@@ -19,6 +19,17 @@ Anthropic's terms restrict third-party products that offer claude.ai login, so d
 - Threads (each its own `claude` session, resumable), streaming output, markdown, tool cards with diffs
 - Per-thread model and permission mode (plan / accept edits / bypass). Bypass is opt-in and confirmed.
 - Stop button, session history replay, subscription usage (5h / 7d) in the sidebar, mobile layout
+- Composer is one rounded card: textarea over a toolbar with model and permission-mode menus (custom accessible menu buttons, keyboard + touch), Send/Stop.
+  Bypass shows as a small amber chip, never red. Thread actions (Rename, Delete) live in the header overflow menu.
+- Markdown with highlight.js syntax colours (bash, js/ts, json, python, css, html/xml, markdown, diff, yaml, sql, go, rust), code blocks with a
+  language header, Copy and line-wrap toggle; Copy under every message; line-level +/- tints for Edit diffs. All output goes through DOMPurify.
+
+## Type and assets (all self-hosted, no CDN, nothing leaves 127.0.0.1)
+- **Inter** variable (UI, 15px/1.6 chat body) and **JetBrains Mono** variable (code, ligatures off): SIL Open Font License 1.1.
+  Latin + latin-ext woff2 in `public/fonts/` with metric-matched fallbacks (no layout jump). Licences: `public/fonts/LICENSE-*.txt`.
+- **highlight.js** 11 (BSD-3-Clause), core + 13 languages as ES modules in `public/vendor/hljs/`.
+- `npm run vendor` re-copies fonts and highlight.js from node_modules into `public/` (the copies are committed). `/fonts/*` is served before the auth gate so the sign-in page uses the same type.
+- Design tokens (surfaces, text, accent, status, radii, spacing, type scale, motion) are at the top of `public/style.css`; contrast is asserted by `npm run test:ui`.
 
 ## Install as an app (ChromeOS / Android / desktop)
 Open the Coder app URL in Chrome and sign in to Coder, then use the address-bar install icon (or ⋮ → Cast, save and share →
@@ -40,9 +51,9 @@ blocked by Coder's login wall.
 - Bypass mode means a prompt can run any command as this user. Treat the password like a shell login.
 
 ## Test
-    npm run test:ui # real Chromium (playwright): dark/light, phone/desktop, tool-card heights, slash menu, PWA installability; spends no quota
+    npm run test:ui # real Chromium (playwright): dark/light, phone/desktop, fonts, no external requests, menus, code blocks + copy, contrast, touch targets, slash menu, PWA installability; spends no quota (creates then deletes one empty thread)
     npm test        # end-to-end: auth gate, websocket checks, a real agent turn (uses a little quota)
 
 ## Layout
-`server/` Node 24 (TypeScript via native type stripping, no build) · `public/` vanilla ES modules, marked + DOMPurify · `bin/agent-console` process control
+`server/` Node 24 (TypeScript via native type stripping, no build) · `public/` vanilla ES modules (`app.js`, `menu.js`, `render.js`), marked + DOMPurify + highlight.js · `bin/agent-console` process control
 Adding another agent (Codex, pi) means a new adapter beside `server/threads.ts`.

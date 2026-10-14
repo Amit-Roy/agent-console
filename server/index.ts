@@ -47,6 +47,7 @@ app.post("/login", express.json({ limit: "1kb" }), (req, res) => {
 });
 app.get("/login.js", (_req, res) => res.sendFile(path.join(ROOT, "public", "login.js")));
 app.get("/style.css", (_req, res) => res.sendFile(path.join(ROOT, "public", "style.css")));
+app.use("/fonts", express.static(path.join(ROOT, "public", "fonts"), { maxAge: "7d" })); // OFL fonts: public, so the sign-in page can use them too
 app.get("/icon.svg", (_req, res) => res.sendFile(path.join(ROOT, "public", "icon.svg")));
 app.get("/manifest.webmanifest", (_req, res) => res.sendFile(path.join(ROOT, "public", "manifest.webmanifest")));
 
