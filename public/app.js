@@ -1,22 +1,12 @@
-import { marked } from "/vendor/marked.js";
-import DOMPurify from "/vendor/purify.js";
+import { $, el, icon, iconButton, wireCopy, renderMarkdown, highlightInto, langFromPath } from "/render.js";
+import { createMenu } from "/menu.js";
 
-DOMPurify.addHook("afterSanitizeAttributes", (n) => {
-  if (n.tagName === "A") {
-    n.setAttribute("target", "_blank");
-    n.setAttribute("rel", "noopener noreferrer");
-  }
-});
-const md = (s) => DOMPurify.sanitize(marked.parse(s, { gfm: true, breaks: false }));
-const $ = (id) => document.getElementById(id);
-const el = (tag, cls, text) => {
-  const e = document.createElement(tag);
-  if (cls) e.className = cls;
-  if (text != null) e.textContent = text;
-  return e;
+const MODE_META = {
+  plan: { label: "Plan", desc: "Read-only. Plans without editing.", icon: "eye" },
+  acceptEdits: { label: "Accept edits", desc: "Edits files without asking.", icon: "pencil" },
+  bypassPermissions: { label: "Bypass", desc: "Runs every tool without asking.", icon: "shield-off", tone: "warn" },
 };
-
-const MODE_LABEL = { plan: "Plan (read-only)", acceptEdits: "Accept edits", bypassPermissions: "⚠ Bypass permissions" };
+const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 const state = { commands: [], threads: new Map(), current: null, dirs: [], modes: [], models: [], live: null, cards: new Map(), usage: null };
 let ws, retry = 0;
 
@@ -52,15 +42,16 @@ function handle(m) {
       state.modes = m.modes;
       state.models = m.models;
       state.threads = new Map(m.threads.map((t) => [t.id, t]));
-      fillSelect($("model"), m.models, (x) => x);
-      fillSelect($("mode"), m.modes, (x) => MODE_LABEL[x] || x);
-      fillSelect($("d-cwd"), m.dirs, (x) => x.replace(/^.*\/repos\/?/, "~/repos/") || x);
-      fillSelect($("d-model"), m.models, (x) => x);
-      fillSelect($("d-mode"), m.modes, (x) => MODE_LABEL[x]);
-      $("d-mode").value = "acceptEdits";
+      menus.model.setItems(modelItems(m.models));
+      menus.mode.setItems(modeItems(m.modes));
+      menus.dCwd.setItems(m.dirs.map((d) => ({ value: d, label: d.replace(/^.*\/repos\/?/, "~/repos/") || d, icon: "folder" })), m.dirs[0]);
+      menus.dModel.setItems(modelItems(m.models), m.models.includes("sonnet") ? "sonnet" : m.models[0]);
+      menus.dMode.setItems(modeItems(m.modes), "acceptEdits");
+      $("d-warn").hidden = true;
       renderThreads();
       if (state.current && state.threads.has(state.current)) openThread(state.current);
       else if (state.threads.size) openThread([...state.threads.values()][0].id);
+      else renderHead();
       break;
     case "thread":
       state.threads.set(m.thread.id, m.thread);
@@ -104,11 +95,58 @@ function handle(m) {
   }
 }
 
-// ---------- threads UI ----------
-function fillSelect(sel, items, label) {
-  sel.replaceChildren(...items.map((v) => Object.assign(el("option", "", label(v)), { value: v })));
+// ---------- menus (model + mode chips in the composer, thread actions, new-thread fields) ----------
+const modelItems = (models) => models.map((v) => ({ value: v, label: cap(v) }));
+const modeItems = (modes) => modes.map((v) => ({ value: v, label: MODE_META[v]?.label || v, desc: MODE_META[v]?.desc, icon: MODE_META[v]?.icon, tone: MODE_META[v]?.tone }));
+
+function chipTrigger(kind) {
+  return (it, b) => {
+    const kids = [];
+    if (kind === "mode" && it?.icon) kids.push(icon(it.icon));
+    kids.push(el("span", "", it?.label ?? ""), icon("chev-down", "chev"));
+    b.replaceChildren(...kids);
+    if (kind === "mode") {
+      if (it?.tone) b.dataset.tone = it.tone;
+      else delete b.dataset.tone;
+    }
+    b.setAttribute("aria-label", `${kind === "mode" ? "Permission mode" : "Model"}: ${it?.label ?? ""}`);
+  };
 }
+function fieldTrigger(it, b) {
+  b.replaceChildren(el("span", "", it?.label ?? ""), icon("chev-down", "chev"));
+}
+const menus = {
+  model: createMenu({ trigger: $("model"), label: "Model", side: "top", renderTrigger: chipTrigger("model"), onSelect: (v) => send({ t: "update", thread: state.current, model: v }) }),
+  mode: createMenu({
+    trigger: $("mode"), label: "Permission mode", side: "top", renderTrigger: chipTrigger("mode"),
+    onSelect: (v) => {
+      if (v === "bypassPermissions" && !confirm("Bypass mode runs every tool without asking, including shell commands on this machine. Enable for this thread?")) return false;
+      send({ t: "update", thread: state.current, mode: v });
+    },
+  }),
+  more: createMenu({
+    trigger: $("more"), kind: "menu", label: "Thread actions", align: "end",
+    items: [{ value: "rename", label: "Rename", icon: "pencil" }, { value: "delete", label: "Delete thread", icon: "trash", tone: "danger" }],
+    onSelect: (v) => {
+      if (v === "rename") startRename();
+      else if (v === "delete" && cur() && confirm(`Delete "${cur().title}" and its history?`)) send({ t: "delete", thread: state.current });
+    },
+  }),
+  dCwd: createMenu({ trigger: $("d-cwd"), label: "Folder", renderTrigger: fieldTrigger }),
+  dModel: createMenu({ trigger: $("d-model"), label: "Model", renderTrigger: fieldTrigger }),
+  dMode: createMenu({ trigger: $("d-mode"), label: "Permission mode", renderTrigger: fieldTrigger, onSelect: (v) => { $("d-warn").hidden = v !== "bypassPermissions"; } }),
+};
+
+// ---------- threads UI ----------
 const cur = () => state.threads.get(state.current);
+function ago(ts) {
+  const s = Math.max(0, (Date.now() - ts) / 1000);
+  if (s < 60) return "now";
+  if (s < 3600) return `${Math.floor(s / 60)}m`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h`;
+  return `${Math.floor(s / 86400)}d`;
+}
+const base = (p) => p.replace(/\/+$/, "").split("/").pop() || p;
 
 function renderThreads() {
   const ul = $("threads");
@@ -117,18 +155,22 @@ function renderThreads() {
   for (const t of list) {
     const li = el("li", t.id === state.current ? "sel" : "");
     li.tabIndex = 0;
+    li.title = `${t.title}\n${t.cwd}\n${cap(t.model)} · $${t.cost.toFixed(3)}`;
     if (t.id === state.current) li.setAttribute("aria-current", "true");
-    const body = el("div");
-    const title = el("div", "t", t.title);
-    const meta = el("div", "meta");
-    meta.append(`${t.model} · `);
-    const mode = el("span", t.mode === "bypassPermissions" ? "bp" : "", t.mode === "bypassPermissions" ? "bypass" : t.mode);
-    meta.append(mode, ` · $${t.cost.toFixed(3)}`);
-    if (t.status === "running") meta.append(" · ", el("span", "run", "running"));
-    body.append(title, meta);
     const dot = el("span", `dot ${t.status}`);
     dot.setAttribute("aria-hidden", "true");
-    li.append(dot, body);
+    const meta = el("div", "meta");
+    meta.append(el("span", "dir", base(t.cwd)));
+    const time = el("time", "", ago(t.updatedAt));
+    time.dateTime = new Date(t.updatedAt).toISOString();
+    meta.append(time);
+    if (t.mode === "bypassPermissions") {
+      const tag = el("span", "tag warn");
+      tag.append(icon("shield-off"), "Bypass");
+      meta.append(tag);
+    }
+    li.append(el("div", "t", t.title), dot, meta);
+    if (t.status === "running") li.append(el("span", "sr-only", "Running"));
     const pick = () => {
       setNav(false);
       openThread(t.id);
@@ -142,11 +184,9 @@ function renderThreads() {
     };
     ul.append(li);
   }
-  if (!list.length) {
-    const li = el("li", "empty-list", "No threads yet.");
-    ul.append(li);
-  }
+  if (!list.length) ul.append(el("li", "empty-list", "No threads yet."));
 }
+setInterval(() => state.threads.size && renderThreads(), 30000);
 
 function setNav(open) {
   document.body.classList.toggle("nav", open);
@@ -164,15 +204,19 @@ function openThread(id) {
 
 function renderHead() {
   const t = cur();
-  $("ttl").textContent = t ? t.title : "No thread";
-  $("cwd").textContent = t ? t.cwd : "";
+  if (!$("ttl-edit")) $("ttl").textContent = t ? t.title : "No thread";
+  $("cwd").hidden = !t;
+  $("cwd-t").textContent = t ? t.cwd.replace(/^\/home\/[^/]+/, "~") : "";
+  $("cwd").title = t ? t.cwd : "";
   if (t) {
-    $("model").value = t.model;
-    $("mode").value = t.mode;
+    menus.model.setValue(t.model);
+    menus.mode.setValue(t.mode);
   }
   const running = t?.status === "running";
-  for (const id of ["model", "mode"]) $(id).disabled = !t || running;
-  $("del").disabled = !t;
+  menus.model.setDisabled(!t || running);
+  menus.mode.setDisabled(!t || running);
+  $("more").disabled = !t;
+  $("state").hidden = !running;
   $("input").disabled = !t;
   $("send").disabled = !t || running;
   $("send").hidden = running;
@@ -181,13 +225,44 @@ function renderHead() {
   $("head").dataset.mode = t?.mode || "";
 }
 
+function startRename() {
+  const t = cur();
+  if (!t || $("ttl-edit")) return;
+  const h = $("ttl");
+  const input = el("input");
+  input.id = "ttl-edit";
+  input.value = t.title;
+  input.maxLength = 80;
+  input.setAttribute("aria-label", "Thread title");
+  h.hidden = true;
+  h.after(input);
+  input.focus();
+  input.select();
+  let done = false;
+  const finish = (commit) => {
+    if (done) return;
+    done = true;
+    const v = input.value.trim();
+    input.remove();
+    h.hidden = false;
+    if (commit && v && v !== t.title) send({ t: "update", thread: t.id, title: v });
+    h.focus?.();
+  };
+  input.onkeydown = (e) => {
+    if (e.key === "Enter") finish(true);
+    else if (e.key === "Escape") finish(false);
+  };
+  input.onblur = () => finish(true);
+}
+$("ttl").ondblclick = startRename;
+
 // ---------- chat rendering ----------
 function emptyState() {
   const box = el("div", "empty");
-  box.innerHTML = '<svg class="glyph" viewBox="0 0 64 64" aria-hidden="true"><path d="M16 20l16 12-16 12" fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/><path d="M36 46h14" stroke="currentColor" stroke-width="5" stroke-linecap="round"/></svg>';
-  box.append(el("h2", "", "No thread selected"), el("p", "", "Start a thread to run a coding agent in one of your folders."));
-  const b = el("button", "primary", "New thread");
+  box.append(icon("terminal", "glyph"), el("h2", "", "No thread selected"), el("p", "", "Start a thread to run a coding agent in one of your folders."));
+  const b = el("button", "btn primary");
   b.type = "button";
+  b.append(icon("plus"), el("span", "", "New thread"));
   b.onclick = openNewDialog;
   box.append(b);
   return box;
@@ -213,37 +288,77 @@ function push(node, live) {
   if (live === false || stick) scrollDown(true);
 }
 function addNote(text, cls = "note") {
+  if (cls === "errtxt") return push(errBlock(text));
   push(el("div", `msg ${cls}`, text));
+}
+function errBlock(text) {
+  const d = el("div", "msg errtxt");
+  d.append(icon("alert"), el("span", "", text));
+  return d;
 }
 
 function summarize(name, input) {
   input = input || {};
   return input.command || input.file_path || input.path || input.pattern || input.url || input.query || input.description || JSON.stringify(input).slice(0, 120);
 }
+const TOOL_ICON = { Bash: "terminal", Edit: "pencil", MultiEdit: "pencil", NotebookEdit: "pencil", Write: "file", Read: "file", Grep: "search", Glob: "search", WebFetch: "globe", WebSearch: "globe", Task: "sparkle", Agent: "sparkle" };
 
+function codePre(text, lang) {
+  const pre = el("pre");
+  const code = el("code");
+  highlightInto(code, text, lang);
+  pre.append(code);
+  return pre;
+}
 function toolBody(name, input) {
   const box = el("div", "body");
   input = input || {};
   if (name === "Edit" && "old_string" in input) {
     const pre = el("pre", "diff");
-    for (const l of String(input.old_string).split("\n")) pre.append(el("div", "del", "- " + l));
-    for (const l of String(input.new_string).split("\n")) pre.append(el("div", "add", "+ " + l));
+    for (const l of String(input.old_string).split("\n")) pre.append(el("div", "del", l));
+    for (const l of String(input.new_string).split("\n")) pre.append(el("div", "add", l));
     box.append(pre);
   } else if (name === "Write" && "content" in input) {
-    box.append(el("pre", "", String(input.content).slice(0, 4000)));
+    box.append(codePre(String(input.content).slice(0, 4000), langFromPath(input.file_path)));
   } else if (name === "Bash" && input.command) {
-    box.append(el("pre", "", "$ " + input.command));
+    box.append(codePre(String(input.command), "bash"));
   } else {
-    box.append(el("pre", "", JSON.stringify(input, null, 2)));
+    box.append(codePre(JSON.stringify(input, null, 2), "json"));
   }
   return box;
+}
+
+function copyActions(getText, label = "Copy message") {
+  const row = el("div", "actions");
+  const b = iconButton("copy", label);
+  wireCopy(b, getText, label);
+  row.append(b);
+  return row;
+}
+function asstMsg(text, final) {
+  const root = el("div", "msg asst");
+  const prose = el("div", "prose");
+  root.append(prose);
+  if (final) {
+    renderMarkdown(text, prose);
+    root.append(copyActions(() => text));
+  }
+  return { root, prose };
 }
 
 function renderLive(kind) {
   if (!state.live) state.live = {};
   const L = state.live;
   if (!L[kind + "El"]) {
-    L[kind + "El"] = el("div", kind === "text" ? "msg asst" : "msg think");
+    if (kind === "text") {
+      const a = asstMsg("", false);
+      L.textEl = a.root;
+      L.prose = a.prose;
+    } else {
+      const d = el("div", "msg think live");
+      d.append(icon("sparkle"), el("span", "", "Thinking…"));
+      L.thinkingEl = d;
+    }
     L[kind] = "";
     push(L[kind + "El"]);
   }
@@ -251,8 +366,8 @@ function renderLive(kind) {
   L.raf = requestAnimationFrame(() => {
     L.raf = 0;
     const stick = nearBottom();
-    if (L.textEl) L.textEl.innerHTML = md(L.text || "");
-    if (L.thinkingEl) L.thinkingEl.textContent = "Thinking… " + (L.thinking || "").slice(-200);
+    if (L.textEl && L.prose) renderMarkdown(L.text || "", L.prose);
+    if (L.thinkingEl) L.thinkingEl.querySelector("span").textContent = "Thinking… " + (L.thinking || "").slice(-200).replace(/\s+/g, " ");
     if (stick) scrollDown(true);
   });
 }
@@ -266,9 +381,12 @@ function dropLive(kind) {
 
 function onEvent(e, live) {
   switch (e.type) {
-    case "user_input":
-      push(el("div", "msg user", e.text), live);
+    case "user_input": {
+      const d = el("div", "msg user");
+      d.append(el("div", "bubble", e.text), copyActions(() => e.text));
+      push(d, live);
       break;
+    }
     case "stream_event": {
       const ev = e.event;
       if (!ev) break;
@@ -290,20 +408,23 @@ function onEvent(e, live) {
         if (b.type === "text" && b.text?.trim()) {
           dropLive("text");
           dropLive("thinking");
-          const d = el("div", "msg asst");
-          d.innerHTML = md(b.text);
-          push(d, live);
+          push(asstMsg(b.text, true).root, live);
         } else if (b.type === "thinking" && b.thinking?.trim()) {
           dropLive("thinking");
           const det = el("details", "msg think");
-          det.append(el("summary", "", "Thinking"), el("pre", "", b.thinking));
+          const sum = el("summary");
+          sum.append(icon("sparkle"), el("span", "", "Reasoning"), icon("chev-right", "chev"));
+          det.append(sum, el("div", "think-body", b.thinking));
           push(det, live);
         } else if (b.type === "tool_use") {
           dropLive("text");
           dropLive("thinking");
           const card = el("details", "msg card pending");
           const sum = el("summary");
-          sum.append(el("span", "name", b.name), el("span", "sum", summarize(b.name, b.input)), el("span", "st"));
+          const tool = icon(TOOL_ICON[b.name] || "code", "tool");
+          const st = el("span", "st");
+          st.append(el("i", "spin"), el("span", "sr-only", "running"));
+          sum.append(tool, el("span", "name", b.name), el("span", "sum", summarize(b.name, b.input)), st, icon("chev-right", "chev"));
           card.append(sum, toolBody(b.name, b.input));
           state.cards.set(b.id, card);
           push(card, live);
@@ -317,6 +438,8 @@ function onEvent(e, live) {
         if (!card) continue;
         card.classList.remove("pending");
         card.classList.add(c.is_error ? "err" : "done");
+        const st = card.querySelector(".st");
+        st.replaceChildren(icon(c.is_error ? "x" : "check"), el("span", "sr-only", c.is_error ? "error" : "done"));
         const text = typeof c.content === "string" ? c.content : (c.content ?? []).map((x) => x.text ?? "").join("\n");
         if (text) card.querySelector(".body").append(el("pre", "", text.slice(0, 8000)));
       }
@@ -329,7 +452,10 @@ function onEvent(e, live) {
       if (e.duration_ms) bits.push(`${(e.duration_ms / 1000).toFixed(1)}s`);
       if (typeof e.total_cost_usd === "number") bits.push(`$${e.total_cost_usd.toFixed(4)}`);
       if (e.is_error || (e.subtype && e.subtype !== "success")) bits.push(e.subtype || "error");
-      push(el("div", "msg foot", bits.join(" · ")), live);
+      const last = $("chat").lastElementChild;
+      const row = last?.matches(".msg.asst") ? last.querySelector(".actions") : null;
+      if (row) row.append(el("span", "foot", bits.join(" · "))); // stats sit on the reply's action row
+      else push(el("div", "msg foot", bits.join(" · ")), live);
       break;
     }
     case "aborted":
@@ -337,7 +463,7 @@ function onEvent(e, live) {
       push(el("div", "msg note", "Stopped."), live);
       break;
     case "console_error":
-      push(el("div", "msg errtxt", e.text), live);
+      push(errBlock(e.text), live);
       break;
     case "rate_limit_event":
       setUsage(e);
@@ -488,15 +614,6 @@ $("input").addEventListener("input", (e) => {
   updateSlash();
 });
 $("input").addEventListener("blur", () => setTimeout(closeSlash, 120));
-$("model").onchange = (e) => send({ t: "update", thread: state.current, model: e.target.value });
-$("mode").onchange = (e) => {
-  if (e.target.value === "bypassPermissions" && !confirm("Bypass mode runs every tool without asking, including shell commands on this machine. Enable for this thread?")) {
-    e.target.value = cur().mode;
-    return;
-  }
-  send({ t: "update", thread: state.current, mode: e.target.value });
-};
-$("del").onclick = () => cur() && confirm(`Delete "${cur().title}" and its history?`) && send({ t: "delete", thread: state.current });
 $("menu").onclick = () => setNav(!document.body.classList.contains("nav"));
 $("scrim").onclick = () => setNav(false);
 document.addEventListener("keydown", (e) => {
@@ -510,21 +627,11 @@ function openNewDialog() {
   $("dlg").showModal();
 }
 $("new").onclick = openNewDialog;
-$("d-mode").onchange = () => ($("d-warn").hidden = $("d-mode").value !== "bypassPermissions");
 $("dform").addEventListener("submit", (e) => {
-  if (e.submitter?.value === "ok") send({ t: "create", cwd: $("d-cwd").value, model: $("d-model").value, mode: $("d-mode").value });
+  if (e.submitter?.value === "ok") send({ t: "create", cwd: menus.dCwd.value, model: menus.dModel.value, mode: menus.dMode.value });
 });
-
-// Header and composer float over the chat; publish their heights so messages can scroll beneath them.
-if ("ResizeObserver" in window) {
-  const root = document.documentElement.style;
-  new ResizeObserver(() => {
-    root.setProperty("--head-h", `${$("head").offsetHeight}px`);
-    root.setProperty("--comp-h", `${$("composer").offsetHeight}px`);
-  }).observe($("head"));
-  new ResizeObserver(() => root.setProperty("--comp-h", `${$("composer").offsetHeight}px`)).observe($("composer"));
-}
 
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
 clearChat();
+renderHead();
 connect();
