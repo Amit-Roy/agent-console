@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Agent Console</title>
+<link rel="icon" href="/icon.svg"><link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#14161c">
+<link rel="stylesheet" href="/style.css"></head>
+<body>
+<div id="app">
+  <aside id="side">
+    <div class="side-head"><strong>Threads</strong><button id="new" class="primary">+ New</button></div>
+    <ul id="threads"></ul>
+    <div id="usage" class="usage" title="Subscription usage"></div>
+  </aside>
+  <div id="scrim"></div>
+  <main>
+    <header id="head">
+      <button id="menu" aria-label="Threads">☰</button>
+      <div class="title"><div id="ttl">No thread</div><div id="cwd" class="muted"></div></div>
+      <select id="model" title="Model"></select>
+      <select id="mode" title="Permission mode"></select>
+      <button id="del" title="Delete thread" class="ghost">🗑</button>
+    </header>
+    <div id="banner" hidden></div>
+    <section id="chat" aria-live="polite"><div class="empty">Create or pick a thread to start.</div></section>
+    <footer id="composer">
+      <textarea id="input" rows="1" placeholder="Message…  (Enter to send, Shift+Enter for newline)" disabled></textarea>
+      <button id="send" class="primary" disabled>Send</button>
+      <button id="stop" class="danger" hidden>Stop</button>
+    </footer>
+  </main>
+</div>
+<dialog id="dlg"><form method="dialog" id="dform">
+  <h3>New thread</h3>
+  <label>Folder<select id="d-cwd"></select></label>
+  <label>Model<select id="d-model"></select></label>
+  <label>Mode<select id="d-mode"></select></label>
+  <p id="d-warn" class="warn" hidden>Bypass mode runs every tool without asking. Use only in folders you trust.</p>
+  <div class="row"><button value="cancel" class="ghost">Cancel</button><button value="ok" class="primary" id="d-ok">Create</button></div>
+</form></dialog>
+<script type="module" src="/app.js"></script>
+</body></html>

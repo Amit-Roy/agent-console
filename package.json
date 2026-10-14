@@ -1,0 +1,21 @@
+{
+  "name": "agent-console",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "node test/e2e.ts",
+    "start": "node server/index.ts"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "private": "true",
+  "dependencies": {
+    "dompurify": "^3.4.17",
+    "express": "^5.3.0",
+    "marked": "^18.1.1",
+    "ws": "^8.22.0"
+  }
+}
