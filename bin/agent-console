@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# agent-console start|stop|status|password|url
+set -u
+DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+RUN="$HOME/.cache/agent-console"; mkdir -p "$RUN"; PORT="${PORT:-7070}"
+export PATH="$HOME/.local/bin:$PATH"
+running() { [ -f "$RUN/pid" ] && kill -0 "$(cat "$RUN/pid")" 2>/dev/null; }
+case "${1:-status}" in
+  start) running && { echo "already running"; exit 0; }
+         (cd "$DIR" && PORT=$PORT exec nohup node server/index.ts >"$RUN/log" 2>&1) & echo $! >"$RUN/pid"; sleep 1.5; "$0" status; "$0" url ;;
+  stop)  running && kill "$(cat "$RUN/pid")" && echo stopped || echo "not running" ;;
+  status) running && echo "up (pid $(cat "$RUN/pid"))" || echo down ;;
+  password) cat "$HOME/.config/agent-console/password" 2>/dev/null || echo "(created on first start)" ;;
+  url) echo "$(echo "${VSCODE_PROXY_URI:-}" | sed "s/{{port}}/$PORT/")" ;;
+esac
