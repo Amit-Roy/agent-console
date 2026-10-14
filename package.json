@@ -6,7 +6,8 @@
   "scripts": {
     "test": "node test/e2e.ts",
     "start": "node server/index.ts",
-    "icons": "node scripts/make-icons.mjs"
+    "icons": "node scripts/make-icons.mjs",
+    "test:ui": "node test/ui.ts"
   },
   "keywords": [],
   "author": "",
@@ -20,6 +21,7 @@
     "ws": "^8.22.0"
   },
   "devDependencies": {
+    "playwright": "^1.64.1",
     "sharp": "^0.35.5"
   }
 }

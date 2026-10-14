@@ -98,7 +98,7 @@ function dirs(): string[] {
 wss.on("connection", (ws) => {
   clients.add(ws);
   const reply = (m: unknown) => ws.readyState === ws.OPEN && ws.send(JSON.stringify(m));
-  reply({ t: "hello", threads: threads.list(), dirs: dirs(), modes: MODES, models: MODELS });
+  reply({ t: "hello", commands: threads.getCommands(), threads: threads.list(), dirs: dirs(), modes: MODES, models: MODELS });
   const ping = setInterval(() => ws.readyState === ws.OPEN && ws.ping(), 25_000);
   ws.on("close", () => {
     clearInterval(ping);

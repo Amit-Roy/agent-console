@@ -15,6 +15,7 @@ Anthropic's terms restrict third-party products that offer claude.ai login, so d
     bin/agent-console password     # sign-in password (generated once, ~/.config/agent-console/password)
 
 ## Features
+- Type `/` in the composer for a command/skill menu (list comes from `claude`'s own `commands_changed` event, cached in `~/.config/agent-console/commands.json`). Skills run headless when a message starts with `/name`.
 - Threads (each its own `claude` session, resumable), streaming output, markdown, tool cards with diffs
 - Per-thread model and permission mode (plan / accept edits / bypass). Bypass is opt-in and confirmed.
 - Stop button, session history replay, subscription usage (5h / 7d) in the sidebar, mobile layout
@@ -39,6 +40,7 @@ blocked by Coder's login wall.
 - Bypass mode means a prompt can run any command as this user. Treat the password like a shell login.
 
 ## Test
+    npm run test:ui # real Chromium (playwright): dark/light, phone/desktop, tool-card heights, slash menu, PWA installability; spends no quota
     npm test        # end-to-end: auth gate, websocket checks, a real agent turn (uses a little quota)
 
 ## Layout

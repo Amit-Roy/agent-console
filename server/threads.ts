@@ -32,6 +32,13 @@ const MAX_RESULT_CHARS = 20_000;
 // never let the subscription login be silently replaced by metered API billing
 const SCRUBBED_ENV = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDECODE"];
 
+export interface Command {
+  name: string;
+  description: string;
+  argumentHint?: string;
+}
+const COMMANDS_FILE = path.join(DATA_DIR, "commands.json");
+
 interface Live {
   proc: ChildProcess;
   buf: string;
@@ -44,14 +51,22 @@ export class Threads {
   private threads = new Map<string, Thread>();
   private live = new Map<string, Live>();
   private emit: Emit;
+  private commands: Command[] = [];
   constructor(emit: Emit) {
     this.emit = emit;
+    try {
+      this.commands = JSON.parse(fs.readFileSync(COMMANDS_FILE, "utf8"));
+    } catch {}
     try {
       for (const t of JSON.parse(fs.readFileSync(THREADS_FILE, "utf8")) as Thread[]) {
         t.status = "idle"; // nothing survives a server restart
         this.threads.set(t.id, t);
       }
     } catch {}
+  }
+
+  getCommands(): Command[] {
+    return this.commands;
   }
 
   list(): Thread[] {
@@ -199,7 +214,19 @@ export class Threads {
         }
       }
     }
-    if (ev.type === "system" && ev.subtype === "commands_changed") return; // noisy, unused
+    if (ev.type === "system" && ev.subtype === "commands_changed") {
+      // slash commands + skills available to headless runs; cached so the "/" menu works before the first message
+      const list: Command[] = (ev.commands ?? [])
+        .filter((c: any) => typeof c?.name === "string")
+        .map((c: any) => ({ name: c.name, description: String(c.description ?? "").slice(0, 200), argumentHint: c.argumentHint || undefined }))
+        .sort((a: Command, b: Command) => a.name.localeCompare(b.name));
+      if (JSON.stringify(list) !== JSON.stringify(this.commands)) {
+        this.commands = list;
+        fs.writeFileSync(COMMANDS_FILE, JSON.stringify(list), { mode: 0o600 });
+        this.emit({ t: "commands", commands: list });
+      }
+      return;
+    }
     if (ev.type === "result") {
       t.status = "idle";
       if (typeof ev.total_cost_usd === "number") t.cost += ev.total_cost_usd;
