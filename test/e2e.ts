@@ -10,6 +10,19 @@ const check = (name: string, ok: boolean, extra = "") => {
   if (!ok) failed++;
 };
 
+const { CODER_HOST } = await import("../server/auth.ts");
+const { request } = await import("node:http");
+const withHost = (host: string) =>
+  new Promise<number>((res, rej) => {
+    const u = new URL(BASE + "/vendor/marked.js");
+    const r = request({ host: u.hostname, port: u.port, path: u.pathname, headers: { host } }, (x) => { x.resume(); res(x.statusCode ?? 0); });
+    r.on("error", rej);
+    r.end();
+  });
+if (CODER_HOST) {
+  check("coder host passes without cookie (SSO)", (await withHost(CODER_HOST)) === 200);
+  check("wrong host without cookie blocked", (await withHost("evil.example")) === 401);
+} else console.log("SKIP  SSO checks (no VSCODE_PROXY_URI)");
 check("unauthenticated API is blocked", (await fetch(BASE + "/vendor/marked.js")).status === 401);
 check("page redirects to login", (await fetch(BASE + "/", { redirect: "manual", headers: { accept: "text/html" } })).status === 302);
 check("bad password rejected", (await fetch(BASE + "/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ password: "nope" }) })).status === 401);

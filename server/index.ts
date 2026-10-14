@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer, type WebSocket } from "ws";
-import { cookieFrom, limited, makeToken, passwordOk, PASSWORD, recordFail, setCookie, tokenValid } from "./auth.ts";
+import { authed, CODER_HOST, cookieFrom, limited, makeToken, passwordOk, PASSWORD, recordFail, setCookie, tokenValid } from "./auth.ts";
 import { MODELS, MODES, Threads, type Mode } from "./threads.ts";
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -35,7 +35,7 @@ app.use((_req, res, next) => {
   next();
 });
 
-app.get("/login", (_req, res) => res.sendFile(path.join(ROOT, "public", "login.html")));
+app.get("/login", (req, res) => (authed(req) ? res.redirect("/") : res.sendFile(path.join(ROOT, "public", "login.html"))));
 app.post("/login", express.json({ limit: "1kb" }), (req, res) => {
   if (limited()) return void res.status(429).json({ error: "Too many attempts. Try again later." });
   if (!passwordOk(req.body?.password)) {
@@ -52,7 +52,7 @@ app.get("/manifest.webmanifest", (_req, res) => res.sendFile(path.join(ROOT, "pu
 
 // everything below requires the session cookie
 app.use((req, res, next) => {
-  if (tokenValid(cookieFrom(req.headers.cookie))) return next();
+  if (authed(req)) return next();
   if (req.method === "GET" && String(req.headers.accept || "").includes("text/html")) return res.redirect("/login");
   res.status(401).end();
 });
@@ -64,7 +64,7 @@ const server = http.createServer(app);
 const wss = new WebSocketServer({ noServer: true, maxPayload: 1 << 20 });
 
 server.on("upgrade", (req, socket, head) => {
-  const okAuth = tokenValid(cookieFrom(req.headers.cookie));
+  const okAuth = authed(req);
   // block cross-site websocket hijacking: Origin host must match the Host header
   let okOrigin = false;
   try {
@@ -139,6 +139,7 @@ wss.on("connection", (ws) => {
 
 server.listen(PORT, HOST, () => {
   console.log(`agent-console listening on http://${HOST}:${PORT}`);
+  console.log(CODER_HOST ? `auth: Coder SSO for ${CODER_HOST} (password cookie still works elsewhere)` : "auth: password only");
   if (process.env.AGENT_CONSOLE_SHOW_PASSWORD) console.log(`password: ${PASSWORD}`);
 });
 

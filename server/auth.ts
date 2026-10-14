@@ -70,3 +70,31 @@ export function recordFail() {
 export function passwordOk(candidate: unknown): boolean {
   return typeof candidate === "string" && safeEqual(candidate, PASSWORD);
 }
+
+// --- Coder SSO -------------------------------------------------------------
+// Behind Coder's authenticated port proxy the user has already signed in to Coder, so we trust a request
+// iff its Host header is exactly this workspace app's Coder hostname. Direct hits on 127.0.0.1 (other local
+// processes, DNS-rebinding pages) carry a different Host and still need the password cookie.
+// Set AGENT_CONSOLE_AUTH=password to turn this off. Requires the port's Coder share level to stay "owner".
+function coderHostFromEnv(): string | undefined {
+  if (process.env.AGENT_CONSOLE_AUTH === "password") return undefined;
+  const explicit = process.env.AGENT_CONSOLE_PUBLIC_HOST;
+  if (explicit) return explicit.toLowerCase();
+  const tpl = process.env.VSCODE_PROXY_URI; // e.g. https://{{port}}--main--ws--owner--host.coder.app/
+  const port = process.env.PORT || "7070";
+  if (!tpl || !tpl.includes("{{port}}")) return undefined;
+  try {
+    return new URL(tpl.replace("{{port}}", port)).host.toLowerCase();
+  } catch {
+    return undefined;
+  }
+}
+export const CODER_HOST = coderHostFromEnv();
+
+export function viaCoder(host: string | undefined): boolean {
+  return !!CODER_HOST && String(host || "").toLowerCase() === CODER_HOST;
+}
+
+export function authed(req: { headers: { cookie?: string; host?: string } }): boolean {
+  return viaCoder(req.headers.host) || tokenValid(cookieFrom(req.headers.cookie));
+}
