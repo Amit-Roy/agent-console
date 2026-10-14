@@ -1,8 +1,12 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Agent Console</title><link rel="icon" href="/icon.svg"><link rel="stylesheet" href="/style.css"></head>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#f7f7f9" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#242427" media="(prefers-color-scheme: dark)">
+<title>Sign in - Agent Console</title><link rel="icon" href="/icon.svg"><link rel="stylesheet" href="/style.css"></head>
 <body class="login"><form id="f" class="login-card">
+<img class="mark" src="/icon.svg" alt="" width="56" height="56">
 <h1>Agent Console</h1>
-<input id="pw" type="password" placeholder="Password" autocomplete="current-password" autofocus required>
-<button type="submit">Sign in</button><p id="err" class="err" role="alert"></p>
+<label>Password<input id="pw" type="password" autocomplete="current-password" autofocus required></label>
+<button type="submit" class="primary">Sign in</button><p id="err" class="err" role="alert"></p>
 </form><script type="module" src="/login.js"></script></body></html>
