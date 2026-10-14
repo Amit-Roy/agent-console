@@ -17,7 +17,7 @@ const el = (tag, cls, text) => {
 };
 
 const MODE_LABEL = { plan: "Plan (read-only)", acceptEdits: "Accept edits", bypassPermissions: "⚠ Bypass permissions" };
-const state = { threads: new Map(), current: null, dirs: [], modes: [], models: [], live: null, cards: new Map(), usage: null };
+const state = { commands: [], threads: new Map(), current: null, dirs: [], modes: [], models: [], live: null, cards: new Map(), usage: null };
 let ws, retry = 0;
 
 // ---------- connection ----------
@@ -42,7 +42,12 @@ function banner(t) {
 
 function handle(m) {
   switch (m.t) {
+    case "commands":
+      state.commands = m.commands;
+      updateSlash();
+      break;
     case "hello":
+      state.commands = m.commands || [];
       state.dirs = m.dirs;
       state.modes = m.modes;
       state.models = m.models;
@@ -372,10 +377,103 @@ function submit() {
   send({ t: "send", thread: state.current, text });
   box.value = "";
   box.style.height = "";
+  closeSlash();
 }
 $("send").onclick = submit;
 $("stop").onclick = () => send({ t: "abort", thread: state.current });
+// ---------- slash menu ("/" for commands and skills) ----------
+const slash = { items: [], idx: 0, dismissed: false };
+const slashEl = $("slash");
+function slashQuery() {
+  const m = /^\/([^\s]*)$/.exec($("input").value);
+  return m ? m[1].toLowerCase() : null;
+}
+function slashMatches(q) {
+  const rank = (c) => {
+    const n = c.name.toLowerCase();
+    if (n === q) return 0;
+    if (n.startsWith(q)) return 1;
+    if (n.split(/[:\-_]/).some((p) => p.startsWith(q))) return 2;
+    if (n.includes(q)) return 3;
+    if (c.description.toLowerCase().includes(q)) return 4;
+    return 9;
+  };
+  return state.commands.filter((c) => !c.name.startsWith("_")).map((c) => [rank(c), c]).filter(([r]) => r < 9).sort((a, b) => a[0] - b[0] || a[1].name.localeCompare(b[1].name)).slice(0, 60).map(([, c]) => c);
+}
+function closeSlash() {
+  slashEl.hidden = true;
+  slash.items = [];
+  $("input").setAttribute("aria-expanded", "false");
+  $("input").removeAttribute("aria-activedescendant");
+}
+function renderSlash() {
+  slashEl.replaceChildren();
+  if (!slash.items.length) {
+    const li = el("li", "none", state.commands.length ? "No matching commands" : "Commands load after your first message.");
+    slashEl.append(li);
+    return;
+  }
+  slash.items.forEach((c, i) => {
+    const li = el("li");
+    li.id = `slash-${i}`;
+    li.setAttribute("role", "option");
+    li.setAttribute("aria-selected", String(i === slash.idx));
+    const head = el("span", "cmd", "/" + c.name);
+    if (c.argumentHint) head.append(el("span", "arg", c.argumentHint));
+    li.append(head, el("span", "desc", c.description));
+    li.onmousedown = (e) => e.preventDefault(); // keep focus in the textarea
+    li.onclick = () => acceptSlash(c);
+    slashEl.append(li);
+  });
+  $("input").setAttribute("aria-activedescendant", `slash-${slash.idx}`);
+}
+function updateSlash() {
+  const q = slashQuery();
+  if (q === null || slash.dismissed || $("input").disabled) return closeSlash();
+  slash.items = slashMatches(q);
+  slash.idx = Math.min(slash.idx, Math.max(0, slash.items.length - 1));
+  slashEl.hidden = false;
+  $("input").setAttribute("aria-expanded", "true");
+  renderSlash();
+}
+function moveSlash(d) {
+  if (!slash.items.length) return;
+  slash.idx = (slash.idx + d + slash.items.length) % slash.items.length;
+  [...slashEl.children].forEach((li, i) => li.setAttribute("aria-selected", String(i === slash.idx)));
+  slashEl.children[slash.idx]?.scrollIntoView({ block: "nearest" });
+  $("input").setAttribute("aria-activedescendant", `slash-${slash.idx}`);
+}
+function acceptSlash(c) {
+  const box = $("input");
+  box.value = `/${c.name} `;
+  box.focus();
+  box.setSelectionRange(box.value.length, box.value.length);
+  box.dispatchEvent(new Event("input"));
+}
 $("input").addEventListener("keydown", (e) => {
+  const shown = !slashEl.hidden;
+  const open = shown && slash.items.length > 0;
+  if (shown && e.key === "Escape") {
+    e.preventDefault();
+    slash.dismissed = true;
+    return closeSlash();
+  }
+  if (open) {
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      return moveSlash(e.key === "ArrowDown" ? 1 : -1);
+    }
+    if ((e.key === "Tab" || e.key === "Enter") && !e.shiftKey && !e.isComposing) {
+      const c = slash.items[slash.idx];
+      const exact = c.name.toLowerCase() === slashQuery();
+      if (e.key === "Enter" && exact) {
+        // typed in full: let Enter send as usual
+      } else {
+        e.preventDefault();
+        return acceptSlash(c);
+      }
+    }
+  }
   const desktop = matchMedia("(pointer:fine)").matches;
   if (e.key === "Enter" && !e.shiftKey && !e.isComposing && desktop) {
     e.preventDefault();
@@ -385,7 +483,11 @@ $("input").addEventListener("keydown", (e) => {
 $("input").addEventListener("input", (e) => {
   e.target.style.height = "auto";
   e.target.style.height = Math.min(e.target.scrollHeight, window.innerHeight * 0.4) + "px";
+  slash.dismissed = false;
+  slash.idx = 0;
+  updateSlash();
 });
+$("input").addEventListener("blur", () => setTimeout(closeSlash, 120));
 $("model").onchange = (e) => send({ t: "update", thread: state.current, model: e.target.value });
 $("mode").onchange = (e) => {
   if (e.target.value === "bypassPermissions" && !confirm("Bypass mode runs every tool without asking, including shell commands on this machine. Enable for this thread?")) {
