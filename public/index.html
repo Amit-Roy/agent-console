@@ -1,42 +1,63 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
 <title>Agent Console</title>
 <link rel="icon" href="/icon.svg"><link rel="manifest" href="/manifest.webmanifest">
-<meta name="theme-color" content="#14161c">
+<meta name="theme-color" content="#f7f7f9" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#242427" media="(prefers-color-scheme: dark)">
 <link rel="stylesheet" href="/style.css"></head>
 <body>
 <div id="app">
-  <aside id="side">
-    <div class="side-head"><strong>Threads</strong><button id="new" class="primary">+ New</button></div>
-    <ul id="threads"></ul>
-    <div id="usage" class="usage" title="Subscription usage"></div>
+  <aside id="side" aria-label="Threads">
+    <div class="side-head">
+      <h2 class="side-title">Threads</h2>
+      <button id="new" class="primary tinted" type="button">
+        <svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>
+        <span>New thread</span>
+      </button>
+    </div>
+    <ul id="threads" aria-label="Thread list"></ul>
+    <div id="usage" class="usage" title="Subscription usage" role="group" aria-label="Subscription usage"></div>
   </aside>
   <div id="scrim"></div>
   <main>
     <header id="head">
-      <button id="menu" aria-label="Threads">☰</button>
-      <div class="title"><div id="ttl">No thread</div><div id="cwd" class="muted"></div></div>
-      <select id="model" title="Model"></select>
-      <select id="mode" title="Permission mode"></select>
-      <button id="del" title="Delete thread" class="ghost">🗑</button>
+      <button id="menu" class="icon ghost" type="button" aria-label="Threads" aria-controls="side" aria-expanded="false">
+        <svg class="ico" viewBox="0 0 20 20" aria-hidden="true"><path d="M3 5.5h14M3 10h14M3 14.5h14"/></svg>
+      </button>
+      <div class="title"><h1 id="ttl">No thread</h1><div id="cwd" class="muted"></div></div>
+      <div class="pickers">
+        <select id="model" title="Model" aria-label="Model"></select>
+        <select id="mode" title="Permission mode" aria-label="Permission mode"></select>
+      </div>
+      <button id="del" class="icon ghost" type="button" title="Delete thread" aria-label="Delete thread">
+        <svg class="ico" viewBox="0 0 20 20" aria-hidden="true"><path d="M3.5 5.5h13M8 5.5V3.75h4V5.5M5.5 5.5l.7 10.2a1 1 0 0 0 1 .95h5.6a1 1 0 0 0 1-.95l.7-10.2M8.5 8.75v4.5M11.5 8.75v4.5"/></svg>
+      </button>
     </header>
-    <div id="banner" hidden></div>
-    <section id="chat" aria-live="polite"><div class="empty">Create or pick a thread to start.</div></section>
+    <div id="banner" role="status" hidden></div>
+    <section id="chat" role="log" aria-label="Conversation" aria-relevant="additions" tabindex="-1"></section>
     <footer id="composer">
-      <textarea id="input" rows="1" placeholder="Message…  (Enter to send, Shift+Enter for newline)" disabled></textarea>
-      <button id="send" class="primary" disabled>Send</button>
-      <button id="stop" class="danger" hidden>Stop</button>
+      <textarea id="input" rows="1" aria-label="Message" aria-describedby="hint" placeholder="Message the agent" enterkeyhint="send" disabled></textarea>
+      <button id="send" class="primary" type="button" disabled>
+        <svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 13V3.5M3.75 7.5 8 3.25l4.25 4.25"/></svg>
+        <span>Send</span>
+      </button>
+      <button id="stop" class="neutral" type="button" hidden>
+        <svg class="ico fill" viewBox="0 0 16 16" aria-hidden="true"><rect x="4" y="4" width="8" height="8" rx="1.5"/></svg>
+        <span>Stop</span>
+      </button>
+      <p id="hint" class="hint">Enter sends. Shift+Enter adds a line.</p>
     </footer>
   </main>
 </div>
-<dialog id="dlg"><form method="dialog" id="dform">
-  <h3>New thread</h3>
+<dialog id="dlg" aria-labelledby="dlg-title"><form method="dialog" id="dform">
+  <h3 id="dlg-title">New thread</h3>
   <label>Folder<select id="d-cwd"></select></label>
   <label>Model<select id="d-model"></select></label>
-  <label>Mode<select id="d-mode"></select></label>
-  <p id="d-warn" class="warn" hidden>Bypass mode runs every tool without asking. Use only in folders you trust.</p>
-  <div class="row"><button value="cancel" class="ghost">Cancel</button><button value="ok" class="primary" id="d-ok">Create</button></div>
+  <label>Permission mode<select id="d-mode"></select></label>
+  <p id="d-warn" class="warn" role="alert" hidden>Bypass mode runs every tool without asking. Use only in folders you trust.</p>
+  <div class="row"><button value="cancel" class="neutral" formnovalidate>Cancel</button><button value="ok" class="primary" id="d-ok">Create</button></div>
 </form></dialog>
 <script type="module" src="/app.js"></script>
 </body></html>

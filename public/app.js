@@ -80,6 +80,13 @@ function handle(m) {
       if (m.thread !== state.current) break;
       clearChat();
       for (const e of m.events) onEvent(e, false);
+      if (!m.events.length) {
+        const hint = emptyState();
+        hint.querySelector("h2").textContent = "Ready";
+        hint.querySelector("p").textContent = "Send a message to start this thread.";
+        hint.querySelector("button").remove();
+        $("chat").append(hint);
+      }
       scrollDown(true);
       break;
     case "event":
@@ -104,20 +111,41 @@ function renderThreads() {
   const list = [...state.threads.values()].sort((a, b) => b.updatedAt - a.updatedAt);
   for (const t of list) {
     const li = el("li", t.id === state.current ? "sel" : "");
+    li.tabIndex = 0;
+    if (t.id === state.current) li.setAttribute("aria-current", "true");
     const body = el("div");
     const title = el("div", "t", t.title);
     const meta = el("div", "meta");
     meta.append(`${t.model} · `);
     const mode = el("span", t.mode === "bypassPermissions" ? "bp" : "", t.mode === "bypassPermissions" ? "bypass" : t.mode);
     meta.append(mode, ` · $${t.cost.toFixed(3)}`);
+    if (t.status === "running") meta.append(" · ", el("span", "run", "running"));
     body.append(title, meta);
-    li.append(el("span", `dot ${t.status}`), body);
-    li.onclick = () => {
-      document.body.classList.remove("nav");
+    const dot = el("span", `dot ${t.status}`);
+    dot.setAttribute("aria-hidden", "true");
+    li.append(dot, body);
+    const pick = () => {
+      setNav(false);
       openThread(t.id);
+    };
+    li.onclick = pick;
+    li.onkeydown = (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        pick();
+      }
     };
     ul.append(li);
   }
+  if (!list.length) {
+    const li = el("li", "empty-list", "No threads yet.");
+    ul.append(li);
+  }
+}
+
+function setNav(open) {
+  document.body.classList.toggle("nav", open);
+  $("menu").setAttribute("aria-expanded", String(open));
 }
 
 function openThread(id) {
@@ -144,14 +172,26 @@ function renderHead() {
   $("send").disabled = !t || running;
   $("send").hidden = running;
   $("stop").hidden = !running;
-  $("mode").style.color = t?.mode === "bypassPermissions" ? "var(--bad)" : "";
+  $("head").dataset.status = t?.status || "";
+  $("head").dataset.mode = t?.mode || "";
 }
 
 // ---------- chat rendering ----------
+function emptyState() {
+  const box = el("div", "empty");
+  box.innerHTML = '<svg class="glyph" viewBox="0 0 64 64" aria-hidden="true"><path d="M16 20l16 12-16 12" fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/><path d="M36 46h14" stroke="currentColor" stroke-width="5" stroke-linecap="round"/></svg>';
+  box.append(el("h2", "", "No thread selected"), el("p", "", "Start a thread to run a coding agent in one of your folders."));
+  const b = el("button", "primary", "New thread");
+  b.type = "button";
+  b.onclick = openNewDialog;
+  box.append(b);
+  return box;
+}
 function clearChat() {
   state.live = null;
   state.cards.clear();
   $("chat").replaceChildren();
+  if (!state.current) $("chat").append(emptyState());
 }
 function nearBottom() {
   const c = $("chat");
@@ -163,6 +203,7 @@ function scrollDown(force) {
 }
 function push(node, live) {
   const stick = nearBottom();
+  $("chat").querySelector(":scope > .empty")?.remove();
   $("chat").append(node);
   if (live === false || stick) scrollDown(true);
 }
@@ -302,8 +343,25 @@ function onEvent(e, live) {
 function setUsage(e) {
   const w = e.rate_limit_info?.unifiedWindows;
   if (!w) return;
-  const pct = (x) => (x ? `${Math.round(x.utilization * 100)}%` : "–");
-  $("usage").textContent = `Subscription: 5h ${pct(w.five_hour)} · 7d ${pct(w.seven_day)}`;
+  const rows = [];
+  for (const [label, x] of [["5-hour", w.five_hour], ["7-day", w.seven_day]]) {
+    const v = x ? Math.max(0, Math.min(1, x.utilization)) : null;
+    const row = el("div", v != null && v >= 0.9 ? "u hot" : "u");
+    const bar = el("div", "bar");
+    bar.setAttribute("role", "meter");
+    bar.setAttribute("aria-label", `${label} subscription usage`);
+    bar.setAttribute("aria-valuemin", "0");
+    bar.setAttribute("aria-valuemax", "100");
+    if (v != null) {
+      bar.setAttribute("aria-valuenow", String(Math.round(v * 100)));
+      const fill = el("i");
+      fill.style.width = `${Math.round(v * 100)}%`;
+      bar.append(fill);
+    }
+    row.append(el("span", "", label), bar, el("span", "pct", v != null ? `${Math.round(v * 100)}%` : "–"));
+    rows.push(row);
+  }
+  $("usage").replaceChildren(...rows);
 }
 
 // ---------- controls ----------
@@ -337,16 +395,34 @@ $("mode").onchange = (e) => {
   send({ t: "update", thread: state.current, mode: e.target.value });
 };
 $("del").onclick = () => cur() && confirm(`Delete "${cur().title}" and its history?`) && send({ t: "delete", thread: state.current });
-$("menu").onclick = () => document.body.classList.toggle("nav");
-$("scrim").onclick = () => document.body.classList.remove("nav");
-$("new").onclick = () => {
-  document.body.classList.remove("nav");
+$("menu").onclick = () => setNav(!document.body.classList.contains("nav"));
+$("scrim").onclick = () => setNav(false);
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && document.body.classList.contains("nav")) {
+    setNav(false);
+    $("menu").focus();
+  }
+});
+function openNewDialog() {
+  setNav(false);
   $("dlg").showModal();
-};
+}
+$("new").onclick = openNewDialog;
 $("d-mode").onchange = () => ($("d-warn").hidden = $("d-mode").value !== "bypassPermissions");
 $("dform").addEventListener("submit", (e) => {
   if (e.submitter?.value === "ok") send({ t: "create", cwd: $("d-cwd").value, model: $("d-model").value, mode: $("d-mode").value });
 });
 
+// Header and composer float over the chat; publish their heights so messages can scroll beneath them.
+if ("ResizeObserver" in window) {
+  const root = document.documentElement.style;
+  new ResizeObserver(() => {
+    root.setProperty("--head-h", `${$("head").offsetHeight}px`);
+    root.setProperty("--comp-h", `${$("composer").offsetHeight}px`);
+  }).observe($("head"));
+  new ResizeObserver(() => root.setProperty("--comp-h", `${$("composer").offsetHeight}px`)).observe($("composer"));
+}
+
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
+clearChat();
 connect();
