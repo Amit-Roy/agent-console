@@ -6,7 +6,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer, type WebSocket } from "ws";
 import { authed, CODER_HOST, cookieFrom, limited, makeToken, passwordOk, PASSWORD, recordFail, setCookie, tokenValid } from "./auth.ts";
-import { MODELS, MODES, Threads, type Mode } from "./threads.ts";
+import { providerInfo, refreshPiModels } from "./providers/index.ts";
+import { Threads } from "./threads.ts";
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PORT = Number(process.env.PORT || 7070);
@@ -99,7 +100,7 @@ function dirs(): string[] {
 wss.on("connection", (ws) => {
   clients.add(ws);
   const reply = (m: unknown) => ws.readyState === ws.OPEN && ws.send(JSON.stringify(m));
-  reply({ t: "hello", commands: threads.getCommands(), threads: threads.list(), dirs: dirs(), modes: MODES, models: MODELS });
+  reply({ t: "hello", commands: threads.getCommands(), threads: threads.list(), dirs: dirs(), providers: providerInfo() });
   const ping = setInterval(() => ws.readyState === ws.OPEN && ws.ping(), 25_000);
   ws.on("close", () => {
     clearInterval(ping);
@@ -112,9 +113,7 @@ wss.on("connection", (ws) => {
         case "open":
           return reply({ t: "history", thread: m.thread, events: threads.history(m.thread) });
         case "create": {
-          const mode: Mode = MODES.includes(m.mode) ? m.mode : "acceptEdits";
-          const model = MODELS.includes(m.model) ? m.model : "sonnet";
-          const t = threads.create({ cwd: safeCwd(m.cwd), mode, model, title: m.title });
+          const t = threads.create({ provider: m.provider, cwd: safeCwd(m.cwd), mode: m.mode, model: m.model, title: m.title });
           return reply({ t: "created", thread: t });
         }
         case "send":
@@ -123,11 +122,11 @@ wss.on("connection", (ws) => {
         case "abort":
           return threads.abort(m.thread);
         case "update": {
-          const patch: { mode?: Mode; model?: string; title?: string } = {};
-          if (MODES.includes(m.mode)) patch.mode = m.mode;
-          if (MODELS.includes(m.model)) patch.model = m.model;
-          if (typeof m.title === "string") patch.title = m.title;
-          return threads.update(m.thread, patch);
+          return threads.update(m.thread, {
+            mode: typeof m.mode === "string" ? m.mode : undefined,
+            model: typeof m.model === "string" ? m.model : undefined,
+            title: typeof m.title === "string" ? m.title : undefined,
+          });
         }
         case "delete":
           return threads.remove(m.thread);
@@ -137,6 +136,9 @@ wss.on("connection", (ws) => {
     }
   });
 });
+
+void refreshPiModels();
+setInterval(() => void refreshPiModels(), 10 * 60_000).unref(); // pick up new credentials / models without a restart
 
 server.listen(PORT, HOST, () => {
   console.log(`agent-console listening on http://${HOST}:${PORT}`);

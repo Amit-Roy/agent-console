@@ -7,7 +7,7 @@ const MODE_META = {
   bypassPermissions: { label: "Bypass", desc: "Runs every tool without asking.", icon: "shield-off", tone: "warn" },
 };
 const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
-const state = { commands: [], threads: new Map(), current: null, dirs: [], modes: [], models: [], live: null, cards: new Map(), usage: null };
+const state = { commands: {}, providers: new Map(), threads: new Map(), current: null, dirs: [], live: null, cards: new Map(), usage: null };
 let ws, retry = 0;
 
 // ---------- connection ----------
@@ -33,21 +33,18 @@ function banner(t) {
 function handle(m) {
   switch (m.t) {
     case "commands":
-      state.commands = m.commands;
+      state.commands[m.provider] = m.commands;
       updateSlash();
       break;
     case "hello":
-      state.commands = m.commands || [];
+      state.commands = m.commands || {};
       state.dirs = m.dirs;
-      state.modes = m.modes;
-      state.models = m.models;
+      state.providers = new Map(m.providers.map((p) => [p.id, p]));
+      menus.model.provider = null; // re-read per-agent model lists below
       state.threads = new Map(m.threads.map((t) => [t.id, t]));
-      menus.model.setItems(modelItems(m.models));
-      menus.mode.setItems(modeItems(m.modes));
+      menus.dProv.setItems(m.providers.map((p) => ({ value: p.id, label: p.label, desc: p.ok ? undefined : p.hint, disabled: !p.ok })), m.providers.find((p) => p.ok)?.id);
       menus.dCwd.setItems(m.dirs.map((d) => ({ value: d, label: d.replace(/^.*\/repos\/?/, "~/repos/") || d, icon: "folder" })), m.dirs[0]);
-      menus.dModel.setItems(modelItems(m.models), m.models.includes("sonnet") ? "sonnet" : m.models[0]);
-      menus.dMode.setItems(modeItems(m.modes), "acceptEdits");
-      $("d-warn").hidden = true;
+      fillDialog(menus.dProv.value);
       renderThreads();
       if (state.current && state.threads.has(state.current)) openThread(state.current);
       else if (state.threads.size) openThread([...state.threads.values()][0].id);
@@ -96,7 +93,31 @@ function handle(m) {
 }
 
 // ---------- menus (model + mode chips in the composer, thread actions, new-thread fields) ----------
-const modelItems = (models) => models.map((v) => ({ value: v, label: cap(v) }));
+// "openrouter/nvidia/nemotron-3-super-120b-a12b:free" -> label "nemotron-3-super-120b-a12b", desc "openrouter · nvidia · free"
+function modelMeta(v) {
+  if (!v.includes("/")) return { label: v === "default" ? "Default" : cap(v) };
+  const [prov, ...rest] = v.split("/");
+  const id = rest.pop();
+  const free = id.endsWith(":free");
+  return { label: id.replace(/:free$/, ""), desc: [prov, rest.join("/"), free && "free"].filter(Boolean).join(" · ") };
+}
+const modelItems = (models) => models.map((v) => ({ value: v, ...modelMeta(v) }));
+const PROVIDER_NOTE = {
+  pi: "Pi never asks before acting: Plan limits it to read-only tools, Bypass gives it everything.",
+  codex: "Uses your ChatGPT login. Plan is a read-only sandbox, Accept edits is workspace-write.",
+};
+const prov = (id) => state.providers.get(id);
+const provLabel = (id) => prov(id)?.label || id || "";
+function fillDialog(id) {
+  const p = prov(id);
+  if (!p) return;
+  menus.dModel.setItems(modelItems(p.models), p.defaultModel);
+  menus.dMode.setItems(modeItems(p.modes), p.defaultMode);
+  $("d-warn").hidden = p.defaultMode !== "bypassPermissions";
+  $("d-note").hidden = !PROVIDER_NOTE[id];
+  $("d-note").textContent = PROVIDER_NOTE[id] || "";
+  $("d-ok").disabled = !p.ok;
+}
 const modeItems = (modes) => modes.map((v) => ({ value: v, label: MODE_META[v]?.label || v, desc: MODE_META[v]?.desc, icon: MODE_META[v]?.icon, tone: MODE_META[v]?.tone }));
 
 function chipTrigger(kind) {
@@ -132,6 +153,7 @@ const menus = {
       else if (v === "delete" && cur() && confirm(`Delete "${cur().title}" and its history?`)) send({ t: "delete", thread: state.current });
     },
   }),
+  dProv: createMenu({ trigger: $("d-prov"), label: "Agent", renderTrigger: fieldTrigger, onSelect: (v) => fillDialog(v) }),
   dCwd: createMenu({ trigger: $("d-cwd"), label: "Folder", renderTrigger: fieldTrigger }),
   dModel: createMenu({ trigger: $("d-model"), label: "Model", renderTrigger: fieldTrigger }),
   dMode: createMenu({ trigger: $("d-mode"), label: "Permission mode", renderTrigger: fieldTrigger, onSelect: (v) => { $("d-warn").hidden = v !== "bypassPermissions"; } }),
@@ -155,7 +177,7 @@ function renderThreads() {
   for (const t of list) {
     const li = el("li", t.id === state.current ? "sel" : "");
     li.tabIndex = 0;
-    li.title = `${t.title}\n${t.cwd}\n${cap(t.model)} · $${t.cost.toFixed(3)}`;
+    li.title = `${t.title}\n${t.cwd}\n${provLabel(t.provider)} · ${modelMeta(t.model).label} · $${t.cost.toFixed(3)}`;
     if (t.id === state.current) li.setAttribute("aria-current", "true");
     const dot = el("span", `dot ${t.status}`);
     dot.setAttribute("aria-hidden", "true");
@@ -164,6 +186,7 @@ function renderThreads() {
     const time = el("time", "", ago(t.updatedAt));
     time.dateTime = new Date(t.updatedAt).toISOString();
     meta.append(time);
+    if (t.provider && t.provider !== "claude") meta.append(el("span", "tag", provLabel(t.provider)));
     if (t.mode === "bypassPermissions") {
       const tag = el("span", "tag warn");
       tag.append(icon("shield-off"), "Bypass");
@@ -209,6 +232,12 @@ function renderHead() {
   $("cwd-t").textContent = t ? t.cwd.replace(/^\/home\/[^/]+/, "~") : "";
   $("cwd").title = t ? t.cwd : "";
   if (t) {
+    const p = prov(t.provider);
+    if (p && menus.model.provider !== t.provider) {
+      menus.model.provider = t.provider; // models and modes differ per agent
+      menus.model.setItems(modelItems(p.models));
+      menus.mode.setItems(modeItems(p.modes));
+    }
     menus.model.setValue(t.model);
     menus.mode.setValue(t.mode);
   }
@@ -524,7 +553,7 @@ function slashMatches(q) {
     if (c.description.toLowerCase().includes(q)) return 4;
     return 9;
   };
-  return state.commands.filter((c) => !c.name.startsWith("_")).map((c) => [rank(c), c]).filter(([r]) => r < 9).sort((a, b) => a[0] - b[0] || a[1].name.localeCompare(b[1].name)).slice(0, 60).map(([, c]) => c);
+  return (state.commands[cur()?.provider || "claude"] || []).filter((c) => !c.name.startsWith("_")).map((c) => [rank(c), c]).filter(([r]) => r < 9).sort((a, b) => a[0] - b[0] || a[1].name.localeCompare(b[1].name)).slice(0, 60).map(([, c]) => c);
 }
 function closeSlash() {
   slashEl.hidden = true;
@@ -535,7 +564,7 @@ function closeSlash() {
 function renderSlash() {
   slashEl.replaceChildren();
   if (!slash.items.length) {
-    const li = el("li", "none", state.commands.length ? "No matching commands" : "Commands load after your first message.");
+    const li = el("li", "none", (state.commands[cur()?.provider || "claude"] || []).length ? "No matching commands" : "Commands load after your first message.");
     slashEl.append(li);
     return;
   }
@@ -628,7 +657,7 @@ function openNewDialog() {
 }
 $("new").onclick = openNewDialog;
 $("dform").addEventListener("submit", (e) => {
-  if (e.submitter?.value === "ok") send({ t: "create", cwd: menus.dCwd.value, model: menus.dModel.value, mode: menus.dMode.value });
+  if (e.submitter?.value === "ok") send({ t: "create", provider: menus.dProv.value, cwd: menus.dCwd.value, model: menus.dModel.value, mode: menus.dMode.value });
 });
 
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});

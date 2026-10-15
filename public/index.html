@@ -90,9 +90,11 @@
 <dialog id="dlg" aria-labelledby="dlg-title"><form method="dialog" id="dform">
   <h3 id="dlg-title">New thread</h3>
   <p class="sub">Run a coding agent in one of your folders.</p>
+  <div class="fld"><span class="lbl" id="l-prov">Agent</span><button type="button" id="d-prov" class="btn field" aria-labelledby="l-prov d-prov"><span></span></button></div>
   <div class="fld"><span class="lbl" id="l-cwd">Folder</span><button type="button" id="d-cwd" class="btn field" aria-labelledby="l-cwd d-cwd"><span></span></button></div>
   <div class="fld"><span class="lbl" id="l-model">Model</span><button type="button" id="d-model" class="btn field" aria-labelledby="l-model d-model"><span></span></button></div>
   <div class="fld"><span class="lbl" id="l-mode">Permission mode</span><button type="button" id="d-mode" class="btn field" aria-labelledby="l-mode d-mode"><span></span></button></div>
+  <p id="d-note" class="hint" hidden></p>
   <p id="d-warn" class="callout" role="alert" hidden><svg class="ico" aria-hidden="true"><use href="#i-alert"/></svg><span>Bypass mode runs every tool without asking. Use only in folders you trust.</span></p>
   <div class="row"><button value="cancel" class="btn" formnovalidate>Cancel</button><button value="ok" class="btn primary" id="d-ok">Create thread</button></div>
 </form></dialog>

@@ -16,7 +16,8 @@ Anthropic's terms restrict third-party products that offer claude.ai login, so d
 
 ## Features
 - Type `/` in the composer for a command/skill menu (list comes from `claude`'s own `commands_changed` event, cached in `~/.config/agent-console/commands.json`). Skills run headless when a message starts with `/name`.
-- Threads (each its own `claude` session, resumable), streaming output, markdown, tool cards with diffs
+- Several agents behind one UI: Claude Code, Pi (any model Pi knows: OpenRouter, OpenAI, Google, local), Codex. Pick one per thread; see Providers.
+- Threads (each its own agent session, resumable), streaming output, markdown, tool cards with diffs
 - Per-thread model and permission mode (plan / accept edits / bypass). Bypass is opt-in and confirmed.
 - Stop button, session history replay, subscription usage (5h / 7d) in the sidebar, mobile layout
 - Composer is one rounded card: textarea over a toolbar with model and permission-mode menus (custom accessible menu buttons, keyboard + touch), Send/Stop.
@@ -50,10 +51,35 @@ blocked by Coder's login wall.
 - `ANTHROPIC_API_KEY` is stripped from the child environment so the subscription login is never swapped for metered billing.
 - Bypass mode means a prompt can run any command as this user. Treat the password like a shell login.
 
+## Providers
+Each thread runs one harness, chosen in the New thread dialog. A provider is a small adapter in `server/providers/` that starts the harness as a child
+process and translates its events into one canonical stream (Claude Code's stream-json shape, which is what the UI renders).
+
+| Agent | How it is driven | Login | Modes |
+| --- | --- | --- | --- |
+| Claude Code | `claude -p` stream-json, long-lived process | your Claude subscription | plan / accept edits / bypass |
+| Pi | `pi --mode rpc`, long-lived, any model in `pi --list-models` | API key or `pi` `/login` | plan (read-only tools) / bypass. Pi has no approval prompts |
+| Codex | `codex exec --json`, one process per turn, resumed by thread id | `codex login --device-auth` | plan (read-only sandbox) / accept edits (workspace-write) / bypass |
+| Mock | scripted, offline (`AGENT_CONSOLE_MOCK=1` only) | none | all |
+
+Credentials for non-Claude agents are read from env files, never from the Claude child's environment, so the subscription login cannot be swapped for metered billing:
+`~/.config/agent-console/env`, then `~/openrouter/.env` (override the list with `AGENT_CONSOLE_ENV_FILES`, colon separated). `OPEN_ROUTER_TOKEN` is accepted as an alias of `OPENROUTER_API_KEY`.
+With an OpenRouter key, Pi offers its `:free` models only (`AGENT_CONSOLE_PI_ALL=1` for everything, `AGENT_CONSOLE_PI_MODELS=a,b` to pin a list).
+OpenRouter's free tier allows 50 requests a day (1000 after a one-off $10 credit), so use the mock for routine tests.
+Slash commands and skills are listed per agent. Codex status: the adapter follows the documented `exec --json` events and is unit tested against fixtures, but has not run against a live login yet.
+
+Adding an agent: implement `Provider` (`server/providers/types.ts`), emit canonical events through `ctx.event`, register it in `server/providers/index.ts`, add fixtures to `test/providers.ts`.
+
 ## Test
-    npm run test:ui # real Chromium (playwright): dark/light, phone/desktop, fonts, no external requests, menus, code blocks + copy, contrast, touch targets, slash menu, PWA installability; spends no quota (creates then deletes one empty thread)
-    npm test        # end-to-end: auth gate, websocket checks, a real agent turn (uses a little quota)
+    node test/providers.ts   # offline: adapter translators (pi, codex), env files, model table. No network
+    npm test                 # providers + end-to-end against the running server: auth gate, websocket checks, provider plumbing (mock agent if started with AGENT_CONSOLE_MOCK=1)
+    REAL=1 npm test          # also one real Claude turn (uses a little subscription quota)
+    npm run test:ui          # real Chromium (playwright): themes, viewports, fonts, menus incl. the agent picker, code blocks, contrast, slash menu, PWA installability. Needs a thread with tool cards and a Claude command cache (a live server has them)
+
+To test on a scratch instance without touching your threads:
+    AGENT_CONSOLE_MOCK=1 AGENT_CONSOLE_DATA=/tmp/ac-test PORT=7071 node server/index.ts &   # then BASE=http://127.0.0.1:7071 AGENT_CONSOLE_DATA=/tmp/ac-test PORT=7071 npm test
+Kill it by pid. `pkill -f "node server/index.ts"` also kills your real server.
 
 ## Layout
 `server/` Node 24 (TypeScript via native type stripping, no build) · `public/` vanilla ES modules (`app.js`, `menu.js`, `render.js`), marked + DOMPurify + highlight.js · `bin/agent-console` process control
-Adding another agent (Codex, pi) means a new adapter beside `server/threads.ts`.
+`server/providers/` one adapter per agent (`claude.ts`, `pi.ts`, `codex.ts`, `mock.ts`) behind `index.ts`; `server/threads.ts` is harness-agnostic.

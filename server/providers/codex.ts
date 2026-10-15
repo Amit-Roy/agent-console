@@ -1,0 +1,116 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { childEnv } from "./env.ts";
+import { parseJson, spawnLines } from "./proc.ts";
+import { clip, type Agent, type AgentCtx, type Provider, type ThreadSpec } from "./types.ts";
+
+// OpenAI Codex CLI via `codex exec --json`: one process per turn, resumed by thread id. Uses the ChatGPT subscription login
+// (`codex login`). Event mapping follows the documented `exec --json` item stream; see test/providers.ts for fixtures.
+
+const asst = (b: any) => ({ type: "assistant", message: { role: "assistant", content: [b] } });
+const result = (id: string, text: string, isError: boolean) => ({
+  type: "user",
+  message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: clip(text), is_error: isError }] },
+});
+
+export function codexTranslator(emit: (ev: any) => void) {
+  let started = 0;
+  const begun = new Set<string>();
+  const finish = (failure?: string) => {
+    if (failure) emit({ type: "console_error", text: failure });
+    emit({ type: "result", subtype: failure ? "error" : "success", is_error: !!failure, duration_ms: started ? Date.now() - started : 0 });
+    started = 0;
+    begun.clear();
+  };
+  const tool = (id: string, name: string, input: Record<string, any>) => {
+    if (begun.has(id)) return;
+    begun.add(id);
+    emit(asst({ type: "tool_use", id, name, input }));
+  };
+  return (r: any) => {
+    switch (r?.type) {
+      case "thread.started":
+        emit({ type: "system", subtype: "init", session_id: r.thread_id });
+        break;
+      case "turn.started":
+        started ||= Date.now();
+        emit({ type: "stream_event", event: { type: "message_start" } });
+        break;
+      case "item.started":
+      case "item.updated":
+      case "item.completed": {
+        const it = r.item ?? {};
+        const done = r.type === "item.completed";
+        if (it.type === "agent_message" && done) emit(asst({ type: "text", text: String(it.text ?? "") }));
+        else if (it.type === "reasoning" && done && it.text) emit(asst({ type: "thinking", thinking: String(it.text) }));
+        else if (it.type === "command_execution") {
+          tool(it.id, "Bash", { command: it.command });
+          if (done) emit(result(it.id, String(it.aggregated_output ?? ""), it.status === "failed" || (it.exit_code ?? 0) !== 0));
+        } else if (it.type === "file_change") {
+          const changes = it.changes ?? [];
+          tool(it.id, "Edit", { file_path: changes[0]?.path, changes });
+          if (done) emit(result(it.id, changes.map((c: any) => `${c.kind} ${c.path}`).join("\n") || "no changes", it.status === "failed"));
+        } else if (it.type === "mcp_tool_call") {
+          tool(it.id, `${it.server}:${it.tool}`, it.arguments ?? {});
+          if (done) emit(result(it.id, JSON.stringify(it.result ?? it.error ?? "", null, 1), it.status === "failed"));
+        } else if (it.type === "web_search") {
+          tool(it.id, "WebSearch", { query: it.query });
+          if (done) emit(result(it.id, "", false));
+        } else if (it.type === "error" && done) emit({ type: "console_error", text: String(it.message ?? "error") });
+        break;
+      }
+      case "turn.completed":
+        finish();
+        break;
+      case "turn.failed":
+        finish(String(r.error?.message ?? "turn failed"));
+        break;
+      case "error":
+        if (!started) emit({ type: "console_error", text: String(r.message ?? "error") });
+        break;
+    }
+  };
+}
+
+const loggedIn = () => fs.existsSync(path.join(process.env.CODEX_HOME || path.join(os.homedir(), ".codex"), "auth.json"));
+
+export const codex: Provider = {
+  id: "codex",
+  label: "Codex",
+  modes: ["plan", "acceptEdits", "bypassPermissions"],
+  defaultMode: "acceptEdits",
+  // "default" = whatever ~/.codex/config.toml selects
+  models: () => ["default", ...(process.env.AGENT_CONSOLE_CODEX_MODELS || "").split(",").map((s) => s.trim()).filter(Boolean)],
+  defaultModel: () => "default",
+  status: () => (loggedIn() ? { ok: true } : { ok: false, hint: "Run `codex login --device-auth` in a terminal." }),
+  start(t: ThreadSpec, ctx: AgentCtx): Agent {
+    let session = t.sessionId;
+    let p: ReturnType<typeof spawnLines> | undefined;
+    let dead = false;
+    const translate = codexTranslator((ev) => {
+      if (ev.type === "system" && ev.subtype === "init") session = ev.session_id;
+      ctx.event(ev);
+    });
+    return {
+      get alive() {
+        return !dead;
+      },
+      send(text) {
+        const args = ["exec", "--json", "--skip-git-repo-check", "-C", t.cwd];
+        if (t.model !== "default") args.push("-m", t.model);
+        if (t.mode === "bypassPermissions") args.push("--dangerously-bypass-approvals-and-sandbox");
+        else args.push("-c", `sandbox_mode="${t.mode === "plan" ? "read-only" : "workspace-write"}"`, "-c", 'approval_policy="never"');
+        if (session) args.push("resume", session);
+        args.push("-"); // prompt from stdin
+        p = spawnLines("codex", "codex", args, { cwd: t.cwd, env: childEnv() }, { ...ctx, exited: (i) => { dead = true; ctx.exited(i); } }, (line) => {
+          const r = parseJson(line);
+          if (r) translate(r);
+        });
+        p.proc.stdin!.end(text);
+      },
+      abort: () => p?.abort(),
+      kill: () => p?.kill(),
+    };
+  },
+};
