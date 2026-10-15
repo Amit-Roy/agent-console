@@ -160,8 +160,9 @@ export class Threads {
       event: (ev) => this.onEvent(t, ev),
       commands: (list) => this.setCommands(t.provider, list),
       exited: (info) => {
-        if (this.live.get(t.id) === live) this.live.delete(t.id);
-        if (t.status !== "running") return;
+        const current = this.live.get(t.id) === live;
+        if (current) this.live.delete(t.id);
+        if (!current || t.status !== "running") return; // a replaced or aborted agent's exit says nothing about the new turn
         t.status = "idle";
         if (!info.aborted && !live.aborted) {
           this.publish(t.id, { type: "console_error", text: `${prov.label} exited (${info.signal ?? info.code}). ${info.stderr.trim().slice(-500)}` });
