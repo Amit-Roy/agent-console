@@ -31,9 +31,11 @@ check("bad password rejected", (await fetch(BASE + "/login", { method: "POST", h
 check("authed index loads", (await fetch(BASE + "/", { headers: { cookie } })).status === 200);
 check("authed vendor lib loads", (await fetch(BASE + "/vendor/marked.js", { headers: { cookie } })).status === 200);
 
+const inbox: any[] = [];
 const open = (headers: Record<string, string>) =>
   new Promise<WebSocket | null>((res) => {
     const w = new WebSocket(BASE.replace("http", "ws") + "/ws", { headers });
+    w.on("message", (d) => inbox.push(JSON.parse(String(d)))); // before "open": the server sends hello immediately
     w.on("open", () => res(w));
     w.on("error", () => res(null));
     w.on("unexpected-response", () => res(null));
@@ -45,8 +47,6 @@ const ws = await open({ cookie, origin: BASE });
 check("ws with cookie+origin accepted", ws !== null);
 if (!ws) process.exit(1);
 
-const inbox: any[] = [];
-ws.on("message", (d) => inbox.push(JSON.parse(String(d))));
 const waitFor = async (pred: (m: any) => boolean, ms = 90_000) => {
   const t0 = Date.now();
   while (Date.now() - t0 < ms) {
