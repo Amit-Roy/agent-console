@@ -102,10 +102,6 @@ function modelMeta(v) {
   return { label: id.replace(/:free$/, ""), desc: [prov, rest.join("/"), free && "free"].filter(Boolean).join(" · ") };
 }
 const modelItems = (models) => models.map((v) => ({ value: v, ...modelMeta(v) }));
-const PROVIDER_NOTE = {
-  pi: "Pi never asks before acting: Plan limits it to read-only tools, Bypass gives it everything.",
-  codex: "Uses your ChatGPT login. Plan is a read-only sandbox, Accept edits is workspace-write.",
-};
 const prov = (id) => state.providers.get(id);
 const provLabel = (id) => prov(id)?.label || id || "";
 function fillDialog(id) {
@@ -114,8 +110,8 @@ function fillDialog(id) {
   menus.dModel.setItems(modelItems(p.models), p.defaultModel);
   menus.dMode.setItems(modeItems(p.modes), p.defaultMode);
   $("d-warn").hidden = p.defaultMode !== "bypassPermissions";
-  $("d-note").hidden = !PROVIDER_NOTE[id];
-  $("d-note").textContent = PROVIDER_NOTE[id] || "";
+  $("d-note").hidden = !p.note;
+  $("d-note").textContent = p.note || "";
   $("d-ok").disabled = !p.ok;
 }
 const modeItems = (modes) => modes.map((v) => ({ value: v, label: MODE_META[v]?.label || v, desc: MODE_META[v]?.desc, icon: MODE_META[v]?.icon, tone: MODE_META[v]?.tone }));

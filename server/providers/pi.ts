@@ -149,6 +149,7 @@ export const pi: Provider = {
   label: "Pi",
   modes: ["plan", "bypassPermissions"],
   defaultMode: "bypassPermissions",
+  note: "Pi never asks before acting: Plan limits it to read-only tools, Bypass gives it everything.",
   models: () => cached,
   defaultModel: () => cached[0] ?? "",
   status() {

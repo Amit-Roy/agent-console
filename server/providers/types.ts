@@ -45,6 +45,7 @@ export interface Provider {
   label: string;
   modes: Mode[];
   defaultMode: Mode;
+  note?: string; // shown under the agent picker
   models(): string[];
   defaultModel(): string;
   // Cheap, synchronous readiness check shown in the UI. Never touches the network.

@@ -59,14 +59,14 @@ process and translates its events into one canonical stream (Claude Code's strea
 | --- | --- | --- | --- |
 | Claude Code | `claude -p` stream-json, long-lived process | your Claude subscription | plan / accept edits / bypass |
 | Pi | `pi --mode rpc`, long-lived, any model in `pi --list-models` | API key or `pi` `/login` | plan (read-only tools) / bypass. Pi has no approval prompts |
-| Codex | `codex exec --json`, one process per turn, resumed by thread id | `codex login --device-auth` | plan (read-only sandbox) / accept edits (workspace-write) / bypass |
+| Codex | `codex exec --json`, one process per turn, resumed by thread id | `codex login --device-auth` | plan (read-only sandbox) / accept edits (workspace-write) / bypass; only bypass where the sandbox cannot run |
 | Mock | scripted, offline (`AGENT_CONSOLE_MOCK=1` only) | none | all |
 
 Credentials for non-Claude agents are read from env files, never from the Claude child's environment, so the subscription login cannot be swapped for metered billing:
 `~/.config/agent-console/env`, then `~/openrouter/.env` (override the list with `AGENT_CONSOLE_ENV_FILES`, colon separated). `OPEN_ROUTER_TOKEN` is accepted as an alias of `OPENROUTER_API_KEY`.
 With an OpenRouter key, Pi offers its `:free` models only (`AGENT_CONSOLE_PI_ALL=1` for everything, `AGENT_CONSOLE_PI_MODELS=a,b` to pin a list).
 OpenRouter's free tier allows 50 requests a day (1000 after a one-off $10 credit), so use the mock for routine tests.
-Slash commands and skills are listed per agent. Codex was verified live (login, two turns, resume). Its shell tool needs the `codex-code-mode-host` helper that ships beside the real binary (`~/.codex/packages/standalone/current/bin/`); a bare copy of `codex` on PATH answers but cannot run commands, and the thread shows Codex's own "Code Mode is unavailable" error.
+Slash commands and skills are listed per agent. Codex was verified live (login, resume, shell tool). It needs the `codex-code-mode-host` helper beside the real binary (the standalone installer puts both in `~/.codex/packages/standalone/`). Its Plan and Accept-edits modes use a bubblewrap sandbox; where user namespaces are blocked (containers, this machine) the adapter detects it and offers Bypass only.
 
 Adding an agent: implement `Provider` (`server/providers/types.ts`), emit canonical events through `ctx.event`, register it in `server/providers/index.ts`, add fixtures to `test/providers.ts`.
 

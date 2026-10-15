@@ -1,5 +1,5 @@
 // Offline unit checks for the provider adapters: recorded/documented harness events in, canonical events out. No network, no quota.
-import { codexTranslator } from "../server/providers/codex.ts";
+import { codexTranslator, unwrapShell } from "../server/providers/codex.ts";
 import { parseEnv } from "../server/providers/env.ts";
 import { normTool, parsePiModels, piTranslator } from "../server/providers/pi.ts";
 
@@ -116,6 +116,10 @@ const o7 = run((emit) => codexTranslator(emit), [
 ]);
 check("codex: config-file warnings are hidden, real errors kept", o7.filter((e) => e.type === "console_error").length === 1 && o7.find((e) => e.type === "console_error").text.startsWith("Code Mode"));
 check("codex: live-captured turn ends with success", o7.at(-1).subtype === "success" && o7.some((e) => e.type === "assistant" && e.message.content[0].text === "DONE"));
+
+check("codex: shell wrapper stripped from the displayed command", unwrapShell("/usr/bin/zsh -lc 'echo hi > a.txt && cat a.txt'") === "echo hi > a.txt && cat a.txt");
+check("codex: plain commands untouched", unwrapShell("ls -la") === "ls -la");
+check("codex: escaped single quotes restored", unwrapShell("/bin/bash -lc 'echo '\\''q'\\'''") === "echo 'q'", unwrapShell("/bin/bash -lc 'echo '\\''q'\\'''"));
 
 console.log(failed ? `\n${failed} FAILED` : "\nall passed");
 process.exit(failed ? 1 : 0);
