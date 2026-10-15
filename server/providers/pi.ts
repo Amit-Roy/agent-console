@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DATA_DIR } from "../auth.ts";
+import { brainContext } from "./brain.ts";
 import { childEnv } from "./env.ts";
 import { parseJson, spawnLines } from "./proc.ts";
 import { clip, type Agent, type AgentCtx, type Command, type Provider, type ThreadSpec } from "./types.ts";
@@ -163,6 +164,8 @@ export const pi: Provider = {
     const args = ["--mode", "rpc", "--model", t.model, "--session-dir", dir];
     if (fs.readdirSync(dir).length) args.push("--continue");
     if (t.mode === "plan") args.push("--tools", READ_ONLY_TOOLS);
+    const brain = brainContext();
+    if (brain) args.push("--append-system-prompt", brain); // shared memory, same text the Claude hook injects
     const translate = piTranslator((ev) => ctx.event(ev), (list) => ctx.commands(list));
     const p = spawnLines("pi", "pi", args, { cwd: t.cwd, env: childEnv() }, ctx, (line) => {
       const r = parseJson(line);
