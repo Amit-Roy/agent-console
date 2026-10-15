@@ -12,4 +12,4 @@ export const PROVIDERS = new Map(all.map((p) => [p.id, p]));
 export const DEFAULT_PROVIDER = "claude";
 
 export const providerInfo = () =>
-  all.map((p) => ({ id: p.id, label: p.label, modes: p.modes, defaultMode: p.defaultMode, models: p.models(), defaultModel: p.defaultModel(), ...p.status() }));
+  all.map((p) => ({ id: p.id, label: p.label, modes: p.modes, defaultMode: p.defaultMode, note: p.note, models: p.models(), defaultModel: p.defaultModel(), ...p.status() }));

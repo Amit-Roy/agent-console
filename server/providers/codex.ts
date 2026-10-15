@@ -1,12 +1,21 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { childEnv } from "./env.ts";
 import { parseJson, spawnLines } from "./proc.ts";
-import { clip, type Agent, type AgentCtx, type Provider, type ThreadSpec } from "./types.ts";
+import { clip, type Agent, type AgentCtx, type Mode, type Provider, type ThreadSpec } from "./types.ts";
 
 // OpenAI Codex CLI via `codex exec --json`: one process per turn, resumed by thread id. Uses the ChatGPT subscription login
 // (`codex login`). Event mapping follows the documented `exec --json` item stream; see test/providers.ts for fixtures.
+
+// codex runs everything as `/usr/bin/zsh -lc '<command>'`; show just the command
+export const unwrapShell = (cmd: unknown): string => {
+  const c = String(cmd ?? "");
+  const m = c.match(/^\S*\/(?:ba|z|da)?sh -lc (['"])([\s\S]*)\1$/);
+  if (!m) return c;
+  return m[1] === "'" ? m[2].replaceAll("'\\''", "'") : m[2].replaceAll('\\"', '"');
+};
 
 const asst = (b: any) => ({ type: "assistant", message: { role: "assistant", content: [b] } });
 const result = (id: string, text: string, isError: boolean) => ({
@@ -48,7 +57,7 @@ export function codexTranslator(emit: (ev: any) => void) {
         if (it.type === "agent_message" && done) emit(asst({ type: "text", text: String(it.text ?? "") }));
         else if (it.type === "reasoning" && done && it.text) emit(asst({ type: "thinking", thinking: String(it.text) }));
         else if (it.type === "command_execution") {
-          tool(it.id, "Bash", { command: it.command });
+          tool(it.id, "Bash", { command: unwrapShell(it.command) });
           if (done) emit(result(it.id, String(it.aggregated_output ?? ""), it.status === "failed" || (it.exit_code ?? 0) !== 0));
         } else if (it.type === "file_change") {
           const changes = it.changes ?? [];
@@ -78,11 +87,25 @@ export function codexTranslator(emit: (ev: any) => void) {
 
 const loggedIn = () => fs.existsSync(path.join(process.env.CODEX_HOME || path.join(os.homedir(), ".codex"), "auth.json"));
 
+// Codex's Plan and Accept-edits modes rely on its bubblewrap sandbox, which needs unprivileged user namespaces. Many containers
+// (this one included) forbid them, and every command then fails with "bwrap: No permissions to create a new namespace".
+let sandbox: boolean | undefined;
+const sandboxWorks = () => (sandbox ??= spawnSync("unshare", ["--user", "true"], { stdio: "ignore" }).status === 0);
+
 export const codex: Provider = {
   id: "codex",
   label: "Codex",
-  modes: ["plan", "acceptEdits", "bypassPermissions"],
-  defaultMode: "acceptEdits",
+  get modes(): Mode[] {
+    return sandboxWorks() ? ["plan", "acceptEdits", "bypassPermissions"] : ["bypassPermissions"];
+  },
+  get defaultMode(): Mode {
+    return sandboxWorks() ? "acceptEdits" : "bypassPermissions";
+  },
+  get note(): string {
+    return sandboxWorks()
+      ? "Uses your ChatGPT login. Plan is a read-only sandbox, Accept edits is workspace-write."
+      : "Uses your ChatGPT login. This machine cannot run Codex's sandbox (no user namespaces), so only Bypass is available.";
+  },
   // "default" = whatever ~/.codex/config.toml selects
   models: () => ["default", ...(process.env.AGENT_CONSOLE_CODEX_MODELS || "").split(",").map((s) => s.trim()).filter(Boolean)],
   defaultModel: () => "default",
