@@ -359,6 +359,8 @@ for (const scheme of ["dark", "light"] as const) {
   const page = await ctx.newPage();
   await page.goto(BASE + "/");
   await page.waitForSelector("#threads li", { timeout: 8000 });
+  // slash commands are per agent and the test expects Claude's: open a Claude thread (non-Claude rows carry an agent tag)
+  await page.locator("#threads li").filter({ hasNotText: /Codex|Pi|Mock/ }).first().click();
   await page.waitForFunction(() => !(document.getElementById("input") as HTMLTextAreaElement).disabled);
   const input = page.locator("#input");
   const visible = () => page.locator("#slash").isVisible();
