@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DATA_DIR } from "./auth.ts";
 import { brainCommit } from "./providers/brain.ts";
+import { createNudger, type Nudger } from "./providers/nudge.ts";
 import { DEFAULT_PROVIDER, PROVIDERS, type Agent, type AgentCtx, type Command, type Mode } from "./providers/index.ts";
 
 export type { Command, Mode };
@@ -38,6 +39,7 @@ interface Live {
 export class Threads {
   private threads = new Map<string, Thread>();
   private live = new Map<string, Live>();
+  private nudgers = new Map<string, Nudger>(); // brain-save reminders for harnesses without hooks (Claude's Stop hook does its own)
   private emit: Emit;
   private commands: Record<string, Command[]> = {}; // per provider: each harness has its own slash commands and skills
   constructor(emit: Emit) {
@@ -118,6 +120,7 @@ export class Threads {
 
   remove(id: string) {
     this.kill(id);
+    this.nudgers.delete(id);
     this.threads.delete(id);
     this.persist();
     fs.rmSync(path.join(LOG_DIR, `${id}.jsonl`), { force: true });
@@ -189,9 +192,24 @@ export class Threads {
       brainCommit(); // agents may have written wiki pages this turn; keep the shared brain's git history current
     }
     this.publish(t.id, ev, ev.type !== "stream_event");
+    if (t.provider !== "claude") this.nudge(t, ev);
   }
 
-  send(id: string, text: string) {
+  private nudge(t: Thread, ev: any) {
+    let n = this.nudgers.get(t.id);
+    if (!n) this.nudgers.set(t.id, (n = createNudger()));
+    n.observe(ev);
+    if (ev.type !== "result" || ev.is_error) return;
+    const msg = n.check();
+    if (!msg) return;
+    setTimeout(() => {
+      try {
+        if (this.threads.get(t.id)?.status === "idle") this.send(t.id, msg, "brain"); // skipped if the user already started a turn
+      } catch {}
+    }, 300).unref();
+  }
+
+  send(id: string, text: string, auto?: "brain") {
     const t = this.threads.get(id);
     if (!t) throw new Error("Unknown thread");
     if (t.status === "running") throw new Error("A turn is already running.");
@@ -199,7 +217,7 @@ export class Threads {
     if (!live || !live.agent.alive) live = this.start(t);
     live.aborted = false;
     t.status = "running";
-    this.publish(id, { type: "user_input", text, ts: Date.now() });
+    this.publish(id, { type: "user_input", text, ts: Date.now(), ...(auto ? { auto } : {}) });
     this.touch(t);
     live.agent.send(text);
   }

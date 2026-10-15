@@ -7,23 +7,23 @@ import path from "node:path";
 // user-level hooks. Pi and Codex have no equivalent installed, so we do the same two jobs here, for any harness:
 //   recall: hand the harness the same context the Claude hook injects (rules + index) when its process starts
 //   save:   agents edit wiki pages themselves; after each turn we run `brain commit` (file-locked, idempotent)
-const BIN = process.env.AGENT_CONSOLE_BRAIN || path.join(os.homedir(), "repos", "brain", "bin", "brain");
+export const BRAIN_BIN = process.env.AGENT_CONSOLE_BRAIN || path.join(os.homedir(), "repos", "brain", "bin", "brain");
 const ttl = 15_000;
 let cache: { at: number; text: string } | undefined;
 
-export const brainAvailable = () => fs.existsSync(BIN);
+export const brainAvailable = () => fs.existsSync(BRAIN_BIN);
 
 export function brainContext(): string {
   if (!brainAvailable()) return "";
   if (cache && Date.now() - cache.at < ttl) return cache.text;
   let text = "";
   try {
-    text = execFileSync(BIN, ["context"], { encoding: "utf8", timeout: 5000, env: { ...process.env, BRAIN_NO_NUDGE: "1" } }).trim();
+    text = execFileSync(BRAIN_BIN, ["context"], { encoding: "utf8", timeout: 5000, env: { ...process.env, BRAIN_NO_NUDGE: "1" } }).trim();
   } catch {}
   cache = { at: Date.now(), text };
   return text;
 }
 
 export function brainCommit() {
-  if (brainAvailable()) execFile(BIN, ["commit"], { timeout: 15_000 }, () => {});
+  if (brainAvailable()) execFile(BRAIN_BIN, ["commit"], { timeout: 15_000 }, () => {});
 }
