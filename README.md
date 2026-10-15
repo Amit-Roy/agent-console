@@ -66,7 +66,7 @@ Credentials for non-Claude agents are read from env files, never from the Claude
 `~/.config/agent-console/env`, then `~/openrouter/.env` (override the list with `AGENT_CONSOLE_ENV_FILES`, colon separated). `OPEN_ROUTER_TOKEN` is accepted as an alias of `OPENROUTER_API_KEY`.
 With an OpenRouter key, Pi offers its `:free` models only (`AGENT_CONSOLE_PI_ALL=1` for everything, `AGENT_CONSOLE_PI_MODELS=a,b` to pin a list).
 OpenRouter's free tier allows 50 requests a day (1000 after a one-off $10 credit), so use the mock for routine tests.
-Slash commands and skills are listed per agent. Codex status: the adapter follows the documented `exec --json` events and is unit tested against fixtures, but has not run against a live login yet.
+Slash commands and skills are listed per agent. Codex was verified live (login, two turns, resume). Its shell tool needs the `codex-code-mode-host` helper that ships beside the real binary (`~/.codex/packages/standalone/current/bin/`); a bare copy of `codex` on PATH answers but cannot run commands, and the thread shows Codex's own "Code Mode is unavailable" error.
 
 Adding an agent: implement `Provider` (`server/providers/types.ts`), emit canonical events through `ctx.event`, register it in `server/providers/index.ts`, add fixtures to `test/providers.ts`.
 

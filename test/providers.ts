@@ -105,5 +105,17 @@ check("codex: ends with success result", o5.at(-1).type === "result" && o5.at(-1
 const o6 = run((emit) => codexTranslator(emit), [{ type: "turn.started" }, { type: "item.completed", item: { id: "c", type: "command_execution", command: "false", aggregated_output: "", exit_code: 1, status: "failed" } }, { type: "turn.failed", error: { message: "boom" } }]);
 check("codex: failed command flagged, turn.failed -> error result", o6.find((e) => e.type === "user").message.content[0].is_error === true && o6.some((e) => e.type === "console_error" && e.text === "boom") && o6.at(-1).is_error);
 
+// captured from a live `codex exec --json` run (0.162.1): config warning, then a real error, then the turn
+const o7 = run((emit) => codexTranslator(emit), [
+  { type: "thread.started", thread_id: "T2" },
+  { type: "item.completed", item: { id: "item_0", type: "error", message: "Codex is ignoring 1 unrecognized configuration setting. Check for typos or deprecated settings.\n  user (/home/coder/.codex/config.toml): `preferred_auth_method` is ignored." } },
+  { type: "item.completed", item: { id: "item_2", type: "error", message: "Code Mode is unavailable because failed to spawn code-mode host" } },
+  { type: "turn.started" },
+  { type: "item.completed", item: { id: "item_3", type: "agent_message", text: "DONE" } },
+  { type: "turn.completed", usage: { input_tokens: 28584, output_tokens: 68 } },
+]);
+check("codex: config-file warnings are hidden, real errors kept", o7.filter((e) => e.type === "console_error").length === 1 && o7.find((e) => e.type === "console_error").text.startsWith("Code Mode"));
+check("codex: live-captured turn ends with success", o7.at(-1).subtype === "success" && o7.some((e) => e.type === "assistant" && e.message.content[0].text === "DONE"));
+
 console.log(failed ? `\n${failed} FAILED` : "\nall passed");
 process.exit(failed ? 1 : 0);

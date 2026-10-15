@@ -14,6 +14,9 @@ const result = (id: string, text: string, isError: boolean) => ({
   message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: clip(text), is_error: isError }] },
 });
 
+// codex reports harmless ~/.codex/config.toml warnings as "error" items before every turn; the user can't act on them from here
+const CONFIG_WARNING = /^Codex is ignoring \d+ unrecognized configuration setting/;
+
 export function codexTranslator(emit: (ev: any) => void) {
   let started = 0;
   const begun = new Set<string>();
@@ -57,7 +60,7 @@ export function codexTranslator(emit: (ev: any) => void) {
         } else if (it.type === "web_search") {
           tool(it.id, "WebSearch", { query: it.query });
           if (done) emit(result(it.id, "", false));
-        } else if (it.type === "error" && done) emit({ type: "console_error", text: String(it.message ?? "error") });
+        } else if (it.type === "error" && done && !CONFIG_WARNING.test(String(it.message))) emit({ type: "console_error", text: String(it.message ?? "error") });
         break;
       }
       case "turn.completed":
@@ -103,11 +106,13 @@ export const codex: Provider = {
         else args.push("-c", `sandbox_mode="${t.mode === "plan" ? "read-only" : "workspace-write"}"`, "-c", 'approval_policy="never"');
         if (session) args.push("resume", session);
         args.push("-"); // prompt from stdin
-        p = spawnLines("codex", "codex", args, { cwd: t.cwd, env: childEnv() }, { ...ctx, exited: (i) => { dead = true; ctx.exited(i); } }, (line) => {
+        // one process per turn: an exit only matters if it is the latest process (a previous turn's exit can land after the next send)
+        const proc = spawnLines("codex", "codex", args, { cwd: t.cwd, env: childEnv() }, { ...ctx, exited: (i) => { if (p !== proc) return; dead = true; ctx.exited(i); } }, (line) => {
           const r = parseJson(line);
           if (r) translate(r);
         });
-        p.proc.stdin!.end(text);
+        p = proc;
+        proc.proc.stdin!.end(text);
       },
       abort: () => p?.abort(),
       kill: () => p?.kill(),
