@@ -427,6 +427,8 @@ dialog .sub{font:var(--fw-reg) var(--f-md);color:var(--t2)}
 .fld{display:block;margin-top:var(--sp-4)}
 .fld>.lbl{display:block;margin-bottom:var(--sp-2);font:var(--fw-med) var(--f-sm);letter-spacing:var(--ls-sm);color:var(--t2)}
 .callout{margin-top:var(--sp-4);padding:var(--sp-3) var(--sp-4);border-radius:var(--r-sm);background:var(--warn-tint);color:var(--warn);font:var(--fw-reg) var(--f-md);letter-spacing:var(--ls-md);display:flex;gap:var(--sp-3);align-items:flex-start}
+.hint{margin-top:var(--sp-3);color:var(--t3);font:var(--fw-reg) var(--f-sm);letter-spacing:var(--ls-sm)}
+.btn.chip>span{max-width:14rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .callout .ico{margin-top:.1875rem}
 .row{display:flex;gap:var(--sp-2);justify-content:flex-end;margin-top:var(--sp-6)}
 .row .btn{min-height:calc(var(--ctl-h) + var(--sp-1));padding:0 var(--sp-4)}

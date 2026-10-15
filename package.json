@@ -4,7 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "node test/e2e.ts",
+    "test": "node test/providers.ts && node test/e2e.ts",
     "start": "node server/index.ts",
     "icons": "node scripts/make-icons.mjs",
     "test:ui": "node test/ui.ts",

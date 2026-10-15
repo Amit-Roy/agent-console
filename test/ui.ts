@@ -220,6 +220,34 @@ for (const scheme of ["dark", "light"] as const) {
   await page.click("#new");
   await page.waitForTimeout(250);
   check("dialog: no native selects", (await page.locator("dialog select").count()) === 0);
+  // agent picker: one dialog, several harnesses; models and modes follow the choice
+  const agentLabels = async () => { await page.click("#d-prov"); const t = await page.locator(".menu [role=option] .m-label").allInnerTexts(); return t; };
+  const labels = await agentLabels();
+  check("dialog: agent menu lists Claude Code, Pi, Codex", ["Claude Code", "Pi", "Codex"].every((l) => labels.includes(l)), labels.join());
+  const codexDisabled = await page.locator(".menu [role=option]", { hasText: "Codex" }).getAttribute("aria-disabled");
+  check("dialog: a not-ready agent is disabled and says why", codexDisabled === "true" ? (await page.locator(".menu [role=option]", { hasText: "Codex" }).innerText()).includes("codex login") : true);
+  const piItem = page.locator(".menu [role=option]", { hasText: "Pi" }).first();
+  if ((await piItem.getAttribute("aria-disabled")) !== "true") {
+    await piItem.click();
+    await page.click("#d-mode");
+    const piModes = await page.locator(".menu [role=option] .m-label").allInnerTexts();
+    check("dialog: Pi offers only Plan and Bypass (it has no approval prompts)", piModes.join() === "Plan,Bypass", piModes.join());
+    await page.keyboard.press("Escape");
+    check("dialog: Pi shows its permission note and defaults to the bypass warning", (await page.locator("#d-note").isVisible()) && (await page.locator("#d-warn").isVisible()));
+    await page.click("#d-model");
+    const piModels = await page.locator(".menu [role=option]").count();
+    const firstDesc = await page.locator(".menu [role=option] .m-desc").first().innerText();
+    check("dialog: Pi model menu is populated and labels source", piModels > 0 && /free|openrouter|openai/.test(firstDesc), `${piModels} ${firstDesc}`);
+    await page.screenshot({ path: `${OUT}/ui-pi-models.png` });
+    await page.keyboard.press("Escape");
+  } else console.log("SKIP  Pi checks (Pi not configured on this machine)");
+  await page.click("#d-prov");
+  await page.locator(".menu [role=option]", { hasText: "Claude Code" }).click();
+  await page.click("#d-mode");
+  const claudeModes = await page.locator(".menu [role=option] .m-label").allInnerTexts();
+  check("dialog: switching back restores Claude's three modes", claudeModes.length === 3, claudeModes.join());
+  await page.keyboard.press("Escape");
+  check("dialog: create button enabled for a ready agent", !(await page.locator("#d-ok").isDisabled()));
   await page.click("#d-cwd");
   const inDialog = await page.evaluate(() => !!document.querySelector("dialog .menu"));
   check("dialog: folder menu opens inside the modal", inDialog);
