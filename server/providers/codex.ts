@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { brainContext } from "./brain.ts";
 import { childEnv } from "./env.ts";
 import { parseJson, spawnLines } from "./proc.ts";
 import { clip, type Agent, type AgentCtx, type Mode, type Provider, type ThreadSpec } from "./types.ts";
@@ -127,6 +128,8 @@ export const codex: Provider = {
         if (t.model !== "default") args.push("-m", t.model);
         if (t.mode === "bypassPermissions") args.push("--dangerously-bypass-approvals-and-sandbox");
         else args.push("-c", `sandbox_mode="${t.mode === "plan" ? "read-only" : "workspace-write"}"`, "-c", 'approval_policy="never"');
+        const brain = brainContext();
+        if (brain) args.push("-c", `developer_instructions=${JSON.stringify(brain)}`); // shared memory; a JSON string is a valid TOML string
         if (session) args.push("resume", session);
         args.push("-"); // prompt from stdin
         // one process per turn: an exit only matters if it is the latest process (a previous turn's exit can land after the next send)

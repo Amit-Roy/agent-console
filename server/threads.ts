@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DATA_DIR } from "./auth.ts";
+import { brainCommit } from "./providers/brain.ts";
 import { DEFAULT_PROVIDER, PROVIDERS, type Agent, type AgentCtx, type Command, type Mode } from "./providers/index.ts";
 
 export type { Command, Mode };
@@ -185,6 +186,7 @@ export class Threads {
       t.status = "idle";
       if (typeof ev.total_cost_usd === "number") t.cost += ev.total_cost_usd;
       this.touch(t);
+      brainCommit(); // agents may have written wiki pages this turn; keep the shared brain's git history current
     }
     this.publish(t.id, ev, ev.type !== "stream_event");
   }

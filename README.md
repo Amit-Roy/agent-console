@@ -66,6 +66,9 @@ Credentials for non-Claude agents are read from env files, never from the Claude
 `~/.config/agent-console/env`, then `~/openrouter/.env` (override the list with `AGENT_CONSOLE_ENV_FILES`, colon separated). `OPEN_ROUTER_TOKEN` is accepted as an alias of `OPENROUTER_API_KEY`.
 With an OpenRouter key, Pi offers its `:free` models only (`AGENT_CONSOLE_PI_ALL=1` for everything, `AGENT_CONSOLE_PI_MODELS=a,b` to pin a list).
 OpenRouter's free tier allows 50 requests a day (1000 after a one-off $10 credit), so use the mock for routine tests.
+Shared memory: every agent uses the same brain wiki (`~/repos/brain`, override with `AGENT_CONSOLE_BRAIN`). Claude reaches it through its user hooks; for Pi and Codex the
+server injects the same context at start (`--append-system-prompt` / `-c developer_instructions=`), and after every turn it runs `brain commit`, so pages any agent writes land in the brain's git history.
+Plan mode on Pi (read-only tools) can recall but not save. Codex's own `memories` feature is off by default; leave it off so there is one store.
 Slash commands and skills are listed per agent. Codex was verified live (login, resume, shell tool). It needs the `codex-code-mode-host` helper beside the real binary (the standalone installer puts both in `~/.codex/packages/standalone/`). Its Plan and Accept-edits modes use a bubblewrap sandbox; where user namespaces are blocked (containers, this machine) the adapter detects it and offers Bypass only.
 
 Adding an agent: implement `Provider` (`server/providers/types.ts`), emit canonical events through `ctx.event`, register it in `server/providers/index.ts`, add fixtures to `test/providers.ts`.

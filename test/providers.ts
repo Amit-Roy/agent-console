@@ -1,4 +1,5 @@
 // Offline unit checks for the provider adapters: recorded/documented harness events in, canonical events out. No network, no quota.
+import { brainContext } from "../server/providers/brain.ts";
 import { codexTranslator, unwrapShell } from "../server/providers/codex.ts";
 import { parseEnv } from "../server/providers/env.ts";
 import { normTool, parsePiModels, piTranslator } from "../server/providers/pi.ts";
@@ -120,6 +121,11 @@ check("codex: live-captured turn ends with success", o7.at(-1).subtype === "succ
 check("codex: shell wrapper stripped from the displayed command", unwrapShell("/usr/bin/zsh -lc 'echo hi > a.txt && cat a.txt'") === "echo hi > a.txt && cat a.txt");
 check("codex: plain commands untouched", unwrapShell("ls -la") === "ls -la");
 check("codex: escaped single quotes restored", unwrapShell("/bin/bash -lc 'echo '\\''q'\\'''") === "echo 'q'", unwrapShell("/bin/bash -lc 'echo '\\''q'\\'''"));
+
+// ---- shared brain: context handed to pi/codex at start
+const ctx = brainContext();
+check("brain: context has the protocol and index (or brain is absent)", ctx === "" || (ctx.includes("Shared memory for ALL agents") && ctx.includes("wiki/index.md")));
+check("brain: context fits Codex's 1000-token additionalContext-style budget", ctx.length < 4000, `${ctx.length} chars`);
 
 console.log(failed ? `\n${failed} FAILED` : "\nall passed");
 process.exit(failed ? 1 : 0);
