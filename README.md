@@ -68,6 +68,7 @@ With an OpenRouter key, Pi offers its `:free` models only (`AGENT_CONSOLE_PI_ALL
 OpenRouter's free tier allows 50 requests a day (1000 after a one-off $10 credit), so use the mock for routine tests.
 Shared memory: every agent uses the same brain wiki (`~/repos/brain`, override with `AGENT_CONSOLE_BRAIN`). Claude reaches it through its user hooks; for Pi and Codex the
 server injects the same context at start (`--append-system-prompt` / `-c developer_instructions=`), and after every turn it runs `brain commit`, so pages any agent writes land in the brain's git history.
+Pi and Codex have no Stop hook, so the server applies the brain's own reminder rule: after `BRAIN_NUDGE_AFTER` (default 12) tool calls with no wiki write, a clean turn is followed by one automatic reminder turn (shown as a note, silenced by `BRAIN_NO_NUDGE=1`). Claude keeps using its hook.
 Plan mode on Pi (read-only tools) can recall but not save. Codex's own `memories` feature is off by default; leave it off so there is one store.
 Slash commands and skills are listed per agent. Codex was verified live (login, resume, shell tool). It needs the `codex-code-mode-host` helper beside the real binary (the standalone installer puts both in `~/.codex/packages/standalone/`). Its Plan and Accept-edits modes use a bubblewrap sandbox; where user namespaces are blocked (containers, this machine) the adapter detects it and offers Bypass only.
 
@@ -80,7 +81,7 @@ Adding an agent: implement `Provider` (`server/providers/types.ts`), emit canoni
     npm run test:ui          # real Chromium (playwright): themes, viewports, fonts, menus incl. the agent picker, code blocks, contrast, slash menu, PWA installability. Needs a thread with tool cards and a Claude command cache (a live server has them)
 
 To test on a scratch instance without touching your threads:
-    AGENT_CONSOLE_MOCK=1 AGENT_CONSOLE_DATA=/tmp/ac-test PORT=7071 node server/index.ts &   # then BASE=http://127.0.0.1:7071 AGENT_CONSOLE_DATA=/tmp/ac-test PORT=7071 npm test
+    BRAIN_NUDGE_AFTER=2 AGENT_CONSOLE_MOCK=1 AGENT_CONSOLE_DATA=/tmp/ac-test PORT=7071 node server/index.ts &   # then BASE=http://127.0.0.1:7071 AGENT_CONSOLE_DATA=/tmp/ac-test PORT=7071 npm test
 Kill it by pid. `pkill -f "node server/index.ts"` also kills your real server.
 
 ## Layout

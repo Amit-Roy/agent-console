@@ -407,6 +407,10 @@ function dropLive(kind) {
 function onEvent(e, live) {
   switch (e.type) {
     case "user_input": {
+      if (e.auto === "brain") {
+        push(el("div", "msg note", "Reminder sent: save anything durable to the shared brain."), live);
+        break;
+      }
       const d = el("div", "msg user");
       d.append(el("div", "bubble", e.text), copyActions(() => e.text));
       push(d, live);

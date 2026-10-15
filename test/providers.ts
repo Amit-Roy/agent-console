@@ -1,5 +1,6 @@
 // Offline unit checks for the provider adapters: recorded/documented harness events in, canonical events out. No network, no quota.
 import { brainContext } from "../server/providers/brain.ts";
+import { createNudger } from "../server/providers/nudge.ts";
 import { codexTranslator, unwrapShell } from "../server/providers/codex.ts";
 import { parseEnv } from "../server/providers/env.ts";
 import { normTool, parsePiModels, piTranslator } from "../server/providers/pi.ts";
@@ -126,6 +127,31 @@ check("codex: escaped single quotes restored", unwrapShell("/bin/bash -lc 'echo 
 const ctx = brainContext();
 check("brain: context has the protocol and index (or brain is absent)", ctx === "" || (ctx.includes("Shared memory for ALL agents") && ctx.includes("wiki/index.md")));
 check("brain: context fits Codex's 1000-token additionalContext-style budget", ctx.length < 4000, `${ctx.length} chars`);
+
+// ---- brain nudge (same rule as the Claude Stop hook)
+process.env.BRAIN_NUDGE_AFTER = "3";
+delete process.env.BRAIN_NO_NUDGE;
+const tool = (command: string, extra: any = {}) => ({ type: "assistant", message: { content: [{ type: "tool_use", id: "x", name: "Bash", input: { command, ...extra } }] } });
+const n1 = createNudger();
+n1.observe(tool("ls")); n1.observe(tool("ls"));
+check("nudge: quiet below the threshold", n1.check() === undefined);
+n1.observe(tool("ls"));
+const msg = n1.check();
+check("nudge: fires at the threshold with the brain wording", !!msg && msg.startsWith("[brain] 3 tool calls") && msg.includes("brain: nothing to save"), String(msg));
+check("nudge: fires once, then resets", n1.check() === undefined);
+n1.observe(tool("ls")); n1.observe(tool("ls"));
+check("nudge: counts from the reminder, not from zero", n1.check() === undefined);
+const n2 = createNudger();
+n2.observe(tool("ls")); n2.observe(tool("cat /home/coder/repos/brain/wiki/x.md")); n2.observe(tool("ls"));
+check("nudge: a wiki write resets the count", n2.check() === undefined);
+const n3 = createNudger();
+n3.observe(tool("ls")); n3.observe(tool("ls")); n3.observe({ type: "assistant", message: { content: [{ type: "tool_use", id: "y", name: "Write", input: { file_path: "/home/coder/repos/brain/wiki/p.md" } }] } }); n3.observe(tool("ls"));
+check("nudge: Write into wiki/ counts as a save", n3.check() === undefined);
+const n4 = createNudger();
+["ls", "ls", "ls"].forEach((c) => n4.observe(tool(c)));
+process.env.BRAIN_NO_NUDGE = "1";
+check("nudge: BRAIN_NO_NUDGE silences it", n4.check() === undefined);
+delete process.env.BRAIN_NO_NUDGE;
 
 console.log(failed ? `\n${failed} FAILED` : "\nall passed");
 process.exit(failed ? 1 : 0);

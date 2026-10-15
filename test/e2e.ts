@@ -1,5 +1,5 @@
 // End-to-end check against a running server: auth gate, websocket origin check, provider plumbing via the mock agent.
-// Start the server like:  AGENT_CONSOLE_MOCK=1 AGENT_CONSOLE_DATA=/tmp/ac-test PORT=7071 node server/index.ts
+// Start the server like:  BRAIN_NUDGE_AFTER=2 AGENT_CONSOLE_MOCK=1 AGENT_CONSOLE_DATA=/tmp/ac-test PORT=7071 node server/index.ts
 // REAL=1 also runs one turn against the real claude CLI (spends a little subscription quota).
 import { WebSocket } from "ws";
 import { makeToken } from "../server/auth.ts";
@@ -96,6 +96,17 @@ if (hello.providers.some((p: any) => p.id === "mock")) {
   await waitFor((m) => m.t === "event" && m.event.type === "result", 5000);
   const ev2 = events(id);
   check("mock: tool_use then tool_result then result", ["assistant", "user", "assistant", "result"].every((t, i) => ev2.filter((e) => !["system", "stream_event", "user_input"].includes(e.type))[i]?.type === t));
+
+  // brain reminder: the scratch server runs with BRAIN_NUDGE_AFTER=2, and this thread has now made 2 tool calls with no wiki write
+  clear();
+  ws.send(JSON.stringify({ t: "send", thread: id, text: "tool second" }));
+  const nudged = await waitFor((m) => m.t === "event" && m.event.type === "user_input" && m.event.auto === "brain", 4000);
+  if (nudged) {
+    check("nudge: server sends one automatic brain reminder after a long turn", nudged.event.text.startsWith("[brain] 2 tool calls"));
+    await waitFor((m) => m.t === "event" && m.event.type === "result" && inbox.indexOf(m) > inbox.indexOf(nudged), 4000);
+    await new Promise((r) => setTimeout(r, 800));
+    check("nudge: exactly one reminder, thread idle afterwards", inbox.filter((m) => m.t === "event" && m.event.auto === "brain").length === 1 && inbox.filter((m) => m.t === "thread" && m.thread.id === id).at(-1)?.thread.status === "idle");
+  } else console.log("SKIP  nudge e2e (start the scratch server with BRAIN_NUDGE_AFTER=2)");
 
   clear();
   ws.send(JSON.stringify({ t: "send", thread: id, text: "fail now" }));
