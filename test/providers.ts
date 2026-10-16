@@ -4,7 +4,7 @@ import { createNudger } from "../server/providers/nudge.ts";
 import { codexTranslator, unwrapShell } from "../server/providers/codex.ts";
 import { parseEnv } from "../server/providers/env.ts";
 import { replayPreamble, threadToMarkdown, turnsOf } from "../server/export.ts";
-import { needsLabel, parseLabels } from "../server/providers/label.ts";
+import { excerpt, needsLabel, parseLabels } from "../server/providers/label.ts";
 import { cleanTitle } from "../server/providers/title.ts";
 import { normTool, parsePiModels, piTranslator } from "../server/providers/pi.ts";
 
@@ -35,6 +35,7 @@ check("title: a whole sentence is not a title", cleanTitle("I'm sorry, but I can
 check("title: empty / junk is rejected", cleanTitle("") === undefined && cleanTitle(undefined) === undefined && cleanTitle('""') === undefined);
 
 // ---- tool labels
+check("labels: only a 100-char excerpt of a command is sent, with dots", excerpt("x".repeat(500)) === "x".repeat(100) + "..." && excerpt("ls  -la\n/tmp") === "ls -la /tmp");
 check("labels: parses a clean JSON array", JSON.stringify(parseLabels('["Running the tests", "Listing files."]', 2)) === JSON.stringify(["Running the tests", "Listing files"]));
 check("labels: tolerates a code fence around the array", parseLabels('```json\n["Checking git status"]\n```', 1)?.[0] === "Checking git status");
 check("labels: wrong length is rejected", parseLabels('["a", "b"]', 3) === undefined);

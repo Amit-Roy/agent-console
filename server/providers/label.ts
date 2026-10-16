@@ -7,7 +7,7 @@ import { completeLabel } from "./small-model.ts";
 
 const FLUSH_MS = 700;
 const MAX_BATCH = 8;
-const MAX_CMD = 300;
+const MAX_CMD = 100; // only an excerpt of each command leaves the machine
 const MAX_LABEL = 72;
 
 export interface LabelJob {
@@ -22,8 +22,10 @@ export function needsLabel(name: string, input: any): input is { command: string
   return name === "Bash" && typeof input?.command === "string" && input.command.trim() !== "" && !(typeof input.description === "string" && input.description.trim());
 }
 
+export const excerpt = (c: string) => { const one = c.replace(/\s+/g, " ").trim(); return one.length > MAX_CMD ? one.slice(0, MAX_CMD) + "..." : one; };
+
 const PROMPT = (cwd: string, commands: string[]) =>
-  `For each numbered shell command, write a plain-English label of 3 to 8 words saying what it does. Start with an -ing verb, e.g. "Running the test suite", "Searching the repo for TODOs", "Listing files in the project". No quotes, no trailing period. Reply with ONLY a JSON array of ${commands.length} string(s), in order.\n\nWorking folder: ${cwd}\n\n${commands.map((c, i) => `${i + 1}. ${c.slice(0, MAX_CMD)}`).join("\n")}`;
+  `For each numbered shell command, write a plain-English label of 3 to 8 words saying what it does. Start with an -ing verb, e.g. "Running the test suite", "Searching the repo for TODOs", "Listing files in the project". No quotes, no trailing period. Reply with ONLY a JSON array of ${commands.length} string(s), in order.\n\nWorking folder: ${cwd}\n\n${commands.map((c, i) => `${i + 1}. ${excerpt(c)}`).join("\n")}`;
 
 /** Model reply -> exactly n tidy labels, or undefined if the reply is not a clean array of that length. */
 export function parseLabels(raw: string | undefined, n: number): string[] | undefined {

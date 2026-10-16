@@ -1202,7 +1202,7 @@ function onEvent(e, live) {
           sum.append(tool, el("span", "name", toolName(b.name, b.input)), el("span", why ? "sum human" : "sum", why || summarize(b.name, b.input)), st, icon("chev-right", "chev"));
           sum.title = summarize(b.name, b.input);
           card.toolInput = { name: b.name, input: b.input };
-          card.append(sum, el("div", "body"));
+          card.append(sum, el("div", "tool-why", why), el("div", "body"));
           card.addEventListener("toggle", () => {
             if (!card.open) return;
             if (card.toolInput) {
@@ -1275,6 +1275,8 @@ function onEvent(e, live) {
       if (sumEl && !sumEl.classList.contains("human")) {
         sumEl.textContent = e.label;
         sumEl.classList.add("human");
+        const w = sumEl.closest(".card")?.querySelector(":scope > .tool-why");
+        if (w) w.textContent = e.label; // the row clips long labels; the open card shows the whole sentence
       }
       break;
     }

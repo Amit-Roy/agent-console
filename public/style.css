@@ -696,3 +696,5 @@ body.login{display:grid;place-items:center;overflow:auto;padding:var(--sp-4)}
 @media (prefers-reduced-motion:reduce){.compact-card .cc-bar{animation:none}}
 
 .dash-link{justify-content:flex-start;text-decoration:none;margin-bottom:var(--sp-2)}
+.tool-why{padding:var(--sp-2) var(--sp-3) 0;color:var(--t1);font:var(--fw-reg) var(--f-sm);letter-spacing:var(--ls-sm);overflow-wrap:anywhere}
+.tool-why:empty{display:none}
