@@ -174,7 +174,8 @@ export const pi: Provider = {
   steer: true,
   note: "Pi never asks before acting: Plan limits it to read-only tools, Bypass gives it everything.",
   models: () => cached,
-  defaultModel: () => cached[0] ?? "",
+  // a free model known to answer reliably (others come and go upstream); otherwise the first listed
+  defaultModel: () => cached.find((m) => m.includes("nemotron-3-super-120b-a12b:free")) ?? cached[0] ?? "",
   modelDetails: () => Object.fromEntries(cached.map(id => [id, { label: id.split("/").at(-1)!.replace(/:free$/, ""), efforts: thinking.has(id) ? ["off", "minimal", "low", "medium", "high"] : [] }])),
   status() {
     if (!configured()) return { ok: false, hint: "Add OPEN_ROUTER_TOKEN to ~/openrouter/.env (or ~/.config/agent-console/env), or run `pi` and /login." };
