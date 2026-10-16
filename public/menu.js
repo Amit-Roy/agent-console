@@ -76,6 +76,7 @@ export function createMenu(opts) {
   }
 
   function open(start = "selected") {
+    if (o.getItems && !pop) items = o.getItems(); // items that depend on state at the moment of opening
     if (pop || trigger.disabled || !items.length) return;
     for (const m of openMenus) m.close(false);
     pop = el("div", "menu");

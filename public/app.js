@@ -224,6 +224,13 @@ function fieldTrigger(it, b) {
   b.replaceChildren(el("span", "", it?.label ?? ""), icon("chev-down", "chev"));
 }
 // ---------- thread actions: one list, used by the ⋯ on every row and by the header ⋯ ----------
+const threadActions = (id) => {
+  const cur = state.threads.get(id)?.provider;
+  const others = [...state.providers.values()].filter((p) => p.id !== cur && p.id !== "mock" && p.ok !== false);
+  const forks = others.map((p) => ({ value: `fork:${p.id}`, label: `Fork in ${p.label}`, desc: "Replay this conversation in another agent", icon: "fork" }));
+  const i = THREAD_ACTIONS.findIndex((a) => a.value === "fork") + 1;
+  return [...THREAD_ACTIONS.slice(0, i), ...forks, ...THREAD_ACTIONS.slice(i)];
+};
 const THREAD_ACTIONS = [
   { value: "rename", label: "Rename", icon: "pencil" },
   { value: "compact", label: "Compact context", desc: "Reduce context; keep the transcript", icon: "sparkle" },
@@ -257,6 +264,8 @@ async function runThreadAction(id, action) {
     void loadLatencySummary();
   } else if (action === "delete") {
     if (confirm(`Delete "${t.title}" and its history?`)) send({ t: "delete", thread: id });
+  } else if (action.startsWith("fork:")) {
+    send({ t: "fork", thread: id, provider: action.slice(5) });
   } else if (action === "fork") {
     send({ t: "fork", thread: id }); // the server answers "created" and we open the new thread
   } else if (action === "download") {
@@ -300,7 +309,7 @@ const menus = {
   }),
   more: createMenu({
     trigger: $("more"), kind: "menu", label: "Thread actions", align: "end",
-    items: THREAD_ACTIONS,
+    items: THREAD_ACTIONS, getItems: () => threadActions(state.current),
     onSelect: (v) => state.current && runThreadAction(state.current, v),
   }),
   dProv: createMenu({ trigger: $("d-prov"), label: "Agent", renderTrigger: fieldTrigger, onSelect: (v) => fillDialog(v) }),
@@ -356,7 +365,7 @@ function renderThreads() {
     more.onclick = (e) => e.stopPropagation(); // the menu opens from its own listener; the row must not also open the thread
     more.addEventListener("keydown", (e) => (e.key === "Enter" || e.key === " ") && e.stopPropagation());
     createMenu({
-      trigger: more, kind: "menu", label: `Actions for ${t.title}`, align: "end", items: THREAD_ACTIONS,
+      trigger: more, kind: "menu", label: `Actions for ${t.title}`, align: "end", items: THREAD_ACTIONS, getItems: () => threadActions(t.id),
       onOpen: () => { rowMenuOpen = true; li.classList.add("menu-open"); },
       onClose: () => { rowMenuOpen = false; li.classList.remove("menu-open"); if (renderPending) renderThreads(); },
       onSelect: (v) => runThreadAction(t.id, v),
