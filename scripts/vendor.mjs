@@ -1,6 +1,6 @@
 // Copies self-hosted assets out of node_modules into public/ (run: npm run vendor). The results are committed so the
 // app has no runtime dependency on node_modules for fonts or highlighting, and works offline as a PWA.
-//   fonts:       Inter Variable + JetBrains Mono Variable (SIL OFL 1.1), latin + latin-ext subsets only
+//   fonts:       Inter Variable + JetBrains Mono Variable + Newsreader Variable (SIL OFL 1.1), latin + latin-ext subsets only
 //   highlight.js: core + 13 common languages as ES modules (BSD-3-Clause)
 import fs from "node:fs";
 import path from "node:path";
@@ -13,6 +13,7 @@ const copy = (from, to) => { fs.mkdirSync(path.dirname(to), { recursive: true })
 for (const [pkg, face, subsets] of [
   ["inter", "inter", ["latin-wght-normal", "latin-ext-wght-normal", "latin-wght-italic"]],
   ["jetbrains-mono", "jetbrains-mono", ["latin-wght-normal", "latin-ext-wght-normal", "latin-wght-italic", "latin-ext-wght-italic"]],
+  ["newsreader", "newsreader", ["latin-standard-normal", "latin-ext-standard-normal", "latin-standard-italic", "latin-ext-standard-italic"]], // weight + optical size axes
 ]) {
   for (const s of subsets) copy(nm(`@fontsource-variable/${pkg}/files/${face}-${s}.woff2`), out(`fonts/${face}-${s}.woff2`));
   copy(nm(`@fontsource-variable/${pkg}/LICENSE`), out(`fonts/LICENSE-${pkg}.txt`));

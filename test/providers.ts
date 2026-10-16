@@ -3,6 +3,9 @@ import { brainContext } from "../server/providers/brain.ts";
 import { createNudger } from "../server/providers/nudge.ts";
 import { codexTranslator, unwrapShell } from "../server/providers/codex.ts";
 import { parseEnv } from "../server/providers/env.ts";
+import { replayPreamble, threadToMarkdown, turnsOf } from "../server/export.ts";
+import { needsLabel, parseLabels } from "../server/providers/label.ts";
+import { cleanTitle } from "../server/providers/title.ts";
 import { normTool, parsePiModels, piTranslator } from "../server/providers/pi.ts";
 
 let failed = 0;
@@ -22,6 +25,40 @@ const types = (out: any[]) => out.map((e) => e.type + (e.subtype ? "/" + e.subty
 const env = parseEnv(`# comment\nOPEN_ROUTER_TOKEN=sk-or-v1-abc\nexport FOO="bar baz"\nBAD LINE\nQ='x'\n`);
 check("env: alias OPEN_ROUTER_TOKEN -> OPENROUTER_API_KEY", env.OPENROUTER_API_KEY === "sk-or-v1-abc" && !("OPEN_ROUTER_TOKEN" in env));
 check("env: quotes + export handled", env.FOO === "bar baz" && env.Q === "x");
+
+// ---- thread titles
+check("title: plain title passes through", cleanTitle("Fix flaky login test") === "Fix flaky login test");
+check("title: quotes, markdown and trailing punctuation stripped", cleanTitle('**"Image paste support".**') === "Image paste support");
+check("title: 'Title:' prefix and extra lines dropped", cleanTitle("Title: Dark mode toggle\n\nThis title captures...") === "Dark mode toggle");
+check("title: long titles are cut to 6 words", cleanTitle("one two three four five six seven eight") === "one two three four five six");
+check("title: a whole sentence is not a title", cleanTitle("I'm sorry, but I cannot determine a title for this particular message because it is empty.") === undefined);
+check("title: empty / junk is rejected", cleanTitle("") === undefined && cleanTitle(undefined) === undefined && cleanTitle('""') === undefined);
+
+// ---- tool labels
+check("labels: parses a clean JSON array", JSON.stringify(parseLabels('["Running the tests", "Listing files."]', 2)) === JSON.stringify(["Running the tests", "Listing files"]));
+check("labels: tolerates a code fence around the array", parseLabels('```json\n["Checking git status"]\n```', 1)?.[0] === "Checking git status");
+check("labels: wrong length is rejected", parseLabels('["a", "b"]', 3) === undefined);
+check("labels: prose / empty entries are rejected", parseLabels("Sure! Here you go", 1) === undefined && parseLabels('["ok", ""]', 2) === undefined && parseLabels("[1,", 1) === undefined);
+check("labels: only description-less Bash needs one", needsLabel("Bash", { command: "ls" }) && !needsLabel("Bash", { command: "ls", description: "Lists files" }) && !needsLabel("Read", { file_path: "/a" }) && !needsLabel("Bash", { command: "  " }));
+
+// ---- export / fork replay
+const log = [
+  { type: "user_input", text: "plan the trip", attachments: [{ name: "map.png" }] },
+  { type: "user_input", text: "[brain] save notes", auto: "brain" },
+  { type: "assistant", message: { content: [{ type: "thinking", thinking: "hmm" }, { type: "text", text: "Sure, where to?" }, { type: "tool_use", id: "t1", name: "Bash", input: { command: "ls -la /tmp" } }] } },
+  { type: "tool_label", tool_use_id: "t1", label: "Listing the temp folder" },
+  { type: "console_error", text: "boom" },
+  { type: "user_input", text: "Lisbon" },
+  { type: "assistant", message: { content: [{ type: "text", text: "Great choice." }] } },
+];
+const turns = turnsOf(log);
+check("export: nudges and thinking are left out, attachments named", turns.map((t) => t.role).join() === "user,agent,agent,agent,user,agent" && turns[0].text === "plan the trip\n(attached: map.png)");
+check("export: a tool line prefers the Haiku label over the raw command", turns[2].tool === true && turns[2].text === "Bash: Listing the temp folder");
+const md = threadToMarkdown({ title: "Trip", provider: "mock", model: "echo", cwd: "/x", createdAt: 0 }, "Mock", log);
+check("export: markdown groups speakers and quotes tool activity", md.startsWith("# Trip\n") && md.includes("## You\n\nplan the trip") && md.includes("> Bash: Listing the temp folder") && (md.match(/## Agent/g) ?? []).length === 2 && (md.match(/## You/g) ?? []).length === 2);
+const pre = replayPreamble(log);
+check("replay: transcript has what was said, not tools", pre.includes("User: plan the trip") && pre.includes("Assistant: Sure, where to?") && !pre.includes("Bash") && pre.includes("forked from an earlier one"));
+check("replay: long conversations keep the newest part", replayPreamble(Array.from({ length: 400 }, (_, i) => ({ type: "user_input", text: `message number ${i} `.repeat(20) })), 3000).includes("message number 399") && !replayPreamble(Array.from({ length: 400 }, (_, i) => ({ type: "user_input", text: `message number ${i} `.repeat(20) })), 3000).includes("message number 0 "));
 
 // ---- pi model table
 const table = `provider    model                                               context  max-out  thinking  images

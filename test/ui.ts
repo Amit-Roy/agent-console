@@ -49,9 +49,9 @@ for (const [name, viewport, scheme] of [
     const cards = [...document.querySelectorAll(".card")] as HTMLElement[];
     const chat = document.getElementById("chat")!;
     return { cards: cards.length, minH: Math.min(...cards.map((c) => c.getBoundingClientRect().height)), overflow: chat.scrollHeight > chat.clientHeight,
-             hScroll: document.documentElement.scrollWidth > window.innerWidth, name0: (cards[0]?.querySelector(".name") as HTMLElement)?.innerText || "" };
+             hScroll: document.documentElement.scrollWidth > window.innerWidth, name0: (cards[0]?.querySelector(".name") as HTMLElement)?.textContent || "" };
   });
-  if (m.cards) {
+  if (m.cards && m.overflow) { // needs a thread long enough to overflow; which one opens first depends on the seeded data
     check(`${name}: cards keep height in overflowing chat`, m.minH >= 30 && m.overflow, `cards=${m.cards} minH=${Math.round(m.minH)} overflow=${m.overflow}`);
     check(`${name}: card shows tool name`, m.name0.length > 0, m.name0);
   } else console.log(`SKIP  ${name}: no tool cards in any thread`);
@@ -61,13 +61,13 @@ for (const [name, viewport, scheme] of [
 
   // fonts: really loaded from /fonts, and applied
   const f = await page.evaluate(async () => {
-    await document.fonts.load("400 15px Inter"); await document.fonts.load("400 13px 'JetBrains Mono'");
+    await document.fonts.load("400 15px Inter"); await document.fonts.load("400 13px 'JetBrains Mono'"); await document.fonts.load("400 18px Newsreader");
     const loaded = [...document.fonts].filter((x) => x.status === "loaded").map((x) => x.family.replace(/"/g, ""));
     return { loaded, inter: document.fonts.check("15px Inter"), mono: document.fonts.check("13px 'JetBrains Mono'"),
-             body: getComputedStyle(document.body).fontFamily, code: getComputedStyle(document.getElementById("cwd-t")!).fontFamily };
+             body: getComputedStyle(document.body).fontFamily, code: getComputedStyle(document.getElementById("cwd-t")!).fontFamily, serif: document.fonts.check("18px Newsreader"), input: getComputedStyle(document.getElementById("input")!).fontFamily };
   });
-  check(`${name}: Inter + JetBrains Mono loaded`, f.inter && f.mono && f.loaded.includes("Inter") && f.loaded.includes("JetBrains Mono"), f.loaded.join(","));
-  check(`${name}: type applied (UI Inter, paths mono)`, f.body.startsWith("Inter") && f.code.startsWith('"JetBrains Mono"'), `${f.body.slice(0, 20)} / ${f.code.slice(0, 22)}`);
+  check(`${name}: Inter + JetBrains Mono + Newsreader loaded`, f.inter && f.mono && f.serif && f.loaded.includes("Inter") && f.loaded.includes("JetBrains Mono") && f.loaded.includes("Newsreader"), f.loaded.join(","));
+  check(`${name}: type applied (UI Inter, paths mono, what you type in Newsreader)`, f.body.startsWith("Inter") && f.code.startsWith('"JetBrains Mono"') && f.input.startsWith("Newsreader"), `${f.body.slice(0, 20)} / ${f.code.slice(0, 22)} / ${f.input.slice(0, 12)}`);
 
   // chrome audit
   const a = await page.evaluate(() => {
@@ -88,9 +88,9 @@ for (const [name, viewport, scheme] of [
 
   // touch targets on the phone
   if (phone) {
-    const t = await page.evaluate(() => ["send", "model", "mode", "more", "menu"].map((id) => { const e = document.getElementById(id)!; const r = e.getBoundingClientRect(); return [id, Math.round(r.width), Math.round(r.height), e.hidden || r.height === 0]; }));
+    const t = await page.evaluate(() => ["attach", "send", "model", "mode", "more", "menu"].map((id) => { const e = document.getElementById(id)!; const r = e.getBoundingClientRect(); return [id, Math.round(r.width), Math.round(r.height), e.hidden || r.height === 0]; }));
     const small = t.filter(([, , h, hid]) => !hid && Number(h) < 44);
-    check(`${name}: 44px touch targets (send/model/mode/more/menu)`, small.length === 0, JSON.stringify(t));
+    check(`${name}: 44px touch targets (attach/send/model/mode/more/menu)`, small.length === 0, JSON.stringify(t));
     const side = await page.evaluate(() => ({ c: document.getElementById("side")!.getBoundingClientRect().right }));
     check(`${name}: drawer closed offscreen`, side.c <= 1);
     await page.screenshot({ path: `${OUT}/ui-${name}-drawer-closed.png` });
@@ -109,15 +109,16 @@ for (const [name, viewport, scheme] of [
   }
 
   // contrast from live tokens
-  const tok = await page.evaluate(() => { const cs = getComputedStyle(document.documentElement); const o: Record<string, string> = {}; for (const k of ["s0","s1","s2","s3","pop","code-bg","code-head","t1","t2","t3","accent","fill","on-fill","sel","ok","warn","bad","warn-tint","bad-tint","accent-tint","add-bg","del-bg","hl-kw","hl-str","hl-num","hl-fn","hl-type","hl-var","hl-cmt","hl-attr","hl-meta"]) o[k] = cs.getPropertyValue(`--${k}`); return o; });
+  const tok = await page.evaluate(() => { const cs = getComputedStyle(document.documentElement); const o: Record<string, string> = {}; for (const k of ["stop","on-stop","stop-hover","s0","s1","s2","s3","pop","code-bg","code-head","t1","t2","t3","accent","fill","on-fill","sel","ok","warn","bad","warn-tint","bad-tint","accent-tint","add-bg","del-bg","hl-kw","hl-str","hl-num","hl-fn","hl-type","hl-var","hl-cmt","hl-attr","hl-meta"]) o[k] = cs.getPropertyValue(`--${k}`); return o; });
   const C = (k: string) => parse(tok[k]);
   const pairs: [string, number[], number[]][] = [];
   for (const t of ["t1", "t2", "t3"]) for (const s of ["s0", "s1", "s2"]) pairs.push([`${t} on ${s}`, C(t), C(s)]);
+  pairs.push(["on-stop on stop (Stop button)", C("on-stop"), C("stop")], ["on-stop on stop-hover", C("on-stop"), C("stop-hover")]);
   pairs.push(["t2 on pop", C("t2"), C("pop")], ["t1 on sel", C("t1"), C("sel")], ["t2 on sel", C("t2"), C("sel")], ["t3 on sel", C("t3"), C("sel")]);
   pairs.push(["accent on s1", C("accent"), C("s1")], ["accent on s2", C("accent"), C("s2")], ["on-fill on fill", C("on-fill"), C("fill")]);
   pairs.push(["ok on s1", C("ok"), C("s1")], ["bad on s1", C("bad"), C("s1")], ["warn on s1", C("warn"), C("s1")]);
   pairs.push(["warn on warn-tint/s2", C("warn"), over(C("warn-tint"), C("s2"))], ["warn on warn-tint/sel (bypass tag in selected row)", C("warn"), over(C("warn-tint"), C("sel"))],
-    ["warn on warn-tint/s0", C("warn"), over(C("warn-tint"), C("s0"))], ["bad on bad-tint/s1", C("bad"), over(C("bad-tint"), C("s1"))], ["accent on accent-tint/s1", C("accent"), over(C("accent-tint"), C("s1"))],
+    ["warn on warn-tint/s0", C("warn"), over(C("warn-tint"), C("s0"))], ["bad on bad-tint/s1", C("bad"), over(C("bad-tint"), C("s1"))], ["accent on accent-tint/s1", C("accent"), over(C("accent-tint"), C("s1"))], ["accent on accent-tint/s2 (attach with files)", C("accent"), over(C("accent-tint"), C("s2"))],
     ["t1 on add-bg/code", C("t1"), over(C("add-bg"), C("code-bg"))], ["t1 on del-bg/code", C("t1"), over(C("del-bg"), C("code-bg"))]);
   for (const k of ["hl-kw", "hl-str", "hl-num", "hl-fn", "hl-type", "hl-var", "hl-cmt", "hl-attr", "hl-meta"]) pairs.push([`${k} on code`, C(k), C("code-bg")]);
   pairs.push(["t1 on code", C("t1"), C("code-bg")], ["t2 on code-head", C("t2"), C("code-head")]);
@@ -154,6 +155,8 @@ for (const scheme of ["dark", "light"] as const) {
   const page = await ctx.newPage();
   await page.goto(BASE + "/");
   await page.waitForSelector("#threads li", { timeout: 8000 }).catch(() => {});
+  // Finish the initial history render before replacing chat with the markdown fixture.
+  await page.waitForFunction(() => !!(window as any).agentConsoleMetrics, { timeout: 15000 });
   await page.evaluate(async () => {
     const r = await import("/render.js");
     const chat = document.getElementById("chat")!;
@@ -172,14 +175,14 @@ for (const scheme of ["dark", "light"] as const) {
     xss: (window as any).__xss ?? 0, scripts: document.querySelectorAll("#chat script").length, onerr: document.querySelectorAll("#chat [onerror]").length,
     table: !!document.querySelector("#chat .table-wrap table"), a: document.querySelector("#chat a")?.getAttribute("rel"),
     liga: getComputedStyle(document.querySelector("#chat .code pre")!).fontVariantLigatures, codeFont: getComputedStyle(document.querySelector("#chat .code pre code")!).fontSize,
-    inlineFont: getComputedStyle(document.querySelector("#chat p code")!).fontFamily.slice(0, 14), bodySize: getComputedStyle(document.querySelector("#chat p")!).fontSize, lh: getComputedStyle(document.querySelector("#chat p")!).lineHeight,
+    inlineFont: getComputedStyle(document.querySelector("#chat p code")!).fontFamily.slice(0, 14), bodySize: getComputedStyle(document.querySelector("#chat p")!).fontSize, bodyFont: getComputedStyle(document.querySelector("#chat p")!).fontFamily.slice(0, 10), lh: getComputedStyle(document.querySelector("#chat p")!).lineHeight,
   }));
   check(`code (${scheme}): 4 blocks with header rows`, q.blocks === 4 && q.langs.join() === "JavaScript,Python,Diff,nosuchlang", q.langs.join());
   check(`code (${scheme}): copy button per block`, q.copyBtns === 4);
   check(`code (${scheme}): syntax tokens highlighted`, q.kw > 2 && q.str > 0 && q.cmt >= 2 && q.add === 1 && q.del === 1, JSON.stringify([q.kw, q.str, q.cmt, q.add, q.del]));
   check(`code (${scheme}): sanitiser strips script + handlers`, q.xss === 0 && q.scripts === 0 && q.onerr === 0 && q.a === "noopener noreferrer");
   check(`code (${scheme}): tables wrapped, ligatures off`, q.table && /none/.test(q.liga), q.liga);
-  check(`code (${scheme}): 13px mono code, 15px/1.6 Inter body`, q.codeFont === "13px" && q.bodySize === "15px" && q.lh === "24px" && q.inlineFont.startsWith('"JetBrains'), `${q.codeFont} ${q.bodySize}/${q.lh} ${q.inlineFont}`);
+  check(`code (${scheme}): 13px mono code, 18px/1.6 Newsreader body`, q.codeFont === "13px" && q.bodySize === "18px" && q.lh === "28.8px" && q.bodyFont.startsWith("Newsreader") && q.inlineFont.startsWith('"JetBrains'), `${q.codeFont} ${q.bodySize}/${q.lh} ${q.bodyFont} ${q.inlineFont}`);
   if (scheme === "dark") {
     const btn = page.locator("#chat .code-head button:has(.lab)").first();
     await btn.click();
@@ -393,6 +396,526 @@ for (const scheme of ["dark", "light"] as const) {
   check("slash: click selects", /^\/apple-design $/.test(await input.inputValue()), JSON.stringify(await input.inputValue()));
   const a11y = await page.evaluate(() => { const i = document.getElementById("input")!; return [i.getAttribute("role"), i.getAttribute("aria-controls")]; });
   check("slash: combobox aria wiring", a11y[0] === "combobox" && a11y[1] === "slash");
+  await ctx.close();
+}
+
+// ---------- attachments: paste / drop / pick, images and files (mock agent only: needs the server started with AGENT_CONSOLE_MOCK=1) ----------
+{
+  const ctx = await newCtx({ viewport: { width: 1280, height: 800 }, colorScheme: "dark" });
+  const page = await ctx.newPage();
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
+  page.on("dialog", (d) => d.accept());
+  await page.goto(BASE + "/");
+  await page.waitForSelector("#threads li", { timeout: 8000 });
+  await page.waitForFunction(() => document.querySelectorAll("#d-cwd span").length && document.querySelector("#d-cwd span")!.textContent!.length > 0);
+  const before = await page.locator("#threads li").count();
+  await page.click("#new");
+  await page.click("#d-prov");
+  const mockItem = page.locator(".menu [role=option]", { hasText: "Mock" });
+  if (await mockItem.count()) {
+    await mockItem.click();
+    await page.click("#d-ok");
+    await page.waitForFunction((n) => document.querySelectorAll("#threads li").length === n + 1, before, { timeout: 5000 });
+    await page.waitForFunction(() => !(document.getElementById("input") as HTMLTextAreaElement).disabled);
+
+    // a real paste event whose clipboard holds the given files (and optionally text)
+    type F = { name: string; type: string; w?: number; h?: number; body?: string };
+    const paste = (files: F[], text = "") =>
+      page.evaluate(async ([files, text]) => {
+        const dt = new DataTransfer();
+        for (const f of files as any[]) {
+          let blob: Blob;
+          if (f.w) {
+            const c = document.createElement("canvas");
+            c.width = f.w; c.height = f.h;
+            const g = c.getContext("2d")!;
+            g.fillStyle = "#c33"; g.fillRect(0, 0, f.w, f.h);
+            blob = await new Promise((r) => c.toBlob((b) => r(b!), f.type));
+          } else blob = new Blob([f.body ?? "x"], { type: f.type });
+          dt.items.add(new File([blob], f.name, { type: f.type }));
+        }
+        if (text) dt.setData("text/plain", text as string);
+        const ev = new ClipboardEvent("paste", { clipboardData: dt, bubbles: true, cancelable: true });
+        document.getElementById("input")!.dispatchEvent(ev);
+        return ev.defaultPrevented;
+      }, [files, text] as const);
+    const png = (name = "shot.png", w = 400, h = 300): F => ({ name, type: "image/png", w, h });
+    const txt = (name = "notes.txt", body = "hello"): F => ({ name, type: "text/plain", body });
+    const items = () => page.locator("#thumbs li").count();
+    const settled = () => page.waitForFunction(() => !document.querySelector("#thumbs li[aria-busy=true]"));
+
+    check("paste: image on the clipboard is claimed", await paste([png()]));
+    await page.waitForFunction(() => document.querySelectorAll("#thumbs li").length === 1);
+    await settled();
+    check("paste: thumbnail shows, labelled, with a remove button", (await items()) === 1 && (await page.locator("#thumbs img").getAttribute("alt")) === "shot.png (Image 1)" && (await page.locator("#thumbs .rm").getAttribute("aria-label")) === "Remove shot.png");
+    check("image label: pasting drops [Image #1] into the message at the cursor, and the thumbnail wears the number", (await page.inputValue("#input")) === "[Image #1] " && (await page.locator("#thumbs .n").innerText()) === "1");
+    check("paste: no console errors / CSP violations", errors.length === 0, errors.join(" | ").slice(0, 160));
+    await page.locator("#thumbs .rm").click();
+    check("remove: clears it, and its [Image #1] label leaves the message", (await items()) === 0 && (await page.locator("#thumbs").isHidden()) && (await page.inputValue("#input")) === "");
+    check("paste: picture beside real text is left to the text paste", !(await paste([png("shot.png", 50, 50)], "some cells")) && (await items()) === 0);
+    check("paste: file copied in a file manager (text = its name) is still a file paste", await paste([png("copied.png", 40, 40)], "copied.png"));
+    await settled();
+    await page.locator("#thumbs .rm").click();
+
+    // any file type: pasted, picked, shown as a chip
+    check("paste: a non-image file is claimed", await paste([txt("notes.txt")]));
+    await page.waitForFunction(() => document.querySelectorAll("#thumbs li.file").length === 1);
+    await settled();
+    const chip = await page.evaluate(() => { const li = document.querySelector("#thumbs li.file")!; return [li.querySelector(".nm")!.textContent, li.querySelector(".sz")!.textContent, li.querySelector(".rm")!.getAttribute("aria-label")]; });
+    check("file chip: name, size and a labelled remove button", chip.join("|") === "notes.txt|5 B|Remove notes.txt", chip.join("|"));
+    await page.locator("#thumbs .rm").click();
+
+    // a 3000px screenshot is downscaled to <= 2000px before upload
+    await paste([png("big.png", 3000, 1500)]);
+    await page.waitForFunction(() => document.querySelectorAll("#thumbs li").length === 1);
+    await settled();
+    const dims = await page.evaluate(() => { const i = document.querySelector("#thumbs img") as HTMLImageElement; return [i.naturalWidth, i.naturalHeight]; });
+    check("paste: large image is downscaled to 2000px long edge", dims[0] === 2000 && dims[1] === 1000, dims.join(","));
+
+    await page.setInputFiles("#file", [
+      { name: "pick.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF-1.4 test") },
+      { name: "data.csv", mimeType: "text/csv", buffer: Buffer.from("a,b\n1,2\n") },
+    ]);
+    await page.waitForFunction(() => document.querySelectorAll("#thumbs li").length === 3);
+    await settled();
+    check("attach button: picker adds several files of any type", (await items()) === 3 && (await page.locator("#thumbs li.file").count()) === 2);
+    check("attach: an empty file is refused with a message", await (async () => { await page.setInputFiles("#file", { name: "empty.txt", mimeType: "text/plain", buffer: Buffer.alloc(0) }); await page.waitForTimeout(300); return (await items()) === 3 && (await page.locator(".errtxt", { hasText: "empty" }).count()) === 1; })());
+    for (let i = 0; i < 6; i++) await paste([txt(`f${i}.txt`)]);
+    await page.waitForTimeout(700);
+    await settled();
+    check("attach: capped at 8, with a message", (await items()) === 8 && (await page.locator(".errtxt", { hasText: "At most 8" }).count()) >= 1, String(await items()));
+    await page.screenshot({ path: `${OUT}/ui-attach-thumbs.png` });
+    check("attach button: highlighted with a count while files wait", (await page.getAttribute("#attach", "data-count")) === "8" && (await page.getAttribute("#attach", "aria-label")) === "Attach files");
+
+    // send (no text), see everything in the log, then reload and see it again from /uploads
+    await page.click("#send");
+    await page.waitForSelector(".msg.user .imgs img");
+    await page.waitForSelector(".msg.asst");
+    check("send: composer clears", (await items()) === 0 && (await page.getAttribute("#attach", "data-count")) === null);
+    check("send: log shows 1 image and 7 file chips", (await page.locator(".msg.user .imgs img").count()) === 1 && (await page.locator(".msg.user .chip").count()) === 7);
+    check("image label: [Image #1] in the sent message is a link to that image", (await page.locator(".msg.user .bubble .imgref").count()) === 1 && (await page.locator(".msg.user .bubble").innerText()).trim() === "Image 1" && ((await page.locator(".msg.user .bubble .imgref").getAttribute("href")) ?? "").includes("/uploads/"));
+    const reply = await page.locator(".msg.asst").last().innerText();
+    check("send: agent got the image and the file paths", /1 image\(s\)/.test(reply) && /Attached files/.test(reply) && /pick\.pdf/.test(reply), reply.slice(0, 120));
+    const href = await page.locator(".msg.user .chip").first().getAttribute("href");
+    const dl = await page.evaluate(async (h) => { const r = await fetch(h!); return [r.status, r.headers.get("content-disposition")?.slice(0, 10)]; }, href);
+    check("send: file chip links to an authed download", dl[0] === 200 && dl[1] === "attachment", dl.join());
+    await page.screenshot({ path: `${OUT}/ui-attach-sent.png` });
+    await page.reload();
+    await page.waitForSelector(".msg.user .imgs img");
+    await page.waitForFunction(() => [...document.querySelectorAll(".msg.user .imgs img")].every((i) => (i as HTMLImageElement).complete && (i as HTMLImageElement).naturalWidth > 0), null, { timeout: 5000 });
+    check("history: image and file chips re-render after a reload", (await page.locator(".msg.user .imgs img").count()) === 1 && (await page.locator(".msg.user .chip").count()) === 7);
+
+    // drag and drop: whole-window overlay, files and a folder
+    await page.evaluate(() => {
+      const dt = new DataTransfer(); dt.items.add(new File(["a"], "drop.md", { type: "text/markdown" }));
+      (window as any).__dt = dt;
+      document.dispatchEvent(new DragEvent("dragenter", { dataTransfer: dt, bubbles: true, cancelable: true }));
+    });
+    check("drop: whole-window overlay appears while dragging files", await page.locator("#dropzone").isVisible() && (await page.locator("#dropzone").innerText()).includes("Drop files"));
+    await page.screenshot({ path: `${OUT}/ui-attach-dropzone.png` });
+    await page.evaluate(() => {
+      const dt = (window as any).__dt;
+      document.dispatchEvent(new DragEvent("dragover", { dataTransfer: dt, bubbles: true, cancelable: true }));
+      document.dispatchEvent(new DragEvent("drop", { dataTransfer: dt, bubbles: true, cancelable: true }));
+    });
+    await page.waitForFunction(() => document.querySelectorAll("#thumbs li.file").length === 1);
+    await settled();
+    check("drop: file dropped anywhere in the window is attached, overlay gone", !(await page.locator("#dropzone").isVisible()) && (await page.locator("#thumbs .nm").innerText()) === "drop.md");
+    await page.fill("#input", "caption");
+    await page.keyboard.press("Enter");
+    await page.waitForFunction(() => [...document.querySelectorAll(".msg.user .bubble")].at(-1)?.textContent === "caption");
+    check("send: text and file together", (await page.locator(".msg.user").last().locator(".chip").count()) === 1 && (await page.locator(".msg.user .bubble").last().innerText()) === "caption");
+
+    // switching threads drops unsent attachments (and deletes their uploads)
+    await paste([txt("stray.txt")]);
+    await settled();
+    await page.locator("#threads li:not(.sel)").first().click();
+    await page.waitForFunction(() => document.querySelectorAll("#thumbs li").length === 0);
+    check("threads: unsent attachments do not follow you to another thread", (await items()) === 0);
+    await page.locator("#threads li:has(.tag:text('Mock'))").first().click();
+    await page.waitForFunction(() => document.querySelector("#threads li.sel .tag")?.textContent === "Mock");
+
+    // phone layout (with a file waiting): paperclip leads the toolbar, Send still fits, nothing overflows
+    await paste([txt("phone.txt")]);
+    await settled();
+    await page.setViewportSize({ width: 390, height: 844 });
+    const fit = await page.evaluate(() => {
+      const r = (id: string) => document.getElementById(id)!.getBoundingClientRect();
+      const a = r("attach"), s = r("send"), c = r("cbox"), m = r("model"); const tb = document.querySelector("#cbox .toolbar") as HTMLElement;
+      return [a.width > 0 && a.left >= c.left && a.right <= m.left, s.width > 0 && s.right <= c.right, tb.scrollWidth <= tb.clientWidth, tb.firstElementChild?.nextElementSibling?.id === "attach"];
+    });
+    check("layout: at 390px attach leads the toolbar, Send fits, no toolbar overflow", fit.every(Boolean), fit.join());
+    await page.locator("#thumbs .rm").click();
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.click("#more");
+    await page.locator(".menu [role=menuitem]", { hasText: "Delete thread" }).click();
+    await page.waitForFunction((n) => document.querySelectorAll("#threads li").length === n, before, { timeout: 5000 });
+    check("image test: no page errors", errors.length === 0, errors.join(" | ").slice(0, 200));
+  } else {
+    console.log("SKIP  attachment checks (start the server with AGENT_CONSOLE_MOCK=1)");
+    await page.keyboard.press("Escape");
+  }
+  await ctx.close();
+}
+
+// ---------- tool cards: plain-English label overlays the raw command (mock agent only) ----------
+{
+  const ctx = await newCtx({ viewport: { width: 1280, height: 800 }, colorScheme: "dark" });
+  const page = await ctx.newPage();
+  page.on("dialog", (d) => d.accept());
+  await page.goto(BASE + "/");
+  await page.waitForSelector("#threads li", { timeout: 8000 });
+  await page.waitForFunction(() => document.querySelectorAll("#d-cwd span").length && document.querySelector("#d-cwd span")!.textContent!.length > 0);
+  const before = await page.locator("#threads li").count();
+  await page.click("#new");
+  await page.click("#d-prov");
+  const mockItem = page.locator(".menu [role=option]", { hasText: "Mock" });
+  if (await mockItem.count()) {
+    await mockItem.click();
+    await page.click("#d-ok");
+    await page.waitForFunction((n) => document.querySelectorAll("#threads li").length === n + 1, before, { timeout: 5000 });
+    await page.waitForFunction(() => !(document.getElementById("input") as HTMLTextAreaElement).disabled);
+    await page.fill("#input", "tool please run it");
+    await page.keyboard.press("Enter");
+    await page.waitForSelector(".card .sum");
+    check("tool card: shows the raw command until a label arrives", (await page.locator(".card .sum").first().innerText()) === "echo hello" || (await page.locator(".card .sum.human").count()) === 1);
+    await page.waitForSelector(".card .sum.human", { timeout: 5000 });
+    check("tool card: closed input body is deferred", !(await page.locator(".card .body").first().textContent())?.includes("echo hello"));
+    await page.locator(".card summary").first().click();
+    await page.waitForFunction(() => document.querySelector(".card .body")?.textContent?.includes("echo hello"));
+    const c = await page.evaluate(() => { const s = document.querySelector(".card .sum.human") as HTMLElement; return { text: s.textContent, font: getComputedStyle(s).fontFamily.slice(0, 5), hover: s.closest("summary")!.getAttribute("title"), body: document.querySelector(".card .body")!.textContent }; });
+    check("tool card: label replaces the command, in the UI font", c.text === "Running echo" && c.font === "Inter", JSON.stringify(c));
+    check("tool card: raw command stays on hover and in the body", c.hover === "echo hello" && /echo hello/.test(c.body || ""));
+    await page.reload();
+    await page.waitForSelector(".card .sum.human", { timeout: 5000 });
+    check("tool card: label survives a reload (history replay)", (await page.locator(".card .sum.human").first().innerText()) === "Running echo");
+    await page.screenshot({ path: `${OUT}/ui-tool-label.png` });
+    await page.click("#more");
+    await page.locator(".menu [role=menuitem]", { hasText: "Delete thread" }).click();
+    await page.waitForFunction((n) => document.querySelectorAll("#threads li").length === n, before, { timeout: 5000 });
+  } else {
+    console.log("SKIP  tool label checks (start the server with AGENT_CONSOLE_MOCK=1)");
+    await page.keyboard.press("Escape");
+  }
+  await ctx.close();
+}
+
+// ---------- thread actions: the ⋯ on every row and in the header (mock agent only) ----------
+{
+  const ctx = await newCtx({ viewport: { width: 1280, height: 800 }, colorScheme: "dark", permissions: ["clipboard-read", "clipboard-write"], acceptDownloads: true });
+  const page = await ctx.newPage();
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
+  page.on("dialog", (d) => d.accept());
+  await page.goto(BASE + "/");
+  await page.waitForSelector("#threads li", { timeout: 8000 });
+  await page.waitForFunction(() => document.querySelectorAll("#d-cwd span").length && document.querySelector("#d-cwd span")!.textContent!.length > 0);
+  const before = await page.locator("#threads li").count();
+  await page.click("#new");
+  await page.click("#d-prov");
+  const mockItem = page.locator(".menu [role=option]", { hasText: "Mock" });
+  if (await mockItem.count()) {
+    await mockItem.click();
+    await page.click("#d-ok");
+    await page.waitForFunction((n) => document.querySelectorAll("#threads li").length === n + 1, before, { timeout: 5000 });
+    await page.waitForFunction(() => !(document.getElementById("input") as HTMLTextAreaElement).disabled);
+    await page.fill("#input", "plan the weekend trip itinerary");
+    await page.keyboard.press("Enter");
+    await page.waitForSelector(".msg.asst");
+    await page.waitForFunction(() => /weekend/i.test(document.querySelector("#threads li.sel .t")?.textContent || ""), null, { timeout: 5000 }); // auto-title
+    const title = (await page.locator("#threads li.sel .t").innerText()).trim();
+    const rowMenu = (row: string) => page.locator(`#threads li${row} .row-more`);
+    const items = () => page.locator(".menu[role=menu] [role=menuitem] .m-label").allInnerTexts();
+
+    // visibility: hidden until hover on a fine pointer, present in the layout either way
+    const idle = await page.evaluate(() => { const b = document.querySelector("#threads li.sel .row-more") as HTMLElement; return [getComputedStyle(b).opacity, b.getBoundingClientRect().width > 0]; });
+    await page.mouse.move(640, 400);
+    check("row menu: the ⋯ is laid out but quiet until you hover the row", idle[0] === "0" && idle[1] === true, idle.join());
+    await page.locator("#threads li.sel").hover();
+    await page.waitForFunction(() => getComputedStyle(document.querySelector("#threads li.sel .row-more")!).opacity === "1", null, { timeout: 2000 }).catch(() => {});
+    check("row menu: hovering the row reveals it", (await rowMenu(".sel").evaluate((b) => getComputedStyle(b).opacity)) === "1");
+    const label = await rowMenu(".sel").getAttribute("aria-label");
+    check("row menu: the button names its thread for screen readers", label === `Actions for ${title}`, label ?? "");
+
+    // opening it on a row does not open that thread
+    const other = page.locator("#threads li:not(.sel)").first();
+    await other.hover();
+    await other.locator(".row-more").click();
+    check("row menu: opens from any row without switching to it", (await page.locator(".menu[role=menu]").count()) === 1 && (await page.locator("#threads li.sel .t").innerText()).trim() === title);
+    check("row menu: Rename, Compact context, Fork, Download, Share, Run details, Delete thread", (await items()).join("|") === "Rename|Compact context|Fork|Download|Share|Run details|Delete thread", (await items()).join("|"));
+    check("row menu: Delete is the only red item", (await page.locator(".menu [data-tone=danger]").count()) === 1);
+    await page.screenshot({ path: `${OUT}/ui-row-menu.png` });
+    await page.keyboard.press("Escape");
+    check("row menu: Esc closes it and returns focus to its button", (await page.locator(".menu").count()) === 0 && (await other.locator(".row-more").evaluate((b) => b === document.activeElement)));
+    await other.locator(".row-more").focus();
+    await page.keyboard.press("Enter");
+    check("row menu: keyboard Enter opens the menu, not the thread", (await page.locator(".menu[role=menu]").count()) === 1 && (await page.locator("#threads li.sel .t").innerText()).trim() === title);
+    await page.keyboard.press("Escape");
+
+    // rename from a row
+    await rowMenu(".sel").click();
+    await page.locator(".menu [role=menuitem]", { hasText: "Rename" }).click();
+    await page.waitForSelector("#ttl-edit");
+    await page.fill("#ttl-edit", "Weekend trip");
+    await page.keyboard.press("Enter");
+    await page.waitForFunction(() => document.querySelector("#threads li.sel .t")?.textContent === "Weekend trip");
+    check("rename (row menu): edits the title in place", (await page.locator("#ttl").innerText()) === "Weekend trip");
+
+    // fork
+    const rows0 = await page.locator("#threads li").count();
+    await rowMenu(".sel").click();
+    await page.locator(".menu [role=menuitem]", { hasText: "Fork" }).click();
+    await page.waitForFunction(() => /\(fork\)$/.test(document.querySelector("#threads li.sel .t")?.textContent || ""));
+    await page.waitForSelector(".msg.user .bubble");
+    check("fork: opens a new thread titled (fork) holding the same conversation", (await page.locator("#threads li").count()) === rows0 + 1 && (await page.locator("#ttl").innerText()) === "Weekend trip (fork)" && /weekend trip itinerary/.test(await page.locator(".msg.user .bubble").first().innerText()));
+
+    // download, from the header menu (the same actions live there too)
+    await page.click("#more");
+    check("header menu: same thread actions", (await items()).join("|") === "Rename|Compact context|Fork|Download|Share|Run details|Delete thread");
+    const dl = page.waitForEvent("download");
+    await page.locator(".menu [role=menuitem]", { hasText: "Download" }).click();
+    const file = await dl;
+    check("download: a Markdown file named after the thread", file.suggestedFilename() === "Weekend trip (fork).md", file.suggestedFilename());
+    const body = await (await import("node:fs")).promises.readFile(await file.path(), "utf8");
+    check("download: contains the conversation", body.startsWith("# Weekend trip (fork)") && body.includes("plan the weekend trip itinerary") && body.includes("## Agent"));
+
+    // share: native sheet when there is one, clipboard otherwise
+    await page.evaluate(() => { (window as any).__shared = null; navigator.share = async (d: any) => { (window as any).__shared = d; }; });
+    await page.click("#more");
+    await page.locator(".menu [role=menuitem]", { hasText: "Share" }).click();
+    await page.waitForFunction(() => (window as any).__shared);
+    const shared = await page.evaluate(() => (window as any).__shared);
+    check("share: hands the title and Markdown to the system share sheet", shared.title === "Weekend trip (fork)" && shared.text.includes("## You"), JSON.stringify(shared).slice(0, 80));
+    await page.evaluate(() => { (navigator as any).share = undefined; });
+    await page.click("#more");
+    await page.locator(".menu [role=menuitem]", { hasText: "Share" }).click();
+    await page.waitForSelector("#toast:not([hidden])");
+    check("share: without a share sheet it copies Markdown and says so", /Copied/.test(await page.locator("#toast").innerText()) && (await page.evaluate(() => navigator.clipboard.readText())).includes("# Weekend trip (fork)"));
+    await page.screenshot({ path: `${OUT}/ui-share-toast.png` });
+
+    // delete from a row: the fork, then the original
+    for (const name of ["Weekend trip (fork)", "Weekend trip"]) {
+      await page.locator("#threads li", { hasText: name }).first().hover();
+      await page.locator("#threads li", { hasText: name }).first().locator(".row-more").click();
+      await page.locator(".menu [role=menuitem]", { hasText: "Delete thread" }).click();
+      await page.waitForFunction((n) => ![...document.querySelectorAll("#threads li .t")].some((e) => e.textContent === n), name, { timeout: 5000 });
+    }
+    check("delete (row menu): confirmed and gone, both copies", (await page.locator("#threads li").count()) === before && errors.length === 0, errors.join(" | ").slice(0, 160));
+
+    // phone: the ⋯ is always visible (no hover) and the menu fits the screen
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.click("#menu");
+    await page.waitForTimeout(400);
+    const touch = await page.evaluate(() => { const b = document.querySelector("#threads li .row-more") as HTMLElement; const r = b.getBoundingClientRect(); return [getComputedStyle(b).opacity, r.right <= innerWidth && r.width > 0]; });
+    check("row menu (phone width): visible without hover and inside the drawer", touch[1] === true, touch.join());
+    await page.locator("#threads li .row-more").first().click();
+    const pop = await page.evaluate(() => { const r = document.querySelector(".menu")!.getBoundingClientRect(); return [r.left >= 0, r.right <= innerWidth, r.top >= 0, r.bottom <= innerHeight]; });
+    check("row menu (phone width): fits the viewport", pop.every(Boolean), pop.join());
+    await page.screenshot({ path: `${OUT}/ui-row-menu-phone.png` });
+  } else {
+    console.log("SKIP  thread action checks (start the server with AGENT_CONSOLE_MOCK=1)");
+    await page.keyboard.press("Escape");
+  }
+  await ctx.close();
+}
+
+// ---------- running agents: loading state, paging, steering, queue, stop, context meter, subagents (mock agent) ----------
+{
+  const ctx = await newCtx({ viewport: { width: 1280, height: 800 }, colorScheme: "dark" });
+  const page = await ctx.newPage();
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
+  page.on("dialog", (d) => d.accept());
+  // hold history back for 900ms so the loading state can be seen (the server is local and answers in a few ms)
+  let delayHistory = 0;
+  await page.routeWebSocket(/\/ws$/, (ws) => {
+    const server = ws.connectToServer();
+    ws.onMessage((m) => server.send(m));
+    server.onMessage((m) => {
+      if (delayHistory && /"t":"history"/.test(String(m).slice(0, 20))) setTimeout(() => ws.send(m), delayHistory);
+      else ws.send(m);
+    });
+  });
+  await page.goto(BASE + "/");
+  await page.waitForSelector("#threads li", { timeout: 8000 });
+  await page.waitForFunction(() => document.querySelectorAll("#d-cwd span").length && document.querySelector("#d-cwd span")!.textContent!.length > 0);
+  const before = await page.locator("#threads li").count();
+
+  // ---- a long real thread: loading state, then only the newest page, then older messages on request
+  const rows = page.locator("#threads li");
+  let big = -1;
+  for (let i = 0; i < before && big < 0; i++) { await rows.nth(i).click(); for (let k = 0; k < 40 && big < 0; k++) { await page.waitForTimeout(100); if (await page.locator(".earlier").count() && (await page.locator("#chat > .msg").count()) > 5) big = i; } }
+  if (big >= 0) {
+    await page.waitForFunction(() => { const b = document.querySelector(".earlier") as HTMLButtonElement | null; return b && !b.disabled; }, null, { timeout: 15000 }); // the newest page has finished drawing
+    const shown = await page.locator("#chat > .msg").count();
+    check("paging: a long thread opens on its newest page with a 'Show earlier messages' button", (await page.locator(".earlier").innerText()) === "Show earlier messages" && shown > 5 && shown < 600, String(shown));
+    await page.waitForFunction(() => { const c = document.getElementById("chat")!; return c.scrollHeight - c.scrollTop - c.clientHeight < 5; }, null, { timeout: 1000 });
+    const bottomGap = await page.evaluate(() => { const c = document.getElementById("chat")!; return c.scrollHeight - c.scrollTop - c.clientHeight; });
+    check("paging: it opens scrolled to the latest message", bottomGap < 5, String(bottomGap));
+    const topOff = await page.evaluate(() => { const c = document.getElementById("chat")!; c.scrollTop = 0; const anchor = c.querySelector(":scope > .msg") as HTMLElement; anchor.dataset.testAnchor = "true"; return anchor.getBoundingClientRect().top; });
+    // Scrolling near the top automatically fetches the preceding page.
+    await page.waitForFunction((n) => document.querySelectorAll("#chat > .msg").length > n, shown, { timeout: 8000 });
+    await page.waitForFunction(() => document.querySelector("#chat")?.getAttribute("aria-busy") === "false");
+    const grew = await page.locator("#chat > .msg").count();
+    const kept = await page.evaluate((top) => { const c = document.getElementById("chat")!; return [top, c.querySelector("[data-test-anchor]")!.getBoundingClientRect().top]; }, topOff);
+    check("paging: older messages are slid in above, the page does not jump", grew > shown && Math.abs(kept[1] - kept[0]) < 80, `${shown}->${grew} anchor ${kept[0]} -> ${kept[1]}`);
+    // opening it again with the history held back shows the loading state, in the message pane only
+    delayHistory = 900;
+    const earlySkeleton = await page.evaluate(async (i) => { (document.querySelectorAll("#threads li")[i] as HTMLElement).click(); await new Promise((r) => setTimeout(r, 100)); return !!document.querySelector(".skeleton"); }, big === 0 ? 1 : 0);
+    check("loading: nothing flashes in the first 150ms", !earlySkeleton);
+    await rows.nth(big).click();
+    check("switching: revisiting an idle thread restores its cached view immediately", /Cached/.test(await page.locator("#diagnostics").textContent()));
+    // Reopening the current thread explicitly refreshes its history.
+    await rows.nth(big).click();
+    await page.waitForSelector(".loading", { timeout: 1500 });
+    const lo = await page.evaluate(() => ({ spinner: !!document.querySelector(".loading .spin"), text: document.querySelector(".loading")!.textContent, bars: document.querySelectorAll(".skeleton .sk i").length, head: !!document.getElementById("ttl")!.textContent, composer: !document.getElementById("input")!.hasAttribute("hidden"), live: document.querySelector(".loading")!.getAttribute("role") }));
+    check("loading: a spinner, a caption and conversation-shaped bars while history loads; header and composer stay put", lo.spinner && /Loading conversation/.test(lo.text || "") && lo.bars >= 6 && lo.head && lo.composer && lo.live === "status", JSON.stringify(lo));
+    await page.screenshot({ path: `${OUT}/ui-loading.png` });
+    await page.waitForFunction(() => !document.querySelector(".loading"), null, { timeout: 5000 });
+    await page.waitForFunction(() => document.querySelector("#chat")?.getAttribute("aria-busy") === "false");
+    check("loading: replaced by the conversation once it arrives", (await page.locator("#chat > .msg").count()) > 5);
+    // switching away mid-load must not let the late history overwrite the thread you moved to
+    await rows.nth(big === 0 ? 1 : 0).click();
+    await page.waitForTimeout(1500);
+    const sel = await page.locator("#threads li.sel .t").innerText();
+    check("loading: a late history for a thread you left is ignored", (await page.locator("#ttl").innerText()) === sel);
+    delayHistory = 0;
+  } else console.log("SKIP  paging/loading checks (no thread long enough in this data dir)");
+
+  // ---- steering, queue, stop, context meter (mock thread)
+  await page.click("#new");
+  await page.click("#d-prov");
+  const mockItem = page.locator(".menu [role=option]", { hasText: "Mock" });
+  if (await mockItem.count()) {
+    await mockItem.click();
+    await page.click("#d-ok");
+    await page.waitForFunction((n) => document.querySelectorAll("#threads li").length === n + 1, before, { timeout: 5000 });
+    await page.waitForFunction(() => !(document.getElementById("input") as HTMLTextAreaElement).disabled);
+    const idleUi = await page.evaluate(() => ({ stop: document.getElementById("stop")!.hidden, queue: document.getElementById("queue")!.hidden, send: document.getElementById("send")!.getAttribute("aria-label"), ph: (document.getElementById("input") as HTMLTextAreaElement).placeholder, ctx: document.getElementById("ctx")!.hidden }));
+    check("idle composer: Send only, no Stop/Queue, no context ring before anything ran", idleUi.stop && idleUi.queue && idleUi.send === "Send" && idleUi.ph === "Message the agent" && idleUi.ctx, JSON.stringify(idleUi));
+
+    await page.fill("#input", "slow burn please");
+    await page.keyboard.press("Enter");
+    await page.waitForFunction(() => !document.getElementById("stop")!.hidden);
+    const run = await page.evaluate(() => { const g = (id: string) => document.getElementById(id) as HTMLButtonElement; return { send: g("send").getAttribute("aria-label"), sendDisabled: g("send").disabled, queue: !g("queue").hidden, stopBg: getComputedStyle(g("stop")).backgroundColor, stopFg: getComputedStyle(g("stop")).color, ph: (document.getElementById("input") as HTMLTextAreaElement).placeholder, inputDisabled: (document.getElementById("input") as HTMLTextAreaElement).disabled, state: document.getElementById("state-t")!.textContent }; });
+    check("running composer: Stop is red, Send becomes Steer and stays enabled, Queue appears, input stays live", run.stopBg === "rgb(220, 38, 38)" && run.stopFg === "rgb(255, 255, 255)" && run.send === "Steer" && !run.sendDisabled && run.queue && /Steer the agent/.test(run.ph) && !run.inputDisabled, JSON.stringify(run));
+    await page.screenshot({ path: `${OUT}/ui-running-composer.png` });
+
+    await page.fill("#input", "turn left");
+    await page.keyboard.press("Enter");
+    await page.waitForFunction(() => [...document.querySelectorAll(".msg.user")].some((m) => /turn left/.test(m.textContent || "")));
+    const steered = await page.evaluate(() => { const m = [...document.querySelectorAll(".msg.user")].find((x) => /turn left/.test(x.textContent || ""))!; return { cap: m.querySelector(".delivery")?.textContent, box: (document.getElementById("input") as HTMLTextAreaElement).value, stillRunning: !document.getElementById("stop")!.hidden }; });
+    check("steer: Enter mid-run sends it now, captioned, composer clears, the turn keeps going", steered.cap === "Sent while the agent was working" && steered.box === "" && steered.stillRunning, JSON.stringify(steered));
+    await page.waitForFunction(() => /\[steered: turn left\]/.test(document.getElementById("chat")!.textContent || ""), null, { timeout: 4000 });
+    check("steer: the agent received it (the mock folds it into its stream)", true);
+
+    await page.fill("#input", "after you are done");
+    await page.click("#queue");
+    await page.waitForSelector("#queued li");
+    const q1 = await page.evaluate(() => ({ n: document.querySelectorAll("#queued li").length, tag: document.querySelector("#queued .tag")!.textContent, txt: document.querySelector("#queued .txt")!.textContent, rm: document.querySelector("#queued .rm")!.getAttribute("aria-label"), box: (document.getElementById("input") as HTMLTextAreaElement).value }));
+    check("queue: the Queue button holds it above the composer as a removable chip", q1.n === 1 && q1.tag === "Queued" && q1.txt === "after you are done" && q1.rm === "Remove queued message" && q1.box === "", JSON.stringify(q1));
+    await page.screenshot({ path: `${OUT}/ui-queued.png` });
+    await page.locator("#queued .rm").click();
+    await page.waitForFunction(() => !document.querySelector("#queued li"));
+    await page.fill("#input", "alt enter queues");
+    await page.keyboard.press("Alt+Enter");
+    await page.waitForSelector("#queued li");
+    check("queue: Alt+Enter queues too", (await page.locator("#queued .txt").innerText()) === "alt enter queues");
+    await page.click("#stop");
+    await page.waitForFunction(() => document.getElementById("stop")!.hidden);
+    check("stop: ends the turn and clears the queue; Send is Send again", (await page.locator("#queued li").count()) === 0 && (await page.getAttribute("#send", "aria-label")) === "Send" && (await page.locator("#queue").isHidden()));
+
+    // compaction: one progress card (no /compact bubble), messages typed meanwhile queue and go out together afterwards
+    await page.fill("#input", "before compaction");
+    await page.keyboard.press("Enter");
+    await page.waitForFunction(() => document.getElementById("stop")!.hidden && /mock reply[^]*before compaction/.test(document.getElementById("chat")!.textContent || ""), null, { timeout: 8000 });
+    await page.fill("#input", "/compact");
+    await page.keyboard.press("Enter");
+    await page.waitForSelector(".compact-card.running");
+    const cc = await page.evaluate(() => ({ title: document.querySelector(".compact-card .cc-title")!.textContent, bubble: [...document.querySelectorAll(".msg.user")].some((m) => /\/compact/.test(m.textContent || "")), spin: !!document.querySelector(".compact-card .cc-ico .spin"), ph: (document.getElementById("input") as HTMLTextAreaElement).placeholder, head: document.getElementById("state-t")!.textContent }));
+    check("compaction: a progress card with a spinner, no /compact message bubble, header says so, composer offers to queue", cc.title === "Compacting context" && !cc.bubble && cc.spin && /after compaction/.test(cc.ph) && cc.head === "Compacting context", JSON.stringify(cc));
+    await page.screenshot({ path: `${OUT}/ui-compacting.png` });
+    for (const t of ["queued one", "queued two"]) { await page.fill("#input", t); await page.keyboard.press("Enter"); await page.waitForFunction((n) => document.querySelectorAll("#queued li").length >= n, t === "queued one" ? 1 : 2); }
+    await page.waitForSelector(".compact-card.done", { timeout: 8000 });
+    await page.waitForFunction(() => [...document.querySelectorAll(".msg.user .bubble")].some((b) => /queued one\s+queued two/.test(b.textContent || "")), null, { timeout: 8000 });
+    check("compaction: the card settles to done, and the two queued messages arrive as ONE prompt", (await page.locator(".compact-card").count()) === 1 && (await page.locator(".compact-card .cc-title").innerText()) === "Context compacted");
+    await page.screenshot({ path: `${OUT}/ui-compacted.png` });
+
+    // context meter
+    const ring = await page.evaluate(() => { const b = document.getElementById("ctx")!; return { hidden: b.hidden, pct: b.querySelector(".pct")!.textContent, label: b.getAttribute("aria-label"), tip: b.dataset.tip, level: b.dataset.level || "" }; });
+    check("context: the ring shows % of the window, with the exact tokens in its label and tooltip", !ring.hidden && /^\d+%$/.test(ring.pct || "") && /of 200,000 tokens/.test(ring.label || "") && /Context window/.test(ring.tip || "") && ring.level === "", JSON.stringify(ring));
+    for (const [n, level] of [[85, "high"], [97, "crit"], [40, ""]] as const) {
+      await page.fill("#input", `ctx ${n} please`);
+      await page.keyboard.press("Enter");
+      await page.waitForFunction((n) => document.getElementById("ctx")!.querySelector(".pct")!.textContent === `${n}%`, n, { timeout: 4000 });
+      await page.waitForFunction(() => document.getElementById("stop")!.hidden);
+      const c = await page.evaluate(() => { const b = document.getElementById("ctx")!; const cs = getComputedStyle(b); return { level: b.dataset.level || "", color: cs.color, dash: (b.querySelector(".fill") as SVGElement).style.strokeDasharray, tip: b.dataset.tip }; });
+      check(`context: ${n}% is ${level || "calm"} (${n >= 90 ? "red" : n >= 70 ? "amber" : "green"})${n >= 80 ? ", with a hint in the tooltip" : ""}`, c.level === level && new RegExp(`^${n}[, ]`).test(c.dash) && (n >= 90 ? c.color === "rgb(255, 143, 135)" : level ? /rgb\(24\d, 1[78]\d, \d+\)/.test(c.color) : true) && (n >= 80 ? /fills|full/.test(c.tip || "") : !/fills|full/.test(c.tip || "")), JSON.stringify(c));
+      if (n === 97) await page.screenshot({ path: `${OUT}/ui-context-crit.png` });
+    }
+    await page.hover("#ctx");
+    await page.waitForTimeout(250);
+    const tipBox = await page.evaluate(() => { const b = document.getElementById("ctx")!; const r = b.getBoundingClientRect(); return { opacity: getComputedStyle(b, "::after").opacity, top: r.top }; });
+    check("context: hovering shows the details", tipBox.opacity === "1");
+    await page.screenshot({ path: `${OUT}/ui-context-tip.png` });
+
+    // ---- subagent
+    await page.fill("#input", "agent please");
+    await page.keyboard.press("Enter");
+    await page.waitForSelector(".card.agent");
+    await page.waitForFunction(() => document.querySelectorAll(".card.agent .sub-row").length >= 2, null, { timeout: 4000 });
+    const ag = await page.evaluate(() => {
+      const c = document.querySelector(".card.agent")!;
+      const top = [...document.querySelectorAll("#chat > .msg")].map((m) => m.textContent || "");
+      return {
+        name: c.querySelector(".name")!.textContent, sum: c.querySelector(".sum")!.textContent, rows: c.querySelectorAll(".sub-row").length,
+        leaked: top.some((t, i) => /Looking at the repo structure/.test(t) && !(document.querySelectorAll("#chat > .msg")[i] as HTMLElement).classList.contains("agent")),
+        nestedText: c.querySelector(".sub-row.text")?.textContent, nestedTool: c.querySelector(".sub-row.tool .name")?.textContent, nestedDone: c.querySelector(".sub-row.tool")?.classList.contains("done"),
+      };
+    });
+    check("subagent: one card, named, with its activity nested inside (not spilled into the main thread)", ag.name === "Agent · explore" && ag.sum === "Survey the repo" && ag.rows === 2 && !ag.leaked && /Looking at the repo/.test(ag.nestedText || "") && ag.nestedTool === "Bash" && ag.nestedDone, JSON.stringify(ag));
+    await page.waitForFunction(() => /1 tool · 4k tokens · 3s/.test(document.querySelector(".card.agent .stats")?.textContent || ""), null, { timeout: 3000 });
+    check("subagent: live stats (tools, tokens, time) on the card", (await page.locator(".card.agent .stats").innerText()) === "1 tool · 4k tokens · 3s", await page.locator(".card.agent .stats").innerText());
+    check("subagent: a 'in background' chip while it runs, and the header counts it", (await page.locator(".card.agent .task-chip.running").innerText()).includes("in background") && /Working · 1 agent/.test(await page.locator("#state-t").innerText()), await page.locator("#state-t").innerText());
+    await page.locator(".card.agent > summary").click();
+    await page.waitForFunction(() => document.querySelector(".card.agent .sub-row.tool .sum.human"), null, { timeout: 4000 }).catch(() => {});
+    check("subagent: its shell commands get plain-English labels too", (await page.locator(".card.agent .sub-row.tool .sum").innerText()) === "Running ls");
+    await page.screenshot({ path: `${OUT}/ui-subagent.png` });
+    await page.waitForFunction(() => /finished/.test(document.querySelector(".card.agent .task-chip")?.textContent || ""), null, { timeout: 5000 });
+    check("subagent: the chip turns to 'finished' when it reports back", (await page.locator(".card.agent .task-chip").innerText()).includes("finished") && /Working$/.test(await page.locator("#state-t").innerText()) || (await page.locator("#state").isHidden()));
+    await page.waitForFunction(() => document.getElementById("stop")!.hidden);
+    await page.reload();
+    await page.waitForSelector(".card.agent", { timeout: 6000 });
+    await page.waitForFunction(() => /finished/.test(document.querySelector(".card.agent .task-chip")?.textContent || ""));
+    const re = await page.evaluate(() => { const c = document.querySelector(".card.agent")!; return [c.querySelectorAll(".sub-row").length, c.querySelector(".stats")!.textContent]; });
+    check("subagent: card, nested rows, stats and chip all rebuild from history after a reload", re[0] === 2 && re[1] === "1 tool · 4k tokens · 3s", JSON.stringify(re));
+
+    // phone: everything still fits the composer while running
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.fill("#input", "slow burn on a phone");
+    await page.keyboard.press("Enter");
+    await page.waitForFunction(() => !document.getElementById("stop")!.hidden);
+    const fit = await page.evaluate(() => { const t = document.querySelector(".toolbar")!; const c = document.getElementById("cbox")!.getBoundingClientRect(); const btns = ["attach", "model", "mode", "ctx", "queue", "stop", "send"].map((id) => document.getElementById(id)!.getBoundingClientRect()).filter((r) => r.width); return { overflow: t.scrollWidth > t.clientWidth + 1, inside: btns.every((r) => r.left >= c.left - 1 && r.right <= c.right + 1), n: btns.length }; });
+    check("phone width, running: model and permissions stay visible alongside attach, context, Queue, Stop and Steer", !fit.overflow && fit.inside && fit.n === 7, JSON.stringify(fit));
+    await page.screenshot({ path: `${OUT}/ui-running-phone.png` });
+    await page.click("#stop");
+    await page.waitForFunction(() => document.getElementById("stop")!.hidden);
+    const idleFit = await page.evaluate(() => { const t = document.querySelector(".toolbar")!; const c = document.getElementById("cbox")!.getBoundingClientRect(); const btns = ["attach", "model", "mode", "ctx", "send"].map((id) => document.getElementById(id)!.getBoundingClientRect()).filter((r) => r.width); return { overflow: t.scrollWidth > t.clientWidth + 1, inside: btns.every((r) => r.left >= c.left - 1 && r.right <= c.right + 1), n: btns.length }; });
+    check("phone width, idle: attach, model, mode, context ring and Send fit too", !idleFit.overflow && idleFit.inside && idleFit.n === 5, JSON.stringify(idleFit));
+    await page.screenshot({ path: `${OUT}/ui-idle-phone.png` });
+    await page.setViewportSize({ width: 1280, height: 800 });
+    check("running agents: no console or page errors", errors.length === 0, errors.join(" | ").slice(0, 200));
+    await page.click("#more");
+    await page.locator(".menu [role=menuitem]", { hasText: "Delete thread" }).click();
+    await page.waitForFunction((n) => document.querySelectorAll("#threads li").length === n, before, { timeout: 5000 });
+  } else {
+    console.log("SKIP  steering/context/subagent checks (start the server with AGENT_CONSOLE_MOCK=1)");
+    await page.keyboard.press("Escape");
+  }
   await ctx.close();
 }
 

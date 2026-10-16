@@ -4,10 +4,14 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "node test/providers.ts && node test/e2e.ts",
+    "test": "node test/latency.ts && node test/queue-edit.ts && node test/commands.ts && node test/usage.ts && node test/history.ts && node test/codex-settings.ts && node test/codex-web.ts && node test/providers.ts && node test/e2e.ts",
     "start": "node server/index.ts",
     "icons": "node scripts/make-icons.mjs",
     "test:ui": "node test/ui.ts",
+    "test:mobile": "node test/mobile-ui.ts",
+    "test:queue-ui": "node test/queue-telemetry-ui.ts",
+    "test:transport": "node test/transport.ts",
+    "test:dashboard": "node test/dashboard-ui.ts",
     "vendor": "node scripts/vendor.mjs"
   },
   "keywords": [],
@@ -18,6 +22,7 @@
   "dependencies": {
     "@fontsource-variable/inter": "^5.3.0",
     "@fontsource-variable/jetbrains-mono": "^5.3.0",
+    "@fontsource-variable/newsreader": "^5.3.0",
     "dompurify": "^3.4.17",
     "express": "^5.3.0",
     "highlight.js": "^11.12.0",

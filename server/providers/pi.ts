@@ -6,7 +6,7 @@ import { DATA_DIR } from "../auth.ts";
 import { brainContext } from "./brain.ts";
 import { childEnv } from "./env.ts";
 import { parseJson, spawnLines } from "./proc.ts";
-import { clip, type Agent, type AgentCtx, type Command, type Provider, type ThreadSpec } from "./types.ts";
+import { clip, IMAGE_ONLY_PROMPT, type Agent, type AgentCtx, type Attachment, type Command, type Provider, type ThreadSpec } from "./types.ts";
 
 // pi (github.com/earendil-works/pi) in RPC mode: one long-lived process per thread, any model pi knows about
 // (OpenRouter, OpenAI, Google, local, ...). Pi has no per-action approvals, so only Plan (read-only tools) and Bypass exist.
@@ -15,6 +15,8 @@ const SESSIONS = path.join(DATA_DIR, "pi-sessions");
 const READ_ONLY_TOOLS = "read,grep,find,ls";
 
 let cached: string[] = [];
+const thinking = new Set<string>();
+const contexts = new Map<string, number>(); // "provider/model" -> context window in tokens, from the --list-models table
 function configured(): boolean {
   try {
     if (Object.keys(JSON.parse(fs.readFileSync(path.join(os.homedir(), ".pi", "agent", "auth.json"), "utf8"))).length) return true;
@@ -24,10 +26,18 @@ function configured(): boolean {
 
 // `pi --list-models` only lists what the current credentials unlock. With an OpenRouter key we offer its free models
 // by default (AGENT_CONSOLE_PI_ALL=1 offers everything) so the picker stays short and a typo can't spend money.
+// "262.1K" -> 262100, "1M" -> 1000000
+export function parseTokens(s: string | undefined): number | undefined {
+  const m = s?.match(/^([\d.]+)([KM])?$/i);
+  return m ? Math.round(Number(m[1]) * (m[2]?.toUpperCase() === "M" ? 1_000_000 : m[2] ? 1000 : 1)) : undefined;
+}
+
 export function parsePiModels(table: string, all = false): string[] {
   const out: string[] = [];
   for (const line of table.split("\n").slice(1)) {
-    const [provider, model] = line.trim().split(/\s+/);
+    const [provider, model, context, , thinks] = line.trim().split(/\s+/);
+    if (thinks === "yes") thinking.add(`${provider}/${model}`);
+    if (provider && model && !provider.startsWith("/") && parseTokens(context)) contexts.set(`${provider}/${model}`, parseTokens(context)!);
     if (!provider || !model || provider.startsWith("/")) continue;
     if (provider === "openrouter" && !all && !model.endsWith(":free")) continue;
     out.push(`${provider}/${model}`);
@@ -73,7 +83,7 @@ function friendlyError(msg: string): string {
 }
 
 // Pure translator: pi session event -> canonical (Claude-shaped) events. Exported so it can be tested without a model.
-export function piTranslator(emit: (ev: any) => void, onCommands?: (list: Command[]) => void) {
+export function piTranslator(emit: (ev: any) => void, onCommands?: (list: Command[]) => void, contextWindow?: () => number | undefined) {
   let started = 0;
   let cost = 0;
   let failure: string | undefined;
@@ -108,6 +118,9 @@ export function piTranslator(emit: (ev: any) => void, onCommands?: (list: Comman
         const m = r.message;
         if (m?.role !== "assistant") break;
         cost += Number(m.usage?.cost?.total) || 0;
+        const u = m.usage;
+        const used = Number(u?.totalTokens) || (Number(u?.input) || 0) + (Number(u?.cacheRead) || 0) + (Number(u?.cacheWrite) || 0) + (Number(u?.output) || 0);
+        if (used > 0) emit({ type: "context_usage", used, ...(contextWindow?.() ? { max: contextWindow() } : {}) });
         if (m.stopReason === "error" && m.errorMessage) failure = friendlyError(m.errorMessage);
         const content = (m.content ?? [])
           .map((b: any) => {
@@ -129,6 +142,14 @@ export function piTranslator(emit: (ev: any) => void, onCommands?: (list: Comman
         settle(!!r.aborted);
         break;
       case "response":
+        if (r.command === "compact") {
+          if (r.success) {
+            emit({ type: "system", subtype: "compact_boundary" });
+            if (Number.isFinite(r.data?.estimatedTokensAfter)) emit({ type: "context_usage", used: r.data.estimatedTokensAfter, ...(contextWindow?.() ? { max: contextWindow() } : {}) });
+          } else emit({ type: "console_error", text: String(r.error || "Pi compaction failed.") });
+          emit({ type: "result", subtype: r.success ? "success" : "error", is_error: !r.success });
+          break;
+        }
         if (r.command === "get_commands" && r.success) {
           onCommands?.(
             (r.data?.commands ?? [])
@@ -150,9 +171,11 @@ export const pi: Provider = {
   label: "Pi",
   modes: ["plan", "bypassPermissions"],
   defaultMode: "bypassPermissions",
+  steer: true,
   note: "Pi never asks before acting: Plan limits it to read-only tools, Bypass gives it everything.",
   models: () => cached,
   defaultModel: () => cached[0] ?? "",
+  modelDetails: () => Object.fromEntries(cached.map(id => [id, { label: id.split("/").at(-1)!.replace(/:free$/, ""), efforts: thinking.has(id) ? ["off", "minimal", "low", "medium", "high"] : [] }])),
   status() {
     if (!configured()) return { ok: false, hint: "Add OPEN_ROUTER_TOKEN to ~/openrouter/.env (or ~/.config/agent-console/env), or run `pi` and /login." };
     if (!cached.length) return { ok: false, hint: "Pi lists no models for these credentials." };
@@ -166,18 +189,26 @@ export const pi: Provider = {
     if (t.mode === "plan") args.push("--tools", READ_ONLY_TOOLS);
     const brain = brainContext();
     if (brain) args.push("--append-system-prompt", brain); // shared memory, same text the Claude hook injects
-    const translate = piTranslator((ev) => ctx.event(ev), (list) => ctx.commands(list));
+    const translate = piTranslator((ev) => ctx.event(ev), (list) => ctx.commands(list), () => contexts.get(t.model));
     const p = spawnLines("pi", "pi", args, { cwd: t.cwd, env: childEnv() }, ctx, (line) => {
       const r = parseJson(line);
       if (r) translate(r);
     });
+    if (t.effort && t.effort !== "default") p.write(JSON.stringify({ id: "effort", type: "set_thinking_level", level: t.effort }));
     p.write(JSON.stringify({ id: "cmds", type: "get_commands" }));
     let n = 0;
+    const body = (text: string, images: Attachment[]) => ({
+      message: text.trim() ? text : IMAGE_ONLY_PROMPT,
+      ...(images.length ? { images: images.map((i) => ({ type: "image", data: fs.readFileSync(i.path).toString("base64"), mimeType: i.media_type })) } : {}),
+    });
     return {
       get alive() {
         return p.alive();
       },
-      send: (text) => p.write(JSON.stringify({ id: `p${++n}`, type: "prompt", message: text })),
+      compact: (instructions = "") => p.write(JSON.stringify({ id: `compact${++n}`, type: "compact", ...(instructions ? { customInstructions: instructions } : {}) })),
+      send: (text, images = []) => p.write(JSON.stringify({ id: `p${++n}`, type: "prompt", ...body(text, images) })),
+      // Pi's `steer` is delivered after the current assistant turn finishes its tool calls, before the next model call
+      steer: (text, images = []) => p.write(JSON.stringify({ id: `p${++n}`, type: "steer", ...body(text, images) })),
       abort: () => p.abort(),
       kill: () => p.kill(),
     };

@@ -16,7 +16,9 @@ export interface ThreadSpec {
   cwd: string;
   mode: Mode;
   model: string;
+  effort?: string;
   sessionId?: string;
+  forkFrom?: string; // a forked thread's first run continues a copy of this session instead of starting fresh (adapters that can)
 }
 
 export interface ExitInfo {
@@ -33,9 +35,27 @@ export interface AgentCtx {
   exited(info: ExitInfo): void;
 }
 
+// A file the user attached to a message, already validated and stored by uploads.ts. Adapters only ever see the images
+// (kind "image", for vision input); other files reach the agent as absolute paths listed in the prompt text.
+export interface Attachment {
+  id: string;
+  name: string;
+  path: string;
+  kind: "image" | "file";
+  media_type: string;
+  size: number;
+  n?: number; // images only: the "[Image #n]" label the user can refer to in the message
+}
+
+export const IMAGE_ONLY_PROMPT = "See the attached image(s).";
+
 export interface Agent {
   readonly alive: boolean;
-  send(text: string): void;
+  send(text: string, images?: Attachment[]): void;
+  // Deliver a message to a turn that is already running; the agent picks it up at its next opportunity (after the current tool call).
+  // Absent when the harness cannot take input mid-turn: the manager then queues the message until the turn ends.
+  steer?(text: string, images?: Attachment[]): void | Promise<void>;
+  compact?(instructions?: string): void;
   abort(): void; // stop the current turn; the manager discards this agent and starts a fresh one on the next send
   kill(): void;
 }
@@ -46,7 +66,9 @@ export interface Provider {
   modes: Mode[];
   defaultMode: Mode;
   note?: string; // shown under the agent picker
+  steer?: boolean; // the harness accepts messages mid-turn (Agent.steer)
   models(): string[];
+  modelDetails?(): Record<string, { label: string; description?: string; efforts: string[]; defaultEffort?: string }>;
   defaultModel(): string;
   // Cheap, synchronous readiness check shown in the UI. Never touches the network.
   status(): { ok: boolean; hint?: string };
