@@ -257,6 +257,11 @@ if (hello.providers.some((p: any) => p.id === "mock")) {
   check("fork: the earlier conversation is replayed once only", !(events(fid).find((e) => e.type === "assistant")?.message.content[0].text ?? "").includes("earlier conversation"));
   check("fork: the parent is untouched", (await histLen(id)) === parentLen);
   clear();
+  ws.send(JSON.stringify({ t: "fork", thread: id, provider: "claude" }));
+  const xf = await waitFor((m) => m.t === "created" || m.t === "error", 3000);
+  check("fork: into another agent switches harness, resets model/effort, replays text", xf?.thread?.provider === "claude" && xf.thread.replay === true && !xf.thread.forkFrom && xf.thread.effort === "default" && xf.thread.model !== "mock" && xf.thread.id !== id, JSON.stringify(xf).slice(0, 160));
+  check("fork: into another agent still carries the whole history", !!xf?.thread && (await histLen(xf.thread.id)) === parentLen);
+  clear();
   ws.send(JSON.stringify({ t: "send", thread: id, text: "slow burn for fork" }));
   await waitFor((m) => m.t === "event" && m.event.type === "stream_event", 3000);
   clear();

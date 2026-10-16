@@ -226,21 +226,29 @@ export class Threads {
 
   // A new thread that carries on from this one. Claude forks its session, Pi gets a copy of its session directory, and agents with
   // no fork (Codex) replay the earlier conversation as text in the first message. The history and uploads are copied so the fork reads whole.
-  fork(id: string): Thread {
+  // With `provider` set to another agent the fork switches harness: its native session cannot carry over, so it always replays text.
+  fork(id: string, provider?: string): Thread {
     const src = this.threads.get(id);
     if (!src) throw new Error("Unknown thread");
+    const target = provider && provider !== src.provider ? PROVIDERS.get(provider) : undefined;
+    if (provider && provider !== src.provider && !target) throw new Error("Unknown provider.");
+    if (target) {
+      const st = target.status();
+      if (!st.ok) throw new Error(`${target.label} is not ready. ${st.hint ?? ""}`.trim());
+      if (!target.defaultModel()) throw new Error(`${target.label} has no models available.`);
+    }
     if (src.status === "running") throw new Error("Wait for the current turn to finish before forking.");
     const now = Date.now();
     const t: Thread = {
       id: crypto.randomUUID(),
-      provider: src.provider,
+      provider: target?.id ?? src.provider,
       title: `${src.title.replace(/\s*\(fork\)$/, "").slice(0, 70)} (fork)`,
       cwd: src.cwd,
-      mode: src.mode,
-      model: src.model,
-      effort: src.effort,
-      advisor: src.advisor,
-      context: src.context,
+      mode: target ? (target.modes.includes(src.mode) ? src.mode : target.defaultMode) : src.mode,
+      model: target ? target.defaultModel() : src.model,
+      effort: target ? "default" : src.effort,
+      advisor: target ? undefined : src.advisor,
+      context: target ? undefined : src.context,
       status: "idle",
       cost: 0,
       createdAt: now,
@@ -250,7 +258,9 @@ export class Threads {
     const hasHistory = fs.existsSync(log(src.id));
     if (hasHistory) fs.copyFileSync(log(src.id), log(t.id));
     if (fs.existsSync(threadDir(src.id))) fs.cpSync(threadDir(src.id), threadDir(t.id), { recursive: true });
-    if (src.provider === "claude") {
+    if (target) {
+      if (hasHistory) t.replay = true;
+    } else if (src.provider === "claude") {
       if (src.sessionId) t.forkFrom = src.sessionId;
     } else if (src.provider === "pi") {
       const dir = path.join(DATA_DIR, "pi-sessions", src.id);

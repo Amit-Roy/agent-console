@@ -235,7 +235,7 @@ wss.on("connection", (ws) => {
         case "unqueue":
           return threads.unqueue(m.thread, String(m.id));
         case "fork":
-          return reply({ t: "created", thread: threads.fork(m.thread) });
+          return reply({ t: "created", thread: threads.fork(m.thread, typeof m.provider === "string" ? m.provider : undefined) });
         case "abort":
           return threads.abort(m.thread);
         case "update": {
