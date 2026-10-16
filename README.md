@@ -173,3 +173,7 @@ Isolated queue/latency checks: `node test/latency.ts`, `node test/queue-edit.ts`
 ## Restarting after a turn
 
 `bin/agent-console restart-when-idle` returns immediately and starts a detached watcher (`scripts/idle-restart.mjs`, log `~/.cache/agent-console/idle-restart.log`). It connects as an ordinary client, waits until no thread is running (plus 1.5 s of quiet, and until queues drain on servers that do not persist them), syntax-checks `server/`, runs `bin/agent-console stop`/`start`, and verifies the new server answers. It needs nothing from the running server, so it works on any version. Browsers reconnect and **reload themselves** (the `build` id in `hello` changed) unless the composer holds a draft, in which case a banner asks first. Agents should run it as the last step of a turn that touched `server/` or `public/`; never stop/start mid-turn. `bin/agent-console restart` is the immediate stop/start. `AGENT_CONSOLE_RUN` and `PORT` point it at a scratch instance.
+
+## Lean context
+
+Claude threads start with about 19k tokens of fixed context. Measured (haiku, trivial prompt): MCP servers ~3.5k, skills + slash-command lists ~6.6k, core prompt and tools ~8k. Threads now load only `codegraph` by default (`AGENT_CONSOLE_MCP=name,name`, or `all` for everything), cutting ~18%. Skills are the next biggest item; `--disable-slash-commands` would save ~6.6k but removes the `/` skill menu.

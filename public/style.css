@@ -267,10 +267,13 @@ li.sel .dot{background:var(--press)}
   padding:var(--sp-4) max(var(--sp-4),calc((100% - var(--col))/2)) var(--sp-6);
   display:flex;flex-direction:column;gap:var(--sp-3);
   scrollbar-width:thin;scrollbar-color:var(--s3) transparent;
-  -webkit-mask-image:linear-gradient(to bottom,transparent 0,#000 var(--sp-4),#000 calc(100% - var(--sp-4)),transparent 100%);
-  mask-image:linear-gradient(to bottom,transparent 0,#000 var(--sp-4),#000 calc(100% - var(--sp-4)),transparent 100%);
 }
 #chat>*{flex-shrink:0}
+/* Edge fades as static overlays: a mask-image on the scroller forces offscreen compositing every frame. */
+#head,#composer{position:relative}
+#head::after,#composer::before{content:"";position:absolute;left:0;right:0;height:var(--sp-4);pointer-events:none;z-index:1}
+#head::after{top:100%;background:linear-gradient(to bottom,var(--s1),transparent)}
+#composer::before{bottom:100%;background:linear-gradient(to top,var(--s1),transparent)}
 #chat:focus{outline:none}
 #chat:focus-visible{outline:2px solid var(--focus);outline-offset:-2px}
 .empty{margin:auto;max-width:24rem;text-align:center;color:var(--t2);display:flex;flex-direction:column;align-items:center;gap:var(--sp-3);padding:var(--sp-8) 0}

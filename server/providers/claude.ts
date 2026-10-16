@@ -1,11 +1,27 @@
 import { headroom } from "../headroom.ts";
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { threadDir } from "../uploads.ts";
 import { clip, type Agent, type AgentCtx, type Attachment, type Command, type Provider, type ThreadSpec } from "./types.ts";
 import { parseJson, spawnLines } from "./proc.ts";
 
 // never let the subscription login be silently replaced by metered API billing
 const SCRUBBED_ENV = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDECODE"];
+
+// Lean context: every connected MCP server adds its tool names and usage instructions to every turn (about 4k tokens for the claude.ai
+// connectors plus project servers). Threads load only the servers named in AGENT_CONSOLE_MCP (default "codegraph", from ~/.claude.json);
+// AGENT_CONSOLE_MCP=all restores everything.
+export function leanMcpArgs(): string[] {
+  const keep = (process.env.AGENT_CONSOLE_MCP ?? "codegraph").split(",").map((x) => x.trim()).filter(Boolean);
+  if (keep.includes("all")) return [];
+  let servers: Record<string, unknown> = {};
+  try {
+    const all = JSON.parse(fs.readFileSync(path.join(os.homedir(), ".claude.json"), "utf8")).mcpServers ?? {};
+    servers = Object.fromEntries(keep.filter((k) => all[k]).map((k) => [k, all[k]]));
+  } catch {}
+  return ["--strict-mcp-config", "--mcp-config", JSON.stringify({ mcpServers: servers })];
+}
 
 export function normalizeCommands(raw: any[]): Command[] {
   return (raw ?? []).map(c => typeof c === "string" ? { name: c } : c)
@@ -36,6 +52,7 @@ export const claude: Provider = {
       "--model", t.model,
     ];
     if (t.effort && t.effort !== "default") args.push("--effort", t.effort);
+    args.push(...leanMcpArgs());
     fs.mkdirSync(threadDir(t.id), { recursive: true, mode: 0o700 });
     if (t.sessionId) args.push("--resume", t.sessionId);
     else if (t.forkFrom) args.push("--resume", t.forkFrom, "--fork-session"); // a forked thread: continue a copy of the parent session
