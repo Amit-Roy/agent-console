@@ -1873,6 +1873,10 @@ function openNewDialog() {
   $("dlg").showModal();
 }
 $("new").onclick = openNewDialog;
+$("restart").onclick = async () => {
+  const r = await fetch("/restart", { method: "POST" }).catch(() => null);
+  toast(r?.ok ? "Restart scheduled. It happens once every thread is idle, then this page reloads." : "Could not schedule a restart.");
+};
 $("dform").addEventListener("submit", (e) => {
   if (e.submitter?.value === "ok") send({ t: "create", provider: menus.dProv.value, cwd: menus.dCwd.value, model: menus.dModel.value, effort: menus.dEffort.value, mode: menus.dMode.value });
 });
