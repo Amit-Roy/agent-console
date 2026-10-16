@@ -1,5 +1,8 @@
+import "./privacy.ts";
+import { usage, refreshRouterUsage } from "./usage.ts";
 import express from "express";
 import fs from "node:fs";
+import crypto from "node:crypto";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -7,7 +10,13 @@ import { fileURLToPath } from "node:url";
 import { WebSocketServer, type WebSocket } from "ws";
 import { authed, CODER_HOST, cookieFrom, limited, makeToken, passwordOk, PASSWORD, recordFail, setCookie, tokenValid } from "./auth.ts";
 import { providerInfo, refreshPiModels } from "./providers/index.ts";
+import { threadToMarkdown } from "./export.ts";
 import { Threads } from "./threads.ts";
+import { dashboard } from "./analytics.ts";
+import { headroom } from "./headroom.ts";
+import { LatencyStore } from "./latency.ts";
+import { DATA_DIR } from "./auth.ts";
+import { isId, MAX_FILE_BYTES, removeUpload, SAFE_NAME, saveUpload, sniffImageFile, UPLOAD_DIR } from "./uploads.ts";
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PORT = Number(process.env.PORT || 7070);
@@ -16,11 +25,21 @@ const HOME = os.homedir();
 const REPOS = path.join(HOME, "repos");
 
 const clients = new Set<WebSocket>();
+const subscriptions = new WeakMap<WebSocket, string>();
 const broadcast = (msg: unknown) => {
   const s = JSON.stringify(msg);
-  for (const c of clients) if (c.readyState === c.OPEN) c.send(s);
+  const event = msg as { t?: string; thread?: string };
+  const invalidation = event.t === "event" ? JSON.stringify({ t: "invalidate", thread: event.thread }) : null;
+  for (const c of clients) if (c.readyState === c.OPEN) {
+    const selected = subscriptions.get(c);
+    c.send(invalidation && selected && selected !== event.thread ? invalidation : s);
+  }
 };
 const threads = new Threads(broadcast);
+let latency: LatencyStore | undefined;
+try { latency = new LatencyStore(path.join(DATA_DIR, "latency.sqlite")); }
+catch { console.warn("Local latency storage is unavailable."); }
+usage.subscribe((provider, usage) => broadcast({ t: "usage", provider, usage }));
 setInterval(() => threads.sweep(), 60_000).unref();
 
 const app = express();
@@ -60,10 +79,77 @@ app.use((req, res, next) => {
 });
 app.get("/vendor/marked.js", (_req, res) => res.sendFile(path.join(ROOT, "node_modules/marked/lib/marked.esm.js")));
 app.get("/vendor/purify.js", (_req, res) => res.sendFile(path.join(ROOT, "node_modules/dompurify/dist/purify.es.mjs")));
+
+// ---- attachments: upload (raw bytes), download, discard. State-changing, so cookie auth alone is not enough: same-origin only.
+const sameOrigin: express.RequestHandler = (req, res, next) => {
+  try {
+    if (new URL(String(req.headers.origin)).host === req.headers.host) return next();
+  } catch {}
+  res.status(403).json({ error: "Cross-site request refused." });
+};
+app.post("/uploads/:thread", sameOrigin, express.raw({ type: () => true, limit: MAX_FILE_BYTES }), (req, res) => {
+  const { thread } = req.params;
+  if (!isId(thread) || !threads.get(thread)) return void res.status(404).json({ error: "Unknown thread." });
+  try {
+    const name = (() => { try { return decodeURIComponent(String(req.headers["x-name"] ?? "")); } catch { return ""; } })();
+    res.json(saveUpload(thread, name, req.headers["content-type"], Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0)));
+  } catch (e: any) {
+    res.status(400).json({ error: e?.message ?? "Upload failed." });
+  }
+});
+app.delete("/uploads/:thread/:id", sameOrigin, (req, res) => {
+  removeUpload(req.params.thread, req.params.id);
+  res.status(204).end();
+});
+app.get("/export/:thread", (req, res) => {
+  const t = threads.get(req.params.thread);
+  if (!t) return void res.status(404).end();
+  const label = providerInfo().find((p) => p.id === t.provider)?.label ?? t.provider;
+  res.attachment(`${t.title.replace(/[\\/:*?"<>|\u0000-\u001f]+/g, " ").trim().slice(0, 60) || "conversation"}.md`).type("text/markdown");
+  res.send(threadToMarkdown(t, label, threads.history(t.id)));
+});
+app.get("/api/latency", (_req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  try { res.json(latency ? { available: true, ...latency.summary() } : { available: false }); }
+  catch { res.status(503).json({ available: false }); }
+});
+app.get("/api/dashboard", async (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  const to = Number(req.query.to) || Date.now();
+  const from = Number(req.query.from) || to - 7 * 86_400_000;
+  if (!(from < to) || to - from > 400 * 86_400_000) return void res.status(400).json({ error: "Choose a range of up to 400 days." });
+  try {
+    const d = await dashboard(from, to);
+    const titles: Record<string, string> = {};
+    for (const t of d.turns) titles[t.thread] ??= threads.get(t.thread)?.title ?? "Deleted thread";
+    res.json({ ...d, titles });
+  }
+  catch { res.status(503).json({ error: "Dashboard data is unavailable." }); }
+});
+app.get("/uploads/:thread/:id/:name", (req, res) => {
+  const { thread, id, name } = req.params;
+  if (!isId(thread) || !isId(id) || !SAFE_NAME.test(name)) return void res.status(404).end();
+  const type = sniffImageFile(path.join(UPLOAD_DIR, thread, id, name));
+  res.setHeader("Cache-Control", "private, max-age=86400, immutable");
+  // only verified images render inline; anything else (html, svg, ...) is a download, so an upload can never run as a page on this origin
+  if (type) res.type(type);
+  else res.attachment(name).type("application/octet-stream");
+  // `root` matters: without it send() 404s any absolute path with a dot segment, and the data dir lives under ~/.config
+  res.sendFile(`${thread}/${id}/${name}`, { root: UPLOAD_DIR }, (err) => err && !res.headersSent && res.status(404).end());
+});
+app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+  if (!req.path.startsWith("/uploads/")) return next(err);
+  res.status(err?.status ?? 400).json({ error: err?.type === "entity.too.large" ? `Files must be under ${MAX_FILE_BYTES >> 20} MB.` : "Upload failed." });
+});
 app.use(express.static(path.join(ROOT, "public"), { index: "index.html", extensions: ["html"] }));
 
 const server = http.createServer(app);
-const wss = new WebSocketServer({ noServer: true, maxPayload: 1 << 20 });
+const wss = new WebSocketServer({
+  noServer: true, maxPayload: 1 << 20,
+  // Browser-supported compression cuts history and tool traffic on remote/mobile links.
+  // Independent messages bound memory and avoid retaining prior message dictionaries.
+  perMessageDeflate: { serverNoContextTakeover: true, clientNoContextTakeover: true, concurrencyLimit: 2, threshold: 1024, zlibDeflateOptions: { level: 3 } },
+});
 
 server.on("upgrade", (req, socket, head) => {
   const okAuth = authed(req);
@@ -99,8 +185,10 @@ function dirs(): string[] {
 
 wss.on("connection", (ws) => {
   clients.add(ws);
+  void refreshRouterUsage(); // quota refresh only on demand; no idle network polling
   const reply = (m: unknown) => ws.readyState === ws.OPEN && ws.send(JSON.stringify(m));
-  reply({ t: "hello", commands: threads.getCommands(), threads: threads.list(), dirs: dirs(), providers: providerInfo() });
+  reply({ t: "hello", build: BUILD, features: { queueEditing: true, latency: !!latency, selectiveEvents: true }, usage: usage.all(), commands: threads.getCommands(), threads: threads.list(), queues: threads.getQueues(), dirs: dirs(), providers: providerInfo() });
+  let metricsWindow = Date.now(), metricsCount = 0;
   const ping = setInterval(() => ws.readyState === ws.OPEN && ws.ping(), 25_000);
   ws.on("close", () => {
     clearInterval(ping);
@@ -110,21 +198,48 @@ wss.on("connection", (ws) => {
     try {
       const m = JSON.parse(String(raw));
       switch (m.t) {
+        case "telemetry": {
+          if (Date.now() - metricsWindow > 60_000) { metricsWindow = Date.now(); metricsCount = 0; }
+          if (!Array.isArray(m.samples) || m.samples.length > 20 || (metricsCount += m.samples.length) > 200) return;
+          try { latency?.record(m.samples, id => threads.get(id)); } catch { console.warn("Local latency sample write failed."); }
+          return;
+        }
+        case "queue_edit":
+        case "queue_save":
+        case "queue_cancel_edit": {
+          try {
+            if (m.t === "queue_edit") return reply({ t: "queue_edit", request: m.request, thread: m.thread, ...threads.editQueued(m.thread, m.id) });
+            if (m.t === "queue_save") threads.saveQueued(m.thread, m.id, m.revision, m.text);
+            else threads.cancelQueuedEdit(m.thread, m.id, m.revision);
+            return reply({ t: "queue_edit_done", request: m.request, thread: m.thread, id: m.id });
+          } catch (e: any) { return reply({ t: "queue_edit_error", request: m.request, message: e?.message || "Could not update this queued message." }); }
+        }
+        case "subscribe":
+          if (threads.get(m.thread)) subscriptions.set(ws, m.thread);
+          return;
         case "open":
-          return reply({ t: "history", thread: m.thread, events: threads.history(m.thread) });
+          if (m.foregroundOnly === true && threads.get(m.thread)) subscriptions.set(ws, m.thread);
+          return reply({ t: "history", thread: m.thread, request: m.request, before: Number.isInteger(m.before) ? m.before : null, ...threads.page(m.thread, Number.isInteger(m.before) ? m.before : undefined) });
         case "create": {
-          const t = threads.create({ provider: m.provider, cwd: safeCwd(m.cwd), mode: m.mode, model: m.model, title: m.title });
+          const t = threads.create({ provider: m.provider, cwd: safeCwd(m.cwd), mode: m.mode, model: m.model, effort: m.effort, title: m.title });
           return reply({ t: "created", thread: t });
         }
         case "send":
-          if (typeof m.text !== "string" || !m.text.trim()) return;
-          return threads.send(m.thread, m.text.slice(0, 100_000));
+          if (typeof m.text !== "string" || (!m.text.trim() && !(Array.isArray(m.attachments) && m.attachments.length))) return;
+          return threads.send(m.thread, m.text.slice(0, 100_000), { attachments: m.attachments, mode: m.mode === "queue" ? "queue" : "steer" });
+        case "compact":
+          return threads.compact(m.thread);
+        case "unqueue":
+          return threads.unqueue(m.thread, String(m.id));
+        case "fork":
+          return reply({ t: "created", thread: threads.fork(m.thread) });
         case "abort":
           return threads.abort(m.thread);
         case "update": {
           return threads.update(m.thread, {
             mode: typeof m.mode === "string" ? m.mode : undefined,
             model: typeof m.model === "string" ? m.model : undefined,
+            effort: typeof m.effort === "string" ? m.effort : undefined,
             title: typeof m.title === "string" ? m.title : undefined,
           });
         }
@@ -138,7 +253,7 @@ wss.on("connection", (ws) => {
 });
 
 void refreshPiModels();
-setInterval(() => void refreshPiModels(), 10 * 60_000).unref(); // pick up new credentials / models without a restart
+headroom.start();
 
 server.listen(PORT, HOST, () => {
   console.log(`agent-console listening on http://${HOST}:${PORT}`);
@@ -146,9 +261,21 @@ server.listen(PORT, HOST, () => {
   if (process.env.AGENT_CONSOLE_SHOW_PASSWORD) console.log(`password: ${PASSWORD}`);
 });
 
+// A hash of the code this process loaded. Open tabs compare it on reconnect and reload themselves when the server was replaced
+// (`bin/agent-console restart-when-idle` -> scripts/idle-restart.mjs).
+const sources = (dir: string): string[] => fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.name === "fonts" || e.name === "node_modules" ? [] : e.isDirectory() ? sources(path.join(dir, e.name)) : [path.join(dir, e.name)]));
+function buildId() {
+  const h = crypto.createHash("sha1");
+  for (const f of [...sources(path.join(ROOT, "server")), ...sources(path.join(ROOT, "public"))].sort()) { const st = fs.statSync(f); h.update(`${f}:${st.mtimeMs}:${st.size}`); }
+  return h.digest("hex").slice(0, 12);
+}
+const BUILD = buildId();
+
 for (const sig of ["SIGINT", "SIGTERM"] as const) {
   process.on(sig, () => {
     threads.shutdown();
+    headroom.stop();
+    latency?.close();
     process.exit(0);
   });
 }

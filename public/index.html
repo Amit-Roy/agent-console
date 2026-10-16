@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,interactive-widget=resizes-content">
 <meta name="color-scheme" content="light dark">
 <title>Agent Console</title>
 <link rel="icon" href="/icon.svg"><link rel="apple-touch-icon" href="/icon-192.png">
@@ -8,6 +8,7 @@
 <meta name="theme-color" content="#eeeef2" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0b0b0d" media="(prefers-color-scheme: dark)">
 <link rel="preload" href="/fonts/inter-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/fonts/newsreader-latin-standard-normal.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="/fonts/jetbrains-mono-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/style.css"></head>
 <body>
@@ -17,6 +18,10 @@
   <symbol id="i-sidebar" viewBox="0 0 16 16"><rect x="2" y="2.5" width="12" height="11" rx="2.5"/><path d="M6.25 2.75v10.5"/></symbol>
   <symbol id="i-send" viewBox="0 0 16 16"><path d="M8 13V3.5M3.75 7.5 8 3.25l4.25 4.25"/></symbol>
   <symbol id="i-stop" viewBox="0 0 16 16"><rect x="4.5" y="4.5" width="7" height="7" rx="1.5" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-paperclip" viewBox="0 0 16 16"><path d="m13.75 7.6-5.6 5.6a3.9 3.9 0 0 1-5.5-5.5l5.85-5.85a2.6 2.6 0 0 1 3.68 3.68L6.4 11.3a1.3 1.3 0 0 1-1.84-1.84L9.9 4.1"/></symbol>
+  <symbol id="i-fork" viewBox="0 0 16 16"><circle cx="4.5" cy="3.5" r="1.5"/><circle cx="11.5" cy="3.5" r="1.5"/><circle cx="8" cy="12.5" r="1.5"/><path d="M4.5 5v1a2 2 0 0 0 2 2h3a2 2 0 0 0 2-2V5M8 8v3"/></symbol>
+  <symbol id="i-download" viewBox="0 0 16 16"><path d="M8 2.5v7M5 7l3 3 3-3M3 13h10"/></symbol>
+  <symbol id="i-share" viewBox="0 0 16 16"><path d="M8 10V2.5M5.25 5.25 8 2.5l2.75 2.75M4 7.5H3.75A1.25 1.25 0 0 0 2.5 8.75v3.5a1.25 1.25 0 0 0 1.25 1.25h8.5a1.25 1.25 0 0 0 1.25-1.25v-3.5A1.25 1.25 0 0 0 12.25 7.5H12"/></symbol>
   <symbol id="i-copy" viewBox="0 0 16 16"><rect x="5.5" y="5.5" width="8" height="8" rx="2"/><path d="M10.5 5.5v-1a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v4a2 2 0 0 0 2 2h1"/></symbol>
   <symbol id="i-check" viewBox="0 0 16 16"><path d="m3.5 8.5 3 3 6-7"/></symbol>
   <symbol id="i-x" viewBox="0 0 16 16"><path d="m4 4 8 8M12 4l-8 8"/></symbol>
@@ -45,6 +50,7 @@
     </button>
     <h2 class="side-label">Threads</h2>
     <ul id="threads" aria-label="Thread list"></ul>
+    <a id="dash-link" class="btn ghost block dash-link" href="/dashboard"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 13V8.5M8 13V3M13 13V6"/></svg><span>Usage &amp; savings</span></a>
     <div id="usage" class="usage" title="Subscription usage" role="group" aria-label="Subscription usage"></div>
   </aside>
   <div id="scrim"></div>
@@ -57,7 +63,7 @@
         <h1 id="ttl">No thread</h1>
         <div id="cwd" class="path" hidden><svg class="ico" aria-hidden="true"><use href="#i-folder"/></svg><span id="cwd-t"></span></div>
       </div>
-      <span id="state" class="state" role="status" hidden><i class="dot running"></i>Working</span>
+      <span id="state" class="state" role="status" hidden><i class="dot running"></i><span id="state-t">Working</span></span>
       <button id="more" class="btn icon ghost" type="button" title="Thread actions" aria-label="Thread actions" disabled>
         <svg class="ico" aria-hidden="true"><use href="#i-more"/></svg>
       </button>
@@ -68,30 +74,61 @@
       <div class="cwrap">
         <ul id="slash" role="listbox" aria-label="Commands and skills" hidden></ul>
         <div id="cbox">
+          <ul id="queued" aria-label="Queued messages" hidden></ul>
+          <ul id="thumbs" aria-label="Attachments" hidden></ul>
           <textarea id="input" rows="1" aria-label="Message" aria-describedby="hint" role="combobox" aria-expanded="false" aria-controls="slash" aria-autocomplete="list" placeholder="Message the agent" enterkeyhint="send" disabled></textarea>
           <div class="toolbar">
+            <input id="file" type="file" multiple hidden>
+            <button id="attach" class="btn icon ghost round" type="button" title="Attach files (or paste / drop them)" aria-label="Attach files" disabled>
+              <svg class="ico" aria-hidden="true"><use href="#i-paperclip"/></svg>
+            </button>
             <button id="model" class="btn chip" type="button" title="Model" disabled><span></span></button>
+            <button id="effort" class="btn chip" type="button" title="Reasoning effort" hidden><span></span></button>
             <button id="mode" class="btn chip" type="button" title="Permission mode" disabled><span></span></button>
             <span class="spacer"></span>
-            <button id="send" class="btn icon primary round" type="button" title="Send (Enter)" aria-label="Send" disabled>
-              <svg class="ico" aria-hidden="true"><use href="#i-send"/></svg>
+            <button id="ctx" class="ctx" type="button" aria-label="Context window" hidden>
+              <svg class="ring" viewBox="0 0 20 20" aria-hidden="true"><circle class="track" cx="10" cy="10" r="8"/><circle class="fill" cx="10" cy="10" r="8" pathLength="100"/></svg>
+              <span class="pct"></span>
             </button>
+            <button id="queue" class="btn sm" type="button" title="Send after this turn finishes (Alt+Enter)" hidden>Queue</button>
             <button id="stop" class="btn icon round" type="button" title="Stop" aria-label="Stop" hidden>
               <svg class="ico" aria-hidden="true"><use href="#i-stop"/></svg>
+            </button>
+            <button id="send" class="btn icon primary round" type="button" title="Send (Enter)" aria-label="Send" disabled>
+              <svg class="ico" aria-hidden="true"><use href="#i-send"/></svg>
             </button>
           </div>
         </div>
       </div>
-      <p id="hint" class="hint">Enter sends. Shift+Enter adds a line. Type / for commands and skills.</p>
+      <p id="hint" class="hint">Enter sends (while the agent works: steers it). Alt+Enter queues. Shift+Enter adds a line. Type / for commands and skills.</p>
     </footer>
   </main>
 </div>
+<div id="dropzone" aria-hidden="true"><div>Drop files to attach</div></div>
+<div id="toast" role="status" hidden></div>
 <div id="announce" class="sr-only" role="status" aria-live="polite"></div>
+<dialog id="run-details" aria-labelledby="run-details-title">
+  <h3 id="run-details-title">Run details</h3>
+  <p id="diagnostics" class="diagnostics" aria-label="Load diagnostics">No load measurements yet.</p>
+  <div id="run-metrics"></div>
+  <h4>Latency on this server</h4>
+  <p id="latency-summary"></p>
+  <form method="dialog"><div class="row"><button class="btn" autofocus>Done</button></div></form>
+</dialog>
+<dialog id="queue-editor" aria-labelledby="queue-edit-title"><form id="queue-edit-form">
+  <h3 id="queue-edit-title">Edit queued message</h3>
+  <p id="queue-edit-note" class="sub"></p>
+  <label class="sr-only" for="queue-draft">Queued message</label>
+  <textarea id="queue-draft" class="input" rows="6" maxlength="100000"></textarea>
+  <p id="queue-edit-error" role="alert"></p>
+  <div class="row"><button id="queue-cancel" class="btn" type="button">Cancel</button><button id="queue-save" class="btn primary" type="submit">Save</button></div>
+</form></dialog>
 <dialog id="dlg" aria-labelledby="dlg-title"><form method="dialog" id="dform">
   <h3 id="dlg-title">New thread</h3>
   <p class="sub">Run a coding agent in one of your folders.</p>
   <div class="fld"><span class="lbl" id="l-prov">Agent</span><button type="button" id="d-prov" class="btn field" aria-labelledby="l-prov d-prov"><span></span></button></div>
   <div class="fld"><span class="lbl" id="l-cwd">Folder</span><button type="button" id="d-cwd" class="btn field" aria-labelledby="l-cwd d-cwd"><span></span></button></div>
+  <div class="fld" id="effort-field" hidden><span class="lbl" id="l-effort">Reasoning effort</span><button type="button" id="d-effort" class="btn field" aria-labelledby="l-effort d-effort"><span></span></button></div>
   <div class="fld"><span class="lbl" id="l-model">Model</span><button type="button" id="d-model" class="btn field" aria-labelledby="l-model d-model"><span></span></button></div>
   <div class="fld"><span class="lbl" id="l-mode">Permission mode</span><button type="button" id="d-mode" class="btn field" aria-labelledby="l-mode d-mode"><span></span></button></div>
   <p id="d-note" class="hint" hidden></p>

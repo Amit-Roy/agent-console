@@ -1,5 +1,5 @@
 // Accessible popover menu button, replacing native <select> (listbox, value picker) and serving as an actions menu (menu).
-//   const m = createMenu({ trigger, items:[{value,label,desc?,icon?,tone?,disabled?}], value, onSelect, kind:"listbox"|"menu", side:"top"|"bottom", align:"start"|"end" })
+//   const m = createMenu({ trigger, items:[{value,label,desc?,icon?,tone?,disabled?}], value, onSelect, onOpen?, onClose?, kind:"listbox"|"menu", side:"top"|"bottom", align:"start"|"end" })
 // Keyboard: trigger opens with Enter / Space / ArrowDown / ArrowUp. In the popover: ArrowUp/Down, Home/End, typeahead, Enter/Space select,
 // Esc closes and returns focus to the trigger, Tab closes. Click or tap outside closes. Items are >=44px on coarse pointers (see .menu in style.css).
 import { el, icon } from "/render.js";
@@ -8,7 +8,7 @@ let uid = 0;
 const openMenus = new Set();
 
 export function createMenu(opts) {
-  const o = { kind: "listbox", side: "bottom", align: "start", onSelect() {}, renderTrigger: null, label: "", ...opts };
+  const o = { kind: "listbox", side: "bottom", align: "start", onSelect() {}, onOpen() {}, onClose() {}, renderTrigger: null, label: "", ...opts };
   const trigger = o.trigger;
   const id = `menu-${++uid}`;
   const itemRole = o.kind === "menu" ? "menuitem" : "option";
@@ -40,7 +40,11 @@ export function createMenu(opts) {
     if (!node) return pop.removeAttribute("aria-activedescendant");
     node.setAttribute("data-active", "");
     pop.setAttribute("aria-activedescendant", node.id);
-    if (scroll) node.scrollIntoView({ block: "nearest" });
+    // Scroll the list itself; scrollIntoView also moves the dialog and dismisses this menu.
+    if (scroll) {
+      if (node.offsetTop < pop.scrollTop) pop.scrollTop = node.offsetTop;
+      else if (node.offsetTop + node.offsetHeight > pop.scrollTop + pop.clientHeight) pop.scrollTop = node.offsetTop + node.offsetHeight - pop.clientHeight;
+    }
   }
   function move(delta, from = active) {
     let i = from;
@@ -112,6 +116,7 @@ export function createMenu(opts) {
     window.addEventListener("resize", onDismiss);
     window.addEventListener("scroll", onScroll, true);
     openMenus.add(api);
+    o.onOpen();
   }
 
   function close(returnFocus = true) {
@@ -126,6 +131,7 @@ export function createMenu(opts) {
     trigger.removeAttribute("aria-controls");
     p.remove();
     if (returnFocus) trigger.focus({ preventScroll: true });
+    o.onClose();
   }
 
   function choose(i) {
@@ -170,7 +176,8 @@ export function createMenu(opts) {
     if (pop && !pop.contains(e.target) && !trigger.contains(e.target)) close(false);
   }
   function onDismiss() { close(false); }
-  function onScroll(e) { if (pop && !pop.contains(e.target)) close(false); }
+  // only scrolling that moves the trigger dismisses the menu (the chat scrolling while history loads must not)
+  function onScroll(e) { if (pop && !pop.contains(e.target) && (e.target === document || e.target.contains?.(trigger))) close(false); }
 
   trigger.addEventListener("click", () => (pop ? close(true) : open()));
   trigger.addEventListener("keydown", (e) => {

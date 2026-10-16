@@ -2,13 +2,12 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { brainContext } from "./brain.ts";
-import { childEnv } from "./env.ts";
-import { parseJson, spawnLines } from "./proc.ts";
+import { startCodexApp } from "./codex-app.ts";
+import { codexWebTool } from "./codex-web.ts";
 import { clip, type Agent, type AgentCtx, type Mode, type Provider, type ThreadSpec } from "./types.ts";
 
-// OpenAI Codex CLI via `codex exec --json`: one process per turn, resumed by thread id. Uses the ChatGPT subscription login
-// (`codex login`). Event mapping follows the documented `exec --json` item stream; see test/providers.ts for fixtures.
+// Persistent Codex app-server owns each active session and accepts native mid-turn steering.
+// The pure exec translator is shared with the app-server item adapter and historical fixtures.
 
 // codex runs everything as `/usr/bin/zsh -lc '<command>'`; show just the command
 export const unwrapShell = (cmd: unknown): string => {
@@ -30,11 +29,13 @@ const CONFIG_WARNING = /^Codex is ignoring \d+ unrecognized configuration settin
 export function codexTranslator(emit: (ev: any) => void) {
   let started = 0;
   const begun = new Set<string>();
+  const web = new Map<string, string>();
   const finish = (failure?: string) => {
     if (failure) emit({ type: "console_error", text: failure });
     emit({ type: "result", subtype: failure ? "error" : "success", is_error: !!failure, duration_ms: started ? Date.now() - started : 0 });
     started = 0;
     begun.clear();
+    web.clear();
   };
   const tool = (id: string, name: string, input: Record<string, any>) => {
     if (begun.has(id)) return;
@@ -68,14 +69,25 @@ export function codexTranslator(emit: (ev: any) => void) {
           tool(it.id, `${it.server}:${it.tool}`, it.arguments ?? {});
           if (done) emit(result(it.id, JSON.stringify(it.result ?? it.error ?? "", null, 1), it.status === "failed"));
         } else if (it.type === "web_search") {
-          tool(it.id, "WebSearch", { query: it.query });
-          if (done) emit(result(it.id, "", false));
+          const details = codexWebTool(it);
+          const signature = JSON.stringify(details);
+          if (!begun.has(it.id)) tool(it.id, details.name, details.input);
+          else if (web.get(it.id) !== signature) emit({ type: "tool_update", tool_use_id: it.id, ...details });
+          web.set(it.id, signature);
+          if (done) {
+            const failed = ["failed", "incomplete", "cancelled"].includes(it.status) || !!it.error;
+            const output = it.error?.message ?? it.error ?? (failed ? `Web action ${it.status}` : it.results ? JSON.stringify(it.results, null, 2) : "");
+            emit(result(it.id, String(output), failed));
+          }
         } else if (it.type === "error" && done && !CONFIG_WARNING.test(String(it.message))) emit({ type: "console_error", text: String(it.message ?? "error") });
         break;
       }
-      case "turn.completed":
+      case "turn.completed": {
+        // exec usage is cumulative across tool-loop requests, never current context.
+        if (r.usage) emit({ type: "token_usage", ...r.usage });
         finish();
         break;
+      }
       case "turn.failed":
         finish(String(r.error?.message ?? "turn failed"));
         break;
@@ -93,9 +105,29 @@ const loggedIn = () => fs.existsSync(path.join(process.env.CODEX_HOME || path.jo
 let sandbox: boolean | undefined;
 const sandboxWorks = () => (sandbox ??= spawnSync("unshare", ["--user", "true"], { stdio: "ignore" }).status === 0);
 
+// Read only the public model metadata from the CLI's account-specific cache. Never expose prompts or auth data.
+export function codexModels() {
+  const home = process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
+  let models: any[] = [];
+  try { models = JSON.parse(fs.readFileSync(path.join(home, "models_cache.json"), "utf8")).models || []; } catch {}
+  const details: Record<string, { label: string; description?: string; efforts: string[]; defaultEffort?: string }> = {};
+  details.default = { label: "CLI default", description: "Inherits Codex configuration, project overrides and CLI defaults. Select a model to pin it for this thread.", efforts: [] };
+  for (const m of models) {
+    if (m.visibility !== "list" || typeof m.slug !== "string") continue;
+    details[m.slug] = { label: m.display_name || m.slug, description: m.description, efforts: (m.supported_reasoning_levels || []).map((e: any) => e.effort).filter((e: any) => typeof e === "string"), defaultEffort: m.default_reasoning_level };
+  }
+  for (const id of (process.env.AGENT_CONSOLE_CODEX_MODELS || "").split(",").map(s => s.trim()).filter(Boolean)) {
+    details[id] ||= { label: id, description: "Configured model; supported effort levels are unknown.", efforts: [] };
+  }
+  const known = Object.entries(details).filter(([id, m]) => id !== "default" && m.efforts.length).map(([,m]) => m.efforts);
+  details.default.efforts = known.length ? known[0].filter(e => known.every(levels => levels.includes(e))) : [];
+  return details;
+}
+
 export const codex: Provider = {
   id: "codex",
   label: "Codex",
+  steer: true,
   get modes(): Mode[] {
     return sandboxWorks() ? ["plan", "acceptEdits", "bypassPermissions"] : ["bypassPermissions"];
   },
@@ -108,40 +140,11 @@ export const codex: Provider = {
       : "Uses your ChatGPT login. This machine cannot run Codex's sandbox (no user namespaces), so only Bypass is available.";
   },
   // "default" = whatever ~/.codex/config.toml selects
-  models: () => ["default", ...(process.env.AGENT_CONSOLE_CODEX_MODELS || "").split(",").map((s) => s.trim()).filter(Boolean)],
+  models: () => Object.keys(codexModels()),
+  modelDetails: codexModels,
   defaultModel: () => "default",
   status: () => (loggedIn() ? { ok: true } : { ok: false, hint: "Run `codex login --device-auth` in a terminal." }),
   start(t: ThreadSpec, ctx: AgentCtx): Agent {
-    let session = t.sessionId;
-    let p: ReturnType<typeof spawnLines> | undefined;
-    let dead = false;
-    const translate = codexTranslator((ev) => {
-      if (ev.type === "system" && ev.subtype === "init") session = ev.session_id;
-      ctx.event(ev);
-    });
-    return {
-      get alive() {
-        return !dead;
-      },
-      send(text) {
-        const args = ["exec", "--json", "--skip-git-repo-check", "-C", t.cwd];
-        if (t.model !== "default") args.push("-m", t.model);
-        if (t.mode === "bypassPermissions") args.push("--dangerously-bypass-approvals-and-sandbox");
-        else args.push("-c", `sandbox_mode="${t.mode === "plan" ? "read-only" : "workspace-write"}"`, "-c", 'approval_policy="never"');
-        const brain = brainContext();
-        if (brain) args.push("-c", `developer_instructions=${JSON.stringify(brain)}`); // shared memory; a JSON string is a valid TOML string
-        if (session) args.push("resume", session);
-        args.push("-"); // prompt from stdin
-        // one process per turn: an exit only matters if it is the latest process (a previous turn's exit can land after the next send)
-        const proc = spawnLines("codex", "codex", args, { cwd: t.cwd, env: childEnv() }, { ...ctx, exited: (i) => { if (p !== proc) return; dead = true; ctx.exited(i); } }, (line) => {
-          const r = parseJson(line);
-          if (r) translate(r);
-        });
-        p = proc;
-        proc.proc.stdin!.end(text);
-      },
-      abort: () => p?.abort(),
-      kill: () => p?.kill(),
-    };
+    return startCodexApp(t, ctx, codexTranslator(ctx.event));
   },
 };
