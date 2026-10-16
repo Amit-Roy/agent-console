@@ -585,6 +585,19 @@ export class Threads {
       this.drain(id);
     }
   }
+  // "Steer" on a queued card: hand that one message to the running turn now instead of waiting for it to end
+  steerQueued(id: string, qid: string) {
+    const t = this.threads.get(id);
+    const q = this.queues.get(id);
+    const item = q?.find((x) => x.id === qid);
+    if (!t || !item) throw new Error("This message is no longer queued. It may already have been sent.");
+    if (item.editing) throw new Error("Finish editing this message first.");
+    if (t.status !== "running") return this.drain(id);
+    if (t.operation || !this.live.get(id)?.agent.steer) throw new Error("This agent cannot take a message mid-turn. It will be sent when the turn ends.");
+    this.queues.set(id, q!.filter((x) => x !== item));
+    this.emitQueue(id);
+    this.whileRunning(t, item.text, { attachments: item.attachments, mode: "steer" });
+  }
   unqueue(id: string, qid: string) {
     const q = this.queues.get(id);
     if (!q) return;

@@ -161,7 +161,7 @@ Isolated queue/latency checks: `node test/latency.ts`, `node test/queue-edit.ts`
 ## Loading, steering, queue, context ring, subagents, compaction, dashboard
 
 - Opening a thread shows a spinner and skeleton bars after 150 ms (never a flash), then the newest page of history; older pages load on scroll.
-- Enter while an agent works **steers** it (Claude stream-json, Pi `steer`, Codex `turn/steer`); Alt+Enter or the Queue button queues. Everything queued goes out together as **one prompt** when the turn ends (a `/command` goes alone; `[Image #n]` tokens are renumbered). Stop is red and clears the queue.
+- Enter while an agent works **queues** the message above the composer; its **Steer** button (or Alt+Enter at send time) hands it to the running turn now (Claude stream-json, Pi `steer`, Codex `turn/steer`). Everything still queued goes out together as **one prompt** when the turn ends (a `/command` goes alone; `[Image #n]` tokens are renumbered). One action button: red Stop when a turn runs and the box is empty, otherwise Send. Tool labels send the model only a 100-character excerpt of each command.
 - A ring beside Stop shows how full the context window is (amber, never red, as it fills).
 - Subagents render as one card with their own nested activity, live stats and an "in background" chip.
 - `/compact` is one progress card (spinner, then done/failed) instead of a message bubble; messages typed meanwhile queue.

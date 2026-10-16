@@ -184,7 +184,7 @@ if (hello.providers.some((p: any) => p.id === "mock")) {
   ws.send(JSON.stringify({ t: "send", thread: steerT, text: "slow burn for steering" }));
   await waitFor((m) => m.t === "event" && m.event.type === "stream_event", 3000);
   clear();
-  ws.send(JSON.stringify({ t: "send", thread: steerT, text: "change course" })); // while it is running: steers
+  ws.send(JSON.stringify({ t: "send", thread: steerT, text: "change course", mode: "steer" })); // while it is running: steers
   const steered = await waitFor((m) => m.t === "event" && m.event.type === "user_input", 3000);
   check("steer: a message sent mid-turn is logged as a steer and delivered to the agent now", steered?.event?.delivery === "steer" && steered.event.text === "change course" && !!(await waitFor((m) => m.t === "event" && m.event.type === "stream_event" && JSON.stringify(m.event.event).includes("[steered: change course]"), 3000)));
   check("steer: the turn keeps running and no error is raised", !inbox.some((m) => m.t === "error") && !(await waitFor((m) => m.t === "event" && m.event.type === "result", 300)));
