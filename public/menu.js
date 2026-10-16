@@ -1,5 +1,5 @@
 // Accessible popover menu button, replacing native <select> (listbox, value picker) and serving as an actions menu (menu).
-//   const m = createMenu({ trigger, items:[{value,label,desc?,icon?,tone?,disabled?}], value, onSelect, onOpen?, onClose?, kind:"listbox"|"menu", side:"top"|"bottom", align:"start"|"end" })
+//   const m = createMenu({ trigger, items:[{value,label,desc?,icon?,tone?,disabled?,keep?,checked?}], value, onSelect, onOpen?, onClose?, kind:"listbox"|"menu", side:"top"|"bottom", align:"start"|"end" })
 // Keyboard: trigger opens with Enter / Space / ArrowDown / ArrowUp. In the popover: ArrowUp/Down, Home/End, typeahead, Enter/Space select,
 // Esc closes and returns focus to the trigger, Tab closes. Click or tap outside closes. Items are >=44px on coarse pointers (see .menu in style.css).
 import { el, icon } from "/render.js";
@@ -87,7 +87,7 @@ export function createMenu(opts) {
       const n = el("div");
       n.id = `${id}-${i}`;
       n.setAttribute("role", itemRole);
-      if (o.kind === "listbox") n.setAttribute("aria-selected", String(it.value === value));
+      if (o.kind === "listbox") n.setAttribute("aria-selected", String(it.keep ? !!it.checked : it.value === value));
       if (it.disabled) n.setAttribute("aria-disabled", "true");
       if (it.tone) n.dataset.tone = it.tone;
       if (it.icon) {
@@ -137,6 +137,7 @@ export function createMenu(opts) {
   function choose(i) {
     const it = items[i];
     close(true);
+    if (it.keep) { o.onSelect(it.value, it); return; } // an action row (e.g. "Advisor · Opus"): acts without becoming the menu's value
     if (o.kind === "listbox") {
       if (it.value === value) return;
       if (o.onSelect(it.value, it) === false) return;

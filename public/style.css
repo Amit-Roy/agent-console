@@ -638,11 +638,11 @@ body.login{display:grid;place-items:center;overflow:auto;padding:var(--sp-4)}
   #attach[data-count]{border-color:Highlight}
 }
 
-/* Browser-managed virtual rendering: skip layout/paint of distant messages. */
+/* Browser-managed virtual rendering: skip layout/paint of distant messages. Keep native scroll anchoring on: it absorbs
+   placeholders resolving to their real height above the viewport (a 40px tool card was a 100px jump mid-fling). */
 #chat > .msg { content-visibility: auto; contain-intrinsic-size: auto 140px; }
 .diagnostics { font:var(--fw-reg) var(--f-sm); color:var(--t2); margin-top:var(--sp-4); overflow-wrap:anywhere; }
 
-#chat { overflow-anchor: none; }
 @media (max-width: 600px) {
   :root{--ctl-h:2.75rem;--ctl-h-sm:2.75rem;--item-h:2.75rem}
   #cbox{padding:var(--sp-3) var(--sp-3) var(--sp-2)}
@@ -669,7 +669,11 @@ body.login{display:grid;place-items:center;overflow:auto;padding:var(--sp-4)}
 .usage-tab { flex:1; min-width:0; min-height:36px; padding:4px; background:transparent; border:0; border-radius:8px; color:var(--t2); font:inherit; cursor:pointer; }
 .usage-tab[aria-selected=true] { background:var(--s3); color:var(--t1); }
 .usage-pane { display:flex; flex-direction:column; gap:8px; }
-.usage-label { color:var(--t2); margin-top:6px; font-weight:600; }
+.usage-label { color:var(--t2); font-weight:600; }
+.usage-head { display:flex; align-items:center; justify-content:space-between; margin-top:6px; }
+.usage-refresh.spinning .ico { animation:usage-spin 1s linear infinite; }
+@keyframes usage-spin { to { transform:rotate(360deg); } }
+@media (prefers-reduced-motion:reduce) { .usage-refresh.spinning .ico { animation:none; } }
 .usage-note { color:var(--t3); line-height:1.4; }
 .usage-thread { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .usage .u { grid-template-columns:3.3rem minmax(20px,1fr) auto; }

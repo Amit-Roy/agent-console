@@ -35,6 +35,7 @@ export const claude: Provider = {
   label: "Claude Code",
   modes: ["plan", "acceptEdits", "bypassPermissions"],
   defaultMode: "acceptEdits",
+  advisors: ["opus", "fable"],
   steer: true,
   models: () => ["sonnet", "opus", "haiku"],
   defaultModel: () => "sonnet",
@@ -52,6 +53,7 @@ export const claude: Provider = {
       "--model", t.model,
     ];
     if (t.effort && t.effort !== "default") args.push("--effort", t.effort);
+    if (t.advisor && t.advisor !== "default") args.push("--advisor", t.advisor); // otherwise the advisorModel in settings.json applies
     args.push(...leanMcpArgs());
     fs.mkdirSync(threadDir(t.id), { recursive: true, mode: 0o700 });
     if (t.sessionId) args.push("--resume", t.sessionId);

@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import {DatabaseSync} from 'node:sqlite';
 
-const KINDS = new Set(['open', 'page', 'cached', 'cancelled']);
+const KINDS = new Set(['open', 'page', 'cached', 'refresh', 'cancelled']);
 const duration = (n: unknown) => typeof n === 'number' && Number.isFinite(n) && n >= 0 && n <= 300_000;
 const size = (n: unknown, max: number) => typeof n === 'number' && Number.isInteger(n) && n >= 0 && n <= max;
 

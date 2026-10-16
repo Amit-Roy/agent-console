@@ -277,7 +277,8 @@ for (const scheme of ["dark", "light"] as const) {
   await model.focus();
   await page.keyboard.press("Enter");
   const opened = await page.evaluate(() => { const m = document.querySelector(".menu")!; return { role: m.getAttribute("role"), opts: m.querySelectorAll("[role=option]").length, exp: document.getElementById("model")!.getAttribute("aria-expanded"), focus: document.activeElement === m, haspopup: document.getElementById("model")!.getAttribute("aria-haspopup") }; });
-  check("model menu: opens on Enter, listbox with 3 options, focus inside", opened.role === "listbox" && opened.opts === 3 && opened.exp === "true" && opened.focus && opened.haspopup === "listbox", JSON.stringify(opened));
+  const modelLabels = await page.locator('.menu [role=option] .m-label').allTextContents();
+  check("model menu: opens on Enter with models and advisor choices, focus inside", opened.role === "listbox" && modelLabels.slice(0, 3).join('|') === 'Sonnet|Opus|Haiku' && modelLabels.slice(3).every(label => label.startsWith('Advisor · ')) && opened.opts === modelLabels.length && opened.exp === "true" && opened.focus && opened.haspopup === "listbox", JSON.stringify(opened));
   const act0 = await page.evaluate(() => document.querySelector(".menu [data-active]")!.textContent);
   await page.keyboard.press("ArrowDown");
   const act1 = await page.evaluate(() => document.querySelector(".menu [data-active] .m-label")!.textContent);
@@ -285,7 +286,7 @@ for (const scheme of ["dark", "light"] as const) {
   await page.keyboard.press("Escape");
   check("model menu: Esc closes and returns focus", (await page.locator(".menu").count()) === 0 && (await page.evaluate(() => document.activeElement?.id)) === "model" && (await model.getAttribute("aria-expanded")) === "false");
   await page.keyboard.press("ArrowUp"); // opens on last
-  check("model menu: ArrowUp on trigger opens at last item", (await page.evaluate(() => document.querySelector(".menu [data-active] .m-label")!.textContent)) === "Haiku");
+  check("model menu: ArrowUp on trigger opens at last item", (await page.evaluate(() => document.querySelector(".menu [data-active] .m-label")!.textContent)) === modelLabels.at(-1));
   await page.keyboard.press("Home");
   await page.keyboard.type("o"); // typeahead
   check("model menu: typeahead jumps to Opus", (await page.evaluate(() => document.querySelector(".menu [data-active] .m-label")!.textContent)) === "Opus");
@@ -773,11 +774,14 @@ for (const scheme of ["dark", "light"] as const) {
     check("loading: nothing flashes in the first 150ms", !earlySkeleton);
     await rows.nth(big).click();
     check("switching: revisiting an idle thread restores its cached view immediately", /Cached/.test(await page.locator("#diagnostics").textContent()));
+    // Refresh from the latest position. Reading older pages intentionally defers replacement.
+    await page.locator('#chat').evaluate(chat => { chat.scrollTop = chat.scrollHeight; });
+    await page.waitForTimeout(50);
     // Reopening the current thread explicitly refreshes its history.
     await rows.nth(big).click();
     await page.waitForSelector(".loading", { timeout: 1500 });
-    const lo = await page.evaluate(() => ({ spinner: !!document.querySelector(".loading .spin"), text: document.querySelector(".loading")!.textContent, bars: document.querySelectorAll(".skeleton .sk i").length, head: !!document.getElementById("ttl")!.textContent, composer: !document.getElementById("input")!.hasAttribute("hidden"), live: document.querySelector(".loading")!.getAttribute("role") }));
-    check("loading: a spinner, a caption and conversation-shaped bars while history loads; header and composer stay put", lo.spinner && /Loading conversation/.test(lo.text || "") && lo.bars >= 6 && lo.head && lo.composer && lo.live === "status", JSON.stringify(lo));
+    const lo = await page.evaluate(() => ({ text: document.querySelector(".loading")!.textContent, bars: document.querySelectorAll(".skeleton .sk i").length, messages: document.querySelectorAll('#chat > .msg').length, head: !!document.getElementById("ttl")!.textContent, composer: !document.getElementById("input")!.hasAttribute("hidden"), live: document.querySelector(".loading")!.getAttribute("role") }));
+    check("loading: refreshing a cached view retains the conversation with an update caption; header and composer stay put", /Updating conversation/.test(lo.text || "") && lo.bars === 0 && lo.messages === grew && lo.head && lo.composer && lo.live === "status", JSON.stringify(lo));
     await page.screenshot({ path: `${OUT}/ui-loading.png` });
     await page.waitForFunction(() => !document.querySelector(".loading"), null, { timeout: 5000 });
     await page.waitForFunction(() => document.querySelector("#chat")?.getAttribute("aria-busy") === "false");

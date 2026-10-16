@@ -45,8 +45,9 @@ Anthropic's terms restrict third-party products that offer claude.ai login, so d
   OpenRouter only uses the free router, never paid routing. Codex uses subscription auth, isolated CLI settings, ephemeral sessions and disabled shell tools.
   `AGENT_CONSOLE_LABEL_CODEX_MODEL` overrides its small model. These helper calls do not replace the thread's selected agent/model.
 - Fast history: byte-indexed JSONL reads, newest 40 events by default (`AGENT_CONSOLE_PAGE`), older pages fetched automatically near the top (button also works).
-  Pages render detached before insertion; closed tool cards defer syntax highlighting until opened; native `content-visibility` virtualizes offscreen message rendering. The five most recent idle thread views restore from detached DOM,
-  invalidated by background events and reconnects. This skips offscreen layout/paint; DOM for explicitly loaded older pages remains available to search and accessibility.
+  Pages render detached before insertion; closed tool cards defer syntax highlighting until opened; native `content-visibility` virtualizes offscreen message rendering.
+  The five most recent views, including running threads, restore immediately from detached DOM. Changed views remain visible while history refreshes in the background; reconnects mark them stale.
+  History responses omit provider/tool catalogs, diagnostic metadata and duplicate result text; logs and exports retain the originals. DOM for explicitly loaded older pages remains available to search and accessibility.
 - ⋯ → Run details shows total load, server read, browser render time and page event count, plus the last Codex run's requested model/effort,
   duration and input/cached/output tokens. CLI-inherited settings are explicitly marked as inherited, not reported as a resolved model.
   Latest history timings also appear as `window.agentConsoleMetrics` and a browser debug log. No prompt content is included in diagnostics.
@@ -55,7 +56,8 @@ Anthropic's terms restrict third-party products that offer claude.ai login, so d
   Queue state and edit holds persist privately in `queues.json` across restarts. Reopen an Editing item to resume; Remove and Stop discard queued work.
 - Browser latency samples are batched every five seconds over the existing authenticated WebSocket, with no idle polling or third-party analytics.
   WebSocket compression reduces history/tool bytes. Browsers request full live events only for the selected thread; other threads send small cache invalidations.
-  Local `latency.sqlite` stores up to 20,000 samples for 14 days: opens, cached switches, older pages and interrupted loads.
+  Local `latency.sqlite` stores up to 20,000 samples for 14 days: opens, cached switches, background refreshes, older pages and interrupted loads.
+  Cached switch latency measures the visible restoration; background refresh duration is tracked separately.
   Timings distinguish preparation, request round-trip (including server/transport), JSON decoding, server reads and rendering; counts and byte sizes aid diagnosis.
   Run details includes the request round-trip so server reads cannot hide transport delays. `wire_bytes` measures decoded JSON payload size, before transport compression.
   Provider, thread ID, viewport size and foreground/background state are recorded. Message content, titles, URLs, user-agent strings and credentials are excluded.
@@ -156,7 +158,7 @@ Kill it by pid. `pkill -f "node server/index.ts"` also kills your real server.
 `server/` Node 24 (TypeScript via native type stripping, no build) · `public/` vanilla ES modules (`app.js`, `menu.js`, `render.js`), marked + DOMPurify + highlight.js · `bin/agent-console` process control
 `server/providers/` one adapter per agent (`claude.ts`, `pi.ts`, `codex.ts`, `mock.ts`) behind `index.ts`; `server/threads.ts` is harness-agnostic.
 
-Isolated queue/latency checks: `node test/latency.ts`, `node test/queue-edit.ts`, `npm run test:queue-ui` (mock agents; no model quota).
+Isolated checks: `node test/latency.ts`, `node test/history-wire.ts`, `npm run test:transport`, `npm run test:cache`, `npm run test:queue-ui` (mock agents; no model quota).
 
 ## Loading, steering, queue, context ring, subagents, compaction, dashboard
 

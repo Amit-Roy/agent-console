@@ -15,6 +15,7 @@ try{
  assert.equal(fs.statSync(file).mode&0o777,0o600);
  store.close();store=new LatencyStore(file,5);assert.equal(store.summary().count,5);
  store.record([{...sample,kind:'cached',total_ms:5}],lookup);assert.equal(store.summary().count,5);assert.equal(store.summary().groups.cached.count,1);
+ store.record([{...sample,kind:'refresh',total_ms:2000}],lookup);assert.equal(store.summary().groups.refresh.count,1);assert.equal(store.summary().groups.cached.median_ms,5);
  assert.equal(store.summary(Date.now()+15*86400_000).count,0);
  console.log('PASS local latency storage: validation, content whitelist, persistence, median/p95, device/provider grouping, private permissions, sample cap and retention');
 }finally{store.close();fs.rmSync(dir,{recursive:true,force:true});}

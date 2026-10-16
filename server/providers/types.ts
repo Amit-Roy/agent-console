@@ -17,6 +17,7 @@ export interface ThreadSpec {
   mode: Mode;
   model: string;
   effort?: string;
+  advisor?: string;
   sessionId?: string;
   forkFrom?: string; // a forked thread's first run continues a copy of this session instead of starting fresh (adapters that can)
 }
@@ -66,6 +67,7 @@ export interface Provider {
   modes: Mode[];
   defaultMode: Mode;
   note?: string; // shown under the agent picker
+  advisors?: string[]; // second-opinion models the harness can consult (Claude's advisor tool)
   steer?: boolean; // the harness accepts messages mid-turn (Agent.steer)
   models(): string[];
   modelDetails?(): Record<string, { label: string; description?: string; efforts: string[]; defaultEffort?: string }>;
