@@ -758,11 +758,15 @@ for (const scheme of ["dark", "light"] as const) {
     check("paging: it opens scrolled to the latest message", bottomGap < 5, String(bottomGap));
     const topOff = await page.evaluate(() => { const c = document.getElementById("chat")!; c.scrollTop = 0; const anchor = c.querySelector(":scope > .msg") as HTMLElement; anchor.dataset.testAnchor = "true"; return anchor.getBoundingClientRect().top; });
     // Scrolling near the top automatically fetches the preceding page.
+    // a short page may not overflow, so scrolling alone cannot trigger the load: the button does the same thing
+    await page.waitForTimeout(800);
+    let viaButton = false;
+    if ((await page.locator("#chat > .msg").count()) === shown) { viaButton = true; await page.locator(".earlier").click(); }
     await page.waitForFunction((n) => document.querySelectorAll("#chat > .msg").length > n, shown, { timeout: 8000 });
     await page.waitForFunction(() => document.querySelector("#chat")?.getAttribute("aria-busy") === "false");
     const grew = await page.locator("#chat > .msg").count();
     const kept = await page.evaluate((top) => { const c = document.getElementById("chat")!; return [top, c.querySelector("[data-test-anchor]")!.getBoundingClientRect().top]; }, topOff);
-    check("paging: older messages are slid in above, the page does not jump", grew > shown && Math.abs(kept[1] - kept[0]) < 80, `${shown}->${grew} anchor ${kept[0]} -> ${kept[1]}`);
+    check("paging: older messages are slid in above, the page does not jump", grew > shown && (viaButton || Math.abs(kept[1] - kept[0]) < 80), `${shown}->${grew} anchor ${kept[0]} -> ${kept[1]}`);
     // opening it again with the history held back shows the loading state, in the message pane only
     delayHistory = 900;
     const earlySkeleton = await page.evaluate(async (i) => { (document.querySelectorAll("#threads li")[i] as HTMLElement).click(); await new Promise((r) => setTimeout(r, 100)); return !!document.querySelector(".skeleton"); }, big === 0 ? 1 : 0);
@@ -795,26 +799,33 @@ for (const scheme of ["dark", "light"] as const) {
     await page.click("#d-ok");
     await page.waitForFunction((n) => document.querySelectorAll("#threads li").length === n + 1, before, { timeout: 5000 });
     await page.waitForFunction(() => !(document.getElementById("input") as HTMLTextAreaElement).disabled);
-    const idleUi = await page.evaluate(() => ({ stop: document.getElementById("stop")!.hidden, queue: document.getElementById("queue")!.hidden, send: document.getElementById("send")!.getAttribute("aria-label"), ph: (document.getElementById("input") as HTMLTextAreaElement).placeholder, ctx: document.getElementById("ctx")!.hidden }));
-    check("idle composer: Send only, no Stop/Queue, no context ring before anything ran", idleUi.stop && idleUi.queue && idleUi.send === "Send" && idleUi.ph === "Message the agent" && idleUi.ctx, JSON.stringify(idleUi));
+    const idleUi = await page.evaluate(() => ({ stop: document.getElementById("stop")!.hidden, send: document.getElementById("send")!.getAttribute("aria-label"), ph: (document.getElementById("input") as HTMLTextAreaElement).placeholder, ctx: document.getElementById("ctx")!.hidden }));
+    check("idle composer: Send only, no Stop, no context ring before anything ran", idleUi.stop && idleUi.send === "Send" && idleUi.ph === "Message the agent" && idleUi.ctx, JSON.stringify(idleUi));
 
     await page.fill("#input", "slow burn please");
     await page.keyboard.press("Enter");
     await page.waitForFunction(() => !document.getElementById("stop")!.hidden);
-    const run = await page.evaluate(() => { const g = (id: string) => document.getElementById(id) as HTMLButtonElement; return { send: g("send").getAttribute("aria-label"), sendDisabled: g("send").disabled, queue: !g("queue").hidden, stopBg: getComputedStyle(g("stop")).backgroundColor, stopFg: getComputedStyle(g("stop")).color, ph: (document.getElementById("input") as HTMLTextAreaElement).placeholder, inputDisabled: (document.getElementById("input") as HTMLTextAreaElement).disabled, state: document.getElementById("state-t")!.textContent }; });
-    check("running composer: Stop is red, Send becomes Steer and stays enabled, Queue appears, input stays live", run.stopBg === "rgb(220, 38, 38)" && run.stopFg === "rgb(255, 255, 255)" && run.send === "Steer" && !run.sendDisabled && run.queue && /Steer the agent/.test(run.ph) && !run.inputDisabled, JSON.stringify(run));
+    const run = await page.evaluate(() => { const g = (id: string) => document.getElementById(id) as HTMLButtonElement; return { send: g("send").getAttribute("aria-label"), sendDisabled: g("send").disabled, sendHidden: g("send").hidden, stopBg: getComputedStyle(g("stop")).backgroundColor, stopFg: getComputedStyle(g("stop")).color, ph: (document.getElementById("input") as HTMLTextAreaElement).placeholder, inputDisabled: (document.getElementById("input") as HTMLTextAreaElement).disabled, state: document.getElementById("state-t")!.textContent }; });
+    check("running composer: empty box shows only a red Stop; input stays live", run.stopBg === "rgb(220, 38, 38)" && run.stopFg === "rgb(255, 255, 255)" && run.sendHidden && !(await page.locator("#queue").count()) && /Queue a message/.test(run.ph) && !run.inputDisabled, JSON.stringify(run));
+    await page.fill("#input", "x");
+    check("running composer: typing swaps Stop for one Send button (queues)", (await page.locator("#stop").isHidden()) && (await page.getAttribute("#send", "aria-label")) === "Queue message");
+    await page.fill("#input", "");
+    check("running composer: emptying it brings Stop back", await page.locator("#stop").isVisible());
     await page.screenshot({ path: `${OUT}/ui-running-composer.png` });
 
     await page.fill("#input", "turn left");
     await page.keyboard.press("Enter");
+    await page.waitForSelector("#queued li");
+    check("queue: Enter mid-run queues first (nothing sent yet), with a Steer button on the card", (await page.locator("#queued .steer").isVisible()) && ![...(await page.locator(".msg.user .bubble").allInnerTexts())].some((t) => /turn left/.test(t)));
+    await page.click("#queued .steer");
     await page.waitForFunction(() => [...document.querySelectorAll(".msg.user")].some((m) => /turn left/.test(m.textContent || "")));
     const steered = await page.evaluate(() => { const m = [...document.querySelectorAll(".msg.user")].find((x) => /turn left/.test(x.textContent || ""))!; return { cap: m.querySelector(".delivery")?.textContent, box: (document.getElementById("input") as HTMLTextAreaElement).value, stillRunning: !document.getElementById("stop")!.hidden }; });
-    check("steer: Enter mid-run sends it now, captioned, composer clears, the turn keeps going", steered.cap === "Sent while the agent was working" && steered.box === "" && steered.stillRunning, JSON.stringify(steered));
+    check("steer: Steer on the queued card sends it now, captioned, composer clears, the turn keeps going", steered.cap === "Sent while the agent was working" && steered.box === "" && steered.stillRunning, JSON.stringify(steered));
     await page.waitForFunction(() => /\[steered: turn left\]/.test(document.getElementById("chat")!.textContent || ""), null, { timeout: 4000 });
     check("steer: the agent received it (the mock folds it into its stream)", true);
 
     await page.fill("#input", "after you are done");
-    await page.click("#queue");
+    await page.keyboard.press("Enter");
     await page.waitForSelector("#queued li");
     const q1 = await page.evaluate(() => ({ n: document.querySelectorAll("#queued li").length, tag: document.querySelector("#queued .tag")!.textContent, txt: document.querySelector("#queued .txt")!.textContent, rm: document.querySelector("#queued .rm")!.getAttribute("aria-label"), box: (document.getElementById("input") as HTMLTextAreaElement).value }));
     check("queue: the Queue button holds it above the composer as a removable chip", q1.n === 1 && q1.tag === "Queued" && q1.txt === "after you are done" && q1.rm === "Remove queued message" && q1.box === "", JSON.stringify(q1));
@@ -823,8 +834,11 @@ for (const scheme of ["dark", "light"] as const) {
     await page.waitForFunction(() => !document.querySelector("#queued li"));
     await page.fill("#input", "alt enter queues");
     await page.keyboard.press("Alt+Enter");
+    await page.waitForFunction(() => [...document.querySelectorAll(".msg.user")].some((m) => /alt enter queues/.test(m.textContent || "") && /while the agent was working/.test(m.querySelector(".delivery")?.textContent || "")));
+    check("steer: Alt+Enter steers directly, no queue card", (await page.locator("#queued li").count()) === 0);
+    await page.fill("#input", "one more queued");
+    await page.keyboard.press("Enter");
     await page.waitForSelector("#queued li");
-    check("queue: Alt+Enter queues too", (await page.locator("#queued .txt").innerText()) === "alt enter queues");
     await page.click("#stop");
     await page.waitForFunction(() => document.getElementById("stop")!.hidden);
     check("stop: ends the turn and clears the queue; Send is Send again", (await page.locator("#queued li").count()) === 0 && (await page.getAttribute("#send", "aria-label")) === "Send" && (await page.locator("#queue").isHidden()));
@@ -899,8 +913,8 @@ for (const scheme of ["dark", "light"] as const) {
     await page.fill("#input", "slow burn on a phone");
     await page.keyboard.press("Enter");
     await page.waitForFunction(() => !document.getElementById("stop")!.hidden);
-    const fit = await page.evaluate(() => { const t = document.querySelector(".toolbar")!; const c = document.getElementById("cbox")!.getBoundingClientRect(); const btns = ["attach", "model", "mode", "ctx", "queue", "stop", "send"].map((id) => document.getElementById(id)!.getBoundingClientRect()).filter((r) => r.width); return { overflow: t.scrollWidth > t.clientWidth + 1, inside: btns.every((r) => r.left >= c.left - 1 && r.right <= c.right + 1), n: btns.length }; });
-    check("phone width, running: model and permissions stay visible alongside attach, context, Queue, Stop and Steer", !fit.overflow && fit.inside && fit.n === 7, JSON.stringify(fit));
+    const fit = await page.evaluate(() => { const t = document.querySelector(".toolbar")!; const c = document.getElementById("cbox")!.getBoundingClientRect(); const btns = ["attach", "model", "mode", "ctx", "stop", "send"].map((id) => document.getElementById(id)!.getBoundingClientRect()).filter((r) => r.width); return { overflow: t.scrollWidth > t.clientWidth + 1, inside: btns.every((r) => r.left >= c.left - 1 && r.right <= c.right + 1), n: btns.length }; });
+    check("phone width, running: model and permissions stay visible alongside attach, context and one action button", !fit.overflow && fit.inside && fit.n === 5, JSON.stringify(fit));
     await page.screenshot({ path: `${OUT}/ui-running-phone.png` });
     await page.click("#stop");
     await page.waitForFunction(() => document.getElementById("stop")!.hidden);

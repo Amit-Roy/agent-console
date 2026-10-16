@@ -593,13 +593,9 @@ function renderHead() {
   $("attach").disabled = !t;
   // While the agent works the composer stays live: Enter steers it (or queues, for agents that cannot take input mid-turn)
   const canSteer = !t?.operation && !!prov(t?.provider)?.steer;
-  $("send").disabled = !t;
-  $("stop").hidden = !running;
-  $("queue").hidden = !(running && canSteer);
+  renderAction();
   $("cbox").classList.toggle("running", running);
-  $("send").title = running ? (canSteer ? "Steer: the agent picks this up after its current step (Enter)" : "Queue: sent when this turn finishes (Enter)") : "Send (Enter)";
-  $("send").setAttribute("aria-label", running ? (canSteer ? "Steer" : "Queue message") : "Send");
-  $("input").placeholder = !t ? "Message the agent" : running ? (canSteer ? "Steer the agent…" : t?.operation ? "Queue a message to send after compaction…" : "Queue a message…") : "Message the agent";
+  $("input").placeholder = !t ? "Message the agent" : running ? (t?.operation ? "Queue a message to send after compaction…" : "Queue a message for after this turn…") : "Message the agent";
   renderQueue();
   renderCtx();
   renderUsage();
@@ -608,6 +604,18 @@ function renderHead() {
   $("head").dataset.mode = t?.mode || "";
 }
 
+// One button does it all: Stop (red) while a turn runs and the composer is empty, otherwise Send (which queues mid-turn).
+function renderAction() {
+  const t = cur();
+  const running = t?.status === "running";
+  const empty = !$("input").value.trim() && !pending.length;
+  const stop = running && empty;
+  $("stop").hidden = !stop;
+  $("send").hidden = stop;
+  $("send").disabled = !t || (empty && !running);
+  $("send").title = running ? "Queue: sent when this turn ends (Enter)" : "Send (Enter)";
+  $("send").setAttribute("aria-label", running ? "Queue message" : "Send");
+}
 // ---------- queued messages and the context meter ----------
 function renderQueue() {
   const ul = $("queued");
@@ -624,7 +632,12 @@ function renderQueue() {
       const edit = iconButton("pencil", "Edit queued message", "btn queue-edit");
       edit.hidden = !state.features.queueEditing;
       edit.onclick = () => editQueuedMessage(q.id);
-      li.append(el("span", "tag", q.editing ? "Editing" : "Queued"), el("span", "txt", q.text), edit, rm);
+      const steer = el("button", "btn sm steer", "Steer");
+      steer.type = "button";
+      steer.title = "Give this to the agent now, instead of after the turn";
+      steer.hidden = q.editing || cur()?.status !== "running" || !!cur()?.operation || !prov(cur()?.provider)?.steer;
+      steer.onclick = () => send({ t: "steer_queued", thread: state.current, id: q.id });
+      li.append(el("span", "tag", q.editing ? "Editing" : "Queued"), el("span", "txt", q.text), steer, edit, rm);
       return li;
     }),
   );
@@ -1376,7 +1389,7 @@ async function submit(mode) {
     }
     const attachments = pending.filter((p) => p.id).map((p) => ({ id: p.id, ...(p.n ? { n: p.n } : {}) }));
     if (!text && !attachments.length) return;
-    // mid-turn the server steers (or queues for agents that cannot be steered); mode "queue" always waits for the turn to end
+    // mid-turn a message queues until the turn ends; mode "steer" (Alt+Enter, or Steer on a queued card) hands it to the agent now
     send({ t: "send", thread: state.current, text, attachments, ...(mode ? { mode } : {}) });
     box.value = "";
     box.style.height = "";
@@ -1389,7 +1402,6 @@ async function submit(mode) {
   }
 }
 $("send").onclick = () => submit();
-$("queue").onclick = () => submit("queue");
 $("stop").onclick = () => send({ t: "abort", thread: state.current });
 
 // ---------- attachments (paste, drop, or the attach button) ----------
@@ -1484,6 +1496,7 @@ function renderThumbs() {
   const ul = $("thumbs");
   if (!pending.some((p) => p.kind === "image")) imageCount = 0; // numbering starts again once no image is waiting
   ul.hidden = !pending.length;
+  renderAction();
   if (pending.length) $("attach").dataset.count = String(pending.length);
   else delete $("attach").dataset.count;
   ul.replaceChildren(
@@ -1692,7 +1705,7 @@ $("input").addEventListener("keydown", (e) => {
       const exact = c.name.toLowerCase() === slashQuery();
       if (e.key === "Enter" && exact) {
         e.preventDefault();
-        return submit(e.altKey ? "queue" : undefined);
+        return submit(e.altKey ? "steer" : undefined);
       } else {
         e.preventDefault();
         return acceptSlash(c);
@@ -1703,7 +1716,7 @@ $("input").addEventListener("keydown", (e) => {
   const command = /^\/[a-z][\w:-]*(?:\s[\s\S]*)?$/i.test($("input").value.trim());
   if (e.key === "Enter" && !e.shiftKey && !e.isComposing && (desktop || command)) {
     e.preventDefault();
-    submit(e.altKey ? "queue" : undefined); // Alt+Enter: wait for the turn to finish instead of steering
+    submit(e.altKey ? "steer" : undefined); // Alt+Enter: steer the running turn now instead of queueing
   }
 });
 function sizeInput() {
@@ -1721,6 +1734,7 @@ $("input").addEventListener("input", () => {
   slash.dismissed = false;
   slash.idx = 0;
   updateSlash();
+  renderAction();
 });
 // Safari can resize only its visual viewport when the keyboard opens. Preserve pinch-to-zoom.
 let viewportFrame;

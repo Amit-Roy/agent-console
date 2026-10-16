@@ -226,7 +226,9 @@ wss.on("connection", (ws) => {
         }
         case "send":
           if (typeof m.text !== "string" || (!m.text.trim() && !(Array.isArray(m.attachments) && m.attachments.length))) return;
-          return threads.send(m.thread, m.text.slice(0, 100_000), { attachments: m.attachments, mode: m.mode === "queue" ? "queue" : "steer" });
+          return threads.send(m.thread, m.text.slice(0, 100_000), { attachments: m.attachments, mode: m.mode === "steer" ? "steer" : "queue" });
+        case "steer_queued":
+          return threads.steerQueued(m.thread, m.id);
         case "compact":
           return threads.compact(m.thread);
         case "unqueue":
