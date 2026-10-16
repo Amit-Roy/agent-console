@@ -803,17 +803,23 @@ function clearChat() {
   $("chat").setAttribute("aria-busy", "false");
   if (!state.current) $("chat").append(emptyState());
 }
-$("chat").addEventListener("scroll", () => {
+let scrollFrame;
+function onChatScroll() {
+  scrollFrame = 0;
+  const chat = $("chat");
   if (state.into || state.rendering || state.loading) return;
-  const upward = $("chat").scrollTop < (state.lastScrollTop || 0);
+  const top = chat.scrollTop;
+  const upward = top < (state.lastScrollTop || 0);
   // Virtual rows can grow after paint; growth alone doesn't mean the reader scrolled away.
   if (upward || nearBottom()) state.stick = nearBottom();
-  state.lastScrollTop = $("chat").scrollTop;
-  if (upward && $("chat").scrollTop < 200) {
-    const more = $("chat").querySelector(":scope > .earlier:not(:disabled)");
+  state.lastScrollTop = top;
+  if (upward && top < 200) {
+    const more = chat.querySelector(":scope > .earlier:not(:disabled)");
     more?.click();
   }
-}, { passive: true });
+}
+// Coalesce to one pass per frame so scroll bursts don't force layout reads on every event.
+$("chat").addEventListener("scroll", () => { scrollFrame ||= requestAnimationFrame(onChatScroll); }, { passive: true });
 let historyAnchor;
 let followFrame;
 const followResize = new ResizeObserver(() => {
