@@ -20,7 +20,7 @@ const state = {
   queues: {}, features: {}, // thread id -> messages waiting for the running turn to end
   loading: null, loadTimer: 0, renderToken: 0, rendering: false, pendingLive: [], into: null, start: 0,
 };
-const views = new Map(); // five most recently visited idle threads; detached DOM restores without replay
+const views = new Map(); // five most recently visited threads; stale snapshots remain visible during revalidation
 let ws, retry = 0;
 
 // ---------- connection ----------
@@ -85,7 +85,7 @@ function handle(m) {
       state.build = m.build || state.build;
       state.features = m.features || {};
       latency.flush();
-      views.clear();
+      for (const view of views.values()) view.stale = true;
       state.commands = m.commands || {};
       state.usage = m.usage || {};
       state.queues = m.queues || {};
@@ -140,14 +140,20 @@ function handle(m) {
       queuedEditReply(m);
       break;
     case "event":
-      views.delete(m.thread);
+      if (views.has(m.thread)) views.get(m.thread).stale = true;
       if (m.event.type === "rate_limit_event") setUsage(m.event, state.threads.get(m.thread)?.provider || "claude");
       if (m.thread !== state.current) break;
+      if (state.revalidating && (!state.rendering || state.deferredRefresh)) {
+        // Durable events before the history reply are already in its snapshot; deltas are never persisted.
+        if (m.event.type === "stream_event") state.waitingLive.push(m.event);
+        else if (m.event.type === "assistant" || m.event.type === "result") state.waitingLive = [];
+        break;
+      }
       if (state.rendering) state.pendingLive.push(m.event); // history is still being drawn: keep order, replay these after
       else onEvent(m.event, true);
       break;
     case "invalidate":
-      views.delete(m.thread);
+      if (views.has(m.thread)) views.get(m.thread).stale = true;
       break;
     case "error":
       addNote(m.message, "errtxt");
@@ -164,6 +170,10 @@ function modelMeta(v) {
   const free = id.endsWith(":free");
   return { label: id.replace(/:free$/, ""), desc: [prov, rest.join("/"), free && "free"].filter(Boolean).join(" · ") };
 }
+const ADV = "advisor:";
+const ADVISOR_LABEL = { default: "Settings default", opus: "Opus", fable: "Fable" };
+// the model list, then (for agents that have an advisor) "Advisor · X" rows: one dropdown covers both choices
+const withAdvisors = (items, p, advisor = "default") => !p?.advisors?.length ? items : [...items, ...["default", ...p.advisors].map((a) => ({ value: ADV + a, label: `Advisor · ${ADVISOR_LABEL[a] || cap(a)}`, desc: a === "default" ? "Use the advisor from your Claude settings." : "A stronger model Claude consults before big decisions.", icon: "sparkle", keep: true, checked: a === advisor }))];
 const modelItems = (models, p) => models.map((v) => ({ value: v, ...modelMeta(v), ...(p?.modelDetails?.[v] ? { label: p.modelDetails[v].label, desc: p.modelDetails[v].description ?? modelMeta(v).desc } : {}) }));
 function fillEffort(menu, p, model, value = "default") {
   const meta = p?.modelDetails?.[model];
@@ -280,7 +290,7 @@ async function runThreadAction(id, action) {
 const menus = {
   effort: createMenu({ trigger: $("effort"), label: "Reasoning effort", side: "top", renderTrigger: chipTrigger("effort"), onSelect: v => send({ t: "update", thread: state.current, effort: v }) }),
   dEffort: createMenu({ trigger: $("d-effort"), label: "Reasoning effort", renderTrigger: fieldTrigger }),
-  model: createMenu({ trigger: $("model"), label: "Model", side: "top", renderTrigger: chipTrigger("model"), onSelect: (v) => send({ t: "update", thread: state.current, model: v }) }),
+  model: createMenu({ trigger: $("model"), label: "Model", side: "top", renderTrigger: chipTrigger("model"), onSelect: (v) => send(v.startsWith(ADV) ? { t: "update", thread: state.current, advisor: v.slice(ADV.length) } : { t: "update", thread: state.current, model: v }) }),
   mode: createMenu({
     trigger: $("mode"), label: "Permission mode", side: "top", renderTrigger: chipTrigger("mode"),
     onSelect: (v) => {
@@ -381,12 +391,21 @@ function openThread(id) {
   state.measurement = null;
   releaseHistoryAnchor();
   const old = cur();
-  if (old && old.id !== id && old.status === "idle" && !state.rendering && !state.loading) {
+  if (old && (!state.rendering && !state.loading || state.snapshot)) {
+    if (state.live?.raf) { cancelAnimationFrame(state.live.raf); state.live.raf = 0; }
+    const snapshot = (!state.deferredRefresh && state.snapshot) || { nodes: [...$("chat").childNodes], cards: state.cards, subs: state.subs, subTools: state.subTools, live: state.live, compact: state.compact, start: state.start, latestStart: state.latestStart, scroll: $("chat").scrollTop, stats: $("diagnostics").textContent };
+    snapshot.stale ||= !!state.revalidating || !!state.loadingEarlier || old.id === id;
     views.delete(old.id);
-    views.set(old.id, { nodes: [...$("chat").childNodes], cards: state.cards, subs: state.subs, subTools: state.subTools, start: state.start, scroll: $("chat").scrollTop, stats: $("diagnostics").textContent });
+    views.set(old.id, snapshot);
     if (views.size > 5) views.delete(views.keys().next().value);
-    state.cards = new Map(); state.subs = new Map(); state.subTools = new Map();
+    state.cards = new Map(); state.subs = new Map(); state.subTools = new Map(); state.live = null;
   }
+  state.revalidating = false;
+  state.loadingEarlier = false;
+  state.deferredRefresh = false;
+  state.waitingLive = [];
+  state.snapshot = null;
+  $("conversation-updating")?.remove();
   state.openAt = performance.now();
   state.request = (state.request || 0) + 1;
   if (pending.length && pending[0].thread !== id) clearPending(); // attachments belong to the thread they were uploaded to
@@ -405,8 +424,9 @@ function openThread(id) {
   if (cached) {
     if (state.features.selectiveEvents) send({ t: "subscribe", thread: id });
     clearTimeout(state.loadTimer); state.loading = null;
-    state.cards = cached.cards; state.subs = cached.subs; state.subTools = cached.subTools; state.start = cached.start;
+    state.cards = cached.cards; state.subs = cached.subs; state.subTools = cached.subTools; state.start = cached.start; state.latestStart = cached.latestStart; state.live = cached.live; state.compact = cached.compact;
     $("chat").replaceChildren(...cached.nodes);
+    $("chat").querySelector(":scope > .earlier")?.removeAttribute("disabled");
     $("chat").scrollTop = cached.scroll;
     state.lastScrollTop = $("chat").scrollTop;
     state.stick = nearBottom();
@@ -415,12 +435,32 @@ function openThread(id) {
     latency.record({ kind: "cached", thread: id, total_ms, render_ms: total_ms, wait_ms: 0 });
     $("diagnostics").textContent = `Cached · ${total_ms} ms`;
     views.delete(id);
+    if (cached.stale || cur()?.status === "running") {
+      state.snapshot = cached;
+      state.revalidating = true;
+      state.deferredRefresh = cached.start < cached.latestStart && !state.stick;
+      const status = el("div", "loading", state.deferredRefresh ? "Showing saved history. Return to latest to update." : "Updating conversation…");
+      status.id = "conversation-updating"; status.setAttribute("role", "status");
+      $("chat").before(status);
+      if (!state.deferredRefresh) refreshConversation();
+    }
     return;
   }
   showLoading(id);
   state.measurement = { thread: id, at: state.openAt, hidden: document.hidden };
   state.requestSentAt = performance.now();
   send({ t: "open", thread: id, request: state.request, foregroundOnly: !!state.features.selectiveEvents });
+}
+
+function refreshConversation() {
+  if (state.rendering || state.loadingEarlier) return;
+  state.deferredRefresh = false;
+  $("conversation-updating").textContent = "Updating conversation…";
+  $("chat").querySelector(":scope > .earlier")?.setAttribute("disabled", "");
+  state.refreshAt = performance.now();
+  state.measurement = { thread: state.current, at: state.refreshAt, hidden: document.hidden };
+  state.requestSentAt = performance.now();
+  send({ t: "open", thread: state.current, request: state.request, foregroundOnly: !!state.features.selectiveEvents });
 }
 
 // ---------- opening a thread: skeleton while it loads, history drawn in slices so the page never freezes ----------
@@ -465,21 +505,33 @@ async function showHistory(m) {
   state.loading = null;
   const token = ++state.renderToken;
   state.historyAt = performance.now();
-  clearChat();
+  const refreshing = state.revalidating;
+  const cachedMetrics = refreshing ? window.agentConsoleMetrics : null;
+  if (refreshing) {
+    if (state.live?.raf) cancelAnimationFrame(state.live.raf);
+    state.live = null; state.compact = null;
+    state.cards = new Map(); state.subs = new Map(); state.subTools = new Map();
+  } else clearChat();
   state.rendering = true;
   $("chat").setAttribute("aria-busy", "true");
-  state.pendingLive = [];
+  state.pendingLive = refreshing ? state.waitingLive.splice(0) : [];
   state.start = m.start || 0;
+  state.latestStart = state.start;
   const more = state.start > 0 ? earlierButton() : null;
   if (more) {
     more.disabled = true; // not before the newest page is drawn: two renders at once would fight over the scroll position
-    $("chat").append(more);
+    if (!refreshing) $("chat").append(more);
   }
   const host = document.createDocumentFragment();
+  if (refreshing && more) host.append(more);
   state.into = host;
   if (!(await renderEvents(m.events, token, true))) return;
   state.into = null;
-  $("chat").append(host);
+  const refreshScroll = $("chat").scrollTop;
+  const refreshFollow = state.stick && nearBottom();
+  const alignHistory = () => refreshing && !refreshFollow ? ($("chat").scrollTop = refreshScroll) : scrollDown(true);
+  if (refreshing) $("chat").replaceChildren(host);
+  else $("chat").append(host);
   if (!m.events.length) {
     const hint = emptyState();
     hint.querySelector("h2").textContent = "Ready";
@@ -488,30 +540,36 @@ async function showHistory(m) {
     $("chat").append(hint);
   }
   for (const e of state.pendingLive.splice(0)) onEvent(e, true);
-  scrollDown(true);
+  alignHistory();
   await frame();
   if (token !== state.renderToken) return;
-  scrollDown(true);
+  alignHistory();
   await frame();
   if (token !== state.renderToken) return;
-  scrollDown(true);
+  alignHistory();
   state.rendering = false;
   if (cur()?.operation !== "compact") settleCompact("interrupted");
   $("chat").setAttribute("aria-busy", "false");
   state.lastScrollTop = $("chat").scrollTop;
   if (more) more.disabled = false;
   for (const e of state.pendingLive.splice(0)) onEvent(e, true);
-  const metrics = { thread: m.thread, total_ms: Math.round(performance.now() - state.openAt), server_ms: m.server_ms, render_ms: Math.round(performance.now() - state.historyAt), events: m.events.length, bytes: m.bytes, prepare_ms: Math.max(0, m.receivedAt - m.roundtrip_ms - state.openAt), roundtrip_ms: m.roundtrip_ms, decode_ms: m.decode_ms, payload_bytes: m.wire_bytes };
-  latency.record({ ...metrics, kind: "open", wait_ms: m.receivedAt - state.openAt, wire_bytes: m.wire_bytes, prepare_ms: Math.max(0, m.receivedAt - m.roundtrip_ms - (state.measurement?.at || 0)), roundtrip_ms: m.roundtrip_ms, decode_ms: m.decode_ms, hidden: state.measurement?.hidden });
+  const metrics = { thread: m.thread, total_ms: Math.round(performance.now() - (refreshing ? state.refreshAt : state.openAt)), server_ms: m.server_ms, render_ms: Math.round(performance.now() - state.historyAt), events: m.events.length, bytes: m.bytes, prepare_ms: Math.max(0, m.receivedAt - m.roundtrip_ms - (refreshing ? state.refreshAt : state.openAt)), roundtrip_ms: m.roundtrip_ms, decode_ms: m.decode_ms, payload_bytes: m.wire_bytes };
+  latency.record({ ...metrics, kind: refreshing ? "refresh" : "open", wait_ms: m.receivedAt - (refreshing ? state.refreshAt : state.openAt), wire_bytes: m.wire_bytes, prepare_ms: Math.max(0, m.receivedAt - m.roundtrip_ms - (state.measurement?.at || 0)), roundtrip_ms: m.roundtrip_ms, decode_ms: m.decode_ms, hidden: state.measurement?.hidden });
   state.measurement = null;
-  window.agentConsoleMetrics = metrics;
+  state.revalidating = false;
+  state.snapshot = null;
+  $("conversation-updating")?.remove();
+  window.agentConsoleMetrics = refreshing ? { ...cachedMetrics, refresh: metrics } : metrics;
   $("diagnostics").textContent = `${metrics.total_ms} ms · prepare ${Math.round(metrics.prepare_ms)} ms · round-trip ${Math.round(metrics.roundtrip_ms)} ms (read ${metrics.server_ms ?? "?"} ms) · decode ${Math.round(metrics.decode_ms)} ms · render ${metrics.render_ms} ms · ${metrics.events} events · ${Math.round(metrics.payload_bytes / 1024)} KB decoded`;
+  if (refreshing) $("diagnostics").textContent = `Cached · ${cachedMetrics.total_ms} ms · updated in ${metrics.total_ms} ms`;
   console.debug("Agent Console history", metrics);
 }
 function earlierButton() {
   const b = el("button", "btn earlier", "Show earlier messages");
   b.type = "button";
   b.onclick = () => {
+    if (state.revalidating && !state.deferredRefresh || state.rendering) return;
+    state.loadingEarlier = true;
     b.disabled = true;
     b.textContent = "Loading…";
     state.pageAt = performance.now();
@@ -554,12 +612,14 @@ async function showEarlier(m) {
     if (anchor?.isConnected && anchorTop != null) chat.scrollTop += anchor.getBoundingClientRect().top - anchorTop;
   }
   state.live = live;
+  state.loadingEarlier = false;
   state.rendering = false;
   chat.setAttribute("aria-busy", "false");
   state.lastScrollTop = chat.scrollTop;
   for (const e of state.pendingLive.splice(0)) onEvent(e, true);
   latency.record({ kind: "page", thread: m.thread, total_ms: performance.now() - pageAt, wait_ms: m.receivedAt - pageAt, server_ms: m.server_ms, render_ms: performance.now() - m.receivedAt, events: m.events.length, bytes: m.bytes, wire_bytes: m.wire_bytes, prepare_ms: Math.max(0, m.receivedAt - m.roundtrip_ms - (state.measurement?.at || 0)), roundtrip_ms: m.roundtrip_ms, decode_ms: m.decode_ms, hidden: state.measurement?.hidden });
   state.measurement = null;
+  if (state.deferredRefresh && nearBottom()) refreshConversation();
 }
 
 function renderHead() {
@@ -572,8 +632,13 @@ function renderHead() {
     const p = prov(t.provider);
     if (p && menus.model.provider !== t.provider) {
       menus.model.provider = t.provider; // models and modes differ per agent
-      menus.model.setItems(modelItems(p.models, p));
+      menus.model.advisorShown = undefined;
+      menus.model.setItems(withAdvisors(modelItems(p.models, p), p, t.advisor || "default"));
       menus.mode.setItems(modeItems(p.modes));
+    }
+    if (p && menus.model.advisorShown !== (t.advisor || "default")) { // the check mark on the advisor rows follows the thread
+      menus.model.advisorShown = t.advisor || "default";
+      menus.model.setItems(withAdvisors(modelItems(p.models, p), p, menus.model.advisorShown), t.model);
     }
     menus.model.setValue(t.model);
     $("effort").hidden = !p?.modelDetails;
@@ -703,7 +768,7 @@ async function loadLatencySummary() {
     if (!response.ok) throw Error();
     const data = await response.json();
     if (!data.available) throw Error();
-    $("latency-summary").textContent = data.count ? [["open", "Thread opens"], ["cached", "Cached switches"], ["page", "Older pages"], ["cancelled", "Interrupted loads"]].flatMap(([key, label]) => {
+    $("latency-summary").textContent = data.count ? [["open", "Thread opens"], ["cached", "Cached switches"], ["refresh", "Background refreshes"], ["page", "Older pages"], ["cancelled", "Interrupted loads"]].flatMap(([key, label]) => {
       const s = data.groups[`${key}/visible`];
       return s ? [`${label}: ${s.count} · median ${Math.round(s.median_ms)} ms · p95 ${Math.round(s.p95_ms)} ms`] : [];
     }).join("\n") + "\nForeground samples · this server only · up to 14 days." : "No local latency samples yet. Open or switch threads to collect measurements.";
@@ -810,22 +875,44 @@ function onChatScroll() {
   if (state.into || state.rendering || state.loading) return;
   const top = chat.scrollTop;
   const upward = top < (state.lastScrollTop || 0);
-  // Virtual rows can grow after paint; growth alone doesn't mean the reader scrolled away.
-  if (upward || nearBottom()) state.stick = nearBottom();
+  // A finger (or wheel) moving up means the reader is leaving the bottom, even inside the 120px "near bottom" band;
+  // otherwise live output would pull them back mid-drag. Virtual rows can grow after paint; growth alone doesn't mean the reader scrolled away.
+  if (upward && readerScrolling()) state.stick = false;
+  else if (upward || nearBottom()) state.stick = nearBottom();
   state.lastScrollTop = top;
-  if (upward && top < 200) {
-    const more = chat.querySelector(":scope > .earlier:not(:disabled)");
-    more?.click();
-  }
+  if (state.deferredRefresh && nearBottom()) refreshConversation();
+  if (upward && top < 200) loadEarlierWhenStill();
 }
 // Coalesce to one pass per frame so scroll bursts don't force layout reads on every event.
-$("chat").addEventListener("scroll", () => { scrollFrame ||= requestAnimationFrame(onChatScroll); }, { passive: true });
+$("chat").addEventListener("scroll", () => {
+  if (readerScrolling()) gesture.at = performance.now(); // momentum after the finger lifts is still the reader's scroll
+  scrollFrame ||= requestAnimationFrame(onChatScroll);
+}, { passive: true });
+// The reader's own scrolling (finger down, wheel, or the fling that follows). While it lasts nothing re-anchors or
+// follows the bottom: on Android a scrollTop write during a drag snaps the list back under the finger.
+const gesture = { touching: false, at: 0, idle: 0 };
+function readerScrolling() { return gesture.touching || performance.now() - gesture.at < 160; }
+function following() { return state.stick && !readerScrolling(); }
+function markGesture(touching) {
+  if (touching != null) gesture.touching = touching;
+  gesture.at = performance.now();
+}
+$("chat").addEventListener("touchstart", () => markGesture(true), { passive: true });
+for (const event of ["touchend", "touchcancel"]) $("chat").addEventListener(event, () => markGesture(false), { passive: true });
+$("chat").addEventListener("wheel", () => markGesture(), { passive: true });
+// Older pages are fetched and slid in only once the list is still: inserting mid-fling moves content under the finger.
+function loadEarlierWhenStill() {
+  clearTimeout(gesture.idle);
+  if (readerScrolling()) return void (gesture.idle = setTimeout(loadEarlierWhenStill, 120));
+  const chat = $("chat");
+  if (chat.scrollTop < 200) chat.querySelector(":scope > .earlier:not(:disabled)")?.click();
+}
 let historyAnchor;
 let followFrame;
 const followResize = new ResizeObserver(() => {
   cancelAnimationFrame(followFrame);
   followFrame = requestAnimationFrame(() => {
-    if (state.stick && !state.rendering && !state.into && !state.loading && !historyAnchor) {
+    if (following() && !state.rendering && !state.into && !state.loading && !historyAnchor) {
       scrollDown(true);
       state.lastScrollTop = $("chat").scrollTop;
     }
@@ -865,7 +952,7 @@ function scrollDown(force) {
 }
 function push(node, live) {
   if (state.into) return void state.into.append(node); // drawing older history off-screen: no scrolling
-  const stick = nearBottom();
+  const stick = following() && nearBottom();
   $("chat").querySelector(":scope > .empty")?.remove();
   $("chat").append(node);
   if (live === false || stick) scrollDown(true);
@@ -986,7 +1073,7 @@ function attachmentRows(items, live) {
       const img = el("img");
       img.src = a.href;
       img.alt = i.name;
-      img.onload = () => state.stick && scrollDown(true); // an image loading below the fold must not leave the log mid-way, but must not yank a reader up the page either
+      img.onload = () => following() && scrollDown(true); // an image loading below the fold must not leave the log mid-way, but must not yank a reader up the page either
       a.append(img);
       row.append(a);
     }
@@ -1036,7 +1123,7 @@ function renderLive(kind) {
   if (L.raf) return;
   L.raf = requestAnimationFrame(() => {
     L.raf = 0;
-    const stick = nearBottom();
+    const stick = following() && nearBottom();
     if (L.textEl && L.prose) renderMarkdown(L.text || "", L.prose);
     if (L.thinkingEl) L.thinkingEl.querySelector("span").textContent = "Thinking… " + (L.thinking || "").slice(-200).replace(/\s+/g, " ");
     if (stick) scrollDown(true);
@@ -1114,7 +1201,7 @@ function subEvent(e, live) {
       li.querySelector(":scope > .st")?.replaceChildren(icon(c.is_error ? "x" : "check"));
     }
   }
-  if (live) scrollDown(false);
+  if (live && following()) scrollDown(false);
 }
 // task_started / task_progress / task_notification: live stats on the card, and a status chip for work that outlives the call
 function taskEvent(e) {
@@ -1358,10 +1445,14 @@ function renderUsage() {
     btn.setAttribute("aria-selected", String(selected)); btn.tabIndex = selected ? 0 : -1;
   }
   const sample = state.usage[state.usageTab];
-  pane.append(el("div", "usage-label", state.usageTab === "pi" ? "OpenRouter allowance" : "Subscription allowance"));
+  const head = el("div", "usage-head", "");
+  const refresh = iconButton("refresh", "Refresh usage", "btn icon sm ghost usage-refresh");
+  refresh.onclick = () => { refresh.classList.add("spinning"); refresh.disabled = true; send({ t: "refresh_usage" }); setTimeout(() => { refresh.classList.remove("spinning"); refresh.disabled = false; }, 4000); };
+  head.append(el("span", "usage-label", state.usageTab === "pi" ? "OpenRouter allowance" : "Subscription allowance"), refresh);
+  pane.append(head);
   if (sample?.windows?.length) {
     for (const w of sample.windows) pane.append(usageMeter(w.label, w.used, w.limit, w.unit || "requests", w.resetsAt));
-  } else pane.append(el("div", "usage-note", sample?.note || "No allowance telemetry yet."));
+  } else pane.append(el("div", "usage-note", sample?.note || (state.usageTab === "claude" ? "Claude reports its allowance after each turn." : "No allowance telemetry yet. Tap refresh.")));
   if (sample?.windows?.some(w => w.resetsAt && w.resetsAt < Date.now())) pane.append(el("div", "usage-note", "Last reported usage · reset passed; awaiting refresh."));
   if (sample?.spendToday != null) pane.append(el("div", "usage-note", `$${sample.spendToday.toFixed(4)} spent today`));
   if (sample?.updatedAt) { const stamp = el("div", "usage-note", `Updated ${new Date(sample.updatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`); stamp.title = new Date(sample.updatedAt).toLocaleString(); pane.append(stamp); }
@@ -1754,7 +1845,7 @@ function fitViewport() {
     }
     if (v) document.documentElement.style.setProperty("--viewport-height", `${v.height}px`);
     sizeInput();
-    if (state.stick) scrollDown(true);
+    if (following()) scrollDown(true);
   });
 }
 window.visualViewport?.addEventListener("resize", fitViewport);

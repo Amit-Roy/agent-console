@@ -5,7 +5,7 @@ import path from "node:path";
 import { usage } from "../usage.ts";
 import { childEnv } from "./env.ts";
 
-export interface LabelEngine { id: string; call(prompt: string, system: string): Promise<string | undefined>; available?(): boolean }
+export interface LabelEngine { id: string; call(prompt: string, system: string): Promise<string | undefined>; available?(): boolean; cooldownMs?: number }
 export function createLabelCompletion(engines: LabelEngine[], cooldownMs = 5 * 60_000) {
   const cooldown = new Map<string, number>();
   return async <T>(prompt: string, system: string, validate: (raw: string | undefined) => T | undefined): Promise<T | undefined> => {
@@ -18,7 +18,7 @@ export function createLabelCompletion(engines: LabelEngine[], cooldownMs = 5 * 6
           return result;
         }
       } catch {} // a failed helper must never stop a conversation
-      cooldown.set(e.id, Date.now() + cooldownMs);
+      cooldown.set(e.id, Date.now() + (e.cooldownMs ?? cooldownMs));
       console.info(`Label helper ${e.id} unavailable; trying fallback (cooldown ${cooldownMs / 1000}s).`);
     }
   };
@@ -39,12 +39,15 @@ function cli(cmd: string, args: string[], prompt: string, parse: (raw: string) =
   });
 }
 export const askHaiku = (prompt: string, system: string) => cli("claude", ["-p", "--model", "haiku", "--output-format", "json", "--no-session-persistence", "--tools", "", "--disable-slash-commands", "--strict-mcp-config", "--setting-sources", "", "--system-prompt", system], prompt, raw => { const j = JSON.parse(raw); return j.is_error ? undefined : j.result; });
+// Measured on the real label prompt: north-mini-code answered 5/5 in under a second; the bare `openrouter/free` router sometimes
+// lands on a safety classifier or a model that wraps the JSON in prose. OpenRouter tries the list in order.
+const ROUTER_MODELS = [process.env.AGENT_CONSOLE_LABEL_ROUTER_MODEL || "cohere/north-mini-code:free", "nvidia/nemotron-3-super-120b-a12b:free", "openrouter/free"];
 export async function askRouter(prompt: string, system: string) {
   const key = childEnv().OPENROUTER_API_KEY;
   if (!key) return;
   const r = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST", headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ model: "openrouter/free", messages: [{ role: "system", content: system }, { role: "user", content: prompt }], max_tokens: 512, reasoning: { effort: "none", exclude: true } }),
+    body: JSON.stringify({ models: ROUTER_MODELS, messages: [{ role: "system", content: system }, { role: "user", content: prompt }], max_tokens: 512, reasoning: { effort: "none", exclude: true } }),
     signal: AbortSignal.timeout(12_000),
   });
   if (!r.ok) return;
@@ -68,7 +71,8 @@ export function askCodex(prompt: string, system: string) {
   }, 20_000);
 }
 export const completeLabel = createLabelCompletion([
-  { id: "openrouter-free", call: askRouter, available: () => !!childEnv().OPENROUTER_API_KEY && !usage.exhausted("pi") },
+  { id: "openrouter-free", cooldownMs: 45_000, call: askRouter, // free models blip; retry soon rather than push every label onto Codex for 5 minutes
+    available: () => !!childEnv().OPENROUTER_API_KEY && !usage.exhausted("pi") },
   { id: "codex-small", call: askCodex, available: () => !usage.exhausted("codex") },
   { id: "haiku", call: askHaiku, available: () => !usage.exhausted("claude") },
 ]);

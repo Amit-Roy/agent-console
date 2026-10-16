@@ -1,5 +1,5 @@
 import "./privacy.ts";
-import { usage, refreshRouterUsage } from "./usage.ts";
+import { usage, refreshRouterUsage, refreshUsage } from "./usage.ts";
 import express from "express";
 import fs from "node:fs";
 import crypto from "node:crypto";
@@ -204,6 +204,7 @@ wss.on("connection", (ws) => {
           try { latency?.record(m.samples, id => threads.get(id)); } catch { console.warn("Local latency sample write failed."); }
           return;
         }
+        case "refresh_usage": void refreshUsage(); return;
         case "queue_edit":
         case "queue_save":
         case "queue_cancel_edit": {
@@ -242,6 +243,7 @@ wss.on("connection", (ws) => {
             mode: typeof m.mode === "string" ? m.mode : undefined,
             model: typeof m.model === "string" ? m.model : undefined,
             effort: typeof m.effort === "string" ? m.effort : undefined,
+            advisor: typeof m.advisor === "string" ? m.advisor : undefined,
             title: typeof m.title === "string" ? m.title : undefined,
           });
         }

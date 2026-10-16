@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { stripTypeScriptTypes } from "node:module";
 import { WebSocket } from "ws";
 import { makeToken } from "../server/auth.ts";
 
@@ -44,7 +45,10 @@ const check = setInterval(async () => {
   restarting = true;
   clearInterval(check); clearTimeout(deadline); ws.close();
   try {
-    for (const dir of ["server", "server/providers"]) for (const f of fs.readdirSync(path.join(ROOT, dir)).filter((f) => f.endsWith(".ts"))) execFileSync(process.execPath, ["--check", path.join(ROOT, dir, f)], { stdio: "pipe" });
+    for (const dir of ["server", "server/providers"]) for (const f of fs.readdirSync(path.join(ROOT, dir)).filter((f) => f.endsWith(".ts"))) {
+      const source = stripTypeScriptTypes(fs.readFileSync(path.join(ROOT, dir, f), "utf8"));
+      execFileSync(process.execPath, ["--check", "--input-type=module"], { input: source, stdio: "pipe" });
+    }
   } catch (e) { give(`Restart cancelled: the new code does not parse.\n${String(e.stderr ?? e).slice(0, 800)}`, 1); }
   console.log("All threads idle. Restarting Agent Console.");
   console.log(execFileSync(BIN, ["stop"], { encoding: "utf8" }).trim());

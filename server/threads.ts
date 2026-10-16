@@ -1,4 +1,5 @@
 import { HistoryIndex } from "./history.ts";
+import { historyWireEvent } from "./history-wire.ts";
 import { commandList, CONSOLE_COMMANDS, parseCommand } from "./commands.ts";
 import { usage, claudeWindows, codexWindows } from "./usage.ts";
 import { CodexTelemetry } from "./providers/codex-telemetry.ts";
@@ -26,6 +27,7 @@ export interface Thread {
   mode: Mode;
   model: string;
   effort?: string;
+  advisor?: string;
   lastRun?: { model?: string; effort?: string; source?: string; duration_ms?: number; input_tokens?: number; output_tokens?: number; cached_input_tokens?: number };
   sessionId?: string;
   forkFrom?: string; // forked from a Claude session: the first run continues a copy of it (cleared once the fork has its own session id)
@@ -88,6 +90,7 @@ interface Live {
   agent: Agent;
   aborted: boolean;
   compactConfirmed?: boolean;
+  compactWait?: NodeJS.Timeout;
 }
 
 export class Threads {
@@ -199,23 +202,25 @@ export class Threads {
     return effort;
   }
 
-  update(id: string, patch: { mode?: Mode; model?: string; effort?: string; title?: string }) {
+  update(id: string, patch: { mode?: Mode; model?: string; effort?: string; advisor?: string; title?: string }) {
     const t = this.threads.get(id);
     if (!t) return;
     const prov = PROVIDERS.get(t.provider);
     if (patch.mode && !prov?.modes.includes(patch.mode)) patch.mode = undefined;
     if (patch.model && !prov?.models().includes(patch.model)) patch.model = undefined;
+    if (patch.advisor && patch.advisor !== "default" && !prov?.advisors?.includes(patch.advisor)) patch.advisor = undefined;
     const effort = patch.model || patch.effort ? this.validEffort(prov, patch.model || t.model, patch.effort || "default") : t.effort;
-    if (t.status === "running" && (patch.mode || patch.model || patch.effort)) throw new Error("Stop the running turn before changing mode, model or effort.");
+    if (t.status === "running" && (patch.mode || patch.model || patch.effort || patch.advisor)) throw new Error("Stop the running turn before changing mode, model or effort.");
     if (patch.mode) t.mode = patch.mode;
     if (patch.model && patch.model !== t.model) delete t.context; // the old model's window is no longer authoritative
     if (patch.model) t.model = patch.model;
     t.effort = effort;
+    if (patch.advisor) t.advisor = patch.advisor;
     if (patch.title) {
       t.title = patch.title.slice(0, 80);
       t.autoTitle = false;
     }
-    if (patch.mode || patch.model || patch.effort) this.kill(id); // respawn with new flags on next send (history kept via the harness's session)
+    if (patch.mode || patch.model || patch.effort || patch.advisor) this.kill(id); // respawn with new flags on next send (history kept via the harness's session)
     this.touch(t);
   }
 
@@ -234,6 +239,7 @@ export class Threads {
       mode: src.mode,
       model: src.model,
       effort: src.effort,
+      advisor: src.advisor,
       context: src.context,
       status: "idle",
       cost: 0,
@@ -290,7 +296,7 @@ export class Threads {
     const events = page.events.filter((e) => !NOISE.has(kindOf(e))).map((e) => {
       if (e?.type !== "user" || !Array.isArray(e.message?.content)) return e;
       return { ...e, message: { ...e.message, content: e.message.content.map((c: any) => (c?.type === "tool_result" && typeof c.content === "string" && c.content.length > RESULT_CLIP ? { ...c, content: clip(c.content, RESULT_CLIP) } : c)) } };
-    });
+    }).map(historyWireEvent);
     return { ...page, events, server_ms: Math.round((performance.now() - at) * 10) / 10 };
   }
 
@@ -331,7 +337,7 @@ export class Threads {
         if (parseCommand(this.queues.get(t.id)?.[0]?.text || "")?.name === "compact") this.drain(t.id);
       },
     };
-    live.agent = prov.start({ id: t.id, cwd: t.cwd, mode: t.mode, model: t.model, effort: t.effort, sessionId: t.sessionId, forkFrom: t.sessionId ? undefined : t.forkFrom }, ctx);
+    live.agent = prov.start({ id: t.id, cwd: t.cwd, mode: t.mode, model: t.model, effort: t.effort, advisor: t.advisor, sessionId: t.sessionId, forkFrom: t.sessionId ? undefined : t.forkFrom }, ctx);
     this.live.set(t.id, live);
     return live;
   }
@@ -381,6 +387,13 @@ export class Threads {
       if (turn) for (const b of ev.message?.content ?? []) if (b?.type === "tool_use") turn.tools[b.name] = (turn.tools[b.name] ?? 0) + 1;
     }
     if (ev.type === "result") {
+      const live = this.live.get(t.id);
+      // Claude answers /compact with an empty result straight away, then compacts and sends compact_boundary and the real result
+      if (t.operation === "compact" && t.provider === "claude" && live && !live.compactConfirmed && !live.compactWait && !ev.is_error && !ev.num_turns) {
+        live.compactWait = setTimeout(() => { live.compactWait = undefined; if (t.operation === "compact" && !live.compactConfirmed) this.onEvent(t, { ...ev, is_error: true, subtype: "error" }); }, 10 * 60_000);
+        return;
+      }
+      if (live?.compactWait) { clearTimeout(live.compactWait); live.compactWait = undefined; }
       this.finishTurn(t, ev);
       if (t.operation === "compact") {
         if (!ev.is_error && !this.live.get(t.id)?.compactConfirmed) {
@@ -472,6 +485,7 @@ export class Threads {
     this.kill(id); // native sessions resume from disk; never share a mutable session with an idle subprocess
     const live = this.start(t);
     if (!live.agent.compact) { this.kill(id); throw new Error("This agent does not support context compaction."); }
+    live.compactConfirmed = false;
     t.operation = "compact";
     t.status = "running";
     this.publish(id, { type: "user_input", text: `/compact${instructions ? " " + instructions : ""}`, command: true, ts: Date.now() });

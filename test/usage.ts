@@ -55,7 +55,10 @@ try {
   process.env.OPENROUTER_API_KEY = "fixture-only";
   globalThis.fetch = (async (_url: any, opts: any) => { sent = JSON.parse(opts.body); return new Response(JSON.stringify({ choices: [{ message: { content: "Fixture label" } }] }), { status: 200 }); }) as typeof fetch;
   assert.equal(await askRouter("fixture", "labels"), "Fixture label");
-  assert.equal(sent.model, "openrouter/free");
+  assert.ok(Array.isArray(sent.models), "router helper supplies an ordered fallback list");
+  assert.equal(sent.models[0], process.env.AGENT_CONSOLE_LABEL_ROUTER_MODEL || "cohere/north-mini-code:free");
+  assert.deepEqual(sent.models.slice(1), ["nvidia/nemotron-3-super-120b-a12b:free", "openrouter/free"]);
+  assert.ok(sent.models.every((model: string) => model === process.env.AGENT_CONSOLE_LABEL_ROUTER_MODEL || model.endsWith(":free") || model === "openrouter/free"), "automatic fallbacks stay free");
   assert.equal(sent.reasoning.effort, "none"); // prevent free reasoning models consuming the label's entire output budget
 } finally { globalThis.fetch = originalFetch; if (originalKey === undefined) delete process.env.OPENROUTER_API_KEY; else process.env.OPENROUTER_API_KEY = originalKey; }
 console.log("PASS context vs cumulative usage, Codex tailing, provider allowances, no invented limits, validated helper fallback and cooldown");

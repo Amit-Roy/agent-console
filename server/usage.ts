@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { spawn } from "node:child_process";
 import { DATA_DIR } from "./auth.ts";
 import { childEnv } from "./providers/env.ts";
 
@@ -55,4 +56,37 @@ async function readRouterUsage() {
     const r = await fetch("https://openrouter.ai/api/v1/key", { headers: { Authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(8000) });
     if (r.ok) usage.record("pi", routerUsage((await r.json() as any).data));
   } catch {} // retain the last successful sample, with its timestamp
+}
+
+// Codex only reports quota while a turn runs; ask a short-lived app-server for the current figures instead.
+export function readCodexUsage(): Promise<void> {
+  if (process.env.AGENT_CONSOLE_MOCK === "1") return Promise.resolve();
+  return new Promise(resolve => {
+    let out = "", done = false;
+    const p = spawn("codex", ["app-server", "-c", "analytics.enabled=false", "-c", "feedback.enabled=false"], { env: childEnv(), stdio: ["pipe", "pipe", "ignore"] });
+    const end = () => { if (done) return; done = true; clearTimeout(timer); p.kill(); resolve(); };
+    const timer = setTimeout(end, 10_000);
+    const write = (o: object) => p.stdin.write(JSON.stringify(o) + "\n");
+    p.on("error", end); p.on("exit", end); p.stdin.on("error", () => {});
+    p.stdout.on("data", d => {
+      out += d;
+      for (let i; (i = out.indexOf("\n")) >= 0;) {
+        const line = out.slice(0, i); out = out.slice(i + 1);
+        let m: any; try { m = JSON.parse(line); } catch { continue; }
+        if (m.id === 1) { write({ method: "initialized", params: {} }); write({ id: 2, method: "account/rateLimits/read" }); }
+        else if (m.id === 2) {
+          const r = m.result?.rateLimits;
+          const norm = (w: any) => w && ({ used_percent: w.usedPercent, window_minutes: w.windowDurationMins, resets_at: w.resetsAt });
+          const windows = codexWindows({ primary: norm(r?.primary), secondary: norm(r?.secondary) });
+          if (windows.length) usage.record("codex", { windows });
+          end();
+        }
+      }
+    });
+    write({ id: 1, method: "initialize", params: { clientInfo: { name: "agent_console", title: "Agent Console", version: "1.0.0" } } });
+  });
+}
+export async function refreshUsage() {
+  routerCheckedAt = 0;
+  await Promise.all([readCodexUsage(), refreshRouterUsage()]);
 }
