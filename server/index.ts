@@ -4,6 +4,7 @@ import express from "express";
 import fs from "node:fs";
 import crypto from "node:crypto";
 import http from "node:http";
+import { spawn } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -87,6 +88,14 @@ const sameOrigin: express.RequestHandler = (req, res, next) => {
   } catch {}
   res.status(403).json({ error: "Cross-site request refused." });
 };
+// Restart button: the same detached watcher as `bin/agent-console restart-when-idle` (waits for running turns, then replaces this process).
+const RUN_DIR = process.env.AGENT_CONSOLE_RUN || path.join(os.homedir(), ".cache", "agent-console");
+app.post("/restart", sameOrigin, (_req, res) => {
+  fs.mkdirSync(RUN_DIR, { recursive: true });
+  const out = fs.openSync(path.join(RUN_DIR, "idle-restart.log"), "a");
+  spawn(process.execPath, [path.join(ROOT, "scripts", "idle-restart.mjs")], { cwd: ROOT, detached: true, stdio: ["ignore", out, out] }).unref();
+  res.json({ ok: true });
+});
 app.post("/uploads/:thread", sameOrigin, express.raw({ type: () => true, limit: MAX_FILE_BYTES }), (req, res) => {
   const { thread } = req.params;
   if (!isId(thread) || !threads.get(thread)) return void res.status(404).json({ error: "Unknown thread." });
@@ -260,6 +269,8 @@ void refreshPiModels();
 headroom.start();
 
 server.listen(PORT, HOST, () => {
+  fs.mkdirSync(RUN_DIR, { recursive: true });
+  fs.writeFileSync(path.join(RUN_DIR, "pid"), String(process.pid)); // only the process that holds the port may claim the pid file
   console.log(`agent-console listening on http://${HOST}:${PORT}`);
   console.log(CODER_HOST ? `auth: Coder SSO for ${CODER_HOST} (password cookie still works elsewhere)` : "auth: password only");
   if (process.env.AGENT_CONSOLE_SHOW_PASSWORD) console.log(`password: ${PASSWORD}`);
