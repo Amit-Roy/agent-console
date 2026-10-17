@@ -619,7 +619,6 @@ function refreshConversation() {
   if (state.rendering || state.loadingEarlier) return;
   state.deferredRefresh = false;
   $("conversation-updating").textContent = "Updating conversation…";
-  $("chat").querySelector(":scope > .earlier")?.setAttribute("disabled", "");
   state.refreshAt = performance.now();
   state.measurement = { thread: state.current, at: state.refreshAt, hidden: document.hidden };
   state.requestSentAt = performance.now();
@@ -762,15 +761,21 @@ function historyDone(m, refreshing, cachedMetrics) {
 function earlierButton() {
   const b = el("button", "btn earlier", "Show earlier messages");
   b.type = "button";
-  b.onclick = () => {
-    if (state.revalidating && !state.deferredRefresh || state.rendering) return;
+  const load = (token) => {
+    if (token !== state.renderToken || !b.isConnected) return;
+    // A refresh or page draw in flight would swallow the click, so wait for it instead of ignoring it.
+    if (state.revalidating && !state.deferredRefresh || state.rendering || state.loadingEarlier) return void setTimeout(load, 100, token);
     state.loadingEarlier = true;
-    b.disabled = true;
-    b.textContent = "Loading…";
     state.pageAt = performance.now();
     state.measurement = { thread: state.current, at: state.pageAt, hidden: document.hidden };
     state.requestSentAt = performance.now();
     send({ t: "open", thread: state.current, before: state.start, request: state.request, small: SMALL_PAGES });
+  };
+  b.onclick = () => {
+    if (b.disabled) return;
+    b.disabled = true;
+    b.textContent = "Loading…";
+    load(state.renderToken);
   };
   return b;
 }
