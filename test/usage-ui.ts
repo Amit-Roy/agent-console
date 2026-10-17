@@ -36,7 +36,12 @@ try {
     await page.getByRole("tab", { name: "Claude", exact: true }).click(); const red = await color();
     assert.match(await page.locator("#usage").innerText(), /Subscription allowance/);
     await page.getByRole("tab", { name: "Codex", exact: true }).click(); const green = await color();
-    assert.match(await page.locator("#usage").innerText(), /475k tokens/i);
+    const info = page.locator("#usage-ctx-info");
+    assert.equal(await info.getAttribute("aria-expanded"), "false");
+    assert.doesNotMatch(await page.locator("#usage").innerText(), /\d+k of [\d.]+[kM] tokens/i, "context details start collapsed");
+    await info.click();
+    assert.equal(await info.getAttribute("aria-expanded"), "true");
+    assert.match(await page.locator("#usage").innerText(), /\d+k of [\d.]+[kM] tokens/i);
     assert.doesNotMatch(await page.locator("#usage").innerText(), /5\.7M/);
     const tabNode = await page.locator("#usage-tab-codex").elementHandle();
     const refreshThread = hello.threads.find((t: any) => t.provider === "codex");

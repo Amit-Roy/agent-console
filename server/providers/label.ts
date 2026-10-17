@@ -3,7 +3,7 @@ import { completeLabel } from "./small-model.ts";
 
 // Tool cards show what the agent is *doing*, not just the raw command. Claude usually supplies a `description` for Bash itself
 // and the UI derives labels for file/search tools from their input. What is left is shell commands with no description
-// (Codex, Pi, terse Claude calls): batch them through OpenRouter, then Luna, then Haiku.
+// (Codex, Pi, terse Claude calls): batch them through Nemotron on NVIDIA.
 
 const FLUSH_MS = 700;
 const MAX_BATCH = 8;

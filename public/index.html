@@ -27,6 +27,8 @@
   <symbol id="i-x" viewBox="0 0 16 16"><path d="m4 4 8 8M12 4l-8 8"/></symbol>
   <symbol id="i-chev-down" viewBox="0 0 16 16"><path d="m4 6 4 4 4-4"/></symbol>
   <symbol id="i-chev-right" viewBox="0 0 16 16"><path d="m6 4 4 4-4 4"/></symbol>
+  <symbol id="i-power" viewBox="0 0 16 16"><path d="M8 2.5v5M4.9 4.4a5 5 0 1 0 6.2 0"/></symbol>
+  <symbol id="i-info" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5"/><path d="M8 7.25v3.25M8 5.25h.01"/></symbol>
   <symbol id="i-refresh" viewBox="0 0 16 16"><path d="M13 8a5 5 0 1 1-1.6-3.7M13 2.5v3h-3"/></symbol>
   <symbol id="i-more" viewBox="0 0 16 16"><circle cx="3.5" cy="8" r="1.1" fill="currentColor" stroke="none"/><circle cx="8" cy="8" r="1.1" fill="currentColor" stroke="none"/><circle cx="12.5" cy="8" r="1.1" fill="currentColor" stroke="none"/></symbol>
   <symbol id="i-trash" viewBox="0 0 16 16"><path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8a1 1 0 0 0 1 .9h3.8a1 1 0 0 0 1-.9l.6-8M6.75 7v4M9.25 7v4"/></symbol>
@@ -51,10 +53,15 @@
     </button>
     <h2 class="side-label">Threads</h2>
     <ul id="threads" aria-label="Thread list"></ul>
-    <a id="dash-link" class="btn ghost block dash-link" href="/dashboard"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 13V8.5M8 13V3M13 13V6"/></svg><span>Usage &amp; savings</span></a>
-    <button id="restart" class="btn ghost block dash-link" type="button" title="Restart the server once every thread is idle, then reload this page">
-      <svg class="ico" aria-hidden="true"><use href="#i-refresh"/></svg><span>Restart &amp; reload</span>
-    </button>
+    <div class="side-actions" role="group" aria-label="Console shortcuts">
+      <a id="dash-link" class="btn ghost tile" href="/dashboard" title="Usage and savings dashboard"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 13V8.5M8 13V3M13 13V6"/></svg><span>Usage</span></a>
+      <button id="reload" class="btn ghost tile" type="button" title="Reload this page (the server keeps running)">
+        <svg class="ico" aria-hidden="true"><use href="#i-refresh"/></svg><span>Reload</span>
+      </button>
+      <button id="restart" class="btn ghost tile" type="button" title="Restart the server once every thread is idle, then reload this page">
+        <svg class="ico" aria-hidden="true"><use href="#i-power"/></svg><span>Restart</span>
+      </button>
+    </div>
     <div id="usage" class="usage" title="Subscription usage" role="group" aria-label="Subscription usage"></div>
   </aside>
   <div id="scrim"></div>

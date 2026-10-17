@@ -41,9 +41,8 @@ Anthropic's terms restrict third-party products that offer claude.ai login, so d
 - Background telemetry/error reporting/update checks are disabled for agent children. RTK runs locally via Codex/Claude hooks and the Pi extension, with telemetry blocked.
   Headroom runs as a loopback-only proxy child of the server (`server/headroom.ts`, port 8790, `AGENT_CONSOLE_HEADROOM=0` disables, beacon/telemetry off) and Claude is pointed at it with `ANTHROPIC_BASE_URL` only while it answers health checks, so a dead proxy never breaks a turn.
   Codex (ChatGPT sign-in) and Pi (OpenRouter) use hosts the proxy cannot serve, so they rely on RTK alone. Its MCP server stays off.
-- Title/tool-label helpers fail over **OpenRouter free router → Codex Luna at low effort → Haiku**. Exhausted quotas are skipped; errors and malformed replies trigger a five-minute cooldown.
-  OpenRouter only uses the free router, never paid routing. Codex uses subscription auth, isolated CLI settings, ephemeral sessions and disabled shell tools.
-  `AGENT_CONSOLE_LABEL_CODEX_MODEL` overrides its small model. These helper calls do not replace the thread's selected agent/model.
+- Title/tool-label helpers use **Nemotron 3 Super 120B direct from NVIDIA** (thinking off), falling back to the same model on OpenRouter's free tier. Haiku and Codex Luna are not used. Errors and malformed replies trigger a 45 s cooldown.
+  `AGENT_CONSOLE_LABEL_NVIDIA_MODEL` overrides the model. Needs `NVIDIA_API_KEY` in `~/.config/agent-console/env`. These helper calls do not replace the thread's selected agent/model.
 - Fast history: byte-indexed JSONL reads, newest 40 events by default (`AGENT_CONSOLE_PAGE`), older pages fetched automatically near the top (button also works).
   Pages render detached before insertion; closed tool cards defer syntax highlighting until opened; native `content-visibility` virtualizes offscreen message rendering.
   The five most recent views, including running threads, restore immediately from detached DOM. Changed views remain visible while history refreshes in the background; reconnects mark them stale.
@@ -78,7 +77,7 @@ Anthropic's terms restrict third-party products that offer claude.ai login, so d
   and the agent opens it with its own tools (Claude gets `--add-dir` for the thread's upload folder so Plan/Accept-edits can read it).
   Verified live 2026-10-16: Claude (image + file in Plan mode), Codex (image + file on a resumed session), Pi (file by path; payload matches Pi's documented `ImageContent`, the free model tried reported no vision).
 - Auto titles: a thread created without a title is named after its folder, then renamed by the label helper from its first message (2 to 5 words, e.g. "Stale Quant Dashboard Prices").
-  The shared helper uses OpenRouter free first, subscription Luna second and Haiku last, and never blocks the turn.
+  The shared helper uses NVIDIA Nemotron first and the free OpenRouter copy second, and never blocks the turn.
   One-word openers ("ok") are skipped until a real message arrives; a manual rename or a title given at creation is never overwritten; any failure keeps the folder name.
   Threads that predate this: `node scripts/retitle.ts` (`--dry` to preview) titles those still named after their folder, through the running server's `update` API.
 - Readable tool cards: a Bash card shows what the command is *for*, not the raw command. Claude's own `description` is used when it gives one; otherwise (Codex, Pi,

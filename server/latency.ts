@@ -61,6 +61,9 @@ export class LatencyStore {
       if (!row.hidden) add(`${row.kind}/visible`, row);
       add(`${row.kind}/${row.provider}/${row.width <= 600 ? 'mobile' : row.width <= 1024 ? 'tablet' : 'desktop'}/${row.hidden ? 'background' : 'visible'}`, row);
     }
+    // latest 20 foreground samples per kind: shows a fix (or a regression) that the 14-day pool hides
+    for (const [key, group] of [...groups].filter(([key]) => key.endsWith('/visible') && key.split('/').length === 2))
+      groups.set(`${key}/recent`, [...group].sort((a, b) => b.at - a.at || b.id - a.id).slice(0, 20).sort((a, b) => a.total_ms - b.total_ms));
     const stats = (group: any[]) => ({ count: group.length, median_ms: group[Math.floor((group.length-1)*.5)].total_ms, p95_ms: group[Math.ceil(group.length*.95)-1].total_ms, max_ms: group.at(-1).total_ms, mean_ms: Math.round(group.reduce((n,r)=>n+r.total_ms,0)/group.length) });
     return { retention_days: 14, max_samples: this.maxSamples, count: rows.length, groups: Object.fromEntries([...groups].map(([key, values])=>[key, stats(values)])), slowest: rows.slice(-10).reverse(), recent: this.db.prepare('SELECT * FROM latency ORDER BY id DESC LIMIT 20').all() };
   }

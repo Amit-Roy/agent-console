@@ -1,6 +1,6 @@
 import { completeLabel } from "./small-model.ts";
 
-// A new thread is titled after its folder. After the first message, Haiku (on the user's Claude login) names it after what is
+// A new thread is titled after its folder. After the first message, Nemotron (via NVIDIA) names it after what is
 // actually being discussed. One small headless call per thread: no tools, no MCP, no hooks, no project settings (~600 tokens).
 
 const MAX_INPUT = 1500;

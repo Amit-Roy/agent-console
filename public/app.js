@@ -13,7 +13,7 @@ const EFFORT_LABEL = { xhigh: "Extra high", ultracode: "Ultra" };
 const EFFORT_DESC = { ultracode: "Claude Code's Ultracode: starts a multi-agent workflow on every task. Slow and costly; keep it for big jobs.", max: "Deepest reasoning the model offers.", xhigh: "More reasoning than High, less than Max." };
 const effortLabel = (v) => EFFORT_LABEL[v] || cap(v);
 const state = {
-  commands: {}, providers: new Map(), threads: new Map(), current: null, ready: false, dirs: [], live: null, cards: new Map(), usage: {}, usageTab: "claude",
+  commands: {}, providers: new Map(), threads: new Map(), current: null, ready: false, dirs: [], live: null, cards: new Map(), usage: {}, usageTab: "claude", ctxOpen: false,
   stick: true, // the reader is at the bottom of the chat (kept from scroll events, since layout growth fires none)
   subs: new Map(), // tool_use id of a subagent (or nested subagent) -> the <ol> its activity is listed in
   subTools: new Map(), // tool_use id of a call made inside a subagent -> its row
@@ -818,9 +818,10 @@ async function loadLatencySummary() {
     const data = await response.json();
     if (!data.available) throw Error();
     $("latency-summary").textContent = data.count ? [["open", "Thread opens"], ["cached", "Cached switches"], ["refresh", "Background refreshes"], ["page", "Older pages"], ["cancelled", "Interrupted loads"]].flatMap(([key, label]) => {
-      const s = data.groups[`${key}/visible`];
-      return s ? [`${label}: ${s.count} · median ${Math.round(s.median_ms)} ms · p95 ${Math.round(s.p95_ms)} ms`] : [];
-    }).join("\n") + "\nForeground samples · this server only · up to 14 days." : "No local latency samples yet. Open or switch threads to collect measurements.";
+      const s = data.groups[`${key}/visible`], d = data.groups[`${key}/visible/recent`];
+      const fmt = (g) => `median ${Math.round(g.median_ms)} ms · p95 ${Math.round(g.p95_ms)} ms (${g.count})`;
+      return s ? [`${label}: latest ${fmt(d)} · 14 days ${fmt(s)}`] : [];
+    }).join("\n") + "\nForeground samples · this server only · latest 20 and up to 14 days." : "No local latency samples yet. Open or switch threads to collect measurements.";
   } catch { $("latency-summary").textContent = "Local measurements are unavailable until the server reconnects."; }
 }
 const fmtTok = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(n >= 1e7 ? 0 : 1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(n));
@@ -1484,7 +1485,7 @@ function onEvent(e, live) {
       break;
     }
     case "tool_label": {
-      // Haiku's plain-English version of a command that came without a description; arrives a few seconds after the card
+      // The helper model's plain-English version of a command that came without a description; arrives a few seconds after the card
       const sumEl = (state.cards.get(e.tool_use_id) ?? state.subTools.get(e.tool_use_id))?.querySelector(".sum");
       if (sumEl && !sumEl.classList.contains("human")) {
         sumEl.textContent = e.label;
@@ -1554,20 +1555,33 @@ function renderUsage() {
   const head = el("div", "usage-head", "");
   const refresh = iconButton("refresh", "Refresh usage", "btn icon sm ghost usage-refresh");
   refresh.onclick = () => { refresh.classList.add("spinning"); refresh.disabled = true; send({ t: "refresh_usage" }); setTimeout(() => { refresh.classList.remove("spinning"); refresh.disabled = false; }, 4000); };
-  head.append(el("span", "usage-label", state.usageTab === "pi" ? "OpenRouter allowance" : "Subscription allowance"), refresh);
+  const stamp = sample?.updatedAt ? el("span", "usage-stamp", new Date(sample.updatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })) : null;
+  if (stamp) { stamp.title = `Updated ${new Date(sample.updatedAt).toLocaleString()}`; refresh.setAttribute("aria-label", `Refresh usage (updated ${stamp.textContent})`); }
+  head.append(el("span", "usage-label", state.usageTab === "pi" ? "OpenRouter allowance" : "Subscription allowance"), ...(stamp ? [stamp] : []), refresh);
   pane.append(head);
   if (sample?.windows?.length) {
     for (const w of sample.windows) pane.append(usageMeter(w.label, w.used, w.limit, w.unit || "requests", w.resetsAt));
   } else pane.append(el("div", "usage-note", sample?.note || (state.usageTab === "claude" ? "Claude reports its allowance after each turn." : "No allowance telemetry yet. Tap refresh.")));
   if (sample?.windows?.some(w => w.resetsAt && w.resetsAt < Date.now())) pane.append(el("div", "usage-note", "Last reported usage · reset passed; awaiting refresh."));
   if (sample?.spendToday != null) pane.append(el("div", "usage-note", `$${sample.spendToday.toFixed(4)} spent today`));
-  if (sample?.updatedAt) { const stamp = el("div", "usage-note", `Updated ${new Date(sample.updatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`); stamp.title = new Date(sample.updatedAt).toLocaleString(); pane.append(stamp); }
   const t = cur()?.provider === state.usageTab ? cur() : [...state.threads.values()].filter(t => t.provider === state.usageTab).sort((a,b) => b.updatedAt-a.updatedAt)[0];
-  pane.append(el("div", "usage-label", "Thread context"));
-  if (t?.context?.used != null && t.context.max) {
-    pane.append(usageMeter("Context", t.context.used, t.context.max, "tokens"), el("div", "usage-note", `${fmtTok(t.context.used)} of ${fmtTok(t.context.max)} tokens`));
-  } else pane.append(el("div", "usage-note", t?.context?.used != null ? `${fmtTok(t.context.used)} tokens · window not reported` : t?.lastCompactedAt ? "Compacted · token usage updates on the next request." : "Context not reported yet."));
-  if (t) { const title = el("div", "usage-note usage-thread", t.title); title.title = t.title; pane.append(title); }
+  const hasCtx = t?.context?.used != null && t.context.max;
+  const detail = hasCtx ? `${fmtTok(t.context.used)} of ${fmtTok(t.context.max)} tokens`
+    : t?.context?.used != null ? `${fmtTok(t.context.used)} tokens · window not reported`
+    : t?.lastCompactedAt ? "Compacted · token usage updates on the next request." : "Context not reported yet.";
+  const ctxRow = hasCtx ? usageMeter("Context", t.context.used, t.context.max, "tokens") : el("div", "u u-empty", "");
+  ctxRow.classList.add("u-ctx");
+  if (!hasCtx) ctxRow.append(el("span", "", "Context"), el("span", "bar"), el("span", "pct", "\u2013"));
+  const info = iconButton("info", "Context details", "btn icon sm ghost usage-info");
+  info.id = "usage-ctx-info"; info.setAttribute("aria-controls", "usage-ctx-detail"); info.setAttribute("aria-expanded", String(state.ctxOpen));
+  info.title = "Context details";
+  const box = el("div", "usage-ctx-detail"); box.id = "usage-ctx-detail"; box.hidden = !state.ctxOpen;
+  box.append(el("div", "", detail));
+  if (t) { const title = el("div", "usage-thread", t.title); title.title = t.title; box.append(title); }
+  info.onclick = () => { state.ctxOpen = !state.ctxOpen; info.setAttribute("aria-expanded", String(state.ctxOpen)); box.hidden = !state.ctxOpen; };
+  const ctxWrap = el("div", "usage-ctx"); ctxWrap.setAttribute("role", "group"); ctxWrap.setAttribute("aria-label", "Thread context");
+  const line = el("div", "usage-ctx-line"); line.append(ctxRow, info);
+  ctxWrap.append(line, box); pane.append(ctxWrap);
   if (rebuildTabs) root.replaceChildren(tabs, pane);
   else root.querySelector(".usage-pane").replaceWith(pane);
   if (focusedTab) $(focusedTab)?.focus({ preventScroll: true });
@@ -1970,6 +1984,7 @@ function openNewDialog() {
   $("dlg").showModal();
 }
 $("new").onclick = openNewDialog;
+$("reload").onclick = () => location.reload();
 $("restart").onclick = async () => {
   const r = await apiFetch("/restart", { method: "POST" }).catch(() => null);
   toast(r?.ok ? "Restart scheduled. It happens once every thread is idle, then this page reloads." : "Could not schedule a restart.");

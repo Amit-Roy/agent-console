@@ -90,6 +90,10 @@ const sameOrigin: express.RequestHandler = (req, res, next) => {
 };
 // Restart button: the same detached watcher as `bin/agent-console restart-when-idle` (waits for running turns, then replaces this process).
 const RUN_DIR = process.env.AGENT_CONSOLE_RUN || path.join(os.homedir(), ".cache", "agent-console");
+// Set by bin/agent-console for the server it starts. Removed from our env so agents and the scratch servers their tests start
+// (which inherit everything else) can never overwrite the live server's pid file.
+const PID_FILE = process.env.AGENT_CONSOLE_PID_FILE;
+delete process.env.AGENT_CONSOLE_PID_FILE;
 app.post("/restart", sameOrigin, (_req, res) => {
   fs.mkdirSync(RUN_DIR, { recursive: true });
   const out = fs.openSync(path.join(RUN_DIR, "idle-restart.log"), "a");
@@ -269,8 +273,7 @@ void refreshPiModels();
 headroom.start();
 
 server.listen(PORT, HOST, () => {
-  fs.mkdirSync(RUN_DIR, { recursive: true });
-  fs.writeFileSync(path.join(RUN_DIR, "pid"), String(process.pid)); // only the process that holds the port may claim the pid file
+  if (PID_FILE) fs.writeFileSync(PID_FILE, String(process.pid)); // only the process that holds the port may claim it
   console.log(`agent-console listening on http://${HOST}:${PORT}`);
   console.log(CODER_HOSTS.length ? `auth: Coder SSO for ${CODER_HOSTS.join(", ")} (password cookie still works elsewhere)` : "auth: password only");
   if (process.env.AGENT_CONSOLE_SHOW_PASSWORD) console.log(`password: ${PASSWORD}`);
