@@ -75,3 +75,20 @@ details.table th{color:var(--t2);font-weight:var(--fw-med)}
 .empty-c{padding:var(--sp-6) 0;text-align:center;color:var(--t3);font:var(--fw-reg) var(--f-sm)}
 @media (max-width:560px){.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.kpi{padding:var(--sp-3) var(--sp-4)}.kpi .v{font-size:1.5rem}.hb{grid-template-columns:5.5rem 1fr auto}.dh h1{flex-basis:100%;order:3}.heat{grid-template-columns:1.75rem repeat(24,1fr);gap:1px}}
 @media (prefers-reduced-motion:reduce){svg.chart .bar{transition:none}}
+
+.comparison-values{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,14rem),1fr));gap:var(--sp-3)}
+.comparison-values .kpi{padding:var(--sp-3);background:var(--s3);box-shadow:none}
+.comparison-values .v{font-size:1.5rem}
+.panel .note{margin-top:var(--sp-3);font:var(--fw-reg) var(--f-sm);color:var(--t2)}
+.subscription-settings{margin-top:var(--sp-4);border-top:1px solid var(--edge);padding-top:var(--sp-3);font:var(--fw-reg) var(--f-sm)}
+.subscription-settings summary{cursor:pointer;min-height:2rem;color:var(--t1)}
+.subscription-form{display:flex;flex-wrap:wrap;align-items:end;gap:var(--sp-3);margin-top:var(--sp-3)}
+.subscription-form label{display:grid;gap:var(--sp-2);flex:1;min-width:min(100%,14rem);color:var(--t2)}
+.subscription-form input{width:100%;min-height:2.75rem;padding:var(--sp-2) var(--sp-3);border:1px solid var(--edge-strong);border-radius:var(--r-sm);background:var(--s1);color:var(--t1);font:inherit}
+.subscription-form button{min-height:2.75rem}
+.subscription-form input:focus-visible,.subscription-settings summary:focus-visible{outline:2px solid var(--focus);outline-offset:3px}
+
+.pricing-details{font:var(--fw-reg) var(--f-sm);color:var(--t2)}
+.pricing-details summary{cursor:pointer;min-height:2rem}
+.pricing-details .note{margin-top:var(--sp-2)}
+.pricing-details a{color:var(--accent);text-underline-offset:2px}

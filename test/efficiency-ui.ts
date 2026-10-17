@@ -52,8 +52,8 @@ try {
   await page.goto(base + "/dashboard#1");
   await page.locator(".kpis").waitFor();
   const kpis = page.locator(".kpi");
-  assert.match(await kpis.nth(1).innerText(), /110/);
-  assert.match(await kpis.nth(2).innerText(), /Unknown/);
+  assert.match(await kpis.nth(1).innerText(), /1.2k/);
+  assert.match(await kpis.nth(2).innerText(), /0\/2 turns priced/);
   assert.doesNotMatch(await page.locator("#dm").innerText(), /Savings rate/);
   await page.getByText("Show data as a table", { exact: true }).click();
   assert.match(await page.locator("details.table table").innerText(), /Day \(UTC\)/);

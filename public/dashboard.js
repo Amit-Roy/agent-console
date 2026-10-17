@@ -15,7 +15,7 @@ const el = (tag, cls, text) => {
   return n;
 };
 const fmt = (n) => (n >= 1e9 ? `${(n / 1e9).toFixed(1)}B` : n >= 1e6 ? `${(n / 1e6).toFixed(n >= 1e7 ? 0 : 1)}M` : n >= 1e4 ? `${Math.round(n / 1e3)}k` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : String(Math.round(n)));
-const usd = (n) => (n >= 100 ? `$${Math.round(n)}` : n >= 1 ? `$${n.toFixed(2)}` : `$${n.toFixed(n < 0.01 && n > 0 ? 4 : 3)}`);
+const usd = (n) => `$${n.toFixed(n >= 0.01 ? 2 : n > 0 ? 4 : 3)}`;
 const pct = (n) => `${n >= 10 ? Math.round(n) : n.toFixed(1)}%`;
 const PROVIDERS = { claude: ["Claude", "--c-claude"], codex: ["Codex", "--c-codex"], pi: ["Pi", "--c-pi"] };
 const provMeta = (p) => PROVIDERS[p] || [p === "mock" ? "Mock" : p, "--c-other"];
@@ -69,9 +69,10 @@ async function load() {
   if (mine === seq) $("dm").setAttribute("aria-busy", "false");
 }
 
-const tokensOf = (t) => t.accounting === 2 && t.in != null && t.out != null ? t.in + t.out : 0;
+const hasTokens = (t) => Number.isFinite(t.in) && t.in >= 0 && Number.isFinite(t.out) && t.out >= 0;
+const tokensOf = (t) => hasTokens(t) ? t.in + t.out : 0;
 const sumTurns = (turns) => ({
-  knownTokens: turns.filter(t => t.accounting === 2 && t.in != null && t.out != null).length,
+  knownTokens: turns.filter(hasTokens).length,
   knownCost: turns.filter(t => t.cost != null && t.accounting === 2).length,
   turns: turns.length,
   tokens: turns.reduce((s, t) => s + tokensOf(t), 0),
@@ -84,6 +85,66 @@ const savedOf = (d) => {
   const hr = (d?.headroom?.daily || []).reduce((s, x) => s + (x.tokens_saved || 0), 0);
   return { rtk, hr };
 };
+const PLAN_KEY = "ac_subscription_monthly_usd_v1";
+let monthlyFees = {};
+try { monthlyFees = JSON.parse(localStorage.getItem(PLAN_KEY) || "{}"); } catch {}
+if (!monthlyFees || typeof monthlyFees !== "object" || Array.isArray(monthlyFees)) monthlyFees = {};
+// Include every selected UTC calendar day; each month contributes its own day fraction.
+function allocatedFee(monthly, from, to) {
+  let total = 0;
+  for (let day = startOfDay(from); day <= startOfDay(to); day += DAY) {
+    const d = new Date(day);
+    total += monthly / new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();
+  }
+  return total;
+}
+const feeKnown = (p) => Number.isFinite(monthlyFees[p]) && monthlyFees[p] >= 0;
+function subscriptionPanel(cur) {
+  const p = panel("API estimate vs your subscriptions", "Compare public API list prices with the fees you enter for this period.");
+  const result = el("div", "comparison-result");
+  const draw = () => {
+    const providers = ["claude", "codex"];
+    const active = providers.filter(provider => cur.turns.some(t => t.provider === provider));
+    const missing = active.filter(provider => !feeKnown(provider));
+    const configured = providers.filter(feeKnown);
+    const comparable = cur.turns.filter(t => configured.includes(t.provider));
+    const measured = comparable.filter(t => t.accounting === 2 && t.cost != null);
+    const api = measured.reduce((sum, t) => sum + t.cost, 0);
+    const fees = configured.reduce((sum, provider) => sum + allocatedFee(monthlyFees[provider], range.from, range.to), 0);
+    const complete = !missing.length && comparable.length > 0 && measured.length === comparable.length;
+    const values = el("div", "comparison-values");
+    values.append(kpi("Estimated API cost", measured.length ? usd(api) : "—", `${measured.length}/${comparable.length} matching turns priced · ${configured.map(p => provMeta(p)[0]).join(" + ") || "no fees configured"}`),
+      kpi("Your allocated subscription cost", configured.length ? usd(fees) : "Not configured", "All configured plans, including days without activity; prorated by UTC calendar day"),
+      kpi("API estimate minus subscriptions", complete ? `${api < fees ? "−" : ""}${usd(Math.abs(api - fees))}` : "—", complete ? (api >= fees ? "API estimate is higher" : "Subscription allocation is higher") : "Requires fees and full API cost coverage"));
+    const note = missing.length ? `Enter your monthly ${missing.map(p => p === "codex" ? "Codex / ChatGPT" : "Claude").join(" and ")} fee to compare.` : "Enter the full monthly fee you pay, including any taxes you want counted. Use 0 for no paid plan.";
+    result.replaceChildren(values, el("p", "note", note), el("p", "note", "This compares recorded console activity with allocated plan fees, not a bill or a claim of savings. Pi / pay-as-you-go activity is excluded. Fees apply across this selected range; adjust them if your plan changed."));
+  };
+  draw();
+  const settings = el("details", "subscription-settings");
+  settings.append(el("summary", "", "Set your monthly subscription fees"));
+  const form = el("form", "subscription-form");
+  for (const [provider, name] of [["claude", "Claude monthly fee (USD)"], ["codex", "Codex / ChatGPT monthly fee (USD)"]]) {
+    const label = el("label", "", name), input = el("input");
+    input.type = "number"; input.min = "0"; input.max = "100000"; input.step = "0.01"; input.inputMode = "decimal";
+    input.name = provider; input.value = feeKnown(provider) ? String(monthlyFees[provider]) : ""; input.placeholder = "Not configured";
+    label.append(input); form.append(label);
+  }
+  const save = el("button", "btn primary", "Save fees"); save.type = "submit";
+  const status = el("p", "note", "Stored only in this browser. Leave a fee blank to clear it."); status.setAttribute("role", "status");
+  form.append(save);
+  form.onsubmit = e => {
+    e.preventDefault();
+    if (!form.reportValidity()) return;
+    const next = {};
+    for (const input of form.querySelectorAll("input")) if (input.value.trim()) next[input.name] = Number(input.value);
+    monthlyFees = next;
+    try { localStorage.setItem(PLAN_KEY, JSON.stringify(next)); status.textContent = "Saved in this browser."; }
+    catch { status.textContent = "Applied for this page; this browser could not save your fees."; }
+    draw();
+  };
+  settings.append(form, status); p.append(result, settings);
+  return p;
+}
 function delta(now, before) {
   if (before == null || !isFinite(before)) return "";
   if (before === 0) return now > 0 ? "nothing earlier to compare" : "no change";
@@ -220,8 +281,8 @@ function render(cur, prev) {
   const kpis = el("div", "kpis");
   kpis.append(
     kpi("Turns", fmt(cs.turns), ps ? delta(cs.turns, ps.turns) : "", false),
-    kpi("Known tokens processed", cs.knownTokens ? fmt(cs.tokens) : "Unknown", `${cs.knownTokens}/${cs.turns} turns measured · ${fmt(cs.cache)} cache reads included`, false),
-    kpi("API-equivalent cost", cs.knownCost ? usd(cs.cost) : "Unknown", `${cs.knownCost}/${cs.turns} turns measured; actual subscription billing unavailable`, false),
+    kpi("Tokens processed", cs.knownTokens ? fmt(cs.tokens) : "—", `${cs.knownTokens}/${cs.turns} turns with token counts · ${fmt(cs.cache)} verified cache reads included`, false),
+    kpi("Estimated API cost", cs.knownCost ? usd(cs.cost) : "—", `${cs.knownCost}/${cs.turns} turns priced${cs.knownCost < cs.turns ? " · partial coverage" : ""} · public list prices`, false),
     kpi("RTK output reduction", fmt(sv.rtk), "Command output; all local CLI activity", true),
     kpi("Headroom input reduction", fmt(sv.hr), "Claude proxy activity; separate scope", true),
   );
@@ -281,7 +342,7 @@ function render(cur, prev) {
   if (measuredModels.size) {
     const list = el("dl");
     for (const [name, row] of [...measuredModels].sort((a, b) => b[1].cost - a[1].cost)) list.append(el("dt", "", name), el("dd", "", row.known ? usd(row.cost) : "Cost unknown"));
-    modelPanel.append(list, el("p", "note", "Reported API-equivalent costs by actual model. Claude does not separately identify advisor and subagent cost."));
+    modelPanel.append(list, el("p", "note", "Estimated API costs by actual model. Claude does not separately identify advisor and subagent cost."));
   }
   const toolPanel = panel("Tools", "What the agents reached for");
   toolPanel.append(hbars(top(byTool, 10).map(([name, value]) => ({ name, value, color: css("--c-used") })), (v) => `${fmt(v)} calls`));
@@ -313,7 +374,7 @@ function render(cur, prev) {
   tbl.append(el("summary", "", "Show data as a table"));
   const t = el("table");
   const thead = el("thead"); const hr0 = el("tr");
-  for (const c of ["Day (UTC)", "Turns", "Known tokens", "Known equivalent cost", "RTK saved", "Headroom saved"]) hr0.append(el("th", "", c));
+  for (const c of ["Day (UTC)", "Turns", "Known tokens", "Estimated API cost", "RTK saved", "Headroom saved"]) hr0.append(el("th", "", c));
   thead.append(hr0); t.append(thead);
   const tb = el("tbody");
   const perDay = days.map(() => []);
@@ -325,7 +386,23 @@ function render(cur, prev) {
   const g1 = el("div", "grid2"); g1.append(usagePanel, savePanel);
   const g2 = el("div", "grid2"); g2.append(modelPanel, toolPanel);
   const g3 = el("div", "grid2"); g3.append(threadPanel, heatPanel);
-  root.replaceChildren(kpis, g1, srcs, g2, g3, tbl);
+  const priceNote = el("p", "muted", "Estimated API cost uses public per-model input, cached-input, cache-write and output rates where usage is available. Unpriced turns are excluded. This is not your subscription bill.");
+  if (cur.turns.some(t => hasTokens(t) && t.accounting !== 2)) priceNote.append(" Historical token counts are shown as recorded; their cache categories and old costs are unverified.");
+  const pricingDetails = el("details", "pricing-details");
+  pricingDetails.append(el("summary", "", `Pricing basis${cur.pricing?.verifiedAt ? ` · verified ${cur.pricing.verifiedAt}` : ""}`));
+  const sourceList = el("p", "note");
+  for (const source of cur.pricing?.sources || []) {
+    // Accept public HTTPS references only; never turn arbitrary response text into markup.
+    try {
+      const url = new URL(source.url);
+      if (url.protocol !== "https:") continue;
+      if (sourceList.childNodes.length) sourceList.append(" · ");
+      const link = el("a", "", source.name); link.href = url.href; link.target = "_blank"; link.rel = "noopener noreferrer"; sourceList.append(link);
+    } catch {}
+  }
+  if (sourceList.childNodes.length) pricingDetails.append(sourceList);
+  for (const assumption of cur.pricing?.assumptions || []) pricingDetails.append(el("p", "note", assumption));
+  root.replaceChildren(kpis, priceNote, ...(cur.pricing ? [pricingDetails] : []), subscriptionPanel(cur), g1, srcs, g2, g3, tbl);
   if (cur.turns.some((x) => x.b)) root.append(el("p", "muted", "Historical rows were reconstructed from local logs. Missing usage and costs remain unknown; API-equivalent costs do not establish actual billing."));
 }
 
