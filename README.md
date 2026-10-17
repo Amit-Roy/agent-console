@@ -18,6 +18,7 @@ Anthropic's terms restrict third-party products that offer claude.ai login, so d
 - Type `/` in the composer for a command/skill menu (list comes from `claude`'s own `commands_changed` event, cached in `~/.config/agent-console/commands.json`). Skills run headless when a message starts with `/name`.
 - Several agents behind one UI: Claude Code, Pi (any model Pi knows: OpenRouter, OpenAI, Google, local), Codex. Pick one per thread; see Providers.
 - Threads (each its own agent session, resumable), streaming output, markdown, tool cards with diffs
+- Local file links and chat image attachments open a read-only viewer. Text supports syntax highlighting (including extensionless scripts with a shebang), line references such as `server/threads.ts:360`, wrapping and copy. Markdown opens as a rendered document with a Source toggle; a line reference opens its source at that line. A folder tree on the left loads one directory at a time; on mobile, use Files to show it. Viewer code and styles load after the initial conversation has painted, during idle time, or on the first click. Tree requests start only when the viewer opens.
 - Per-thread model and permission mode (plan / accept edits / bypass). Bypass is opt-in and confirmed.
 - Codex model picker reads the installed CLI's account-specific `models_cache.json`; effort choices follow each model's supported levels.
   Choose a model and effort in the new-thread dialog or composer. Changes are blocked during a running turn; switching model resets effort to inherited.
@@ -118,6 +119,7 @@ blocked by Coder's login wall.
 - Password login (fallback) → signed HttpOnly/Secure/SameSite=Strict cookie; failed-login limiter.
 - WebSocket requires the cookie **and** a matching Origin header (blocks cross-site hijacking).
 - Thread folders are restricted to your home directory.
+- The file viewer reads text files up to 1 MiB and verified raster images within the current thread folder, including realpath checks for symlinks. Credentials, environment files, unsupported binary files and special files are refused; source HTML is displayed as text. Uploaded images use their existing authenticated attachment URLs.
 - `ANTHROPIC_API_KEY` is stripped from the child environment so the subscription login is never swapped for metered billing.
 - Bypass mode means a prompt can run any command as this user. Treat the password like a shell login.
 
@@ -167,6 +169,9 @@ Kill it by pid. `pkill -f "node server/index.ts"` also kills your real server.
 `server/providers/` one adapter per agent (`claude.ts`, `pi.ts`, `codex.ts`, `mock.ts`) behind `index.ts`; `server/threads.ts` is harness-agnostic.
 
 Isolated checks: `node test/latency.ts`, `node test/history-wire.ts`, `npm run test:transport`, `npm run test:cache`, `npm run test:queue-ui` (mock agents; no model quota).
+`npm run test:files` checks the file API, tree, viewer and local performance measurements in an isolated mock instance, including lazy loading, image attachments and mobile layout.
+
+The viewer's Performance control shows recent timings for module loading, file/image display and directory loading. Numeric stage timings are batched over the existing WebSocket into local latency storage (`GET /api/latency`, kinds `viewer_module`, `viewer_open`, `viewer_tree`). Measurements include network wait, server work, decode and drawing; file paths and contents are not recorded. There is no metrics polling or third-party reporting.
 
 ## Loading, steering, queue, context ring, subagents, compaction, dashboard
 

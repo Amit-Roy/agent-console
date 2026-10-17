@@ -1,0 +1,62 @@
+/* Kept outside the initial stylesheet: requested only by the lazy file viewer module. */
+#file-viewer{
+  width:min(72rem,calc(100vw - var(--sp-8)));height:min(52rem,calc(var(--viewport-height,100dvh) - var(--sp-8)));
+  max-width:none;max-height:none;padding:0;overflow:hidden;border-radius:var(--r-lg);background:var(--s1);
+  --file-line-height:1.5rem;
+}
+#file-viewer[open]{display:flex;flex-direction:column}
+.file-viewer-head{display:flex;align-items:flex-start;gap:var(--sp-4);padding:var(--sp-5) var(--sp-5) var(--sp-3);flex-shrink:0}
+.file-viewer-heading{min-width:0;flex:1}
+#file-viewer-title{font:var(--fw-semi) var(--f-lg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin:0}
+#file-viewer-path{font:var(--fw-reg) var(--fm-xs);color:var(--t2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:var(--sp-1)}
+.file-viewer-meta{display:flex;flex-wrap:wrap;align-items:center;gap:var(--sp-2);font:var(--fw-reg) var(--f-xs);color:var(--t3);margin-top:var(--sp-2)}
+.file-viewer-readonly{border:1px solid var(--edge);border-radius:var(--r-xs);padding:1px var(--sp-1)}
+.file-viewer-toolbar{display:flex;align-items:center;flex-wrap:wrap;gap:var(--sp-2);padding:var(--sp-2) var(--sp-4);border-bottom:1px solid var(--edge);flex-shrink:0}
+.file-viewer-position{margin-left:auto;font:var(--fw-reg) var(--f-xs);color:var(--t2)}
+.file-viewer-code{position:relative;min-height:0;flex:1;overflow:auto;overscroll-behavior:contain;tab-size:4;background:var(--code-bg);font:var(--fw-reg) .8125rem/var(--file-line-height) var(--font-mono);font-variant-ligatures:none;padding:var(--sp-2) 0}
+.file-viewer-code:focus-visible{outline-offset:-2px}
+.file-line{display:flex;min-width:100%;width:max-content;min-height:var(--file-line-height)}
+.file-line.is-selected{background:var(--accent-tint);box-shadow:inset 3px 0 var(--accent)}
+.file-line-number{position:sticky;left:0;flex:none;width:4.5rem;padding:0 var(--sp-3) 0 var(--sp-2);color:var(--t3);text-align:right;user-select:none;background:var(--code-bg);border-right:1px solid var(--edge)}
+.is-selected>.file-line-number{color:var(--accent);background:var(--sel)}
+.file-line-text{display:block;white-space:pre;padding:0 var(--sp-4);min-width:0;background:none!important}
+.is-wrapped .file-line{width:100%}
+.is-wrapped .file-line-text{white-space:pre-wrap;overflow-wrap:anywhere}
+.file-viewer-error{padding:var(--sp-5)}
+.file-viewer-code.is-plain{display:flex;align-items:flex-start;padding:0}
+.file-plain-gutter,.file-plain-text{font:inherit;line-height:var(--file-line-height);margin:0;padding:0 var(--sp-4);white-space:pre}
+.file-plain-gutter{position:sticky;left:0;z-index:1;flex-shrink:0;min-width:4.5rem;text-align:right;user-select:none;color:var(--t3);background:var(--code-bg);border-right:1px solid var(--edge)}
+.file-plain-text{flex:1;isolation:isolate}
+.file-plain-text code{font:inherit;background:none;padding:0;color:inherit}
+.file-plain-selection{position:absolute;left:0;width:100%;background:var(--accent-tint);box-shadow:inset 3px 0 var(--accent);pointer-events:none}
+@media(max-width:640px){
+  #file-viewer{width:100%;height:calc(var(--viewport-height,100dvh) - var(--sp-3));margin:auto auto 0;border-radius:var(--r-lg) var(--r-lg) 0 0;padding-bottom:env(safe-area-inset-bottom)}
+  .file-viewer-head{padding:var(--sp-4)}
+  .file-line-number{width:3.5rem}
+}
+
+.file-viewer-workspace{display:flex;flex:1;min-height:0;min-width:0;overflow:hidden}
+.file-viewer-main{display:flex;flex-direction:column;flex:1;min-width:0;min-height:0}
+.file-viewer-tree{width:15rem;max-width:38%;flex:none;overflow:auto;border-right:1px solid var(--edge);background:var(--s1);overscroll-behavior:contain;padding-bottom:var(--sp-3)}
+.file-tree-title{position:sticky;top:0;z-index:1;background:var(--s1);padding:var(--sp-3);font:var(--fw-semi) var(--f-xs);color:var(--t2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.file-tree-entry{display:flex;align-items:center;gap:var(--sp-2);width:100%;min-height:2rem;padding:5px var(--sp-3);border:0;border-radius:0;background:none;color:var(--t2);text-align:left;font:var(--fw-reg) var(--f-xs);cursor:pointer}
+.file-tree-entry:hover{background:var(--hover)}
+.file-tree-entry.is-selected{background:var(--accent-tint);color:var(--accent)}
+.file-tree-symbol{flex:none;width:.65rem;color:var(--t3)}
+.file-tree-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.file-tree-note{display:block;padding:var(--sp-3);font:var(--fw-reg) var(--f-xs);color:var(--t3)}
+.file-tree-more{margin:var(--sp-2) var(--sp-3);padding:var(--sp-2);background:none;border:1px solid var(--edge);border-radius:var(--r-xs);color:var(--t2);font:var(--fw-reg) var(--f-xs);cursor:pointer}
+.file-viewer-code.is-image{display:flex;align-items:center;justify-content:center;padding:var(--sp-4)}
+.file-viewer-image{display:block;max-width:100%;max-height:100%;object-fit:contain}
+.file-viewer-performance{flex:none;max-height:8rem;overflow:auto;border-bottom:1px solid var(--edge);padding:var(--sp-2) var(--sp-4);font:var(--fw-reg) var(--f-xs);line-height:1.6;color:var(--t2)}
+.file-viewer-code.is-markdown{padding:var(--sp-6);font:var(--fw-text) var(--f-text)}
+.file-markdown{max-width:var(--col);margin-inline:auto;overflow-wrap:anywhere}
+#file-viewer [hidden]{display:none!important}
+@media(max-width:640px){
+  .file-viewer-toolbar{gap:var(--sp-1);padding-inline:var(--sp-2)}
+  .file-viewer-toolbar .btn{min-height:44px}
+  .file-viewer-workspace{position:relative}
+  .file-viewer-tree{width:min(17rem,80%);max-width:none;position:absolute;inset:0 auto 0 0;z-index:3;box-shadow:8px 0 24px #0002}
+  .file-tree-entry{min-height:44px}
+  .file-viewer-position{width:100%;margin:0 var(--sp-2)}
+}

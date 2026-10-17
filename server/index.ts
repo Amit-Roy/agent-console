@@ -16,6 +16,7 @@ import { Threads } from "./threads.ts";
 import { dashboard } from "./analytics.ts";
 import { headroom } from "./headroom.ts";
 import { LatencyStore } from "./latency.ts";
+import { fileTree, fileViewer } from "./files.ts";
 import { DATA_DIR } from "./auth.ts";
 import { isId, MAX_FILE_BYTES, removeUpload, SAFE_NAME, saveUpload, sniffImageFile, UPLOAD_DIR } from "./uploads.ts";
 
@@ -51,7 +52,7 @@ app.use((_req, res, next) => {
   res.setHeader("X-Frame-Options", "DENY");
   res.setHeader(
     "Content-Security-Policy",
-    "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; connect-src 'self' wss: ws:; frame-ancestors 'none'",
+    "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; connect-src 'self' wss: ws:; frame-ancestors 'none'",
   );
   next();
 });
@@ -126,6 +127,9 @@ app.get("/api/latency", (_req, res) => {
   try { res.json(latency ? { available: true, ...latency.summary() } : { available: false }); }
   catch { res.status(503).json({ available: false }); }
 });
+app.get("/api/file", fileViewer(id => threads.get(id)));
+app.get("/api/file-image", fileViewer(id => threads.get(id), true));
+app.get("/api/files", fileTree(id => threads.get(id)));
 app.get("/api/dashboard", async (req, res) => {
   res.setHeader("Cache-Control", "no-store");
   const to = Number(req.query.to) || Date.now();
