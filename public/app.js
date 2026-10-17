@@ -1,4 +1,4 @@
-import { $, el, icon, iconButton, wireCopy, renderMarkdown, highlightInto, langFromPath, parseFileRef } from "/render.js";
+import { $, el, icon, iconButton, wireCopy, renderMarkdown, highlightInto, langFromPath, parseFileRef, setFileScope } from "/render.js";
 import { createMenu } from "/menu.js";
 import { toolName, toolSummary } from "/tool-display.js";
 import { createLatencyReporter } from "/telemetry.js";
@@ -21,6 +21,7 @@ const state = {
   queues: {}, features: {}, // thread id -> messages waiting for the running turn to end
   loading: null, loadTimer: 0, renderToken: 0, rendering: false, pendingLive: [], into: null, start: 0,
 };
+setFileScope(() => state.current); // local image/video refs in markdown resolve against this thread's folder
 const views = new Map(); // five most recently visited threads; stale snapshots remain visible during revalidation
 let ws, retry = 0;
 
