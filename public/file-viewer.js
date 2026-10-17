@@ -83,6 +83,8 @@ export function createFileViewer(apiFetch, report = () => {}) {
   let treeGeneration = 0, treeThread, treeRoot, treeEntries = 0, treeShown = !matchMedia("(max-width:640px)").matches;
   const directories = new Map(), treeControllers = new Set();
   const metrics = window.agentConsoleViewerMetrics ||= [];
+  const metricThread = request => request.scope === "repos" ? "viewer:repos" : request.thread;
+  const scopeParams = request => request.scope === "repos" ? { scope: "repos" } : { thread: request.thread };
   function record(sample) {
     const safe = { kind: sample.kind, thread: sample.thread };
     for (const [key, value] of Object.entries(sample)) if (typeof value === "number" && Number.isFinite(value)) safe[key] = Math.max(0, Math.round(value * 10) / 10);
@@ -108,7 +110,7 @@ export function createFileViewer(apiFetch, report = () => {}) {
     body.scrollTop = 0; body.scrollLeft = 0;
     renderFile(currentTextFile.file, currentTextFile.ref, token);
     await paint();
-    if (token === generation && dialog.open) record({kind: "viewer_open", thread: current.thread, total_ms: performance.now() - at, render_ms: performance.now() - at, bytes: currentTextFile.file.bytes || 0, events: 1});
+    if (token === generation && dialog.open) record({kind: "viewer_open", thread: metricThread(current), total_ms: performance.now() - at, render_ms: performance.now() - at, bytes: currentTextFile.file.bytes || 0, events: 1});
   };
   function openMarkdownLink(event) {
     if (event.type === "auxclick" && event.button !== 1) return;
@@ -118,7 +120,7 @@ export function createFileViewer(apiFetch, report = () => {}) {
     if (!ref) return;
     event.preventDefault();
     if (!ref.path.startsWith("/") && !ref.path.startsWith("~/")) ref.path = decodeURIComponent(new URL(ref.path, new URL(currentTextFile.file.path, location.origin)).pathname);
-    current = { thread: current.thread, ref }; load(current);
+    current = { ...current, ref, openedAt: undefined, module_ms: 0 }; load(current);
   }
   body.addEventListener("click", openMarkdownLink);
   body.addEventListener("auxclick", openMarkdownLink);
@@ -224,7 +226,7 @@ export function createFileViewer(apiFetch, report = () => {}) {
     if (!existing) { directories.set(directoryPath, group); parent.append(group); }
     const loading = el("span", "file-tree-note", "Loading…"); group.append(loading);
     try {
-      const params = new URLSearchParams({ thread: current.thread, path: directoryPath }); if (cursor) params.set("cursor", cursor);
+      const params = new URLSearchParams({ ...scopeParams(current), path: directoryPath }); if (cursor) params.set("cursor", cursor);
       const response = await apiFetch(`/api/files?${params}`, { signal: controller.signal, cache: "no-store" });
       const raw = await response.text(), receivedAt = performance.now(), result = JSON.parse(raw), decodedAt = performance.now();
       if (!response.ok) throw new Error(result.error || "Could not load files.");
@@ -248,7 +250,7 @@ export function createFileViewer(apiFetch, report = () => {}) {
             if (!children.hidden && !children.hasChildNodes()) directory(children, entry.path, "", depth + 1);
           };
           if (current.ref.path.startsWith(entry.path + "/")) button.click();
-        } else button.onclick = () => { current = { thread: current.thread, ref: { path: entry.path } }; load(current); if (matchMedia("(max-width:640px)").matches) { treeShown = false; showTree(); } };
+        } else button.onclick = () => { current = { ...current, ref: { path: entry.path }, openedAt: undefined, module_ms: 0 }; load(current); if (matchMedia("(max-width:640px)").matches) { treeShown = false; showTree(); } };
       }
       group.append(fragment); loading.remove();
       if (treeEntries >= 2400 || result.limit_reached) group.append(el("p", "file-tree-note", "File list limit reached. Close and reopen the viewer to browse another folder."));
@@ -258,7 +260,7 @@ export function createFileViewer(apiFetch, report = () => {}) {
       }
       markSelected();
       await paint();
-      if (token === treeGeneration) record({kind: "viewer_tree", thread: current.thread, total_ms: performance.now() - at, wait_ms: receivedAt - at, roundtrip_ms: receivedAt - at, server_ms: result.read_ms || 0, decode_ms: decodedAt - receivedAt, render_ms: performance.now() - decodedAt, bytes: result.bytes || 0, events: result.entries.length});
+      if (token === treeGeneration) record({kind: "viewer_tree", thread: metricThread(current), total_ms: performance.now() - at, wait_ms: receivedAt - at, roundtrip_ms: receivedAt - at, server_ms: result.read_ms || 0, decode_ms: decodedAt - receivedAt, render_ms: performance.now() - decodedAt, bytes: result.bytes || 0, events: result.entries.length});
     } catch (e) {
       loading.remove();
       if (e.name !== "AbortError" && token === treeGeneration) {
@@ -269,9 +271,9 @@ export function createFileViewer(apiFetch, report = () => {}) {
   }
   function ensureTree() {
     if (!treeShown || !dialog.open) return;
-    if (treeThread !== current.thread || !tree.hasChildNodes()) {
+    if (treeThread !== metricThread(current) || !tree.hasChildNodes()) {
       for (const request of treeControllers) request.abort(); treeControllers.clear();
-      treeGeneration++; treeThread = current.thread; treeRoot = null; treeEntries = 0; directories.clear(); tree.replaceChildren();
+      treeGeneration++; treeThread = metricThread(current); treeRoot = null; treeEntries = 0; directories.clear(); tree.replaceChildren();
       directory(tree, ".");
     } else markSelected();
   }
@@ -311,7 +313,7 @@ export function createFileViewer(apiFetch, report = () => {}) {
         receivedAt = imageStats.receivedAt || requestAt; decodedAt = imageStats.readyAt || performance.now();
         roundtrip_ms = imageStats.imageNetwork || 0; decode_ms = imageStats.imageDecode || 0;
       } else {
-        const params = new URLSearchParams({ thread: request.thread, path: request.ref.path });
+        const params = new URLSearchParams({ ...scopeParams(request), path: request.ref.path });
         const response = await apiFetch(`/api/file?${params}`, { signal: controller.signal, cache: "no-store" });
         const raw = await response.text(); receivedAt = performance.now(); file = JSON.parse(raw); decodedAt = performance.now();
         roundtrip_ms = receivedAt - requestAt; decode_ms = decodedAt - receivedAt;
@@ -333,13 +335,13 @@ export function createFileViewer(apiFetch, report = () => {}) {
       if (token !== generation || !dialog.open) return;
       await paint();
       if (token !== generation || !dialog.open) return;
-      record({ kind: "viewer_open", thread: request.thread, total_ms: performance.now() - at, module_ms: request.module_ms || 0, wait_ms: receivedAt - at, roundtrip_ms, server_ms: file?.read_ms || 0, decode_ms, render_ms: performance.now() - decodedAt, bytes: imageStats.bytes || file?.bytes || 0, events: 1 });
+      record({ kind: "viewer_open", thread: metricThread(request), total_ms: performance.now() - at, module_ms: request.module_ms || 0, wait_ms: receivedAt - at, roundtrip_ms, server_ms: file?.read_ms || 0, decode_ms, render_ms: performance.now() - decodedAt, bytes: imageStats.bytes || file?.bytes || 0, events: 1 });
       ensureTree();
     } catch (e) {
       if (token !== generation || e.name === "AbortError" || !dialog.open) return;
       status.textContent = e.message || "Could not open this file.";
       body.hidden = true; error.hidden = false;
-      record({ kind: "viewer_open", thread: request.thread, total_ms: performance.now() - at, events: 0 });
+      record({ kind: "viewer_open", thread: metricThread(request), total_ms: performance.now() - at, events: 0 });
       await paint(); if (token === generation && dialog.open) ensureTree();
     } finally {
       if (token === generation) dialog.setAttribute("aria-busy", "false");
@@ -347,6 +349,26 @@ export function createFileViewer(apiFetch, report = () => {}) {
   }
   return {
     record,
+    openWorkspace({ opener, openedAt, module_ms }) {
+      controller?.abort(); generation++;
+      for (const request of treeControllers) request.abort(); treeControllers.clear();
+      treeGeneration++; treeThread = null; treeRoot = null; treeEntries = 0;
+      tree.replaceChildren(); directories.clear(); treeTitle.textContent = "repos"; treeTitle.title = "~/repos";
+      if (imageObjectUrl) URL.revokeObjectURL(imageObjectUrl); imageObjectUrl = null;
+      current = { scope: "repos", ref: { path: "" } };
+      content = ""; currentTextFile = null; markdownSource = false;
+      title.textContent = "Files"; path.textContent = "~/repos"; path.title = "~/repos";
+      status.textContent = ""; position.textContent = ""; source.hidden = true;
+      copy.disabled = true; wrap.disabled = true; wrap.setAttribute("aria-pressed", "false"); dialog.classList.remove("is-wrapped");
+      error.hidden = true; body.hidden = false; body.classList.remove("is-plain", "is-image", "is-markdown");
+      body.replaceChildren(el("p", "file-tree-note", "Select a file to preview.")); body.scrollTop = 0; body.scrollLeft = 0;
+      performanceDetails.hidden = true; timings.setAttribute("aria-expanded", "false");
+      dialog.setAttribute("aria-busy", "false");
+      restoreFocus = opener || document.activeElement;
+      if (!dialog.open) dialog.showModal();
+      treeShown = true; showTree(); ensureTree();
+      record({ kind: "viewer_open", thread: "viewer:repos", total_ms: performance.now() - openedAt, module_ms, events: 0 });
+    },
     open({ thread, ref, opener, openedAt, module_ms }) {
       const wasOpen = dialog.open;
       current = { thread, ref, openedAt, module_ms };

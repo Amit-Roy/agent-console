@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import net from "node:net";
 import { spawn, execFileSync } from "node:child_process";
 import { MAX_VIEW_BYTES, MAX_PREVIEW_IMAGE_BYTES, TREE_PAGE_SIZE } from "../server/files.ts";
 
@@ -14,10 +13,11 @@ const id = "11111111-1111-4111-8111-111111111111";
 const alias = path.join(temp, "project-alias"), aliasId = "22222222-2222-4222-8222-222222222222";
 fs.symlinkSync(cwd, alias);
 fs.writeFileSync(path.join(data, "threads.json"), JSON.stringify([{ id, cwd }, { id: aliasId, cwd: alias }].map(thread => ({ ...thread, provider: "mock", model: "echo", mode: "plan", title: "File fixture", status: "idle", createdAt: 1, updatedAt: 1, cost: 0 }))));
-const listener = net.createServer();
-await new Promise<void>(resolve => listener.listen(0, "127.0.0.1", resolve));
-const port = (listener.address() as net.AddressInfo).port;
-await new Promise<void>(resolve => listener.close(() => resolve()));
+const port = process.env.FILE_API_TEST_PORT || "7073";
+assert.match(port, /^707[1-5]$/, "use an isolated scratch port, 7071–7075");
+const repos = path.join(os.homedir(), "repos");
+const workspace = fs.mkdtempSync(path.join(repos, "ac-files-scope-"));
+fs.writeFileSync(path.join(workspace, "workspace.ts"), "export const workspace = true;");
 const base = `http://127.0.0.1:${port}`;
 const password = "isolated-file-preview-fixture";
 const server = spawn(process.execPath, ["server/index.ts"], {
@@ -40,6 +40,22 @@ try {
   assert.equal((await fetch(`${base}/api/file-image?thread=${id}&path=hello.ts`)).status, 401, "image requires authentication");
   const login = await fetch(`${base}/login`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ password }) });
   assert.equal(login.status, 200); cookie = login.headers.get("set-cookie")!.split(";")[0];
+  const scoped = (endpoint: string, params: Record<string, string> = {}, authenticated = true) => fetch(`${base}/api/${endpoint}?${new URLSearchParams({ scope: "repos", ...params })}`, { headers: authenticated ? { cookie } : {}, signal: AbortSignal.timeout(3000) });
+  for (const endpoint of ["files", "file", "file-image"]) assert.equal((await scoped(endpoint, {}, false)).status, 401, "workspace scope requires authentication");
+  const rootListing = await (await scoped("files")).json();
+  assert.equal(rootListing.root, repos); assert.equal(rootListing.path, repos);
+  assert.equal((await scoped("files", { path: workspace })).status, 200);
+  assert.equal((await scoped("file", { path: path.join(workspace, "workspace.ts") })).status, 200, "workspace needs no thread");
+  assert.equal((await file(path.join(workspace, "workspace.ts"))).status, 403, "thread scope stays narrow");
+  assert.equal((await scoped("file", { path: path.join(temp, "outside.txt") })).status, 403);
+  fs.writeFileSync(path.join(workspace, ".env"), "private workspace fixture");
+  fs.symlinkSync(cwd, path.join(workspace, "outside"));
+  assert.equal((await scoped("file", { path: path.join(workspace, ".env") })).status, 403);
+  assert.equal((await scoped("file", { path: path.join(workspace, "outside", "hello.ts") })).status, 403);
+  for (const endpoint of ["files", "file", "file-image"]) {
+    assert.equal((await scoped(endpoint, { scope: "home", path: workspace })).status, 400);
+    assert.equal((await scoped(endpoint, { thread: id, path: workspace })).status, 400, "reject ambiguous scope");
+  }
   const response = await file("hello.ts");
   assert.equal(response.status, 200); assert.equal(response.headers.get("cache-control"), "no-store");
   assert.match(response.headers.get("content-type")!, /application\/json/);
@@ -105,6 +121,11 @@ try {
     assert.deepEqual(Buffer.from(await raw.arrayBuffer()), bytes);
     assert.equal((await fetch(base + meta.url)).status, 401);
   }
+  fs.writeFileSync(path.join(workspace, "workspace.png"), png);
+  const workspaceImage = await (await scoped("file", { path: path.join(workspace, "workspace.png") })).json();
+  assert.equal(new URL(workspaceImage.url, base).searchParams.get("scope"), "repos");
+  assert.equal(new URL(workspaceImage.url, base).searchParams.has("thread"), false);
+  assert.deepEqual(Buffer.from(await (await fetch(base + workspaceImage.url, { headers: { cookie } })).arrayBuffer()), png);
   put("fake.png", "<svg onload='alert(1)'></svg>");
   const rawFile = (requested: string) => fetch(`${base}/api/file-image?${new URLSearchParams({ thread: id, path: requested })}`, { headers: { cookie } });
   assert.equal((await rawFile("fake.png")).status, 415);
@@ -149,5 +170,6 @@ try {
   console.log("PASS file API: authentication, absolute/relative UTF-8 text and HTML-as-JSON, scope/symlinks, secrets/private keys, binary/special files, text/image byte boundaries, authenticated image sniffing/headers, scoped nonrecursive paginated tree and timing metrics");
 } finally {
   if (server.exitCode === null) { server.kill("SIGTERM"); await new Promise<void>(resolve => server.once("exit", () => resolve())); }
+  fs.rmSync(workspace, { recursive: true, force: true });
   fs.rmSync(temp, { recursive: true, force: true });
 }
