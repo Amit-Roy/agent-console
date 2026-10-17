@@ -95,6 +95,13 @@ Anthropic's terms restrict third-party products that offer claude.ai login, so d
 - Markdown with highlight.js syntax colours (bash, js/ts, json, python, css, html/xml, markdown, diff, yaml, sql, go, rust), code blocks with a
   language header, Copy and line-wrap toggle; Copy under every message; line-level +/- tints for Edit diffs. All output goes through DOMPurify.
 
+## Context and usage efficiency
+- Shared memory injects only the brain index; topic pages load when relevant. Memory upkeep never creates an automatic model follow-up.
+- Thread actions include Economy settings (medium effort where supported, advisor off, selected model kept) and Fork with recent context (a local handoff capped at 6,000 characters; full transcript retained).
+- Context details suggest compaction from 70% full. Compaction remains explicit because it also costs tokens and can invalidate prompt caches. Explicit advisor model selections remain available; the inherited advisor default is off.
+- Dashboard usage uses UTC days, includes cache reads consistently, shows measured coverage and per-model costs, and labels missing values unknown. API-equivalent estimates are separate from actual subscription billing. RTK and Headroom savings have different scopes and are not added into a billing-savings rate.
+- Startup repairs legacy accounting from retained logs before accepting turns, backing up the original `turns.jsonl`. Missing or ambiguous results remain unknown. `node scripts/repair-accounting.ts DATA_DIR` previews the repair without changing files.
+
 ## Type and assets (all self-hosted, no CDN, no asset requests leave 127.0.0.1)
 - **Newsreader** variable (conversation text, 18px/1.6), **Inter** variable (UI chrome) and **JetBrains Mono** variable (code, ligatures off): SIL Open Font License 1.1.
   Latin + latin-ext woff2 in `public/fonts/` with metric-matched fallbacks (no layout jump). Licences: `public/fonts/LICENSE-*.txt`.

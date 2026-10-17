@@ -1,6 +1,6 @@
 # agent-console
 
-Vanilla-JS PWA + Node 24 server (no build step) driving Claude Code / Pi / Codex. Read README.md and brain wiki `agent-console` first.
+Vanilla-JS PWA + Node 24 server (no build step) driving Claude Code / Pi / Codex. Read relevant README.md sections as needed. Brain recall starts with `brain/wiki/index.md`; open only relevant referenced pages on demand.
 
 ## Working rules
 - Follow the workspace rules in ../CLAUDE.md (you are the orchestrator). **Use subagents for noisy work**: log/transcript digging, test-suite runs with long output, screenshot review loops, broad research, multi-file investigations. Give each one a precise question and ask for a short conclusion (files, root cause, evidence), not raw output. Keep the main context for decisions and edits.

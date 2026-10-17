@@ -252,7 +252,7 @@ wss.on("connection", (ws) => {
         case "unqueue":
           return threads.unqueue(m.thread, String(m.id));
         case "fork":
-          return reply({ t: "created", thread: threads.fork(m.thread, typeof m.provider === "string" ? m.provider : undefined) });
+          return reply({ t: "created", thread: threads.fork(m.thread, typeof m.provider === "string" ? m.provider : undefined, m.context === "recent") });
         case "abort":
           return threads.abort(m.thread);
         case "update": {
@@ -276,7 +276,7 @@ wss.on("connection", (ws) => {
 });
 
 void refreshPiModels();
-headroom.start();
+await headroom.start();
 
 server.listen(PORT, HOST, () => {
   if (PID_FILE) fs.writeFileSync(PID_FILE, String(process.pid)); // only the process that holds the port may claim it

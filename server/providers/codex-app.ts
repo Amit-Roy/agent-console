@@ -143,7 +143,7 @@ export function startCodexApp(t: ThreadSpec, ctx: AgentCtx, translate: (row: any
       total = v.tokenUsage?.total;
       if (operation === "turn" && active && (!v.turnId || v.turnId === active) && total && u) {
         baseline ||= Object.fromEntries(Object.keys(total).map(k => [k, Math.max(0, total[k] - (u[k] || 0))]));
-        ctx.event({ type: "token_usage", input_tokens: Math.max(0, total.inputTokens - baseline.inputTokens), cached_input_tokens: Math.max(0, total.cachedInputTokens - baseline.cachedInputTokens), output_tokens: Math.max(0, total.outputTokens - baseline.outputTokens) });
+        ctx.event({ type: "token_usage", input_tokens: Math.max(0, total.inputTokens - baseline.inputTokens), cached_input_tokens: Math.max(0, total.cachedInputTokens - baseline.cachedInputTokens), output_tokens: Math.max(0, total.outputTokens - baseline.outputTokens), ...(typeof total.reasoningOutputTokens === "number" ? { reasoning_output_tokens: Math.max(0, total.reasoningOutputTokens - (baseline.reasoningOutputTokens || 0)) } : {}) });
       }
     } else if (r.method === "account/rateLimits/updated") {
       const norm = (w: any) => w && ({ used_percent: w.usedPercent, window_minutes: w.windowDurationMins, resets_at: w.resetsAt });

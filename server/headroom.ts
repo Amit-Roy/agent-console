@@ -15,6 +15,7 @@ let owned = false;
 let failures = 0;
 let timer: NodeJS.Timeout | undefined;
 let lastError: string | undefined;
+let starting: Promise<void> | undefined;
 
 async function live(): Promise<boolean> {
   try {
@@ -41,11 +42,22 @@ async function check() {
 }
 
 export const headroom = {
-  start() {
-    if (!enabled() || timer) return;
-    void check();
-    timer = setInterval(() => void check(), 5000);
-    timer.unref();
+  async start() {
+    if (!enabled()) return;
+    if (starting) return starting;
+    if (timer) return;
+    // Resolve routing before accepting sessions: a Claude process keeps its startup environment for its whole lifetime.
+    starting = (async () => {
+      await check();
+      const deadline = Date.now() + 10_000;
+      while (!healthy && child && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        healthy = await live();
+      }
+      timer = setInterval(() => void check(), 5000);
+      timer.unref();
+    })();
+    try { await starting; } finally { starting = undefined; }
   },
   stop() {
     if (timer) clearInterval(timer);
