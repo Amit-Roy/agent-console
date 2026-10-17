@@ -765,11 +765,12 @@ function earlierButton() {
     if (token !== state.renderToken || !b.isConnected) return;
     // A refresh or page draw in flight would swallow the click, so wait for it instead of ignoring it.
     if (state.revalidating && !state.deferredRefresh || state.rendering || state.loadingEarlier) return void setTimeout(load, 100, token);
-    state.loadingEarlier = true;
     state.pageAt = performance.now();
     state.measurement = { thread: state.current, at: state.pageAt, hidden: document.hidden };
     state.requestSentAt = performance.now();
-    send({ t: "open", thread: state.current, before: state.start, request: state.request, small: SMALL_PAGES });
+    // The socket may be down (phone woke up, reconnecting): a dropped request would leave the button dead, so retry until it is sent.
+    if (!send({ t: "open", thread: state.current, before: state.start, request: state.request, small: SMALL_PAGES })) return void setTimeout(load, 300, token);
+    state.loadingEarlier = true;
   };
   b.onclick = () => {
     if (b.disabled) return;
