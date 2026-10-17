@@ -15,6 +15,7 @@
     "test:dashboard": "node test/dashboard-ui.ts",
     "test:startup": "node test/startup-ui.ts",
     "test:signin": "node test/signin-ui.ts",
+    "test:archive": "node test/archive-ui.ts",
     "vendor": "node scripts/vendor.mjs"
   },
   "keywords": [],

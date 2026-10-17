@@ -260,6 +260,8 @@ wss.on("connection", (ws) => {
             title: typeof m.title === "string" ? m.title : undefined,
           });
         }
+        case "archive":
+          return threads.archive(m.thread, m.archived !== false);
         case "delete":
           return threads.remove(m.thread);
       }

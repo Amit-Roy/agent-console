@@ -13,7 +13,7 @@ const EFFORT_LABEL = { xhigh: "Extra high", ultracode: "Ultra" };
 const EFFORT_DESC = { ultracode: "Claude Code's Ultracode: starts a multi-agent workflow on every task. Slow and costly; keep it for big jobs.", max: "Deepest reasoning the model offers.", xhigh: "More reasoning than High, less than Max." };
 const effortLabel = (v) => EFFORT_LABEL[v] || cap(v);
 const state = {
-  commands: {}, providers: new Map(), threads: new Map(), current: null, ready: false, dirs: [], live: null, cards: new Map(), usage: {}, usageTab: "claude", ctxOpen: false,
+  commands: {}, providers: new Map(), threads: new Map(), current: null, ready: false, dirs: [], live: null, cards: new Map(), usage: {}, usageTab: "claude", ctxOpen: false, archiveOpen: !!localStorage.getItem("ac_archive_open"),
   stick: true, // the reader is at the bottom of the chat (kept from scroll events, since layout growth fires none)
   subs: new Map(), // tool_use id of a subagent (or nested subagent) -> the <ol> its activity is listed in
   subTools: new Map(), // tool_use id of a call made inside a subagent -> its row
@@ -269,7 +269,9 @@ const threadActions = (id) => {
   const others = [...state.providers.values()].filter((p) => p.id !== cur && p.id !== "mock" && p.ok !== false);
   const forks = others.map((p) => ({ value: `fork:${p.id}`, label: `Fork in ${p.label}`, desc: "Replay this conversation in another agent", icon: "fork" }));
   const i = THREAD_ACTIONS.findIndex((a) => a.value === "fork") + 1;
-  return [...THREAD_ACTIONS.slice(0, i), ...forks, ...THREAD_ACTIONS.slice(i)];
+  const filed = !!state.threads.get(id)?.archived;
+  const items = THREAD_ACTIONS.map((a) => a.value === "archive" && filed ? { value: "unarchive", label: "Unarchive", desc: "Back to the working list", icon: "archive" } : a);
+  return [...items.slice(0, i), ...forks, ...items.slice(i)];
 };
 const THREAD_ACTIONS = [
   { value: "rename", label: "Rename", icon: "pencil" },
@@ -278,6 +280,7 @@ const THREAD_ACTIONS = [
   { value: "download", label: "Download", desc: "Save as a Markdown file", icon: "download" },
   { value: "share", label: "Share", desc: "Send the conversation as text", icon: "share" },
   { value: "details", label: "Run details", desc: "Model, effort, tokens and load timings", icon: "code" },
+  { value: "archive", label: "Archive", desc: "Move out of the working list", icon: "archive" },
   { value: "delete", label: "Delete thread", icon: "trash", tone: "danger" },
 ];
 let toastTimer;
@@ -302,6 +305,8 @@ async function runThreadAction(id, action) {
     if (state.current !== id) openThread(id);
     $("run-details").showModal();
     void loadLatencySummary();
+  } else if (action === "archive" || action === "unarchive") {
+    send({ t: "archive", thread: id, archived: action === "archive" });
   } else if (action === "delete") {
     if (confirm(`Delete "${t.title}" and its history?`)) send({ t: "delete", thread: id });
   } else if (action.startsWith("fork:")) {
@@ -377,27 +382,39 @@ function renderThreads() {
     return;
   }
   renderPending = false;
-  const ul = $("threads");
+  const ul = $("threads"), shelf = $("archived");
   ul.replaceChildren();
+  shelf.replaceChildren();
   const list = [...state.threads.values()].sort((a, b) => b.updatedAt - a.updatedAt);
+  // archived threads sit in their own section below, collapsed unless the user opened it
+  const filed = list.filter((t) => t.archived).length;
+  $("archive").hidden = !filed;
+  $("archive-count").textContent = filed || "";
+  $("archive-toggle").setAttribute("aria-expanded", String(state.archiveOpen));
+  shelf.hidden = !state.archiveOpen;
+  // the folder most threads share says nothing per row; only the odd ones out show theirs
+  const dirs = new Map();
+  for (const t of list) dirs.set(base(t.cwd), (dirs.get(base(t.cwd)) || 0) + 1);
+  const usualDir = [...dirs].sort((a, b) => b[1] - a[1])[0]?.[0];
   for (const t of list) {
     const li = el("li", t.id === state.current ? "sel" : "");
     li.tabIndex = 0;
-    li.title = `${t.title}\n${t.cwd}\n${provLabel(t.provider)} · ${modelMeta(t.model).label} · $${t.cost.toFixed(3)}`;
+    li.title = `${t.title}\n${t.cwd}\n${provLabel(t.provider)} · ${modelMeta(t.model).label}${t.mode === "bypassPermissions" ? " · Bypass" : ""} · $${t.cost.toFixed(3)}`;
     if (t.id === state.current) li.setAttribute("aria-current", "true");
     const dot = el("span", `dot ${t.status}`);
     dot.setAttribute("aria-hidden", "true");
     const meta = el("div", "meta");
-    meta.append(el("span", "dir", base(t.cwd)));
+    if (base(t.cwd) !== usualDir) meta.append(el("span", "dir", base(t.cwd)));
+    meta.append(el("span", "tag", provLabel(t.provider || "claude")));
+    if (t.mode === "bypassPermissions") {
+      const tag = el("span", "tag warn");
+      tag.title = "Bypass permissions";
+      tag.append(icon("shield-off"), el("span", "sr-only", "Bypass"));
+      meta.append(tag);
+    }
     const time = el("time", "", ago(t.updatedAt));
     time.dateTime = new Date(t.updatedAt).toISOString();
     meta.append(time);
-    if (t.provider && t.provider !== "claude") meta.append(el("span", "tag", provLabel(t.provider)));
-    if (t.mode === "bypassPermissions") {
-      const tag = el("span", "tag warn");
-      tag.append(icon("shield-off"), "Bypass");
-      meta.append(tag);
-    }
     const more = el("button", "btn sm icon ghost row-more");
     more.type = "button";
     more.title = "Thread actions";
@@ -411,7 +428,7 @@ function renderThreads() {
       onSelect: (v) => runThreadAction(t.id, v),
     });
     more.setAttribute("aria-label", `Actions for ${t.title}`);
-    li.append(el("div", "t", t.title), dot, more, meta);
+    li.append(dot, el("div", "t", t.title), meta, more);
     if (t.status === "running") li.append(el("span", "sr-only", "Running"));
     const pick = () => {
       setNav(false);
@@ -424,9 +441,9 @@ function renderThreads() {
         pick();
       }
     };
-    ul.append(li);
+    (t.archived ? shelf : ul).append(li);
   }
-  if (!list.length) ul.append(el("li", "empty-list", "No threads yet."));
+  if (list.length === filed) ul.append(el("li", "empty-list", list.length ? "Everything is archived." : "No threads yet."));
 }
 setInterval(() => state.threads.size && renderThreads(), 30000);
 
@@ -1585,7 +1602,7 @@ function renderUsage() {
   refresh.onclick = () => { refresh.classList.add("spinning"); refresh.disabled = true; send({ t: "refresh_usage" }); setTimeout(() => { refresh.classList.remove("spinning"); refresh.disabled = false; }, 4000); };
   const stamp = sample?.updatedAt ? el("span", "usage-stamp", new Date(sample.updatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })) : null;
   if (stamp) { stamp.title = `Updated ${new Date(sample.updatedAt).toLocaleString()}`; refresh.setAttribute("aria-label", `Refresh usage (updated ${stamp.textContent})`); }
-  head.append(el("span", "usage-label", state.usageTab === "pi" ? "OpenRouter allowance" : "Subscription allowance"), ...(stamp ? [stamp] : []), refresh);
+  head.append(el("span", "usage-label", "Allowance"), ...(stamp ? [stamp] : []), refresh);
   pane.append(head);
   if (sample?.windows?.length) {
     for (const w of sample.windows) pane.append(usageMeter(w.label, w.used, w.limit, w.unit || "requests", w.resetsAt));
@@ -2012,6 +2029,11 @@ function openNewDialog() {
   $("dlg").showModal();
 }
 $("new").onclick = openNewDialog;
+$("archive-toggle").onclick = () => {
+  state.archiveOpen = !state.archiveOpen;
+  localStorage.setItem("ac_archive_open", state.archiveOpen ? "1" : "");
+  renderThreads();
+};
 $("reload").onclick = () => location.reload();
 $("restart").onclick = async () => {
   const r = await apiFetch("/restart", { method: "POST" }).catch(() => null);
