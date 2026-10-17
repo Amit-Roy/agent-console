@@ -646,7 +646,8 @@ for (const scheme of ["dark", "light"] as const) {
     await other.hover();
     await other.locator(".row-more").click();
     check("row menu: opens from any row without switching to it", (await page.locator(".menu[role=menu]").count()) === 1 && (await page.locator("#threads li.sel .t").innerText()).trim() === title);
-    check("row menu: Rename, Compact context, Fork, Download, Share, Run details, Delete thread", (await items()).join("|") === "Rename|Compact context|Fork|Download|Share|Run details|Delete thread", (await items()).join("|"));
+    const its = (await items()).filter((l) => !l.startsWith("Fork in ")); // one "Fork in <agent>" per other installed agent
+    check("row menu: Rename, Compact context, Fork, Download, Share, Run details, Archive, Delete thread", its.join("|") === "Rename|Compact context|Fork|Download|Share|Run details|Archive|Delete thread", (await items()).join("|"));
     check("row menu: Delete is the only red item", (await page.locator(".menu [data-tone=danger]").count()) === 1);
     await page.screenshot({ path: `${OUT}/ui-row-menu.png` });
     await page.keyboard.press("Escape");
@@ -668,14 +669,14 @@ for (const scheme of ["dark", "light"] as const) {
     // fork
     const rows0 = await page.locator("#threads li").count();
     await rowMenu(".sel").click();
-    await page.locator(".menu [role=menuitem]", { hasText: "Fork" }).click();
+    await page.locator(".menu [role=menuitem]", { hasText: /^Fork/ }).first().click();
     await page.waitForFunction(() => /\(fork\)$/.test(document.querySelector("#threads li.sel .t")?.textContent || ""));
     await page.waitForSelector(".msg.user .bubble");
     check("fork: opens a new thread titled (fork) holding the same conversation", (await page.locator("#threads li").count()) === rows0 + 1 && (await page.locator("#ttl").innerText()) === "Weekend trip (fork)" && /weekend trip itinerary/.test(await page.locator(".msg.user .bubble").first().innerText()));
 
     // download, from the header menu (the same actions live there too)
     await page.click("#more");
-    check("header menu: same thread actions", (await items()).join("|") === "Rename|Compact context|Fork|Download|Share|Run details|Delete thread");
+    check("header menu: same thread actions", (await items()).filter((l) => !l.startsWith("Fork in ")).join("|") === "Rename|Compact context|Fork|Download|Share|Run details|Archive|Delete thread", (await items()).join("|"));
     const dl = page.waitForEvent("download");
     await page.locator(".menu [role=menuitem]", { hasText: "Download" }).click();
     const file = await dl;

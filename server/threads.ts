@@ -36,6 +36,7 @@ export interface Thread {
   status: "idle" | "running";
   operation?: "compact";
   lastCompactedAt?: number;
+  archived?: number; // when it was archived: it leaves the working list until unarchived or sent to again
   cost: number;
   createdAt: number;
   updatedAt: number;
@@ -200,6 +201,16 @@ export class Threads {
     if (!effort || effort === "default") return "default";
     if (!prov?.modelDetails?.()[model]?.efforts.includes(effort)) throw new Error("Unsupported effort for this model.");
     return effort;
+  }
+
+  // Filing a thread away is not activity: updatedAt stays, so it keeps its place in either list
+  archive(id: string, archived: boolean) {
+    const t = this.threads.get(id);
+    if (!t || !!t.archived === archived) return;
+    if (archived) t.archived = Date.now();
+    else delete t.archived;
+    this.persist();
+    this.emit({ t: "thread", thread: t });
   }
 
   update(id: string, patch: { mode?: Mode; model?: string; effort?: string; advisor?: string; title?: string }) {
@@ -522,6 +533,7 @@ export class Threads {
       prompt = replayPreamble(this.history(id)) + prompt; // before publish: the transcript must not include this message
       t.replay = false;
     }
+    if (!opts.auto) delete t.archived; // writing to an archived thread puts it back to work (touch below persists it)
     let live = this.live.get(id);
     if (!live || !live.agent.alive) live = this.start(t);
     live.aborted = false;

@@ -34,7 +34,7 @@ try {
     assert.deepEqual(await page.locator("#usage [role=tab]").allTextContents(), ["Claude", "OpenRouter", "Codex"]);
     const color = async () => page.locator("#usage .bar i").first().evaluate(e => getComputedStyle(e).backgroundColor);
     await page.getByRole("tab", { name: "Claude", exact: true }).click(); const red = await color();
-    assert.match(await page.locator("#usage").innerText(), /Subscription allowance/);
+    assert.match(await page.locator("#usage").innerText(), /Allowance/);
     await page.getByRole("tab", { name: "Codex", exact: true }).click(); const green = await color();
     const info = page.locator("#usage-ctx-info");
     assert.equal(await info.getAttribute("aria-expanded"), "false");

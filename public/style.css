@@ -200,31 +200,48 @@ main{position:relative;flex:1;min-width:0;display:flex;flex-direction:column;
 /* sidebar: same surface as the canvas, so no border is needed */
 #side{width:var(--side-w);flex:none;display:flex;flex-direction:column;background:var(--s0);
   padding:calc(var(--sp-3) + env(safe-area-inset-top)) var(--sp-2) 0 max(var(--sp-2),env(safe-area-inset-left))}
-.brand{display:flex;align-items:center;gap:var(--sp-2);padding:var(--sp-1) var(--sp-2) var(--sp-3)}
+.brand{display:flex;align-items:center;gap:var(--sp-2);padding:0 0 var(--sp-3) var(--sp-2);min-height:var(--ctl-h)}
 .brand img{width:1.5rem;height:1.5rem;border-radius:var(--r-xs)}
-.brand span{font:var(--fw-semi) var(--f-md);letter-spacing:var(--ls-md);color:var(--t1)}
-#new{margin:0 0 var(--sp-3)}
+.brand span{flex:1;min-width:0;font:var(--fw-semi) var(--f-md);letter-spacing:var(--ls-md);color:var(--t1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* New thread: a quiet tonal row, not a loud accent slab; the accent lives in the plus */
+#new{margin:0 0 var(--sp-2);justify-content:flex-start;padding:0 var(--sp-3);background:transparent;color:var(--t1);box-shadow:inset 0 0 0 1px var(--edge)}
+#new:hover{background:var(--hover)}
+#new .ico{color:var(--accent)}
 .side-label{padding:var(--sp-2) var(--sp-3) var(--sp-1);font:var(--fw-med) var(--f-xs);letter-spacing:.04em;text-transform:uppercase;color:var(--t3)}
-#threads{list-style:none;margin:0;padding:0 0 var(--sp-2);overflow:auto;flex:1;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:var(--s3) transparent}
-#threads li{
-  display:grid;grid-template-columns:minmax(0,1fr) auto auto;column-gap:var(--sp-2);align-items:center;position:relative;
+/* the working list and the archive scroll together; the usage block stays pinned below */
+.side-scroll{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:var(--s3) transparent;padding-bottom:var(--sp-2)}
+#threads,#archived{list-style:none;margin:0;padding:0}
+.side-toggle{display:flex;align-items:center;gap:var(--sp-1);width:100%;margin-top:var(--sp-3);min-height:var(--ctl-h-sm);background:none;border:0;border-radius:var(--r-sm);cursor:pointer;text-align:left}
+.side-toggle:hover{color:var(--t2)}
+.side-toggle .ico{width:.75rem;height:.75rem;transition:transform var(--dur-1) var(--ease)}
+.side-toggle[aria-expanded=true] .ico{transform:rotate(90deg)}
+.side-toggle .count{margin-left:auto;font-variant-numeric:tabular-nums;letter-spacing:0}
+#archived li .t{color:var(--t3)}
+#archived li.sel .t{color:var(--t1)}
+/* two lines per thread: title [running dot] over provider · permission · time; the ⋯ sits in its own column */
+.thread-list li{
+  display:grid;grid-template-columns:minmax(0,1fr) auto auto;column-gap:var(--sp-2);row-gap:2px;align-items:center;position:relative;
   min-height:2.75rem;padding:var(--sp-2) var(--sp-3);border-radius:var(--r-sm);cursor:pointer;-webkit-tap-highlight-color:transparent;
   transition:background-color var(--dur-1) var(--ease);
 }
-#threads li+li{margin-top:2px}
-@media (hover:hover){#threads li:hover{background:var(--hover)}}
-#threads li.sel{background:var(--sel)}
-#threads li:focus-visible{outline-offset:-2px}
-#threads .t{font:var(--fw-med) var(--f-md);color:var(--t1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-#threads li.sel .t{font-weight:var(--fw-semi)}
-#threads .meta{grid-column:1/3;display:flex;align-items:center;gap:var(--sp-2);font:var(--fw-reg) var(--f-xs);letter-spacing:var(--ls-xs);color:var(--t3);min-width:0}
-#threads .meta .dir{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
-#threads .meta time{flex:none;font-variant-numeric:tabular-nums}
+.thread-list li+li{margin-top:2px}
+@media (hover:hover){.thread-list li:hover{background:var(--hover)}}
+.thread-list li.sel{background:var(--sel)}
+.thread-list li:focus-visible{outline-offset:-2px}
+.thread-list .t{grid-column:1;grid-row:1;min-width:0;font:var(--fw-reg) var(--f-md);color:var(--t2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.thread-list li.sel .t{font-weight:var(--fw-med);color:var(--t1)}
+.thread-list .dot{grid-column:2;grid-row:1}
+.thread-list .dot:not(.running){display:none}
+.thread-list .meta{grid-column:1/3;grid-row:2;display:flex;align-items:center;gap:var(--sp-2);font:var(--fw-reg) var(--f-xs);letter-spacing:var(--ls-xs);color:var(--t3);min-width:0}
+.thread-list .meta .dir{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.thread-list .meta time{flex:none;margin-left:auto;font-variant-numeric:tabular-nums}
+.thread-list .meta .tag{padding:0;background:none;color:inherit}
+.thread-list .meta .tag.warn .ico{width:.8125rem;height:.8125rem}
 /* the ⋯ for a row: always laid out, so titles never jump; shown on hover, focus, an open menu, and always on touch */
-#threads .row-more{grid-column:3;grid-row:1/3;align-self:center;margin-right:calc(var(--sp-2) * -1);color:var(--t2);opacity:0;transition:opacity var(--dur-1) var(--ease),background-color var(--dur-1) var(--ease)}
-#threads li:hover .row-more,#threads li:focus-within .row-more,#threads li.menu-open .row-more,#threads .row-more[aria-expanded=true],#threads .row-more:focus-visible{opacity:1}
-@media (pointer:coarse){#threads .row-more{opacity:1}}
-#threads li.empty-list{display:block;cursor:default;color:var(--t3);font:var(--fw-reg) var(--f-md)}
+.thread-list .row-more{grid-column:3;grid-row:1/3;align-self:center;margin-right:calc(var(--sp-2) * -1);color:var(--t2);opacity:0;transition:opacity var(--dur-1) var(--ease),background-color var(--dur-1) var(--ease)}
+.thread-list li:hover .row-more,.thread-list li:focus-within .row-more,.thread-list li.menu-open .row-more,.thread-list .row-more[aria-expanded=true],.thread-list .row-more:focus-visible{opacity:1}
+@media (pointer:coarse){.thread-list .row-more{opacity:1}}
+.thread-list li.empty-list{display:block;cursor:default;color:var(--t3);font:var(--fw-reg) var(--f-md)}
 .dot{width:.5rem;height:.5rem;border-radius:50%;background:var(--s3);flex:none}
 li.sel .dot{background:var(--press)}
 .dot.running{background:var(--accent);animation:pulse 1.4s ease-in-out infinite}
@@ -233,7 +250,7 @@ li.sel .dot{background:var(--press)}
 .tag.warn{background:var(--warn-tint);color:var(--warn)}
 .tag .ico{width:.75rem;height:.75rem}
 
-.usage{padding:var(--sp-3) var(--sp-3) calc(var(--sp-4) + env(safe-area-inset-bottom));font:var(--fw-reg) var(--f-xs);letter-spacing:var(--ls-xs);color:var(--t3);display:flex;flex-direction:column;gap:var(--sp-2)}
+.usage{margin:0 var(--sp-1);padding:var(--sp-3) var(--sp-2) calc(var(--sp-3) + env(safe-area-inset-bottom));border-top:1px solid var(--edge);font:var(--fw-reg) var(--f-xs);letter-spacing:var(--ls-xs);color:var(--t3);display:flex;flex-direction:column;gap:var(--sp-2)}
 .usage:empty{display:none}
 .usage .u{display:grid;grid-template-columns:2.75rem 1fr 2.25rem;align-items:center;gap:var(--sp-2)}
 .usage .bar{height:.25rem;border-radius:var(--r-full);background:var(--s3);overflow:hidden}
@@ -711,13 +728,13 @@ body.login{display:grid;place-items:center;overflow:auto;padding:var(--sp-4)}
 #queued{max-height:10rem;overflow-y:auto}
 
 /* Provider usage: allowance and current context are separate measures. */
-.usage-tabs { display:flex; gap:2px; padding:2px; border-radius:var(--r-sm); background:var(--s2); }
-.usage-tab { flex:1; min-width:0; min-height:32px; padding:4px; background:transparent; border:0; border-radius:calc(var(--r-sm) - 2px); color:var(--t2); font:inherit; cursor:pointer; }
+.usage-tabs { display:flex; gap:2px; padding:2px; border-radius:var(--r-sm); background:var(--s2); margin-bottom:var(--sp-1); }
+.usage-tab { flex:1; min-width:0; min-height:24px; padding:2px 4px; background:transparent; border:0; border-radius:calc(var(--r-sm) - 2px); color:var(--t2); font:inherit; cursor:pointer; }
 .usage-tab[aria-selected=true] { background:var(--s1); color:var(--t1); box-shadow:0 1px 2px rgb(0 0 0 / .12); }
 .usage-pane { display:flex; flex-direction:column; gap:var(--sp-2); }
-.usage-label { color:var(--t2); font-weight:600; }
+.usage-label { color:var(--t2); font-weight:var(--fw-med); }
 .usage-head { display:flex; align-items:center; gap:var(--sp-2); }
-.usage-head .usage-label { flex:1; min-width:0; }
+.usage-head .usage-label { flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .usage-stamp { color:var(--t3); font-variant-numeric:tabular-nums; }
 /* right rail: refresh (header) and info (context) share one column with the percentages left of it */
 .usage-head .usage-refresh, .usage-info { flex:none; margin:-6px calc(var(--sp-2) * -1) -6px 0; color:var(--t3); }
@@ -753,11 +770,10 @@ body.login{display:grid;place-items:center;overflow:auto;padding:var(--sp-4)}
 .compact-card.running .cc-bar{display:block}
 @media (prefers-reduced-motion:reduce){.compact-card .cc-bar{animation:none}}
 
-/* sidebar shortcuts: three equal icon+label tiles in one row */
-.side-actions{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:var(--sp-2);padding:var(--sp-2) 0 0}
-.side-actions .tile{width:100%;min-width:0;gap:var(--sp-1);padding:0 var(--sp-2);background:var(--s2);color:var(--t2);font:var(--fw-med) var(--f-sm);letter-spacing:var(--ls-sm);text-decoration:none}
-.side-actions .tile:hover:not(:disabled){background:var(--s3);color:var(--t1)}
-.side-actions .tile .ico{width:1rem;height:1rem}
+/* sidebar shortcuts: quiet icon buttons at the end of the brand row */
+.side-actions{display:flex;flex:none;gap:2px}
+.side-actions .btn{color:var(--t3)}
+.side-actions .btn:hover:not(:disabled){color:var(--t1)}
 #queued .steer{flex:none;min-height:1.75rem;padding:0 var(--sp-3);background:var(--accent-tint);color:var(--accent)}
 #queued .steer:hover:not(:disabled){background:var(--sel)}
 @media (pointer:coarse){#queued .steer{min-height:2.25rem}}
