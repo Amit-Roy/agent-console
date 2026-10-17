@@ -16,6 +16,7 @@
     "test:startup": "node test/startup-ui.ts",
     "test:signin": "node test/signin-ui.ts",
     "test:archive": "node test/archive-ui.ts",
+    "test:files": "node test/latency.ts && node test/files.ts && node test/file-viewer-ui.ts",
     "vendor": "node scripts/vendor.mjs"
   },
   "keywords": [],

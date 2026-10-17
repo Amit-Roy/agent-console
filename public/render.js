@@ -22,7 +22,8 @@ for (const [n, l] of Object.entries({ bash, javascript, typescript, json, python
 
 DOMPurify.addHook("afterSanitizeAttributes", (n) => {
   if (n.tagName === "A") {
-    n.setAttribute("target", "_blank");
+    if (n.hasAttribute("data-file-ref")) n.removeAttribute("target");
+    else n.setAttribute("target", "_blank");
     n.setAttribute("rel", "noopener noreferrer");
   }
 });
@@ -101,6 +102,40 @@ export function wireCopy(btn, getText, label = "Copy") {
 
 // ---------- highlighting ----------
 const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+/** A local file reference, never an HTTP URL, app route, or executable scheme. Paths stay relative until the server resolves them. */
+export function parseFileRef(value) {
+  if (typeof value !== "string" || !value || /[\u0000-\u001f\u007f]/.test(value)) return null;
+  let ref = value.trim();
+  if (!ref || ref.startsWith("#") || ref.startsWith("//")) return null;
+  let line = null, endLine = null, column = null;
+  const hash = ref.indexOf("#");
+  if (hash !== -1) {
+    const range = /^#L(\d+)(?:-L?(\d+))?$/i.exec(ref.slice(hash));
+    if (range) { line = Number(range[1]); endLine = Number(range[2] || range[1]); }
+    ref = ref.slice(0, hash);
+  }
+  if (/^file:/i.test(ref)) {
+    try {
+      const url = new URL(ref);
+      if (url.protocol !== "file:" || (url.hostname && url.hostname !== "localhost") || url.search) return null;
+      ref = url.pathname;
+    } catch { return null; }
+  }
+  try { ref = decodeURIComponent(ref); } catch { return null; }
+  const position = /:(\d+)(?::(\d+))?$/.exec(ref);
+  if (position) {
+    if (line == null) { line = Number(position[1]); endLine = line; column = position[2] ? Number(position[2]) : null; }
+    ref = ref.slice(0, position.index);
+  }
+  if (!ref || /[\u0000-\u001f\u007f\\?]/.test(ref) || /^[a-z][\w+.-]*:/i.test(ref) || ref.startsWith("//")) return null;
+  if (/^\/(?:api|uploads|export|vendor|fonts)(?:\/|$)/.test(ref) || /^\/(?:dashboard|login|restart|manifest\.webmanifest|sw\.js|icon\.svg)\/?$/.test(ref)) return null;
+  // Bare names with no extension are ambiguous; common repository documents remain useful file links.
+  if (!ref.includes("/") && !/\.[\w-]+$/.test(ref) && !/^(?:README|LICENSE|LICENCE|COPYING|NOTICE|Dockerfile|Makefile|AGENTS|CLAUDE)$/i.test(ref)) return null;
+  for (const n of [line, endLine, column]) if (n != null && (!Number.isSafeInteger(n) || n < 1)) return null;
+  if (endLine != null && endLine < line) return null;
+  return { path: ref, line, endLine, column };
+}
 const cache = new Map();
 /** Highlighted HTML for `text` (escaped plain text when the language is unknown). Cached: streaming re-renders the same blocks. */
 export function highlight(text, lang) {
@@ -124,6 +159,11 @@ const md = new Marked({
   gfm: true,
   breaks: false,
   renderer: {
+    link({ href, title, tokens }) {
+      if (!parseFileRef(href)) return false;
+      // DOMPurify deliberately blocks file://. Carry a validated reference as data, with an inert keyboard-accessible link.
+      return `<a href="#" data-file-ref="${esc(href)}"${title ? ` title="${esc(title)}"` : ""}>${this.parser.parseInline(tokens)}</a>`;
+    },
     code({ text, lang }) {
       const l = (lang || "").trim().split(/\s+/)[0].toLowerCase().replace(/[^a-z0-9+#_-]/g, "");
       return `<pre><code class="hljs${l ? ` language-${l}` : ""}">${highlight(text, l)}</code></pre>\n`;
@@ -177,8 +217,10 @@ export function highlightInto(codeEl, text, lang) {
   codeEl.className = `hljs${lang ? ` language-${lang}` : ""}`;
   codeEl.innerHTML = DOMPurify.sanitize(highlight(text, lang));
 }
-export const langFromPath = (p) => {
+export const langFromPath = (p, content = "") => {
   const ext = /\.([A-Za-z0-9]+)$/.exec(String(p || ""))?.[1]?.toLowerCase();
+  const shebang = /^#![^\n]*(?:\/|\s)(bash|sh|zsh|dash|ksh|python[\d.]*|node)(?:\s|$)/.exec(content.slice(0, 200));
+  if (shebang) return /^(bash|sh|zsh|dash|ksh)$/.test(shebang[1]) ? "bash" : shebang[1].startsWith("python") ? "python" : "javascript";
   return { js: "javascript", mjs: "javascript", cjs: "javascript", jsx: "javascript", ts: "typescript", tsx: "typescript", json: "json", py: "python", css: "css",
     html: "xml", xml: "xml", svg: "xml", md: "markdown", yml: "yaml", yaml: "yaml", sql: "sql", go: "go", rs: "rust", sh: "bash", bash: "bash", diff: "diff", patch: "diff" }[ext] || "";
 };

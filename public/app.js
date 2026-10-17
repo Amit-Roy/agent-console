@@ -1,4 +1,4 @@
-import { $, el, icon, iconButton, wireCopy, renderMarkdown, highlightInto, langFromPath } from "/render.js";
+import { $, el, icon, iconButton, wireCopy, renderMarkdown, highlightInto, langFromPath, parseFileRef } from "/render.js";
 import { createMenu } from "/menu.js";
 import { toolName, toolSummary } from "/tool-display.js";
 import { createLatencyReporter } from "/telemetry.js";
@@ -98,6 +98,43 @@ async function apiFetch(url, opts = {}) {
 // The websocket only reports a failed upgrade as a close; ask over plain HTTP whether that is a sign-in problem.
 const checkSignIn = () => apiFetch("/manifest.webmanifest", { cache: "no-store" }).then(() => {}, () => {});
 
+// File viewing adds no request to startup. Warm its module and stylesheet only after history has painted, in idle time.
+let fileViewer, fileViewerLoad, fileWarmupScheduled = false;
+function loadFileViewer() {
+  const at = performance.now();
+  return fileViewerLoad ||= import("/file-viewer.js").then(async module => {
+    await module.prepare();
+    const viewer = fileViewer ||= module.createFileViewer(apiFetch, sample => latency.record(sample));
+    viewer.record({ kind: "viewer_module", thread: state.current, total_ms: performance.now() - at, module_ms: performance.now() - at });
+    return viewer;
+  }).catch(error => { fileViewerLoad = null; throw error; });
+}
+function warmFileViewer() {
+  if (fileWarmupScheduled) return;
+  fileWarmupScheduled = true;
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    const warm = () => { if (!document.hidden) loadFileViewer().catch(() => {}); };
+    if ("requestIdleCallback" in window) window.requestIdleCallback(warm);
+    else setTimeout(warm, 1500);
+  }));
+}
+function openFileLink(event) {
+  if (event.type === "auxclick" && event.button !== 1) return;
+  const link = event.target.closest?.("a");
+  if (!link || !$("chat").contains(link)) return;
+  const image = link.dataset.viewerImage;
+  const ref = image ? { path: link.title || link.querySelector("img")?.alt || "Image", imageUrl: link.getAttribute("href") } : parseFileRef(link.dataset.fileRef || link.getAttribute("href"));
+  if (!ref || !state.current) return;
+  event.preventDefault(); // modified clicks also stay inside the viewer instead of opening a broken app route
+  const thread = state.current, openedAt = performance.now();
+  link.setAttribute("aria-busy", "true");
+  loadFileViewer().then(viewer => {
+    if (state.current === thread && link.isConnected) viewer.open({ thread, ref, opener: link, openedAt, module_ms: performance.now() - openedAt });
+  }).catch(error => toast(error.message || "Could not load the file viewer. Try again.")).finally(() => link.removeAttribute("aria-busy"));
+}
+$("chat").addEventListener("click", openFileLink);
+$("chat").addEventListener("auxclick", openFileLink);
+
 function handle(m) {
   switch (m.t) {
     case "usage":
@@ -139,6 +176,7 @@ function handle(m) {
       else {
         clearChat();
         renderHead();
+        warmFileViewer();
       }
       break;
     case "thread":
@@ -631,6 +669,7 @@ async function showHistory(m) {
   if (refreshing) showLoad(`Opened from cache in ${fmtMs(cachedMetrics.total_ms)}, then updated in ${fmtMs(metrics.total_ms)}`, detail);
   else showLoad(`Loaded in ${fmtMs(metrics.total_ms)}`, detail);
   console.debug("Agent Console history", metrics);
+  warmFileViewer();
 }
 function earlierButton() {
   const b = el("button", "btn earlier", "Show earlier messages");
@@ -1198,8 +1237,7 @@ function userText(text, attachments) {
     frag.append(text.slice(last, m.index));
     const link = el("a", "imgref", `Image ${m[1]}`);
     link.href = uploadUrl(a);
-    link.target = "_blank";
-    link.rel = "noopener";
+    link.dataset.viewerImage = "true";
     link.title = a.name;
     frag.append(link);
     last = m.index + m[0].length;
@@ -1217,8 +1255,8 @@ function attachmentRows(items, live) {
     for (const i of images) {
       const a = el("a");
       a.href = uploadUrl(i);
-      a.target = "_blank";
-      a.rel = "noopener";
+      a.dataset.viewerImage = "true";
+      a.title = i.name;
       const img = el("img");
       img.src = a.href;
       img.alt = i.name;
