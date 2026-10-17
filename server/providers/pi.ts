@@ -17,6 +17,7 @@ const READ_ONLY_TOOLS = "read,grep,find,ls";
 let cached: string[] = [];
 const thinking = new Set<string>();
 const contexts = new Map<string, number>(); // "provider/model" -> context window in tokens, from the --list-models table
+const NVIDIA_FREE_MODELS = new Set(["stepfun-ai/step-5-preview"]);
 function configured(): boolean {
   try {
     if (Object.keys(JSON.parse(fs.readFileSync(path.join(os.homedir(), ".pi", "agent", "auth.json"), "utf8"))).length) return true;
@@ -39,7 +40,7 @@ export function parsePiModels(table: string, all = false): string[] {
     if (thinks === "yes") thinking.add(`${provider}/${model}`);
     if (provider && model && !provider.startsWith("/") && parseTokens(context)) contexts.set(`${provider}/${model}`, parseTokens(context)!);
     if (!provider || !model || provider.startsWith("/")) continue;
-    if (provider === "openrouter" && !all && !model.endsWith(":free")) continue;
+    if (!all && ((provider === "openrouter" && !model.endsWith(":free")) || (provider === "nvidia" && !NVIDIA_FREE_MODELS.has(model)))) continue;
     out.push(`${provider}/${model}`);
   }
   return out.slice(0, 200);
