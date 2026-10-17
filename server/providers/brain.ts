@@ -27,3 +27,13 @@ export function brainContext(): string {
 export function brainCommit() {
   if (brainAvailable()) execFile(BRAIN_BIN, ["commit"], { timeout: 15_000 }, () => {});
 }
+
+// Reply-style preamble (ADHD + caveman max) shared by every harness, replacing the always-loaded caveman / i-have-adhd skills.
+export const STYLE_FILE = process.env.AGENT_CONSOLE_STYLE || path.join(os.homedir(), "repos", "brain", "config", "style-preamble.md");
+
+export function stylePreamble(): string {
+  try { return fs.readFileSync(STYLE_FILE, "utf8").trim(); } catch { return ""; }
+}
+
+/** Style preamble plus brain index, for harnesses that take one instruction string. */
+export const harnessInstructions = () => [stylePreamble(), brainContext()].filter(Boolean).join("\n\n");

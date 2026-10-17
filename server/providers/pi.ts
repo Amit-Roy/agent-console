@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DATA_DIR } from "../auth.ts";
-import { brainContext } from "./brain.ts";
+import { harnessInstructions } from "./brain.ts";
 import { childEnv } from "./env.ts";
 import { parseJson, spawnLines } from "./proc.ts";
 import { piQuestions } from "./pi-questions.ts";
@@ -203,8 +203,8 @@ export const pi: Provider = {
     const args = ["--mode", "rpc", "--model", t.model, "--session-dir", dir, "--extension", QUESTIONS_EXTENSION];
     if (fs.readdirSync(dir).length) args.push("--continue");
     if (t.mode === "plan") args.push("--tools", READ_ONLY_TOOLS);
-    const brain = brainContext();
-    if (brain) args.push("--append-system-prompt", brain); // shared memory, same text the Claude hook injects
+    const brain = harnessInstructions();
+    if (brain) args.push("--append-system-prompt", brain); // style preamble + shared memory index
     const translate = piTranslator((ev) => ctx.event(ev), (list) => ctx.commands(list), () => contexts.get(t.model));
     const questions = piQuestions(msg => p.write(JSON.stringify(msg)), ctx.event);
     const p = spawnLines("pi", "pi", args, { cwd: t.cwd, env: childEnv() }, {

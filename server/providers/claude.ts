@@ -5,6 +5,7 @@ import path from "node:path";
 import { threadDir } from "../uploads.ts";
 import { cleanQuestions, clip, type Agent, type AgentCtx, type Attachment, type Command, type Provider, type QuestionReply, type ThreadSpec } from "./types.ts";
 import { parseJson, spawnLines } from "./proc.ts";
+import { stylePreamble } from "./brain.ts";
 
 // never let the subscription login be silently replaced by metered API billing
 const SCRUBBED_ENV = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDECODE"];
@@ -136,6 +137,8 @@ export const claude: Provider = {
     if (t.effort && t.effort !== "default") args.push("--effort", t.effort);
     args.push(...claudeConsoleSettingsArgs(t.advisor));
     args.push(...leanMcpArgs());
+    const style = stylePreamble();
+    if (style) args.push("--append-system-prompt", style); // brain index arrives via the user hook
     fs.mkdirSync(threadDir(t.id), { recursive: true, mode: 0o700 });
     if (t.sessionId) args.push("--resume", t.sessionId);
     else if (t.forkFrom) args.push("--resume", t.forkFrom, "--fork-session"); // a forked thread: continue a copy of the parent session
