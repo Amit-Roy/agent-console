@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { spawnLines, parseJson } from "./proc.ts";
 import { childEnv } from "./env.ts";
-import { brainContext } from "./brain.ts";
+import { harnessInstructions } from "./brain.ts";
 import { cleanQuestions, IMAGE_ONLY_PROMPT, type Agent, type AgentCtx, type Attachment, type Question, type QuestionReply, type ThreadSpec } from "./types.ts";
 
 // Codex asks the user through app-server server requests (exec mode refuses: "request_user_input not supported in exec mode"):
@@ -176,7 +176,7 @@ export function startCodexApp(t: ThreadSpec, ctx: AgentCtx, translate: (row: any
   const ready = (async () => {
     await request("initialize", { clientInfo: { name: "agent_console", title: "Agent Console", version: "1.0.0" }, capabilities: { experimentalApi: ask.length > 0 } });
     p.write(JSON.stringify({ method: "initialized", params: {} }));
-    const brain = brainContext();
+    const brain = harnessInstructions();
     const result = await request(session ? "thread/resume" : "thread/start", {
       ...(session ? { threadId: session, excludeTurns: true } : {}), cwd: t.cwd, approvalPolicy: "never",
       sandbox: t.mode === "bypassPermissions" ? "danger-full-access" : t.mode === "plan" ? "read-only" : "workspace-write",
