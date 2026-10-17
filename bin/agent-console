@@ -4,9 +4,13 @@ set -u
 DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
 RUN="${AGENT_CONSOLE_RUN:-$HOME/.cache/agent-console}"; mkdir -p "$RUN"; export AGENT_CONSOLE_RUN="$RUN"; PORT="${PORT:-7070}"
 export PATH="$HOME/.local/bin:$PATH"
-running() { [ -f "$RUN/pid" ] && kill -0 "$(cat "$RUN/pid")" 2>/dev/null; }
+# the pid file survives a workspace restart, when its pid may belong to an unrelated process: check it is our server
+running() { [ -f "$RUN/pid" ] && grep -qa "server/index.ts" "/proc/$(cat "$RUN/pid")/cmdline" 2>/dev/null; }
 case "${1:-status}" in
   start) running && { echo "already running"; exit 0; }
+         # a server we lost track of (pid file gone) still holds the port: adopt it instead of crashing on EADDRINUSE
+         pid=$(ss -ltnpH "sport = :$PORT" 2>/dev/null | grep -o 'pid=[0-9]*' | head -1 | cut -d= -f2)
+         [ -n "$pid" ] && grep -qa "server/index.ts" "/proc/$pid/cmdline" 2>/dev/null && { echo "$pid" >"$RUN/pid"; echo "already running (pid $pid)"; exit 0; }
          (cd "$DIR" && PORT=$PORT AGENT_CONSOLE_PID_FILE="$RUN/pid" exec nohup node server/index.ts >"$RUN/log" 2>&1) & sleep 1.5; "$0" status; "$0" url ;;
   stop)  running && kill "$(cat "$RUN/pid")" && echo stopped || echo "not running" ;;
   restart) "$0" stop; sleep 1; "$0" start ;;

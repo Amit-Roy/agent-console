@@ -668,7 +668,7 @@ body.login{display:grid;place-items:center;overflow:auto;padding:var(--sp-4)}
 /* Browser-managed virtual rendering: skip layout/paint of distant messages. Keep native scroll anchoring on: it absorbs
    placeholders resolving to their real height above the viewport (a 40px tool card was a 100px jump mid-fling). */
 #chat > .msg { content-visibility: auto; contain-intrinsic-size: auto 140px; }
-.diagnostics { font:var(--fw-reg) var(--f-sm); color:var(--t2); margin-top:var(--sp-4); overflow-wrap:anywhere; }
+.diagnostics { font:var(--fw-reg) var(--f-sm); color:var(--t2); overflow-wrap:anywhere; }
 
 @media (max-width: 600px) {
   :root{--ctl-h:2.75rem;--ctl-h-sm:2.75rem;--item-h:2.75rem}
@@ -684,8 +684,27 @@ body.login{display:grid;place-items:center;overflow:auto;padding:var(--sp-4)}
   #head .state{background:transparent;height:auto;padding:0 var(--sp-1);gap:var(--sp-1);font:var(--fw-med) var(--f-xs)}
 }
 
-#run-metrics { white-space:pre-wrap; overflow-wrap:anywhere; padding:var(--sp-3) 0; color:var(--t2); font:var(--fw-reg) var(--f-md); line-height:1.6; }
-#latency-summary{white-space:pre-line;margin-top:var(--sp-2);font:var(--fw-reg) var(--f-sm);color:var(--t2);line-height:1.6}
+/* run details: label/value rows, then plain-language load and speed summaries */
+#run-details h4{margin-top:var(--sp-5);font:var(--fw-semi,600) var(--f-sm);color:var(--t1)}
+#run-details .note{display:block;color:var(--t3);font:var(--fw-reg) var(--f-xs);margin-top:2px}
+.facts{display:grid;grid-template-columns:auto minmax(0,1fr);gap:var(--sp-2) var(--sp-4);margin:var(--sp-3) 0 0;font:var(--fw-reg) var(--f-md)}
+.facts dt{color:var(--t3)}
+.facts dd{margin:0;color:var(--t1);overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
+#diagnostics .lead{margin:var(--sp-2) 0 0;color:var(--t1);font:var(--fw-reg) var(--f-md)}
+#diagnostics .note{font-variant-numeric:tabular-nums}
+#latency-summary{margin-top:var(--sp-2);font:var(--fw-reg) var(--f-sm);color:var(--t2)}
+.speed{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+.speed th,.speed td{padding:var(--sp-2) 0;text-align:right;border-bottom:1px solid var(--edge);font-weight:var(--fw-reg)}
+.speed thead th{color:var(--t3);font:var(--fw-med) var(--f-xs);padding-top:0}
+.speed tbody th{text-align:left;color:var(--t1);padding-right:var(--sp-3)}
+.speed td,.speed thead th{padding-left:var(--sp-4);white-space:nowrap}
+.speed td{color:var(--t1)}
+.speed td:last-child{color:var(--t3)}
+.speed tr:last-child>*{border-bottom:0}
+.speed .dot{display:inline-block;width:.5rem;height:.5rem;border-radius:50%;margin-right:var(--sp-2);vertical-align:.08em;background:var(--t3)}
+.speed .dot.fast{background:var(--ok)}
+.speed .dot.slow{background:var(--warn)}
+#latency-summary .note{margin-top:var(--sp-3)}
 #queue-editor{max-height:calc(var(--viewport-height,100dvh) - var(--sp-4));overflow-y:auto}
 #queue-draft{display:block;width:100%;min-height:5rem;max-height:30dvh;margin-top:var(--sp-4);padding:var(--sp-3);resize:vertical;font:var(--fw-text) var(--f-text)}
 #queue-edit-error{margin-top:var(--sp-2);font:var(--fw-reg) var(--f-sm);color:var(--bad)}

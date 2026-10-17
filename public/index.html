@@ -119,10 +119,11 @@
 <div id="announce" class="sr-only" role="status" aria-live="polite"></div>
 <dialog id="run-details" aria-labelledby="run-details-title">
   <h3 id="run-details-title">Run details</h3>
-  <p id="diagnostics" class="diagnostics" aria-label="Load diagnostics">No load measurements yet.</p>
-  <div id="run-metrics"></div>
-  <h4>Latency on this server</h4>
-  <p id="latency-summary"></p>
+  <dl id="run-metrics" class="facts"></dl>
+  <h4>This thread loaded</h4>
+  <div id="diagnostics" class="diagnostics" aria-label="Load diagnostics">No load measurements yet.</div>
+  <h4>Speed on this server</h4>
+  <div id="latency-summary"></div>
   <form method="dialog"><div class="row"><button class="btn" autofocus>Done</button></div></form>
 </dialog>
 <dialog id="queue-editor" aria-labelledby="queue-edit-title"><form id="queue-edit-form">
