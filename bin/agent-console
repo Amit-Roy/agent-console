@@ -16,7 +16,8 @@ case "${1:-status}" in
   restart) "$0" stop; sleep 1; "$0" start ;;
   # for agents: run as the last step of a turn that changed the server. Returns at once; a detached watcher waits for every running
   # thread (including the caller's) to finish, then restarts the server. Open browsers reload themselves.
-  restart-when-idle) (cd "$DIR" && setsid nohup node scripts/idle-restart.mjs </dev/null >>"$RUN/idle-restart.log" 2>&1 &); echo "restart scheduled: it happens when no thread is running (log: $RUN/idle-restart.log)" ;;
+  # redirect the whole subshell: a forked list left holding the caller's stdout makes `... | tail` wait for the restart
+  restart-when-idle) (cd "$DIR" && exec setsid nohup node scripts/idle-restart.mjs) </dev/null >>"$RUN/idle-restart.log" 2>&1 & echo "restart scheduled: it happens when no thread is running (log: $RUN/idle-restart.log)" ;;
   status) running && echo "up (pid $(cat "$RUN/pid"))" || echo down ;;
   password) cat "$HOME/.config/agent-console/password" 2>/dev/null || echo "(created on first start)" ;;
   url) echo "$(echo "${VSCODE_PROXY_URI:-}" | sed "s/{{port}}/$PORT/")" ;;
