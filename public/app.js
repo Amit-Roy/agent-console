@@ -216,7 +216,7 @@ function handle(m) {
       break;
     case "history":
       if (m.thread !== state.current || (m.request != null && m.request !== state.request)) break;
-      void (m.before != null ? showEarlier(m) : showHistory(m));
+      void (m.before != null ? showEarlier(m) : m.delta ? showDelta(m) : showHistory(m));
       break;
     case "queue":
       state.queues[m.thread] = m.items;
@@ -237,6 +237,7 @@ function handle(m) {
         else if (m.event.type === "assistant" || m.event.type === "result") state.waitingLive = [];
         break;
       }
+      if (m.seq) state.end = Math.max(state.end || 0, m.seq);
       if (state.rendering) state.pendingLive.push(m.event); // history is still being drawn: keep order, replay these after
       else onEvent(m.event, true);
       break;
@@ -259,9 +260,9 @@ function modelMeta(v) {
   return { label: id.replace(/:free$/, ""), desc: [prov, rest.join("/"), free && "free"].filter(Boolean).join(" · ") };
 }
 const ADV = "advisor:";
-const ADVISOR_LABEL = { default: "Settings default", off: "Off", opus: "Opus", fable: "Fable" };
+const ADVISOR_LABEL = { default: "Settings default", opus: "Opus", fable: "Fable" };
 // the model list, then (for agents that have an advisor) "Advisor · X" rows: one dropdown covers both choices
-const withAdvisors = (items, p, advisor = "default") => !p?.advisors?.length ? items : [...items, ...["default", ...p.advisors].map((a) => ({ value: ADV + a, label: `Advisor · ${ADVISOR_LABEL[a] || cap(a)}`, desc: a === "default" ? "Use the advisor from your Claude settings." : a === "off" ? "No additional advisor model calls." : "A stronger model Claude consults before big decisions (additional usage).", icon: "sparkle", keep: true, checked: a === advisor }))];
+const withAdvisors = (items, p, advisor = "default") => !p?.advisors?.length ? items : [...items, ...["default", ...p.advisors].map((a) => ({ value: ADV + a, label: `Advisor · ${ADVISOR_LABEL[a] || cap(a)}`, desc: a === "default" ? "Use the advisor from your Claude settings." : "A stronger model Claude consults before big decisions.", icon: "sparkle", keep: true, checked: a === advisor }))];
 const modelItems = (models, p) => models.map((v) => ({ value: v, ...modelMeta(v), ...(p?.modelDetails?.[v] ? { label: p.modelDetails[v].label, desc: p.modelDetails[v].description ?? modelMeta(v).desc } : {}) }));
 function fillEffort(menu, p, model, value = "default") {
   const meta = p?.modelDetails?.[model];
@@ -324,9 +325,7 @@ const threadActions = (id) => {
 const THREAD_ACTIONS = [
   { value: "rename", label: "Rename", icon: "pencil" },
   { value: "compact", label: "Compact context", desc: "Reduce context; keep the transcript", icon: "sparkle" },
-  { value: "economy", label: "Economy settings", desc: "Use medium effort and turn the advisor off; keep the selected model", icon: "sparkle" },
   { value: "fork", label: "Fork", desc: "Continue in a new thread", icon: "fork" },
-  { value: "fork-recent", label: "Fork with recent context", desc: "Carry a short recent handoff; keep the full transcript available", icon: "fork" },
   { value: "download", label: "Download", desc: "Save as a Markdown file", icon: "download" },
   { value: "share", label: "Share", desc: "Send the conversation as text", icon: "share" },
   { value: "details", label: "Run details", desc: "Model, effort, tokens and load timings", icon: "code" },
@@ -350,13 +349,6 @@ async function runThreadAction(id, action) {
     startRename();
   } else if (action === "compact") {
     send({ t: "compact", thread: id });
-  } else if (action === "economy") {
-    if (t.status === "running") { toast("Apply economy settings when this turn finishes."); return; }
-    const provider = state.providers.get(t.provider);
-    const efforts = provider?.modelDetails?.[t.model]?.efforts || [];
-    const effort = ["medium", "low"].find(e => efforts.includes(e)) || "default";
-    send({ t: "update", thread: id, effort, ...(provider?.advisors?.includes("off") ? { advisor: "off" } : {}) });
-    toast("Economy settings applied; selected model kept.");
   } else if (action === "details") {
     setNav(false);
     if (state.current !== id) openThread(id);
@@ -366,8 +358,6 @@ async function runThreadAction(id, action) {
     send({ t: "archive", thread: id, archived: action === "archive" });
   } else if (action === "delete") {
     if (confirm(`Delete "${t.title}" and its history?`)) send({ t: "delete", thread: id });
-  } else if (action === "fork-recent") {
-    send({ t: "fork", thread: id, context: "recent" });
   } else if (action.startsWith("fork:")) {
     send({ t: "fork", thread: id, provider: action.slice(5) });
   } else if (action === "fork") {
@@ -458,7 +448,7 @@ function renderThreads() {
   for (const t of list) {
     const li = el("li", t.id === state.current ? "sel" : "");
     li.tabIndex = 0;
-    li.title = `${t.title}\n${t.cwd}\n${provLabel(t.provider)} · ${modelMeta(t.model).label}${t.mode === "bypassPermissions" ? " · Bypass" : ""} · ${t.costMeasured ? `$${t.cost.toFixed(3)} recorded API-equivalent` : "cost not measured"}`;
+    li.title = `${t.title}\n${t.cwd}\n${provLabel(t.provider)} · ${modelMeta(t.model).label}${t.mode === "bypassPermissions" ? " · Bypass" : ""} · $${t.cost.toFixed(3)}`;
     if (t.id === state.current) li.setAttribute("aria-current", "true");
     const dot = el("span", `dot ${t.status}`);
     dot.setAttribute("aria-hidden", "true");
@@ -518,7 +508,7 @@ function openThread(id) {
   const old = cur();
   if (old && (!state.rendering && !state.loading || state.snapshot)) {
     if (state.live?.raf) { cancelAnimationFrame(state.live.raf); state.live.raf = 0; }
-    const snapshot = (!state.deferredRefresh && state.snapshot) || { nodes: [...$("chat").childNodes], cards: state.cards, subs: state.subs, subTools: state.subTools, live: state.live, compact: state.compact, start: state.start, latestStart: state.latestStart, scroll: $("chat").scrollTop, stats: $("diagnostics").textContent };
+    const snapshot = (!state.deferredRefresh && state.snapshot) || { nodes: [...$("chat").childNodes], cards: state.cards, subs: state.subs, subTools: state.subTools, live: state.live, compact: state.compact, start: state.start, latestStart: state.latestStart, end: state.end, scroll: $("chat").scrollTop, stats: $("diagnostics").textContent };
     snapshot.stale ||= !!state.revalidating || !!state.loadingEarlier || old.id === id;
     views.delete(old.id);
     views.set(old.id, snapshot);
@@ -549,7 +539,7 @@ function openThread(id) {
   if (cached) {
     if (state.features.selectiveEvents) send({ t: "subscribe", thread: id });
     clearTimeout(state.loadTimer); state.loading = null;
-    state.cards = cached.cards; state.subs = cached.subs; state.subTools = cached.subTools; state.start = cached.start; state.latestStart = cached.latestStart; state.live = cached.live; state.compact = cached.compact;
+    state.cards = cached.cards; state.subs = cached.subs; state.subTools = cached.subTools; state.start = cached.start; state.latestStart = cached.latestStart; state.end = cached.end; state.live = cached.live; state.compact = cached.compact;
     $("chat").replaceChildren(...cached.nodes);
     $("chat").querySelector(":scope > .earlier")?.removeAttribute("disabled");
     $("chat").scrollTop = cached.scroll;
@@ -574,7 +564,7 @@ function openThread(id) {
   showLoading(id);
   state.measurement = { thread: id, at: state.openAt, hidden: document.hidden };
   state.requestSentAt = performance.now();
-  send({ t: "open", thread: id, request: state.request, foregroundOnly: !!state.features.selectiveEvents });
+  send({ t: "open", thread: id, request: state.request, foregroundOnly: !!state.features.selectiveEvents, small: SMALL_PAGES });
 }
 
 function refreshConversation() {
@@ -585,10 +575,12 @@ function refreshConversation() {
   state.refreshAt = performance.now();
   state.measurement = { thread: state.current, at: state.refreshAt, hidden: document.hidden };
   state.requestSentAt = performance.now();
-  send({ t: "open", thread: state.current, request: state.request, foregroundOnly: !!state.features.selectiveEvents });
+  send({ t: "open", thread: state.current, request: state.request, foregroundOnly: !!state.features.selectiveEvents, since: state.end, small: SMALL_PAGES });
 }
 
 // ---------- opening a thread: skeleton while it loads, history drawn in slices so the page never freezes ----------
+// Phones get smaller pages: building each message costs them about a millisecond, and the link is slower.
+const SMALL_PAGES = matchMedia("(pointer: coarse)").matches;
 const frame = () => new Promise((r) => requestAnimationFrame(() => r()));
 // Nothing for the first 150ms (a quick open should not flash a placeholder), then message-shaped bars and a spinner.
 function showLoading(id) {
@@ -642,6 +634,7 @@ async function showHistory(m) {
   state.pendingLive = refreshing ? state.waitingLive.splice(0) : [];
   state.start = m.start || 0;
   state.latestStart = state.start;
+  state.end = m.end;
   const more = state.start > 0 ? earlierButton() : null;
   if (more) {
     more.disabled = true; // not before the newest page is drawn: two renders at once would fight over the scroll position
@@ -678,6 +671,30 @@ async function showHistory(m) {
   state.lastScrollTop = $("chat").scrollTop;
   if (more) more.disabled = false;
   for (const e of state.pendingLive.splice(0)) onEvent(e, true);
+  historyDone(m, refreshing, cachedMetrics);
+}
+// A refresh that asked for only what was logged after the cached view: append it in place instead of redrawing the conversation.
+function showDelta(m) {
+  clearTimeout(state.loadTimer);
+  state.loading = null;
+  const cachedMetrics = window.agentConsoleMetrics;
+  state.historyAt = performance.now();
+  const chat = $("chat");
+  const follow = state.stick && nearBottom();
+  if (m.events.length) chat.querySelector(":scope > .empty")?.remove();
+  state.into = document.createDocumentFragment();
+  for (const e of m.events) onEvent(e, false); // at most one page, so no slicing across frames
+  chat.append(state.into);
+  state.into = null;
+  for (const e of state.waitingLive.splice(0)) onEvent(e, true);
+  if (follow) scrollDown(true);
+  state.end = m.end;
+  if (cur()?.operation !== "compact") settleCompact("interrupted");
+  chat.querySelector(":scope > .earlier")?.removeAttribute("disabled");
+  state.lastScrollTop = chat.scrollTop;
+  historyDone(m, true, cachedMetrics);
+}
+function historyDone(m, refreshing, cachedMetrics) {
   const metrics = { thread: m.thread, total_ms: Math.round(performance.now() - (refreshing ? state.refreshAt : state.openAt)), server_ms: m.server_ms, render_ms: Math.round(performance.now() - state.historyAt), events: m.events.length, bytes: m.bytes, prepare_ms: Math.max(0, m.receivedAt - m.roundtrip_ms - (refreshing ? state.refreshAt : state.openAt)), roundtrip_ms: m.roundtrip_ms, decode_ms: m.decode_ms, payload_bytes: m.wire_bytes };
   latency.record({ ...metrics, kind: refreshing ? "refresh" : "open", wait_ms: m.receivedAt - (refreshing ? state.refreshAt : state.openAt), wire_bytes: m.wire_bytes, prepare_ms: Math.max(0, m.receivedAt - m.roundtrip_ms - (state.measurement?.at || 0)), roundtrip_ms: m.roundtrip_ms, decode_ms: m.decode_ms, hidden: state.measurement?.hidden });
   state.measurement = null;
@@ -703,7 +720,7 @@ function earlierButton() {
     state.pageAt = performance.now();
     state.measurement = { thread: state.current, at: state.pageAt, hidden: document.hidden };
     state.requestSentAt = performance.now();
-    send({ t: "open", thread: state.current, before: state.start, request: state.request });
+    send({ t: "open", thread: state.current, before: state.start, request: state.request, small: SMALL_PAGES });
   };
   return b;
 }
@@ -904,6 +921,64 @@ function showLoad(main, detail) {
 }
 const SPEED = [["open", "Open a thread"], ["cached", "Switch back"], ["refresh", "Check for new"], ["page", "Older messages"]];
 const speedWord = (ms) => (ms < 300 ? "fast" : ms < 1000 ? "ok" : "slow");
+// Nearest-rank percentile of times sorted fastest first: p% of loads took this long or less.
+const pct = (sorted, p) => sorted?.length ? sorted[Math.max(0, Math.ceil((p / 100) * sorted.length) - 1)] : null;
+const pctWord = (p) => (p === 100 ? "the slowest load" : p === 50 ? "half of loads are faster" : `${p} in 100 loads are faster`);
+let speedData = null;
+// Which percentiles the table shows and over which time window: the reader's choice, kept between visits.
+const speedView = (() => { try { const v = JSON.parse(localStorage.getItem("ac_speed_view")); if (v?.typical && v?.slowest) return { recent: true, ...v }; } catch {} return { typical: 50, slowest: 95, recent: true }; })();
+const saveSpeedView = () => { try { localStorage.setItem("ac_speed_view", JSON.stringify(speedView)); } catch {} };
+function speedSlider(name, label, min, max) {
+  const wrap = el("label", "slider"), out = el("output"), input = el("input");
+  Object.assign(input, { type: "range", min, max, step: 1, value: speedView[name] });
+  input.dataset.pct = name;
+  input.sync = () => { input.value = speedView[name]; out.textContent = `p${speedView[name]} · ${pctWord(speedView[name])}`; };
+  input.oninput = () => {
+    speedView[name] = Number(input.value);
+    // Typical can never be slower than Slowest: dragging one past the other pushes it along.
+    if (speedView.slowest < speedView.typical) speedView[name === "typical" ? "slowest" : "typical"] = speedView[name];
+    for (const s of $("latency-summary").querySelectorAll("[data-pct]")) s.sync();
+    saveSpeedView();
+    renderSpeedTable();
+  };
+  input.sync();
+  wrap.append(el("span", "", label), input, out);
+  return wrap;
+}
+function windowPicker(days) {
+  const pick = el("div", "window-pick");
+  pick.setAttribute("role", "group"); pick.setAttribute("aria-label", "Time window");
+  for (const [recent, text] of [[true, "Last 20 loads"], [false, `Last ${days} days`]]) {
+    const b = el("button", "", text);
+    b.type = "button";
+    b.setAttribute("aria-pressed", String(speedView.recent === recent));
+    b.onclick = () => {
+      speedView.recent = recent;
+      for (const other of pick.children) other.setAttribute("aria-pressed", String(other === b));
+      saveSpeedView();
+      renderSpeedTable();
+    };
+    pick.append(b);
+  }
+  return pick;
+}
+function renderSpeedTable() {
+  const { typical, slowest, recent } = speedView;
+  const table = el("table", "speed"), head = el("tr");
+  table.caption = el("caption", "sr-only", recent ? "Last 20 loads of each kind" : `Every load in the last ${speedData.retention_days} days`);
+  for (const text of ["", `Typical p${typical}`, `Slowest p${slowest}`]) head.append(Object.assign(el("th", "", text), { scope: "col" }));
+  table.append(el("thead"), el("tbody")); table.tHead.append(head);
+  for (const [key, label] of SPEED) {
+    const times = speedData.groups[`${key}/visible${recent ? "/recent" : ""}`]?.samples_ms;
+    if (!times?.length) continue;
+    const tr = el("tr"), name = el("th"), word = speedWord(pct(times, typical));
+    name.scope = "row";
+    name.append(el("span", `dot ${word}`), label, el("span", "sr-only", ` (${word})`));
+    tr.append(name, el("td", "", fmtMs(pct(times, typical))), el("td", "", fmtMs(pct(times, slowest))));
+    table.tBodies[0].append(tr);
+  }
+  $("latency-summary").querySelector("table").replaceWith(table);
+}
 async function loadLatencySummary() {
   if (!state.features.latency) { $("latency-summary").textContent = "Local measurements will be available after the server reconnects."; return; }
   latency.flush();
@@ -914,19 +989,12 @@ async function loadLatencySummary() {
     const data = await response.json();
     if (!data.available) throw Error();
     if (!data.count) { $("latency-summary").textContent = "No measurements yet. Open or switch threads to collect some."; return; }
-    const table = el("table", "speed"), head = el("tr");
-    for (const [t, tip] of [["", ""], ["Typical", "Median of your last 20"], ["Slowest", "Slowest 1 in 20 of your last 20"], ["14 days", "Typical over 14 days"]]) { const th = el("th", "", t); th.scope = "col"; if (tip) th.title = tip; head.append(th); }
-    table.append(el("thead"), el("tbody")); table.tHead.append(head);
-    for (const [key, label] of SPEED) {
-      const all = data.groups[`${key}/visible`], now = data.groups[`${key}/visible/recent`];
-      if (!all) continue;
-      const tr = el("tr"), name = el("th"), word = speedWord(now.median_ms);
-      name.scope = "row";
-      name.append(el("span", `dot ${word}`), label, el("span", "sr-only", ` (${word})`));
-      tr.append(name, el("td", "", fmtMs(now.median_ms)), el("td", "", fmtMs(now.p95_ms)), el("td", "", fmtMs(all.median_ms)));
-      table.tBodies[0].append(tr);
-    }
-    $("latency-summary").replaceChildren(table, el("p", "note", "Typical and Slowest cover your last 20 loads of each kind; 14 days is the typical time over two weeks. Counts only loads while the app was on screen."));
+    speedData = data;
+    const sliders = el("div", "sliders");
+    sliders.append(speedSlider("typical", "Typical", 50, 95), speedSlider("slowest", "Slowest", 75, 100));
+    $("latency-summary").replaceChildren(windowPicker(data.retention_days), sliders, el("table"));
+    renderSpeedTable();
+    $("latency-summary").append(el("p", "note", "A pN time means N in 100 loads were that fast or faster: p50 is the middle load, p100 the slowest one. Counts only loads while the app was on screen."));
   } catch { $("latency-summary").textContent = "Local measurements are unavailable until the server reconnects."; }
 }
 const fmtTok = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(n >= 1e7 ? 0 : 1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(n));
@@ -1686,15 +1754,6 @@ function renderUsage() {
   const ctxWrap = el("div", "usage-ctx"); ctxWrap.setAttribute("role", "group"); ctxWrap.setAttribute("aria-label", "Thread context");
   const line = el("div", "usage-ctx-line"); line.append(ctxRow, info);
   ctxWrap.append(line, box); pane.append(ctxWrap);
-  if (hasCtx && t.context.used / t.context.max >= 0.7) {
-    const note = el("div", "usage-note", "Long context increases repeated input. Compact this task, or start a fresh thread for unrelated work.");
-    if (t.status === "idle") {
-      const compact = el("button", "btn sm ghost", "Compact context");
-      compact.type = "button"; compact.onclick = () => send({ t: "compact", thread: t.id });
-      note.append(compact);
-    }
-    pane.append(note);
-  }
   if (rebuildTabs) root.replaceChildren(tabs, pane);
   else root.querySelector(".usage-pane").replaceWith(pane);
   if (focusedTab) $(focusedTab)?.focus({ preventScroll: true });

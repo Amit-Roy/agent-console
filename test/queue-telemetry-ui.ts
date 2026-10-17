@@ -46,7 +46,23 @@ try{
   await page.evaluate(()=>window.dispatchEvent(new Event('pagehide')));
   await page.waitForFunction(async()=>{const d=await fetch('/api/latency').then(r=>r.json());return d.groups?.cached?.count>0&&d.groups?.open?.count>0;});
   const result=await page.evaluate(()=>fetch('/api/latency').then(r=>r.json()));assert.ok(result.count>0);assert.ok(result.recent.every((s:any)=>typeof s.total_ms==='number'&&s.width>0));assert.ok(!JSON.stringify(result).includes('PRIVATE'));assert.ok(result.groups.open.p95_ms>=result.groups.open.median_ms);
-  await page.locator('#more').click();await page.getByRole('menuitem',{name:/Run details/}).click();await page.waitForFunction(()=>document.querySelector('#latency-summary')?.textContent?.includes('Open a thread'));await page.getByRole('button',{name:'Done',exact:true}).click();
+  await page.locator('#more').click();await page.getByRole('menuitem',{name:/Run details/}).click();await page.waitForFunction(()=>document.querySelector('#latency-summary')?.textContent?.includes('Open a thread'));
+  // Percentile sliders retitle and recompute both time windows, never cross, and persist across dialog openings.
+  assert.deepEqual(await page.locator('.speed thead th').allTextContents(),['','Typical p50','Slowest p95']);
+  await page.getByRole('button',{name:'Last 14 days'}).click();assert.equal(await page.getByRole('button',{name:'Last 14 days'}).getAttribute('aria-pressed'),'true');
+  assert.ok((await page.locator('.speed caption').textContent())!.includes('14 days'));
+  const typical=page.getByRole('slider',{name:/Typical/}),slowest=page.getByRole('slider',{name:/Slowest/});
+  await slowest.fill('80');await typical.fill('90');
+  assert.equal(await slowest.inputValue(),'90','typical cannot pass slowest');
+  assert.ok((await page.locator('.speed thead').textContent())!.includes('Typical p90')&&(await page.locator('.speed thead').textContent())!.includes('Slowest p90'));
+  assert.ok((await page.locator('#latency-summary').textContent())!.includes('p90 · 90 in 100'));
+  await slowest.fill('100');assert.ok((await page.locator('#latency-summary').textContent())!.includes('p100 · the slowest load'));
+  await page.screenshot({path:`/tmp/run-details-${width}.png`});
+  await page.getByRole('button',{name:'Done',exact:true}).click();
+  await page.locator('#more').click();await page.getByRole('menuitem',{name:/Run details/}).click();await page.waitForFunction(()=>document.querySelector('#latency-summary')?.textContent?.includes('Open a thread'));
+  assert.equal(await page.getByRole('slider',{name:/Typical/}).inputValue(),'90');assert.equal(await page.getByRole('button',{name:'Last 14 days'}).getAttribute('aria-pressed'),'true');
+  assert.equal(await page.locator('#run-details').evaluate(d=>d.scrollWidth>d.clientWidth),false,'speed table fits the dialog');
+  await page.getByRole('button',{name:'Done',exact:true}).click();
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);assert.deepEqual(errors,[]);
   console.log(`PASS ${width}px queue editor/full text/save/cancel/reconnect, real latency upload/storage, cached timing, private authenticated summary and Run details`);await context.close();
  }

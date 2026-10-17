@@ -237,7 +237,7 @@ wss.on("connection", (ws) => {
           return;
         case "open":
           if (m.foregroundOnly === true && threads.get(m.thread)) subscriptions.set(ws, m.thread);
-          return reply({ t: "history", thread: m.thread, request: m.request, before: Number.isInteger(m.before) ? m.before : null, ...threads.page(m.thread, Number.isInteger(m.before) ? m.before : undefined) });
+          return reply({ t: "history", thread: m.thread, request: m.request, before: Number.isInteger(m.before) ? m.before : null, ...threads.page(m.thread, Number.isInteger(m.before) ? m.before : undefined, Number.isInteger(m.since) && m.since >= 0 ? m.since : undefined, m.small === true) });
         case "create": {
           const t = threads.create({ provider: m.provider, cwd: safeCwd(m.cwd), mode: m.mode, model: m.model, effort: m.effort, title: m.title });
           return reply({ t: "created", thread: t });
@@ -252,7 +252,7 @@ wss.on("connection", (ws) => {
         case "unqueue":
           return threads.unqueue(m.thread, String(m.id));
         case "fork":
-          return reply({ t: "created", thread: threads.fork(m.thread, typeof m.provider === "string" ? m.provider : undefined, m.context === "recent") });
+          return reply({ t: "created", thread: threads.fork(m.thread, typeof m.provider === "string" ? m.provider : undefined) });
         case "abort":
           return threads.abort(m.thread);
         case "update": {
@@ -276,7 +276,7 @@ wss.on("connection", (ws) => {
 });
 
 void refreshPiModels();
-await headroom.start();
+headroom.start();
 
 server.listen(PORT, HOST, () => {
   if (PID_FILE) fs.writeFileSync(PID_FILE, String(process.pid)); // only the process that holds the port may claim it

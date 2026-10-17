@@ -20,14 +20,14 @@ try{
  browser=await chromium.launch();const ctx=await browser.newContext({viewport:{width:1280,height:800}});
  await ctx.addCookies([{name:'ac_session',value:makeToken(),url:base}]);await ctx.addInitScript(id=>localStorage.setItem('ac_thread',id),a);
  const page=await ctx.newPage(),errors:string[]=[];page.on('pageerror',e=>errors.push(e.message));
- let client:any,historyCount=0,refreshCount=0;
+ let client:any,historyCount=0,refreshCount=0,deltaCount=0;
  await page.routeWebSocket('**/ws',socket=>{
   client=socket;let closed=false;socket.onClose(()=>{closed=true;});const upstream=socket.connectToServer();
   upstream.onMessage(raw=>{
    const m=JSON.parse(String(raw));
    if(m.t==='hello')m.threads.find((t:any)=>t.id===a).status='running';
    if(m.t!=='history'){socket.send(JSON.stringify(m));return;}
-   historyCount++;
+   historyCount++;if(m.delta)deltaCount++;
    if(m.thread===a&&historyCount>1){refreshCount++;m.events.push(assistant(`Fresh version ${refreshCount}`));}
    const inject=m.thread===a&&refreshCount===1;
    if(inject)setTimeout(()=>{if(!closed){
@@ -74,8 +74,9 @@ try{
  await page.locator('.earlier').click();await page.waitForFunction(()=>document.querySelector('#chat')?.textContent?.includes('History B 0'));
  await pick('Cache 0');await pick('Cache 1');assert.ok((await page.locator('#chat').textContent())!.includes('History B 0'),'paging while deferred remains cached');
  await page.locator('#chat').evaluate(e=>{e.scrollTop=e.scrollHeight;});await page.waitForFunction(()=>!document.querySelector('#conversation-updating'));
- assert.ok(!(await page.locator('#chat').textContent())!.includes('History B 0'));
+ // The refresh asks only for lines after the cached view, so the older pages read meanwhile stay and nothing is drawn twice.
+ assert.ok((await page.locator('#chat').textContent())!.includes('History B 0'));assert.equal(await page.getByText('History B 449',{exact:true}).count(),1);
  await page.evaluate(()=>window.dispatchEvent(new Event('pagehide')));await page.waitForFunction(async()=>{const d=await fetch('/api/latency').then(r=>r.json());return d.groups?.cached?.count>0&&d.groups?.refresh?.count>0;});
- assert.deepEqual(errors,[]);console.log(`PASS running/stale switches restore below200ms despite1000ms history, refreshdistinct, liveeventsordered, abandonedrefreshpreservesDOM, idleinvalidationsrevalidate (${historyCount} history replies)`);
+ assert.ok(deltaCount>=3,`refreshes fetch only new lines (${deltaCount} deltas)`);assert.deepEqual(errors,[]);console.log(`PASS running/stale switches restore below200ms despite1000ms history, refreshdistinct, liveeventsordered, abandonedrefreshpreservesDOM, idleinvalidationsrevalidate (${historyCount} history replies)`);
  await ctx.close();
 }finally{await browser?.close();if(server.exitCode===null){server.kill('SIGTERM');await new Promise<void>(r=>server.once('exit',()=>r()));}fs.rmSync(data,{recursive:true,force:true});}

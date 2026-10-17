@@ -8,12 +8,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { DATA_DIR } from "./auth.ts";
 import { brainCommit } from "./providers/brain.ts";
+import { createNudger, type Nudger } from "./providers/nudge.ts";
 import { createLabeler, needsLabel, type Labeler } from "./providers/label.ts";
 import { suggestTitle } from "./providers/title.ts";
-import { recentPreamble, replayPreamble } from "./export.ts";
-import { backfill, restoreAccounting, recordTurn, readTurns, type Turn } from "./analytics.ts";
-import { repairAccounting } from "./accounting-repair.ts";
-import { SessionAccounting, codexAccounting, piAccounting, type ModelUsage } from "./accounting.ts";
+import { replayPreamble } from "./export.ts";
+import { backfill, claudeTotals, delta, recordTurn, type Turn } from "./analytics.ts";
 import { MAX_ATTACHMENTS, removeUploads, resolveAttachments, threadDir, withFileList } from "./uploads.ts";
 import { clip, DEFAULT_PROVIDER, PROVIDERS, type Agent, type AgentCtx, type Command, type Mode } from "./providers/index.ts";
 
@@ -34,13 +33,11 @@ export interface Thread {
   forkFrom?: string; // forked from a Claude session: the first run continues a copy of it (cleared once the fork has its own session id)
   context?: { used?: number; max?: number; source?: string }; // tokens in the agent's context now, and the model's window when the harness reports it
   replay?: boolean; // forked from an agent with no native fork: the first message carries the earlier conversation as text
-  replayLimit?: number; // explicit short handoff instead of the native session or full text replay
   status: "idle" | "running";
   operation?: "compact";
   lastCompactedAt?: number;
   archived?: number; // when it was archived: it leaves the working list until unarchived or sent to again
   cost: number;
-  costMeasured?: boolean;
   createdAt: number;
   updatedAt: number;
 }
@@ -59,6 +56,7 @@ const IDLE_KILL_MS = 30 * 60 * 1000;
 const NOISE = new Set(["system/thinking_tokens", "system/status", "system/hook_started", "system/hook_response", "system/task_updated", "system/background_tasks_changed", "tool_progress"]);
 const kindOf = (e: any) => `${e?.type}${e?.subtype ? "/" + e.subtype : ""}`;
 const PAGE = Number(process.env.AGENT_CONSOLE_PAGE) || 40; // events the UI gets when it opens a thread; older ones load on request
+const PAGE_BYTES = Number(process.env.AGENT_CONSOLE_PAGE_BYTES) || 96_000; // sent JSON per page: a page widened back to its turn's start can exceed 150 events
 const RESULT_CLIP = 4000; // tool output in replayed history (the card shows at most 8000 anyway, and live output is already clipped at 20000)
 const MAX_QUEUE = 20;
 
@@ -88,7 +86,7 @@ function mergeQueued(items: Queued[]): { text: string; attachments: unknown } {
 const queuePreview = ({ id, text, revision, editing }: Queued) => ({ id, text: text.slice(0, 200), revision, editing: !!editing });
 
 // what the usage dashboard needs to know about the turn in flight
-interface TurnState { start: number; tools: Record<string, number>; usage?: any; models?: ModelUsage[] }
+interface TurnState { start: number; tools: Record<string, number>; last?: ReturnType<typeof claudeTotals> }
 
 interface Live {
   agent: Agent;
@@ -102,8 +100,9 @@ export class Threads {
   private threads = new Map<string, Thread>();
   private live = new Map<string, Live>();
   private turns = new Map<string, TurnState>(); // the turn in flight, per thread
-  private accounting = new SessionAccounting();
+  private cumulative = new Map<string, ReturnType<typeof claudeTotals>>(); // Claude's session-wide counters at the last result
   private queues = new Map<string, Queued[]>(); // messages to send, in order, once the running turn ends
+  private nudgers = new Map<string, Nudger>(); // brain-save reminders for harnesses without hooks (Claude's Stop hook does its own)
   private emit: Emit;
   private labeler: Labeler; // plain-English labels for shell commands that arrive without a description
   private commands: Record<string, Command[]> = {}; // per provider: each harness has its own slash commands and skills
@@ -141,17 +140,7 @@ export class Threads {
         this.threads.set(t.id, t);
       }
     } catch {}
-    this.accounting = restoreAccounting([...this.threads.values()]);
     try { backfill([...this.threads.values()]); } catch {} // usage history from logs written before the dashboard existed
-    try {
-      repairAccounting(DATA_DIR, true); // startup precedes new turns; preserves an exclusive original backup
-      const rows = readTurns(0, Date.now(), Number.MAX_SAFE_INTEGER).filter(r => r.accounting === 2);
-      for (const t of this.threads.values()) {
-        const known = rows.filter(r => r.thread === t.id && r.cost != null);
-        t.cost = known.reduce((sum, r) => sum + r.cost!, 0);
-        t.costMeasured = known.length > 0;
-      }
-    } catch { /* malformed/incomplete legacy history must not stop the console */ }
     try {
       for (const [id, items] of Object.entries(JSON.parse(fs.readFileSync(QUEUES_FILE, "utf8"))) as [string, Queued[]][]) {
         if (!this.threads.has(id) || !Array.isArray(items)) continue;
@@ -250,7 +239,7 @@ export class Threads {
   // A new thread that carries on from this one. Claude forks its session, Pi gets a copy of its session directory, and agents with
   // no fork (Codex) replay the earlier conversation as text in the first message. The history and uploads are copied so the fork reads whole.
   // With `provider` set to another agent the fork switches harness: its native session cannot carry over, so it always replays text.
-  fork(id: string, provider?: string, recent = false): Thread {
+  fork(id: string, provider?: string): Thread {
     const src = this.threads.get(id);
     if (!src) throw new Error("Unknown thread");
     const target = provider && provider !== src.provider ? PROVIDERS.get(provider) : undefined;
@@ -271,7 +260,7 @@ export class Threads {
       model: target ? target.defaultModel() : src.model,
       effort: target ? "default" : src.effort,
       advisor: target ? undefined : src.advisor,
-      context: target || recent ? undefined : src.context,
+      context: target ? undefined : src.context,
       status: "idle",
       cost: 0,
       createdAt: now,
@@ -281,9 +270,7 @@ export class Threads {
     const hasHistory = fs.existsSync(log(src.id));
     if (hasHistory) fs.copyFileSync(log(src.id), log(t.id));
     if (fs.existsSync(threadDir(src.id))) fs.cpSync(threadDir(src.id), threadDir(t.id), { recursive: true });
-    if (recent) {
-      if (hasHistory) { t.replay = true; t.replayLimit = 6000; }
-    } else if (target) {
+    if (target) {
       if (hasHistory) t.replay = true;
     } else if (src.provider === "claude") {
       if (src.sessionId) t.forkFrom = src.sessionId;
@@ -301,6 +288,7 @@ export class Threads {
     this.kill(id);
     this.queues.delete(id);
     this.emitQueue(id);
+    this.nudgers.delete(id);
     this.threads.delete(id);
     this.persist();
     fs.rmSync(path.join(LOG_DIR, `${id}.jsonl`), { force: true });
@@ -324,14 +312,28 @@ export class Threads {
 
   // What the UI gets when it opens a thread: the newest PAGE events (or the PAGE before `before`), starting on a user message so a
   // page never opens mid-turn, with long tool output clipped. `start > 0` means there is older history to ask for.
-  page(id: string, before?: number) {
+  // With `since` (the last line a cached view holds) it is only the lines after that, or a full page when too many arrived meanwhile.
+  // `small` (phones) gets 60% of the events and half the bytes: less to download and draw on every open and older page.
+  page(id: string, before?: number, since?: number, small = false) {
+    const limit = small ? Math.ceil(PAGE * 0.6) : PAGE, maxBytes = small ? PAGE_BYTES / 2 : PAGE_BYTES;
     const at = performance.now();
-    const page = this.historyIndex.read(path.join(LOG_DIR, `${id}.jsonl`), before, PAGE);
-    const events = page.events.filter((e) => !NOISE.has(kindOf(e))).map((e) => {
-      if (e?.type !== "user" || !Array.isArray(e.message?.content)) return e;
-      return { ...e, message: { ...e.message, content: e.message.content.map((c: any) => (c?.type === "tool_result" && typeof c.content === "string" && c.content.length > RESULT_CLIP ? { ...c, content: clip(c.content, RESULT_CLIP) } : c)) } };
-    }).map(historyWireEvent);
-    return { ...page, events, server_ms: Math.round((performance.now() - at) * 10) / 10 };
+    const file = path.join(LOG_DIR, `${id}.jsonl`);
+    const delta = since != null && before == null ? this.historyIndex.after(file, since, PAGE) : null;
+    const page = delta || this.historyIndex.read(file, before, limit);
+    let items = page.events.map((e, i) => ({ line: page.start + i, e })).filter(({ e }) => !NOISE.has(kindOf(e))).map(({ line, e }) => {
+      if (e?.type === "user" && Array.isArray(e.message?.content)) e = { ...e, message: { ...e.message, content: e.message.content.map((c: any) => (c?.type === "tool_result" && typeof c.content === "string" && c.content.length > RESULT_CLIP ? { ...c, content: clip(c.content, RESULT_CLIP) } : c)) } };
+      e = historyWireEvent(e);
+      return { line, e, size: JSON.stringify(e).length };
+    });
+    let start = page.start;
+    let rest = items.reduce((n, x) => n + x.size, 0);
+    if (!delta && rest > maxBytes && items.length > 1) {
+      // Too big: begin at the earliest later user message that fits, else just the newest PAGE events (mid-turn, like an unaligned page).
+      let cut = items.findIndex((x) => (rest -= x.size) + x.size <= maxBytes && x.e?.type === "user_input");
+      if (cut < 0) cut = Math.max(0, items.length - limit);
+      if (cut > 0) { start = items[cut].line; items = items.slice(cut); }
+    }
+    return { ...page, start, events: items.map((x) => x.e), ...(delta ? { delta: true } : {}), server_ms: Math.round((performance.now() - at) * 10) / 10 };
   }
 
   private log(id: string, ev: unknown) {
@@ -339,8 +341,9 @@ export class Threads {
   }
 
   private publish(id: string, ev: any, persistIt = true) {
-    if (persistIt) this.log(id, ev);
-    this.emit({ t: "event", thread: id, event: ev });
+    if (!persistIt) return void this.emit({ t: "event", thread: id, event: ev });
+    this.log(id, ev);
+    this.emit({ t: "event", thread: id, event: ev, seq: this.historyIndex.count(path.join(LOG_DIR, `${id}.jsonl`)) });
   }
 
   private setCommands(provider: string, list: Command[]) {
@@ -354,6 +357,7 @@ export class Threads {
     const prov = PROVIDERS.get(t.provider);
     if (!prov) throw new Error(`Unknown provider "${t.provider}".`);
     const live: Live = { agent: undefined as unknown as Agent, aborted: false };
+    this.cumulative.delete(t.id); // a new agent process counts its own tokens and cost from zero
     const ctx: AgentCtx = {
       event: (ev) => this.onEvent(t, ev),
       commands: (list) => this.setCommands(t.provider, list),
@@ -392,7 +396,6 @@ export class Threads {
       const windows = claudeWindows(ev);
       if (windows.length) usage.record(t.provider, { windows });
     }
-    if (ev.type === "token_usage") { const turn = this.turns.get(t.id); if (turn) turn.usage = ev; }
     if (ev.type === "run_settings" || ev.type === "token_usage") {
       t.lastRun = { ...(ev.type === "run_settings" ? {} : t.lastRun), ...Object.fromEntries(Object.entries(ev).filter(([k]) => k !== "type")) };
       this.touch(t);
@@ -405,7 +408,6 @@ export class Threads {
       return;
     }
     if (ev.type === "system" && ev.subtype === "init" && ev.session_id && t.sessionId !== ev.session_id) {
-      if (t.forkFrom) this.accounting.seedFork(ev.session_id, t.forkFrom);
       t.sessionId = ev.session_id;
       delete t.forkFrom; // the fork now has its own session
       this.persist();
@@ -441,6 +443,7 @@ export class Threads {
       t.lastRun = { ...t.lastRun, duration_ms: ev.duration_ms };
       // a message that arrived just as the turn ended starts the next one straight away: Claude says so in queued_turn_count
       t.status = Number(ev.queued_turn_count) > 0 ? "running" : "idle";
+      if (typeof ev.total_cost_usd === "number") t.cost += ev.total_cost_usd;
       this.touch(t);
       brainCommit(); // agents may have written wiki pages this turn; keep the shared brain's git history current
       if (t.status === "idle" && (!ev.is_error || parseCommand(this.queues.get(t.id)?.[0]?.text || "")?.name === "compact")) this.drain(t.id);
@@ -451,22 +454,40 @@ export class Threads {
         if (b?.type === "tool_use" && needsLabel(b.name, b.input)) this.labeler.request({ thread: t.id, id: b.id, command: b.input.command, cwd: t.cwd });
       }
     }
+    if (t.provider !== "claude" && !compacting) this.nudge(t, ev);
   }
 
   private finishTurn(t: Thread, ev: any) {
-    const measured = ev.modelUsage ? this.accounting.consume(ev.session_id || t.sessionId || t.id, ev) : undefined;
-    if (measured?.duplicate) return;
     const turn = this.turns.get(t.id);
     if (!turn) return;
     this.turns.delete(t.id);
-    const row: Turn = { ts: turn.start, thread: t.id, provider: t.provider, model: t.lastRun?.model || t.model, effort: t.effort, ms: ev.duration_ms, accounting: 2 };
+    const row: Turn = { ts: turn.start, thread: t.id, provider: t.provider, model: t.model, effort: t.effort, ms: ev.duration_ms };
     if (Object.keys(turn.tools).length) row.tools = turn.tools;
     if (ev.is_error) row.err = 1;
-    if (measured) Object.assign(row, measured);
-    else if (t.provider === "codex") Object.assign(row, codexAccounting(turn.usage, row.model!));
-    else if (ev.usageModels) Object.assign(row, piAccounting(ev.usageModels));
-    if (row.cost != null) { t.cost += row.cost; t.costMeasured = true; }
+    if (ev.modelUsage) {
+      const now = claudeTotals(ev);
+      const last = this.cumulative.get(t.id);
+      if (now.cost != null) row.cost = delta(now.cost, last?.cost);
+      row.in = delta(now.in, last?.in); row.out = delta(now.out, last?.out); row.cache = delta(now.cache, last?.cache);
+      this.cumulative.set(t.id, now);
+    } else if (t.lastRun?.input_tokens != null) {
+      row.in = t.lastRun.input_tokens; row.out = t.lastRun.output_tokens; row.cache = t.lastRun.cached_input_tokens;
+    }
     try { recordTurn(row); } catch {}
+  }
+
+  private nudge(t: Thread, ev: any) {
+    let n = this.nudgers.get(t.id);
+    if (!n) this.nudgers.set(t.id, (n = createNudger()));
+    n.observe(ev);
+    if (ev.type !== "result" || ev.is_error) return;
+    const msg = n.check();
+    if (!msg) return;
+    setTimeout(() => {
+      try {
+        if (this.threads.get(t.id)?.status === "idle") this.send(t.id, msg, { auto: "brain" }); // skipped if the user already started a turn
+      } catch {}
+    }, 300).unref();
   }
 
   private command(t: Thread, text: string, attachments?: unknown): boolean {
@@ -506,7 +527,6 @@ export class Threads {
     t.status = "running";
     this.publish(id, { type: "user_input", text: `/compact${instructions ? " " + instructions : ""}`, command: true, ts: Date.now() });
     this.publish(id, { type: "command_status", command: "compact", status: "running", text: "Compacting context…" });
-    this.turns.set(id, { start: Date.now(), tools: {} });
     this.touch(t);
     try { live.agent.compact(instructions); }
     catch (error) { this.kill(id); delete t.operation; t.status = "idle"; this.touch(t); throw error; }
@@ -526,9 +546,8 @@ export class Threads {
     const attachments = resolveAttachments(id, opts.attachments);
     let prompt = withFileList(text, attachments);
     if (t.replay && !opts.auto) {
-      prompt = (t.replayLimit === 6000 ? recentPreamble(this.history(id)) : replayPreamble(this.history(id))) + prompt; // exclude this new message
+      prompt = replayPreamble(this.history(id)) + prompt; // before publish: the transcript must not include this message
       t.replay = false;
-      delete t.replayLimit;
     }
     if (!opts.auto) delete t.archived; // writing to an archived thread puts it back to work (touch below persists it)
     let live = this.live.get(id);

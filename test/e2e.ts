@@ -1,5 +1,5 @@
 // End-to-end check against a running server: auth gate, websocket origin check, provider plumbing via the mock agent.
-// Start a scratch server with AGENT_CONSOLE_PAGE=12 AGENT_CONSOLE_MOCK=1 and isolated AGENT_CONSOLE_DATA/AGENT_CONSOLE_RUN.
+// Start the server like:  AGENT_CONSOLE_PAGE=12 BRAIN_NUDGE_AFTER=2 AGENT_CONSOLE_MOCK=1 AGENT_CONSOLE_DATA=/tmp/ac-test PORT=7071 node server/index.ts
 // REAL=1 also runs one turn against the real claude CLI (spends a little subscription quota).
 import { WebSocket } from "ws";
 import { makeToken } from "../server/auth.ts";
@@ -104,12 +104,16 @@ if (hello.providers.some((p: any) => p.id === "mock")) {
   const h0 = await waitFor((m) => m.t === "history", 3000);
   check("tool label: persisted, so history replay carries it after the card", h0.events.findIndex((e: any) => e.type === "tool_label") > h0.events.findIndex((e: any) => e.type === "assistant" && e.message.content[0].type === "tool_use"));
 
-  // Completed tool work must never buy a separate model turn for memory housekeeping.
+  // brain reminder: the scratch server runs with BRAIN_NUDGE_AFTER=2, and this thread has now made 2 tool calls with no wiki write
   clear();
   ws.send(JSON.stringify({ t: "send", thread: id, text: "tool second" }));
-  await waitFor((m) => m.t === "event" && m.event.type === "result", 4000);
-  await new Promise((r) => setTimeout(r, 800));
-  check("memory upkeep never starts an automatic model turn", !inbox.some(m => m.t === "event" && m.event.type === "user_input" && m.event.auto === "brain"));
+  const nudged = await waitFor((m) => m.t === "event" && m.event.type === "user_input" && m.event.auto === "brain", 4000);
+  if (nudged) {
+    check("nudge: server sends one automatic brain reminder after a long turn", nudged.event.text.startsWith("[brain] 2 tool calls"));
+    await waitFor((m) => m.t === "event" && m.event.type === "result" && inbox.indexOf(m) > inbox.indexOf(nudged), 4000);
+    await new Promise((r) => setTimeout(r, 800));
+    check("nudge: exactly one reminder, thread idle afterwards", inbox.filter((m) => m.t === "event" && m.event.auto === "brain").length === 1 && inbox.filter((m) => m.t === "thread" && m.thread.id === id).at(-1)?.thread.status === "idle");
+  } else console.log("SKIP  nudge e2e (start the scratch server with BRAIN_NUDGE_AFTER=2)");
 
   clear();
   ws.send(JSON.stringify({ t: "send", thread: id, text: "fail now" }));
@@ -175,7 +179,7 @@ if (hello.providers.some((p: any) => p.id === "mock")) {
 
   // ---- steering, queued messages, context meter, noise, paged history
   const steerT = (await create({ provider: "mock", model: "echo", title: "steer" })).thread.id;
-  check("claude offers explicit advisor Off plus opus/fable; mock offers none", JSON.stringify(hello.providers.find((p: any) => p.id === "claude")?.advisors) === '["off","opus","fable"]' && hello.providers.find((p: any) => p.id === "mock")?.advisors.length === 0);
+  check("claude offers advisors (opus, fable); mock offers none", JSON.stringify(hello.providers.find((p: any) => p.id === "claude")?.advisors) === '["opus","fable"]' && hello.providers.find((p: any) => p.id === "mock")?.advisors.length === 0);
   check("providers advertise native steering", hello.providers.filter((p: any) => p.steer).map((p: any) => p.id).sort().join() === ["claude", "codex", "mock", "pi"].sort().join(), JSON.stringify(hello.providers.map((p: any) => [p.id, p.steer])));
   clear();
   ws.send(JSON.stringify({ t: "send", thread: steerT, text: "slow burn for steering" }));
@@ -221,6 +225,33 @@ if (hello.providers.some((p: any) => p.id === "mock")) {
     ws.send(JSON.stringify({ t: "open", thread: steerT, before: pg.start }));
     const older = await waitFor((m) => m.t === "history" && m.before === pg.start, 3000);
     check("paging: the page before it ends exactly where the first begins", older.events.length === pg.start - older.start && older.start < pg.start && older.total === pg.total, `${older.start}..${pg.start}`);
+    clear();
+    ws.send(JSON.stringify({ t: "send", thread: steerT, text: "after the page" }));
+    await waitFor((m) => m.t === "event" && m.event.type === "result", 3000);
+    const lastSeq = inbox.filter((m) => m.t === "event" && m.thread === steerT && m.seq).at(-1)?.seq;
+    clear();
+    ws.send(JSON.stringify({ t: "open", thread: steerT, since: pg.end }));
+    const delta = await waitFor((m) => m.t === "history" && m.delta, 3000);
+    check("delta: a refresh from a cached view gets only the lines logged after it", delta?.start === pg.end && delta.end === lastSeq && delta.events[0]?.text === "after the page" && delta.events.at(-1)?.type === "result", JSON.stringify({ start: delta?.start, end: delta?.end, lastSeq, n: delta?.events.length }));
+    clear();
+    ws.send(JSON.stringify({ t: "open", thread: steerT, since: lastSeq }));
+    const none = await waitFor((m) => m.t === "history", 3000);
+    check("delta: nothing new is an empty delta", none?.delta === true && none.events.length === 0);
+    clear();
+    ws.send(JSON.stringify({ t: "open", thread: steerT, since: 0 }));
+    check("delta: too far behind gets a full page instead", !(await waitFor((m) => m.t === "history", 3000))?.delta);
+    clear();
+    ws.send(JSON.stringify({ t: "open", thread: steerT, small: true }));
+    const small = await waitFor((m) => m.t === "history", 3000);
+    clear();
+    ws.send(JSON.stringify({ t: "open", thread: steerT }));
+    const full = await waitFor((m) => m.t === "history", 3000);
+    check("small pages: phones get fewer events per page", small.events.length < full.events.length && small.end === full.end, `${small.events.length} vs ${full.events.length}`);
+    for (const n of [1, 2]) { clear(); ws.send(JSON.stringify({ t: "send", thread: steerT, text: `bulky ${n} ` + "z".repeat(30_000) })); await waitFor((m) => m.t === "event" && m.event.type === "result", 3000); }
+    clear();
+    ws.send(JSON.stringify({ t: "open", thread: steerT }));
+    const capped = await waitFor((m) => m.t === "history", 3000);
+    check("byte cap: an oversized page starts at the latest user message that fits", capped.events[0]?.type === "user_input" && capped.events[0].text.startsWith("bulky 2") && JSON.stringify(capped.events).length <= 96_000, `${capped.events.length} events, ${JSON.stringify(capped.events).length} bytes, first=${capped.events[0]?.text?.slice(0, 8)}`);
   } else console.log("SKIP  paging (start the scratch server with AGENT_CONSOLE_PAGE=12)");
   ws.send(JSON.stringify({ t: "delete", thread: steerT }));
   await waitFor((m) => m.t === "removed", 3000);
