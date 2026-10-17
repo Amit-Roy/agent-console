@@ -4,7 +4,7 @@ import { codexTranslator, unwrapShell } from "../server/providers/codex.ts";
 import { parseEnv } from "../server/providers/env.ts";
 import { replayPreamble, threadToMarkdown, turnsOf } from "../server/export.ts";
 import { excerpt, needsLabel, parseLabels } from "../server/providers/label.ts";
-import { claudeAdvisorArgs, leanMcpArgs } from "../server/providers/claude.ts";
+import { claudeAdvisorArgs, claudeConsoleSettingsArgs, leanMcpArgs } from "../server/providers/claude.ts";
 import { cleanTitle } from "../server/providers/title.ts";
 import { normTool, parsePiModels, piTranslator } from "../server/providers/pi.ts";
 
@@ -24,6 +24,9 @@ const types = (out: any[]) => out.map((e) => e.type + (e.subtype ? "/" + e.subty
 check("advisor: default inherits settings", claudeAdvisorArgs().length === 0 && claudeAdvisorArgs("default").length === 0);
 check("advisor: off disables settings advisor", JSON.parse(claudeAdvisorArgs("off")[1]).advisorModel === "");
 check("advisor: explicit selection preserved", claudeAdvisorArgs("opus").join(" ") === "--advisor opus");
+check("idle compaction: console owns idle timer without disabling context-limit compaction", JSON.stringify(JSON.parse(claudeConsoleSettingsArgs()[1])) === JSON.stringify({ idleCompaction: false }));
+check("idle compaction: advisor off survives settings merge", JSON.parse(claudeConsoleSettingsArgs("off")[1]).advisorModel === "" && JSON.parse(claudeConsoleSettingsArgs("off")[1]).idleCompaction === false);
+check("idle compaction: explicit advisor preserved", claudeConsoleSettingsArgs("opus").slice(2).join(" ") === "--advisor opus");
 
 // ---- env files
 const env = parseEnv(`# comment\nOPEN_ROUTER_TOKEN=sk-or-v1-abc\nexport FOO="bar baz"\nBAD LINE\nQ='x'\n`);

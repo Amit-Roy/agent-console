@@ -100,6 +100,16 @@ export function claudeAdvisorArgs(advisor?: string): string[] {
   return advisor && advisor !== "default" ? ["--advisor", advisor] : [];
 }
 
+// Console schedules idle compaction itself. Keep the CLI's independent idle timer off,
+// including when a thread opts out, while preserving native context-limit compaction.
+export function claudeConsoleSettingsArgs(advisor?: string): string[] {
+  const args = claudeAdvisorArgs(advisor);
+  if (args[0] === "--settings") {
+    return ["--settings", JSON.stringify({ ...JSON.parse(args[1]), idleCompaction: false })];
+  }
+  return ["--settings", JSON.stringify({ idleCompaction: false }), ...args];
+}
+
 export const claude: Provider = {
   id: "claude",
   label: "Claude Code",
@@ -124,7 +134,7 @@ export const claude: Provider = {
       "--model", t.model,
     ];
     if (t.effort && t.effort !== "default") args.push("--effort", t.effort);
-    args.push(...claudeAdvisorArgs(t.advisor));
+    args.push(...claudeConsoleSettingsArgs(t.advisor));
     args.push(...leanMcpArgs());
     fs.mkdirSync(threadDir(t.id), { recursive: true, mode: 0o700 });
     if (t.sessionId) args.push("--resume", t.sessionId);
