@@ -6,31 +6,42 @@ export function createLabelCompletion(engines: LabelEngine[], cooldownMs = 5 * 6
   return async <T>(prompt: string, system: string, validate: (raw: string | undefined) => T | undefined): Promise<T | undefined> => {
     for (const e of engines) {
       if (e.available?.() === false || (cooldown.get(e.id) || 0) > Date.now()) continue;
+      let why: string;
       try {
         const result = validate(await e.call(prompt, system));
         if (result !== undefined) {
           console.info(`Label helper succeeded: ${e.id}.`);
           return result;
         }
-      } catch {} // a failed helper must never stop a conversation
+        // The engine answered, just badly: try the next one now, but do not bench a working engine for one malformed reply.
+        console.info(`Label helper ${e.id} gave an unusable reply; trying fallback.`);
+        continue;
+      } catch (err) { why = (err as Error)?.message || String(err); } // a failed helper must never stop a conversation
       cooldown.set(e.id, Date.now() + (e.cooldownMs ?? cooldownMs));
-      console.info(`Label helper ${e.id} unavailable; trying fallback (cooldown ${(e.cooldownMs ?? cooldownMs) / 1000}s).`);
+      console.info(`Label helper ${e.id} failed (${why}); trying fallback (cooldown ${(e.cooldownMs ?? cooldownMs) / 1000}s).`);
     }
   };
 }
 // Titles and tool labels are written by Nemotron 3 Super 120B, direct from NVIDIA (the same `nvidia` provider Pi uses). Haiku and
 // Codex Luna are deliberately not used here. Thinking is off: it would spend the whole output budget before the label.
 const NVIDIA_MODEL = process.env.AGENT_CONSOLE_LABEL_NVIDIA_MODEL || "nvidia/nemotron-3-super-120b-a12b";
+// The key allows ~1 request per second and titles share it with batched tool labels, so calls are spaced out and a 429 gets one retry.
+let nvidiaNext = 0;
+const nvidiaSlot = async () => { const at = Math.max(Date.now(), nvidiaNext); nvidiaNext = at + 1100; if (at > Date.now()) await new Promise(r => setTimeout(r, at - Date.now())); };
 export async function askNvidia(prompt: string, system: string) {
   const key = childEnv().NVIDIA_API_KEY;
   if (!key) return;
-  const r = await fetch("https://integrate.api.nvidia.com/v1/chat/completions", {
-    method: "POST", headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ model: NVIDIA_MODEL, messages: [{ role: "system", content: system }, { role: "user", content: prompt }], max_tokens: 512, temperature: 0.2, chat_template_kwargs: { enable_thinking: false } }),
-    signal: AbortSignal.timeout(12_000),
-  });
-  if (!r.ok) return;
-  return (await r.json() as any).choices?.[0]?.message?.content;
+  for (let attempt = 0; ; attempt++) {
+    await nvidiaSlot();
+    const r = await fetch("https://integrate.api.nvidia.com/v1/chat/completions", {
+      method: "POST", headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ model: NVIDIA_MODEL, messages: [{ role: "system", content: system }, { role: "user", content: prompt }], max_tokens: 512, temperature: 0.2, chat_template_kwargs: { enable_thinking: false } }),
+      signal: AbortSignal.timeout(12_000),
+    });
+    if (r.status === 429 && attempt === 0) continue;
+    if (!r.ok) throw Error(`NVIDIA HTTP ${r.status}`);
+    return (await r.json() as any).choices?.[0]?.message?.content;
+  }
 }
 // Fallback when NVIDIA is down or rate-limited: the same model on OpenRouter's free tier, never paid routing.
 export async function askRouter(prompt: string, system: string) {
@@ -41,7 +52,7 @@ export async function askRouter(prompt: string, system: string) {
     body: JSON.stringify({ models: ["nvidia/nemotron-3-super-120b-a12b:free"], messages: [{ role: "system", content: system }, { role: "user", content: prompt }], max_tokens: 512, reasoning: { effort: "none", exclude: true } }),
     signal: AbortSignal.timeout(12_000),
   });
-  if (!r.ok) return;
+  if (!r.ok) throw Error(`OpenRouter HTTP ${r.status}`);
   return (await r.json() as any).choices?.[0]?.message?.content;
 }
 export const completeLabel = createLabelCompletion([

@@ -47,7 +47,7 @@ assert.deepEqual(await complete("fixture", "labels", validate), ["Running the te
 assert.deepEqual(calls, ["haiku", "router", "codex"]);
 calls.length = 0;
 await complete("fixture", "labels", validate);
-assert.deepEqual(calls, ["codex"]); // failures and invalid output are cooled down
+assert.deepEqual(calls, ["router", "codex"]); // thrown failures are cooled down; one unusable reply does not bench its engine
 const originalFetch = globalThis.fetch;
 const originalKey = process.env.OPENROUTER_API_KEY;
 let sent: any;
