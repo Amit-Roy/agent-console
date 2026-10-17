@@ -78,7 +78,9 @@ export class LatencyStore {
         return values.length ? [[key, {count: values.length, total: values.reduce((a, b) => a + b, 0), max: Math.max(...values)}]] : [];
       })),
     });
-    return { retention_days: 14, max_samples: this.maxSamples, count: rows.length, groups: Object.fromEntries([...groups].map(([key, values])=>[key, { ...stats(values), ...(key.startsWith('viewer_') ? viewerStats(values) : {}) }])), slowest: rows.slice(-10).reverse(), recent: this.db.prepare('SELECT * FROM latency ORDER BY id DESC LIMIT 20').all() };
+    // The Run details table picks its own percentiles, so its two windows carry every sorted time (whole ms keep it small).
+    const shown = (key: string) => /^[^/]+\/visible(\/recent)?$/.test(key);
+    return { retention_days: 14, max_samples: this.maxSamples, count: rows.length, groups: Object.fromEntries([...groups].map(([key, values])=>[key, { ...stats(values), ...(key.startsWith('viewer_') ? viewerStats(values) : {}), ...(shown(key) ? { samples_ms: values.map(r => Math.round(r.total_ms)) } : {}) }])), slowest: rows.slice(-10).reverse(), recent: this.db.prepare('SELECT * FROM latency ORDER BY id DESC LIMIT 20').all() };
   }
   close() { this.db.close(); }
 }

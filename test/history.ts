@@ -17,9 +17,15 @@ try {
   const older = idx.read(file, latest.start, 80);
   assert.equal(older.end, latest.start);
   assert.deepEqual(older.events, events.slice(older.start, older.end));
+  assert.equal(idx.count(file), 10000);
+  assert.deepEqual(idx.after(file, 9995, 80)!.events, events.slice(9995));
+  assert.equal(idx.after(file, 10000, 80)!.events.length, 0, "nothing new is an empty delta");
+  assert.equal(idx.after(file, 9000, 80), null, "too wide a gap falls back to a page");
+  assert.equal(idx.after(file, 10001, 80), null, "a log shorter than the cached view falls back to a page");
   const extra = { type: "user_input", text: "new turn" };
   fs.appendFileSync(file, JSON.stringify(extra) + "\n");
   assert.equal(idx.read(file, undefined, 80).total, 10001);
+  assert.deepEqual(idx.after(file, 10000, 80)!.events, [extra]);
   fs.writeFileSync(file, JSON.stringify(extra) + "\n");
   assert.deepEqual(idx.read(file, undefined, 80).events, [extra]);
   assert.equal(idx.read(file, 0, 80).events.length, 0);
@@ -47,5 +53,5 @@ try {
   const out: any[] = [];
   codexTranslator(e => out.push(e))({ type: "turn.completed", usage: { input_tokens: 100, cached_input_tokens: 50, output_tokens: 20 } });
   assert.equal(out.find(e => e.type === "token_usage").cached_input_tokens, 50);
-  console.log("PASS indexed history: bounded reads, contiguous pages, UTF-8, appends, truncation, missing logs; Codex catalog and token telemetry");
+  console.log("PASS indexed history: bounded reads, deltas after a line, contiguous pages, UTF-8, appends, truncation, missing logs; Codex catalog and token telemetry");
 } finally { fs.rmSync(dir, { recursive: true, force: true }); }
