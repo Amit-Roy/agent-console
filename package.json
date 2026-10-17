@@ -13,6 +13,8 @@
     "test:transport": "node test/transport.ts",
     "test:cache": "node test/cache-refresh-ui.ts",
     "test:dashboard": "node test/dashboard-ui.ts",
+    "test:startup": "node test/startup-ui.ts",
+    "test:signin": "node test/signin-ui.ts",
     "vendor": "node scripts/vendor.mjs"
   },
   "keywords": [],

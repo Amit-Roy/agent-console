@@ -50,6 +50,43 @@ export interface Attachment {
 
 export const IMAGE_ONLY_PROMPT = "See the attached image(s).";
 
+// Elicitation: the agent asks the user something mid-turn (Claude's AskUserQuestion, Codex request_user_input / MCP elicitation,
+// Pi extension dialogs). Adapters emit the canonical event {type:"question", id, questions} and wait for Agent.answer.
+// An adapter that learns the request went away (the harness cancelled it) emits {type:"question_answer", id, cancelled:true}.
+export interface QuestionOption {
+  label: string;
+  description?: string;
+}
+export interface Question {
+  id: string; // unique within the request; keys the answer map
+  header?: string; // short chip text
+  question: string;
+  options: QuestionOption[]; // may be empty: free text only
+  multiSelect?: boolean;
+  allowOther?: boolean; // free-text answer allowed besides the options
+  secret?: boolean; // mask the free-text field
+}
+// answers: question id -> chosen labels and/or free text. `skip` declines the whole request. `note` is a chat message the user
+// typed instead of using the card; adapters that can hand it to the agent as the answer do so.
+export interface QuestionReply {
+  answers: Record<string, string[]>;
+  skip?: boolean;
+  note?: string;
+}
+
+export function cleanQuestions(raw: unknown): Question[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.slice(0, 10).map((q: any, i) => ({
+    id: String(q?.id ?? i),
+    ...(q?.header ? { header: String(q.header).slice(0, 40) } : {}),
+    question: String(q?.question ?? "").slice(0, 2000),
+    options: (Array.isArray(q?.options) ? q.options : []).slice(0, 20).map((o: any) => ({ label: String(o?.label ?? o).slice(0, 200), ...(o?.description ? { description: String(o.description).slice(0, 500) } : {}) })),
+    ...(q?.multiSelect ? { multiSelect: true } : {}),
+    ...(q?.allowOther ? { allowOther: true } : {}),
+    ...(q?.secret ? { secret: true } : {}),
+  }));
+}
+
 export interface Agent {
   readonly alive: boolean;
   send(text: string, images?: Attachment[]): void;
@@ -57,6 +94,9 @@ export interface Agent {
   // Absent when the harness cannot take input mid-turn: the manager then queues the message until the turn ends.
   steer?(text: string, images?: Attachment[]): void | Promise<void>;
   compact?(instructions?: string): void;
+  // Reply to a pending question (id from the "question" event). Returns true when a `note` reached the agent as the answer itself;
+  // false means the caller must still deliver the note as an ordinary message. Throws when the question is no longer pending.
+  answer?(id: string, reply: QuestionReply): boolean;
   abort(): void; // stop the current turn; the manager discards this agent and starts a fresh one on the next send
   kill(): void;
 }

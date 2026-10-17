@@ -1,7 +1,59 @@
 import { spawnLines, parseJson } from "./proc.ts";
 import { childEnv } from "./env.ts";
 import { brainContext } from "./brain.ts";
-import { IMAGE_ONLY_PROMPT, type Agent, type AgentCtx, type Attachment, type ThreadSpec } from "./types.ts";
+import { cleanQuestions, IMAGE_ONLY_PROMPT, type Agent, type AgentCtx, type Attachment, type Question, type QuestionReply, type ThreadSpec } from "./types.ts";
+
+// Codex asks the user through app-server server requests (exec mode refuses: "request_user_input not supported in exec mode"):
+//   item/tool/requestUserInput   {questions:[{id,header,question,isOther,isSecret,options:[{label,description}]|null}]}
+//                                -> {answers:{[id]:{answers:[...]}}}; no answers = "continue with best judgment"
+//   mcpServer/elicitation/request (mode "form") an MCP server's JSON-schema form -> {action:"accept"|"decline", content}
+// request_user_input is offered to the model in Plan collaboration mode, or in default mode behind the
+// default_mode_request_user_input feature, which we enable (AGENT_CONSOLE_CODEX_ASK=0 turns it off). Returns undefined for
+// requests that cannot be shown as a question card.
+export function codexQuestion(method: string, params: any): { questions: Question[]; reply(r: QuestionReply): any } | undefined {
+  if (method === "item/tool/requestUserInput" && Array.isArray(params?.questions)) {
+    const questions = cleanQuestions(params.questions.map((q: any) => ({ ...q, options: q.options ?? [], allowOther: q.isOther || !q.options?.length, secret: q.isSecret })));
+    return {
+      questions,
+      reply: (r) => {
+        if (r.note !== undefined) return { answers: questions[0] ? { [questions[0].id]: { answers: [r.note] } } : {} };
+        if (r.skip) return { answers: {} };
+        return { answers: Object.fromEntries(questions.map((q) => [q.id, { answers: (r.answers[q.id] ?? []).map(String).filter(Boolean) }]).filter(([, a]: any) => a.answers.length)) };
+      },
+    };
+  }
+  if (method === "mcpServer/elicitation/request" && params?.mode === "form" && params.requestedSchema?.properties) {
+    const props = Object.entries<any>(params.requestedSchema.properties);
+    const required = new Set<string>(params.requestedSchema.required ?? []);
+    const enumOf = (s: any): string[] => s?.enum ?? s?.oneOf?.map((o: any) => o.const) ?? s?.anyOf?.map((o: any) => o.const) ?? [];
+    const questions = cleanQuestions(props.map(([key, s], i) => {
+      const multi = s.type === "array";
+      const values = s.type === "boolean" ? ["Yes", "No"] : enumOf(multi ? s.items : s);
+      return {
+        id: key,
+        header: i === 0 ? params.serverName : undefined,
+        question: [i === 0 ? params.message : "", s.title || s.description || key].filter(Boolean).join("\n\n") + (required.has(key) ? "" : " (optional)"),
+        options: values.map((v: string) => ({ label: String(v) })),
+        multiSelect: multi,
+        allowOther: !values.length,
+      };
+    }));
+    return {
+      questions,
+      reply: (r) => {
+        if (r.skip || r.note !== undefined) return { action: "decline", content: null, _meta: null };
+        const content: Record<string, unknown> = {};
+        for (const [key, s] of props) {
+          const a = (r.answers[key] ?? []).map(String).filter(Boolean);
+          if (!a.length) continue;
+          content[key] = s.type === "array" ? a : s.type === "boolean" ? a[0] === "Yes" : s.type === "number" || s.type === "integer" ? Number(a[0]) : a[0];
+        }
+        return { action: "accept", content, _meta: null };
+      },
+    };
+  }
+  return undefined;
+}
 
 // Keep the owning app-server alive: turn/steer must reach the process running the turn.
 export function startCodexApp(t: ThreadSpec, ctx: AgentCtx, translate: (row: any) => void): Agent {
@@ -25,7 +77,9 @@ export function startCodexApp(t: ThreadSpec, ctx: AgentCtx, translate: (row: any
     translate(error ? { type: "turn.failed", error: { message: error } } : { type: "turn.completed" });
   };
   const failed = (error: any) => { finish(String(error?.message || error)); p.kill(); };
-  const p = spawnLines("codex", "codex", ["app-server", "-c", "analytics.enabled=false", "-c", "feedback.enabled=false"], { cwd: t.cwd, env: childEnv() }, {
+  const asks = new Map<string, { rpcId: any; reply: (r: QuestionReply) => any }>(); // pending questions by canonical id
+  const ask = process.env.AGENT_CONSOLE_CODEX_ASK === "0" ? [] : ["--enable", "default_mode_request_user_input"];
+  const p = spawnLines("codex", "codex", ["app-server", "-c", "analytics.enabled=false", "-c", "feedback.enabled=false", ...ask], { cwd: t.cwd, env: childEnv() }, {
     ...ctx,
     exited(info) {
       alive = false;
@@ -41,14 +95,26 @@ export function startCodexApp(t: ThreadSpec, ctx: AgentCtx, translate: (row: any
       if (wait) { pending.delete(r.id); clearTimeout(wait.timer); r.error ? wait.reject(new Error(r.error.message || "Codex request rejected.")) : wait.resolve(r.result); }
       return;
     }
-    // This adapter never grants an approval or fabricates a user answer.
+    // Questions become cards; the answer is whatever the user picks. This adapter never grants an approval.
     if (r.id != null && r.method) {
+      const q = codexQuestion(r.method, r.params);
+      if (q && q.questions.length) {
+        const id = `codex-${r.id}`;
+        asks.set(id, { rpcId: r.id, reply: q.reply });
+        ctx.event({ type: "question", id, questions: q.questions, ts: Date.now() });
+        return;
+      }
       p.write(JSON.stringify({ id: r.id, error: { code: -32601, message: "This Console cannot answer interactive requests. Use a message to provide guidance." } }));
       ctx.event({ type: "console_error", text: `Codex requested ${r.method}; interactive response is unavailable.` });
       return;
     }
     const v = r.params || {};
     if (v.threadId && v.threadId !== session) return;
+    if (r.method === "serverRequest/resolved") {
+      const id = `codex-${v.requestId}`;
+      if (asks.delete(id)) ctx.event({ type: "question_answer", id, cancelled: true });
+      return;
+    }
     if (r.method === "turn/started") {
       active = v.turn?.id;
       baseline = total;
@@ -87,7 +153,7 @@ export function startCodexApp(t: ThreadSpec, ctx: AgentCtx, translate: (row: any
     }
   });
   const ready = (async () => {
-    await request("initialize", { clientInfo: { name: "agent_console", title: "Agent Console", version: "1.0.0" } });
+    await request("initialize", { clientInfo: { name: "agent_console", title: "Agent Console", version: "1.0.0" }, capabilities: { experimentalApi: ask.length > 0 } });
     p.write(JSON.stringify({ method: "initialized", params: {} }));
     const brain = brainContext();
     const result = await request(session ? "thread/resume" : "thread/start", {
@@ -130,6 +196,13 @@ export function startCodexApp(t: ThreadSpec, ctx: AgentCtx, translate: (row: any
       operation = "compact"; compactConfirmed = false;
       compactTimer = setTimeout(() => failed(new Error("Context compaction timed out.")), 180_000);
       void ready.then(() => request("thread/compact/start", { threadId: session })).catch(failed);
+    },
+    answer(id, reply) {
+      const a = asks.get(id);
+      if (!a || !alive) throw new Error("This question is no longer waiting for an answer.");
+      asks.delete(id);
+      p.write(JSON.stringify({ id: a.rpcId, result: a.reply(reply) }));
+      return reply.note !== undefined && a.reply === a.reply && !("action" in (a.reply({ answers: {}, skip: true }) ?? {}));
     },
     abort() { operation = undefined; clearTimeout(compactTimer); p.abort(); },
     kill() { operation = undefined; clearTimeout(compactTimer); p.kill(); },

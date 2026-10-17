@@ -114,7 +114,8 @@ blocked by Coder's login wall.
 - **Coder SSO:** when started with `VSCODE_PROXY_URI` set (any Coder terminal), requests whose `Host` header is exactly this
   app's Coder hostname are trusted: Coder already authenticated you. Direct hits on localhost use a different Host and still
   need the password. Keep the port's Coder share level on "owner"; if you widen it, anyone allowed by Coder can run agents
-  here. Set `AGENT_CONSOLE_AUTH=password` to disable SSO, or `AGENT_CONSOLE_PUBLIC_HOST` to override the host.
+  here. Set `AGENT_CONSOLE_AUTH=password` to disable SSO, or `AGENT_CONSOLE_PUBLIC_HOST` (comma-separated, also read from `~/.config/agent-console/env`) to trust additional
+  Coder-authenticated hosts, such as a direct wildcard app host.
 - Password login (fallback) → signed HttpOnly/Secure/SameSite=Strict cookie; failed-login limiter.
 - WebSocket requires the cookie **and** a matching Origin header (blocks cross-site hijacking).
 - Thread folders are restricted to your home directory.
@@ -134,8 +135,16 @@ process and translates its events into one canonical stream (Claude Code's strea
 
 Credentials for non-Claude agents are read from env files, never from the Claude child's environment, so the subscription login cannot be swapped for metered billing:
 `~/.config/agent-console/env`, then `~/openrouter/.env` (override the list with `AGENT_CONSOLE_ENV_FILES`, colon separated). `OPEN_ROUTER_TOKEN` is accepted as an alias of `OPENROUTER_API_KEY`.
-With an OpenRouter key, Pi offers its `:free` models only (`AGENT_CONSOLE_PI_ALL=1` for everything, `AGENT_CONSOLE_PI_MODELS=a,b` to pin a list).
+With an OpenRouter key, Pi offers its `:free` OpenRouter models only (`AGENT_CONSOLE_PI_ALL=1` for everything, `AGENT_CONSOLE_PI_MODELS=a,b` to pin a list; both are read from the env file too, and the list loads once at server start).
 OpenRouter's free tier allows 50 requests a day (1000 after a one-off $10 credit), so use the mock for routine tests.
+
+**NVIDIA NIM (direct).** Pi has a built-in `nvidia` provider; no `models.json` and no custom provider needed.
+1. Add `NVIDIA_API_KEY=...` to `~/.config/agent-console/env`.
+2. Run `bin/agent-console restart-when-idle` (the model list loads only at server start).
+3. In the New thread dialog pick Pi and a model whose subtitle starts with `nvidia ·` (id `nvidia/<vendor>/<model>`, e.g. `nvidia/nvidia/nemotron-3-super-120b-a12b`).
+
+Direct or OpenRouter? Read the picker subtitle: `nvidia · nvidia` or `nvidia · moonshotai` is direct NIM; `openrouter · nvidia · free` is the same vendor via OpenRouter (id `openrouter/<vendor>/<model>:free`).
+A key can list a model yet fail on use with 404 `Function ... Not found for account`; pick another model. The free tier allows about 1 request/s (~40/min).
 Shared memory: every agent uses the same brain wiki (`~/repos/brain`, override with `AGENT_CONSOLE_BRAIN`). Claude reaches it through its user hooks; for Pi and Codex the
 server injects the same context at start (`--append-system-prompt` / `-c developer_instructions=`), and after every turn it runs `brain commit`, so pages any agent writes land in the brain's git history.
 Pi and Codex have no Stop hook, so the server applies the brain's own reminder rule: after `BRAIN_NUDGE_AFTER` (default 12) tool calls with no wiki write, a clean turn is followed by one automatic reminder turn (shown as a note, silenced by `BRAIN_NO_NUDGE=1`). Claude keeps using its hook.

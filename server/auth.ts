@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileEnv } from "./providers/env.ts";
 
 export const DATA_DIR = process.env.AGENT_CONSOLE_DATA || path.join(os.homedir(), ".config", "agent-console");
 fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
@@ -76,23 +77,28 @@ export function passwordOk(candidate: unknown): boolean {
 // iff its Host header is exactly this workspace app's Coder hostname. Direct hits on 127.0.0.1 (other local
 // processes, DNS-rebinding pages) carry a different Host and still need the password cookie.
 // Set AGENT_CONSOLE_AUTH=password to turn this off. Requires the port's Coder share level to stay "owner".
-function coderHostFromEnv(): string | undefined {
-  if (process.env.AGENT_CONSOLE_AUTH === "password") return undefined;
-  const explicit = process.env.AGENT_CONSOLE_PUBLIC_HOST;
-  if (explicit) return explicit.toLowerCase();
+// AGENT_CONSOLE_PUBLIC_HOST (server env or ~/.config/agent-console/env) adds comma-separated hosts, e.g. a direct
+// wildcard app host next to the tunnel one. Only list hosts that Coder itself authenticates.
+function coderHostsFromEnv(): string[] {
+  if (process.env.AGENT_CONSOLE_AUTH === "password") return [];
+  const hosts = String(process.env.AGENT_CONSOLE_PUBLIC_HOST || fileEnv().AGENT_CONSOLE_PUBLIC_HOST || "")
+    .split(",")
+    .map((h) => h.trim().toLowerCase())
+    .filter(Boolean);
   const tpl = process.env.VSCODE_PROXY_URI; // e.g. https://{{port}}--main--ws--owner--host.coder.app/
   const port = process.env.PORT || "7070";
-  if (!tpl || !tpl.includes("{{port}}")) return undefined;
-  try {
-    return new URL(tpl.replace("{{port}}", port)).host.toLowerCase();
-  } catch {
-    return undefined;
+  if (tpl && tpl.includes("{{port}}")) {
+    try {
+      hosts.push(new URL(tpl.replace("{{port}}", port)).host.toLowerCase());
+    } catch {}
   }
+  return [...new Set(hosts)];
 }
-export const CODER_HOST = coderHostFromEnv();
+export const CODER_HOSTS = coderHostsFromEnv();
+export const CODER_HOST = CODER_HOSTS[0];
 
 export function viaCoder(host: string | undefined): boolean {
-  return !!CODER_HOST && String(host || "").toLowerCase() === CODER_HOST;
+  return CODER_HOSTS.includes(String(host || "").toLowerCase());
 }
 
 export function authed(req: { headers: { cookie?: string; host?: string } }): boolean {

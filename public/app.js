@@ -13,7 +13,7 @@ const EFFORT_LABEL = { xhigh: "Extra high", ultracode: "Ultra" };
 const EFFORT_DESC = { ultracode: "Claude Code's Ultracode: starts a multi-agent workflow on every task. Slow and costly; keep it for big jobs.", max: "Deepest reasoning the model offers.", xhigh: "More reasoning than High, less than Max." };
 const effortLabel = (v) => EFFORT_LABEL[v] || cap(v);
 const state = {
-  commands: {}, providers: new Map(), threads: new Map(), current: null, dirs: [], live: null, cards: new Map(), usage: {}, usageTab: "claude",
+  commands: {}, providers: new Map(), threads: new Map(), current: null, ready: false, dirs: [], live: null, cards: new Map(), usage: {}, usageTab: "claude",
   stick: true, // the reader is at the bottom of the chat (kept from scroll events, since layout growth fires none)
   subs: new Map(), // tool_use id of a subagent (or nested subagent) -> the <ol> its activity is listed in
   subTools: new Map(), // tool_use id of a call made inside a subagent -> its row
@@ -28,6 +28,7 @@ function connect() {
   ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
   ws.onopen = () => {
     retry = 0;
+    signedOut = false;
     banner("");
   };
   ws.onclose = () => {
@@ -38,7 +39,8 @@ function connect() {
       $("queue-save").disabled = queueEditor.revision == null;
       $("queue-draft").disabled = queueEditor.revision == null;
     }
-    banner("Disconnected. Reconnecting…");
+    if (!signedOut) banner("Disconnected. Reconnecting…");
+    if (retry >= 1) checkSignIn();
     setTimeout(connect, Math.min(1000 * 2 ** retry++, 10000));
   };
   ws.onmessage = (m) => {
@@ -59,11 +61,42 @@ const latency = createLatencyReporter(samples => {
   ws.send(JSON.stringify({ t: "telemetry", samples }));
   return true;
 }, () => state.features.latency);
-function banner(t) {
+function banner(t, action) {
   const b = $("banner");
   b.hidden = !t;
   b.textContent = t;
+  if (action) {
+    const btn = el("button", "btn sm", action.label);
+    btn.type = "button";
+    btn.onclick = action.run;
+    b.append(" ", btn);
+  }
 }
+
+// ---------- Coder sign-in ----------
+// Behind Coder, an expired (or revoked) app session turns every request into a redirect to Coder's sign-in page on
+// another site. fetch() cannot follow that, so it fails as "Failed to fetch". Requests go through apiFetch, which
+// notices the redirect; only a top-level reload can sign in again, so offer one and keep the draft across it.
+let signedOut = false;
+function needSignIn() {
+  if (signedOut) return;
+  signedOut = true;
+  banner("Coder sign-in expired.", { label: "Sign in again", run: signInAgain });
+}
+function signInAgain() {
+  try { if ($("input").value) sessionStorage.setItem("ac_draft", $("input").value); } catch {}
+  location.reload();
+}
+async function apiFetch(url, opts = {}) {
+  const r = await fetch(url, { ...opts, redirect: "manual" });
+  if (r.type === "opaqueredirect") {
+    needSignIn();
+    throw new Error("Coder sign-in expired. Tap Sign in again, then retry.");
+  }
+  return r;
+}
+// The websocket only reports a failed upgrade as a close; ask over plain HTTP whether that is a sign-in problem.
+const checkSignIn = () => apiFetch("/manifest.webmanifest", { cache: "no-store" }).then(() => {}, () => {});
 
 function handle(m) {
   switch (m.t) {
@@ -96,10 +129,17 @@ function handle(m) {
       menus.dProv.setItems(m.providers.map((p) => ({ value: p.id, label: p.label, desc: p.ok ? undefined : p.hint, disabled: !p.ok })), m.providers.find((p) => p.ok)?.id);
       menus.dCwd.setItems(m.dirs.map((d) => ({ value: d, label: d.replace(/^.*\/repos\/?/, "~/repos/") || d, icon: "folder" })), m.dirs[0]);
       fillDialog(menus.dProv.value);
+      state.ready = true; // until the first hello there is nothing true to say, so the chat stays blank rather than "No thread"
       renderThreads();
+      let last = null;
+      try { last = localStorage.getItem("ac_thread"); } catch {}
       if (state.current && state.threads.has(state.current)) openThread(state.current);
+      else if (last && state.threads.has(last)) openThread(last); // first load: reopen the thread the reader last had open
       else if (state.threads.size) openThread([...state.threads.values()][0].id);
-      else renderHead();
+      else {
+        clearChat();
+        renderHead();
+      }
       break;
     case "thread":
       state.threads.set(m.thread.id, m.thread);
@@ -276,7 +316,7 @@ async function runThreadAction(id, action) {
     a.click();
     a.remove();
   } else if (action === "share") {
-    const r = await fetch(`/export/${id}`).catch(() => null);
+    const r = await apiFetch(`/export/${id}`).catch(() => null);
     if (!r?.ok) return toast("Could not read that conversation.");
     const text = await r.text();
     if (navigator.share) {
@@ -633,7 +673,7 @@ async function showEarlier(m) {
 
 function renderHead() {
   const t = cur();
-  if (!$("ttl-edit")) $("ttl").textContent = t ? t.title : "No thread";
+  if (!$("ttl-edit")) $("ttl").textContent = t ? t.title : state.ready ? "No thread" : "";
   $("cwd").hidden = !t;
   $("cwd-t").textContent = t ? t.cwd.replace(/^\/home\/[^/]+/, "~") : "";
   $("cwd").title = t ? t.cwd : "";
@@ -773,7 +813,7 @@ async function loadLatencySummary() {
   latency.flush();
   $("latency-summary").textContent = "Loading local measurements…";
   try {
-    const response = await fetch("/api/latency", { cache: "no-store" });
+    const response = await apiFetch("/api/latency", { cache: "no-store" });
     if (!response.ok) throw Error();
     const data = await response.json();
     if (!data.available) throw Error();
@@ -875,7 +915,7 @@ function clearChat() {
   state.subTools.clear();
   $("chat").replaceChildren();
   $("chat").setAttribute("aria-busy", "false");
-  if (!state.current) $("chat").append(emptyState());
+  if (!state.current && state.ready) $("chat").append(emptyState());
 }
 let scrollFrame;
 function onChatScroll() {
@@ -1032,12 +1072,66 @@ function toolBody(name, input) {
   } else if (name === "Write" && "content" in input) {
     box.append(codePre(String(input.content).slice(0, 4000), langFromPath(input.file_path)));
   } else if (name === "Bash" && input.command) {
-    box.append(codePre(String(input.command), "bash"));
+    // "$ cmd" with a hanging indent so wrapped lines stay under the command, and its own copy button
+    const cmd = String(input.command);
+    const row = el("div", "tool-cmd");
+    const copy = iconButton("copy", "Copy command");
+    wireCopy(copy, () => cmd, "Copy command");
+    row.append(el("span", "ps1", "$"), codePre(cmd, "bash"), copy);
+    row.firstChild.setAttribute("aria-hidden", "true");
+    box.append(row);
   } else {
     box.append(codePre(JSON.stringify(input, null, 2), "json"));
   }
   return box;
 }
+
+// What a tool returned: a labelled section ("Output" or "Error", line count, wrap + copy), clamped to a
+// short preview with a fade and a "Show all" button instead of a scroller nested inside the chat scroller.
+const OUT_MAX = 8000;
+function toolOutput(text, isError) {
+  const sec = el("section", isError ? "tool-result tool-out err" : "tool-result tool-out");
+  const lines = text.replace(/\n+$/, "").split("\n").length;
+  const head = el("div", "tool-out-head");
+  const lab = el("span", "lab");
+  if (isError) lab.append(icon("alert"));
+  lab.append(isError ? "Error" : "Output");
+  const meta = `${lines.toLocaleString()} ${lines === 1 ? "line" : "lines"}${text.length > OUT_MAX ? " · first 8k chars" : ""}`;
+  const wrap = iconButton("wrap", "Wrap lines");
+  wrap.setAttribute("aria-pressed", "true");
+  wrap.onclick = () => {
+    wrap.setAttribute("aria-pressed", String(!sec.classList.toggle("nowrap")));
+    fitOutput(sec);
+  };
+  const copy = iconButton("copy", "Copy output");
+  wireCopy(copy, () => text, "Copy output");
+  head.append(lab, el("span", "meta", meta), wrap, copy);
+  const pre = el("pre", "", text.slice(0, OUT_MAX));
+  pre.tabIndex = 0; // keyboard-scrollable when lines do not wrap
+  pre.setAttribute("role", "region");
+  pre.setAttribute("aria-label", isError ? "Error output" : "Tool output");
+  const more = el("button", "btn sm ghost more", `Show all ${lines.toLocaleString()} lines`);
+  more.type = "button";
+  more.hidden = true;
+  more.setAttribute("aria-expanded", "false");
+  more.onclick = () => {
+    const open = sec.classList.toggle("expanded");
+    more.setAttribute("aria-expanded", String(open));
+    more.textContent = open ? "Show less" : `Show all ${lines.toLocaleString()} lines`;
+    if (!open) sec.scrollIntoView({ block: "nearest" });
+  };
+  sec.append(head, pre, more);
+  return sec;
+}
+// Clamping needs layout, so it runs when the card is open (a closed <details> has no box to measure).
+function fitOutput(sec) {
+  if (sec.classList.contains("expanded")) return;
+  const pre = sec.querySelector("pre");
+  const over = pre.scrollHeight > pre.clientHeight + 4;
+  sec.classList.toggle("clamped", over);
+  sec.querySelector(".more").hidden = !over;
+}
+const fitOutputs = (card) => card.querySelectorAll(".tool-out").forEach(fitOutput);
 
 function copyActions(getText, label = "Copy message") {
   const row = el("div", "actions");
@@ -1317,7 +1411,7 @@ function onEvent(e, live) {
           sum.append(tool, el("span", "name", toolName(b.name, b.input)), el("span", why ? "sum human" : "sum", why || summarize(b.name, b.input)), st, icon("chev-right", "chev"));
           sum.title = summarize(b.name, b.input);
           card.toolInput = { name: b.name, input: b.input };
-          card.append(sum, el("div", "tool-why", why), el("div", "body"));
+          card.append(sum, el("div", "body")); // the open row wraps to show the whole label, so it is not repeated below
           card.addEventListener("toggle", () => {
             if (!card.open) return;
             if (card.toolInput) {
@@ -1330,6 +1424,7 @@ function onEvent(e, live) {
               highlightInto(code, code.textContent, code.dataset.highlightPending);
               delete code.dataset.highlightPending;
             }
+            fitOutputs(card);
           });
           state.cards.set(b.id, card);
           push(card, live);
@@ -1346,7 +1441,11 @@ function onEvent(e, live) {
         const st = card.querySelector(".st");
         st.replaceChildren(icon(c.is_error ? "x" : "check"), el("span", "sr-only", c.is_error ? "error" : "done"));
         const text = typeof c.content === "string" ? c.content : (c.content ?? []).map((x) => x.text ?? "").join("\n");
-        if (text) card.querySelector(".body").append(el("pre", "tool-result", text.slice(0, 8000)));
+        if (text) {
+          const out = toolOutput(text, !!c.is_error);
+          card.querySelector(".body").append(out);
+          if (card.open) fitOutput(out);
+        }
       }
       updateWorking();
       break;
@@ -1390,8 +1489,6 @@ function onEvent(e, live) {
       if (sumEl && !sumEl.classList.contains("human")) {
         sumEl.textContent = e.label;
         sumEl.classList.add("human");
-        const w = sumEl.closest(".card")?.querySelector(":scope > .tool-why");
-        if (w) w.textContent = e.label; // the row clips long labels; the open card shows the whole sentence
       }
       break;
     }
@@ -1581,12 +1678,12 @@ async function prepare(file) {
 }
 
 async function upload(thread, blob, name) {
-  const r = await fetch(`/uploads/${thread}`, { method: "POST", headers: { "Content-Type": blob.type || "application/octet-stream", "X-Name": encodeURIComponent(name) }, body: blob });
+  const r = await apiFetch(`/uploads/${thread}`, { method: "POST", headers: { "Content-Type": blob.type || "application/octet-stream", "X-Name": encodeURIComponent(name) }, body: blob });
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(j.error || `Upload failed (${r.status}).`);
   return j;
 }
-const discard = (p) => p.ready.then(() => p.id && fetch(`/uploads/${p.thread}/${p.id}`, { method: "DELETE" }).catch(() => {}));
+const discard = (p) => p.ready.then(() => p.id && apiFetch(`/uploads/${p.thread}/${p.id}`, { method: "DELETE" }).catch(() => {}));
 function dropPending(p) {
   const i = pending.indexOf(p);
   if (i >= 0) pending.splice(i, 1);
@@ -1874,7 +1971,7 @@ function openNewDialog() {
 }
 $("new").onclick = openNewDialog;
 $("restart").onclick = async () => {
-  const r = await fetch("/restart", { method: "POST" }).catch(() => null);
+  const r = await apiFetch("/restart", { method: "POST" }).catch(() => null);
   toast(r?.ok ? "Restart scheduled. It happens once every thread is idle, then this page reloads." : "Could not schedule a restart.");
 };
 $("dform").addEventListener("submit", (e) => {
@@ -1882,6 +1979,14 @@ $("dform").addEventListener("submit", (e) => {
 });
 
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
+try {
+  const draft = sessionStorage.getItem("ac_draft");
+  sessionStorage.removeItem("ac_draft");
+  if (draft && !$("input").value) {
+    $("input").value = draft;
+    $("input").dispatchEvent(new Event("input")); // resize the composer and enable Send
+  }
+} catch {}
 clearChat();
 renderHead();
 connect();

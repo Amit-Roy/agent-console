@@ -9,7 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer, type WebSocket } from "ws";
-import { authed, CODER_HOST, cookieFrom, limited, makeToken, passwordOk, PASSWORD, recordFail, setCookie, tokenValid } from "./auth.ts";
+import { authed, CODER_HOSTS, cookieFrom, limited, makeToken, passwordOk, PASSWORD, recordFail, setCookie, tokenValid } from "./auth.ts";
 import { providerInfo, refreshPiModels } from "./providers/index.ts";
 import { threadToMarkdown } from "./export.ts";
 import { Threads } from "./threads.ts";
@@ -272,7 +272,7 @@ server.listen(PORT, HOST, () => {
   fs.mkdirSync(RUN_DIR, { recursive: true });
   fs.writeFileSync(path.join(RUN_DIR, "pid"), String(process.pid)); // only the process that holds the port may claim the pid file
   console.log(`agent-console listening on http://${HOST}:${PORT}`);
-  console.log(CODER_HOST ? `auth: Coder SSO for ${CODER_HOST} (password cookie still works elsewhere)` : "auth: password only");
+  console.log(CODER_HOSTS.length ? `auth: Coder SSO for ${CODER_HOSTS.join(", ")} (password cookie still works elsewhere)` : "auth: password only");
   if (process.env.AGENT_CONSOLE_SHOW_PASSWORD) console.log(`password: ${PASSWORD}`);
 });
 
