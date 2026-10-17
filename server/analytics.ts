@@ -5,6 +5,8 @@ import { DATA_DIR } from "./auth.ts";
 import { headroom } from "./headroom.ts";
 import { SessionAccounting, type ModelUsage } from "./accounting.ts";
 import { accountingSamples } from "./accounting-log.ts";
+import { normalizeAccountingRows } from "./accounting-repair.ts";
+import { apiPricedTurn, pricing } from "./api-pricing.ts";
 export { claudeTotals, delta } from "./accounting.ts";
 
 // What the dashboard shows. Three sources, all local:
@@ -32,10 +34,10 @@ export function readTurns(from: number, to: number, max = 50_000): Turn[] {
     if (!line) continue;
     try {
       const t = JSON.parse(line) as Turn;
-      if (t.ts >= from && t.ts <= to) out.push(t);
+      out.push(t);
     } catch {}
   }
-  return out.slice(-max);
+  return normalizeAccountingRows(DATA_DIR, out).filter(t => t.ts >= from && t.ts <= to).slice(-max);
 }
 
 // Restore baselines from every persisted result, including results with no user_input (e.g. compact).
@@ -92,8 +94,9 @@ export async function dashboard(from: number, to: number) {
   const [rtk, hr] = await Promise.all([rtkGain(), headroom.stats()]);
   const day = (ts: string) => Date.parse(ts);
   return {
-    from, to,
-    turns: readTurns(from, to).map(({ cumulative, session, eventId, ...row }) => row), // durable baselines stay server-side
+    from, to, pricing,
+    // Public API estimates are a read-only projection; never overwrite provider counters or prices in the ledger.
+    turns: readTurns(from, to).map(apiPricedTurn).map(({ cumulative, session, eventId, ...row }) => row), // durable baselines stay server-side
     rtk: rtk ? { summary: rtk.summary, daily: (rtk.daily ?? []).filter((d: any) => Date.parse(d.date) + 86_400_000 > from && Date.parse(d.date) <= to) } : null,
     headroom: { ...headroom.state(), daily: (hr?.series?.daily ?? []).filter((d: any) => day(d.timestamp) + 86_400_000 > from && day(d.timestamp) <= to), lifetime: hr?.lifetime ?? null },
   };
