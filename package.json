@@ -13,6 +13,8 @@
     "test:transport": "node test/transport.ts",
     "test:cache": "node test/cache-refresh-ui.ts",
     "test:dashboard": "node test/dashboard-ui.ts",
+    "test:efficiency-ui": "node test/efficiency-ui.ts",
+    "test:efficiency": "node test/accounting.ts && node test/accounting-repair.ts && node test/accounting-threads.ts && node test/handoff.ts && node test/handoff-integration.ts && node test/headroom.ts && node test/providers.ts",
     "test:startup": "node test/startup-ui.ts",
     "test:signin": "node test/signin-ui.ts",
     "test:archive": "node test/archive-ui.ts",

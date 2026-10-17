@@ -87,6 +87,7 @@ function friendlyError(msg: string): string {
 export function piTranslator(emit: (ev: any) => void, onCommands?: (list: Command[]) => void, contextWindow?: () => number | undefined) {
   let started = 0;
   let cost = 0;
+  let usageModels: any[] = [];
   let failure: string | undefined;
   const settle = (aborted = false) => {
     if (failure) emit({ type: "console_error", text: failure });
@@ -96,9 +97,11 @@ export function piTranslator(emit: (ev: any) => void, onCommands?: (list: Comman
       is_error: !!failure,
       duration_ms: started ? Date.now() - started : 0,
       ...(cost > 0 ? { total_cost_usd: cost } : {}),
+      usageModels,
     });
     started = 0;
     cost = 0;
+    usageModels = [];
     failure = undefined;
   };
   return (r: any) => {
@@ -120,6 +123,7 @@ export function piTranslator(emit: (ev: any) => void, onCommands?: (list: Comman
         if (m?.role !== "assistant") break;
         cost += Number(m.usage?.cost?.total) || 0;
         const u = m.usage;
+        if (u) usageModels.push({ model: m.model || "unknown", role: "agent", fresh: u.input, cacheWrite: u.cacheWrite, cacheRead: u.cacheRead, output: u.output, reasoning: u.reasoning, cost: u.cost?.total });
         const used = Number(u?.totalTokens) || (Number(u?.input) || 0) + (Number(u?.cacheRead) || 0) + (Number(u?.cacheWrite) || 0) + (Number(u?.output) || 0);
         if (used > 0) emit({ type: "context_usage", used, ...(contextWindow?.() ? { max: contextWindow() } : {}) });
         if (m.stopReason === "error" && m.errorMessage) failure = friendlyError(m.errorMessage);
@@ -130,7 +134,7 @@ export function piTranslator(emit: (ev: any) => void, onCommands?: (list: Comman
             if (b.type === "toolCall") return { type: "tool_use", id: b.id, ...normTool(b.name, b.arguments) };
           })
           .filter(Boolean);
-        if (content.length) emit({ type: "assistant", message: { role: "assistant", content } });
+        if (content.length) emit({ type: "assistant", message: { role: "assistant", content, model: m.model, usage: m.usage } });
         break;
       }
       case "tool_execution_end":

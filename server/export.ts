@@ -59,3 +59,30 @@ export function replayPreamble(events: any[], maxChars = 24_000): string {
   const clipped = body.length > maxChars ? "… (earlier part omitted)\n\n" + body.slice(body.length - maxChars) : body;
   return `This conversation was forked from an earlier one. Here is what was said so far (tool output omitted); continue from it.\n\n--- earlier conversation ---\n${clipped}\n--- end of earlier conversation ---\n\n`;
 }
+
+/** A bounded, local handoff: no summarizer call and no native session history carried into the new run. */
+export function recentPreamble(events: any[], maxChars = 6000): string {
+  const limit = Math.max(0, Math.floor(maxChars));
+  const header = "This is a fresh session with a short handoff: the initial request and recent conversation only. Earlier constraints may be omitted; the full transcript remains available in Console. Inspect the working tree before continuing.\n\n";
+  if (limit <= header.length) return header.slice(0, limit);
+  const turns = turnsOf(events.filter(e => !e?.parent_tool_use_id), { tools: false });
+  const recent = turns.slice(-6);
+  const first = turns.find(t => t.role === "user");
+  const excerpt = (s: string, n: number) => s.length <= n ? s : n < 40 ? s.slice(0, n) : s.slice(0, Math.floor((n - 25) / 2)) + "\n… (middle omitted) …\n" + s.slice(-Math.floor((n - 25) / 2));
+  let budget = limit - header.length;
+  let initial = "";
+  if (first && !recent.includes(first)) {
+    initial = "Initial request: " + excerpt(first.text, Math.max(0, Math.min(1200, Math.floor(budget / 4))));
+    budget -= initial.length + 2;
+  }
+  const parts: string[] = [];
+  for (const turn of recent.toReversed()) {
+    const label = turn.role === "user" ? "User: " : "Assistant: ";
+    const available = Math.min(1200, budget - label.length - 2);
+    if (available <= 0) break;
+    const text = label + excerpt(turn.text, available);
+    parts.unshift(text);
+    budget -= text.length + 2;
+  }
+  return (header + [initial, ...parts].filter(Boolean).join("\n\n") + "\n\n").slice(0, limit);
+}

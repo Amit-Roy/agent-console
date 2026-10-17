@@ -19,7 +19,7 @@ for (const [name, viewport, scheme] of [["desktop-light", { width: 1280, height:
   await page.goto(`${BASE}/dashboard#7`);
   await page.waitForSelector(".kpis");
   const kpis = await page.locator(".kpi .l").allInnerTexts();
-  check(`${name}: five headline numbers`, kpis.join("|") === "Turns|Tokens processed|API-equivalent cost|Tokens saved|Savings rate", kpis.join("|"));
+  check(`${name}: scoped headline numbers`, kpis.join("|") === "Turns|Known tokens processed|API-equivalent cost|RTK output reduction|Headroom input reduction", kpis.join("|"));
   check(`${name}: usage and savings charts, source panels, breakdowns`, (await page.locator("svg.chart").count()) >= 2 && (await page.locator(".src").count()) === 2 && (await page.locator(".panel h2").allInnerTexts()).includes("Tools"));
   check(`${name}: 7 days is selected`, (await page.getAttribute('.range [data-r="7"]', "aria-pressed")) === "true");
   await page.click('.range [data-r="30"]');

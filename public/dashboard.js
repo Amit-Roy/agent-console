@@ -20,8 +20,8 @@ const pct = (n) => `${n >= 10 ? Math.round(n) : n.toFixed(1)}%`;
 const PROVIDERS = { claude: ["Claude", "--c-claude"], codex: ["Codex", "--c-codex"], pi: ["Pi", "--c-pi"] };
 const provMeta = (p) => PROVIDERS[p] || [p === "mock" ? "Mock" : p, "--c-other"];
 const css = (v) => `var(${v})`;
-const localDay = (ms) => { const d = new Date(ms); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
-const startOfDay = (ms) => { const d = new Date(ms); d.setHours(0, 0, 0, 0); return d.getTime(); };
+const localDay = (ms) => new Date(ms).toISOString().slice(0, 10);
+const startOfDay = (ms) => { const d = new Date(ms); d.setUTCHours(0, 0, 0, 0); return d.getTime(); };
 
 // ---------- range ----------
 let range = { key: "7", from: 0, to: 0 };
@@ -44,7 +44,7 @@ for (const b of document.querySelectorAll(".range button")) b.onclick = () => {
 };
 $("custom").onsubmit = (e) => {
   e.preventDefault();
-  const from = new Date(`${$("from").value}T00:00:00`).getTime(), to = new Date(`${$("to").value}T23:59:59`).getTime();
+  const from = new Date(`${$("from").value}T00:00:00Z`).getTime(), to = new Date(`${$("to").value}T23:59:59Z`).getTime();
   if (!(from < to)) return;
   setRange("custom", from, Math.min(to, Date.now()));
 };
@@ -69,17 +69,20 @@ async function load() {
   if (mine === seq) $("dm").setAttribute("aria-busy", "false");
 }
 
+const tokensOf = (t) => t.accounting === 2 && t.in != null && t.out != null ? t.in + t.out : 0;
 const sumTurns = (turns) => ({
+  knownTokens: turns.filter(t => t.accounting === 2 && t.in != null && t.out != null).length,
+  knownCost: turns.filter(t => t.cost != null && t.accounting === 2).length,
   turns: turns.length,
-  tokens: turns.reduce((s, t) => s + (t.in || 0) + (t.out || 0), 0),
-  cache: turns.reduce((s, t) => s + (t.cache || 0), 0),
-  cost: turns.reduce((s, t) => s + (t.cost || 0), 0),
+  tokens: turns.reduce((s, t) => s + tokensOf(t), 0),
+  cache: turns.reduce((s, t) => s + (t.accounting === 2 ? t.cache || 0 : 0), 0),
+  cost: turns.reduce((s, t) => s + (t.accounting === 2 ? t.cost || 0 : 0), 0),
   ms: turns.reduce((s, t) => s + (t.ms || 0), 0),
 });
 const savedOf = (d) => {
   const rtk = (d?.rtk?.daily || []).reduce((s, x) => s + (x.saved_tokens || 0), 0);
   const hr = (d?.headroom?.daily || []).reduce((s, x) => s + (x.tokens_saved || 0), 0);
-  return { rtk, hr, total: rtk + hr };
+  return { rtk, hr };
 };
 function delta(now, before) {
   if (before == null || !isFinite(before)) return "";
@@ -203,7 +206,7 @@ function heatmap(turns) {
 // ---------- page ----------
 function dayList(from, to) {
   const out = [];
-  for (let d = startOfDay(from); d <= to && out.length < 400; d += DAY) { const dt = new Date(d); out.push({ key: localDay(d), label: dt.toLocaleDateString(undefined, { month: "short", day: "numeric" }), title: dt.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" }) }); }
+  for (let d = startOfDay(from); d <= to && out.length < 400; d += DAY) { const dt = new Date(d); out.push({ key: localDay(d), label: dt.toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC" }), title: dt.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" }) }); }
   return out;
 }
 let metric = "tokens";
@@ -211,23 +214,22 @@ function render(cur, prev) {
   const root = $("dm");
   const cs = sumTurns(cur.turns), ps = prev ? sumTurns(prev.turns) : null;
   const sv = savedOf(cur), pv = prev ? savedOf(prev) : null;
-  const rate = sv.total + cs.tokens > 0 ? (sv.total / (sv.total + cs.tokens)) * 100 : 0;
   const days = dayList(range.from, range.to);
   const idx = new Map(days.map((d, i) => [d.key, i]));
 
   const kpis = el("div", "kpis");
   kpis.append(
     kpi("Turns", fmt(cs.turns), ps ? delta(cs.turns, ps.turns) : "", false),
-    kpi("Tokens processed", fmt(cs.tokens), `${fmt(cs.cache)} read from cache`, false),
-    kpi("API-equivalent cost", usd(cs.cost), ps ? delta(cs.cost, ps.cost) : "List price; your subscription is flat-rate", false),
-    kpi("Tokens saved", fmt(sv.total), pv ? delta(sv.total, pv.total) : "", true),
-    kpi("Savings rate", pct(rate), "Saved ÷ (saved + processed)", true),
+    kpi("Known tokens processed", cs.knownTokens ? fmt(cs.tokens) : "Unknown", `${cs.knownTokens}/${cs.turns} turns measured · ${fmt(cs.cache)} cache reads included`, false),
+    kpi("API-equivalent cost", cs.knownCost ? usd(cs.cost) : "Unknown", `${cs.knownCost}/${cs.turns} turns measured; actual subscription billing unavailable`, false),
+    kpi("RTK output reduction", fmt(sv.rtk), "Command output; all local CLI activity", true),
+    kpi("Headroom input reduction", fmt(sv.hr), "Claude proxy activity; separate scope", true),
   );
 
   // usage chart with a metric switch
   const seg = el("div", "seg");
   seg.setAttribute("role", "group"); seg.setAttribute("aria-label", "Metric");
-  const usagePanel = panel("Usage", "Per day, by agent", seg);
+  const usagePanel = panel("Usage", "Per UTC day, by agent; missing measurements are excluded", seg);
   const usageBody = el("div");
   const provs = [...new Set(cur.turns.map((t) => t.provider))].sort();
   const series = provs.map((p) => ({ name: provMeta(p)[0], color: css(provMeta(p)[1]), p }));
@@ -237,7 +239,7 @@ function render(cur, prev) {
     for (const t of cur.turns) {
       const i = idx.get(localDay(t.ts)); if (i == null) continue;
       const k = provs.indexOf(t.provider);
-      rows[i].values[k] += metric === "turns" ? 1 : metric === "cost" ? t.cost || 0 : (t.in || 0) + (t.out || 0);
+      rows[i].values[k] += metric === "turns" ? 1 : metric === "cost" ? (t.accounting === 2 ? t.cost || 0 : 0) : tokensOf(t);
     }
     usageBody.replaceChildren(cur.turns.length ? barChart(rows, series, f) : el("div", "empty-c", "No turns in this range."), ...(series.length ? [legend(series.map((s) => [s.name, s.color]))] : []));
   };
@@ -251,12 +253,12 @@ function render(cur, prev) {
   usagePanel.append(usageBody);
 
   // savings chart
-  const savePanel = panel("Context saved", "Tokens kept out of the context, per day");
+  const savePanel = panel("Context saved", "Separate measurements by source day; scopes can overlap and must not be added");
   const hrSeries = [{ name: "RTK (command output)", color: css("--c-rtk") }, { name: "Headroom (compression)", color: css("--c-headroom") }];
   const srows = days.map((d) => ({ ...d, values: [0, 0] }));
   for (const d of cur.rtk?.daily || []) { const i = idx.get(d.date); if (i != null) srows[i].values[0] += d.saved_tokens || 0; }
   for (const d of cur.headroom?.daily || []) { const i = idx.get(d.timestamp.slice(0, 10)); if (i != null) srows[i].values[1] += d.tokens_saved || 0; }
-  savePanel.append(sv.total ? barChart(srows, hrSeries, fmt) : el("div", "empty-c", "No savings recorded in this range."), legend(hrSeries.map((s) => [s.name, s.color])));
+  savePanel.append(sv.rtk || sv.hr ? barChart(srows, hrSeries, fmt) : el("div", "empty-c", "No savings recorded in this range."), legend(hrSeries.map((s) => [s.name, s.color])));
 
   // breakdowns
   const byModel = new Map(), byTool = new Map(), byThread = new Map();
@@ -265,11 +267,22 @@ function render(cur, prev) {
     byModel.set(m, (byModel.get(m) || 0) + 1);
     for (const [n, c] of Object.entries(t.tools || {})) byTool.set(n, (byTool.get(n) || 0) + c);
     const th = byThread.get(t.thread) || { turns: 0, tokens: 0, cost: 0, p: t.provider };
-    th.turns++; th.tokens += (t.in || 0) + (t.out || 0); th.cost += t.cost || 0; byThread.set(t.thread, th);
+    th.turns++; th.tokens += tokensOf(t); th.cost += t.accounting === 2 ? t.cost || 0 : 0; byThread.set(t.thread, th);
   }
   const top = (m, n = 8) => [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, n);
-  const modelPanel = panel("Models", "Turns per agent and model");
+  const modelPanel = panel("Models", "Turns by configured model; Claude may use additional unattributed models");
   modelPanel.append(hbars(top(byModel).map(([name, value]) => ({ name, value, color: css(provMeta(name.split(" · ")[0].toLowerCase())[1]) })), (v) => `${v} turns`));
+  const measuredModels = new Map();
+  for (const turn of cur.turns.filter(t => t.accounting === 2)) for (const model of turn.models || []) {
+    const row = measuredModels.get(model.model) || { cost: 0, known: false };
+    if (model.cost != null) { row.cost += model.cost; row.known = true; }
+    measuredModels.set(model.model, row);
+  }
+  if (measuredModels.size) {
+    const list = el("dl");
+    for (const [name, row] of [...measuredModels].sort((a, b) => b[1].cost - a[1].cost)) list.append(el("dt", "", name), el("dd", "", row.known ? usd(row.cost) : "Cost unknown"));
+    modelPanel.append(list, el("p", "note", "Reported API-equivalent costs by actual model. Claude does not separately identify advisor and subagent cost."));
+  }
   const toolPanel = panel("Tools", "What the agents reached for");
   toolPanel.append(hbars(top(byTool, 10).map(([name, value]) => ({ name, value, color: css("--c-used") })), (v) => `${fmt(v)} calls`));
   const threadPanel = panel("Busiest threads", "By turns");
@@ -284,8 +297,8 @@ function render(cur, prev) {
   const rtkP = el("section", "panel src");
   const rh = el("div", "head"); const rt1 = el("div"); rt1.append(el("h2", "", "RTK"), el("p", "sub", "Filters noisy command output before the agent reads it")); rh.append(rt1, el("span", `chip-s ${rt ? "ok" : "off"}`, rt ? "Active" : "Not found")); rtkP.append(rh);
   const dl1 = el("dl");
-  for (const [k, v] of [["Commands filtered", fmt(rtkCmd)], ["Output before filtering", fmt(rtkIn)], ["Tokens saved", fmt(sv.rtk)], ["Reduction", rtkIn ? pct((sv.rtk / rtkIn) * 100) : "–"]]) dl1.append(el("dt", "", k), el("dd", "", v));
-  rtkP.append(dl1, el("p", "note", "Applies to Claude (hook), Codex (hook) and Pi (extension)."));
+  for (const [k, v] of [["Commands tracked", fmt(rtkCmd)], ["Captured output before filtering", fmt(rtkIn)], ["Tokens saved", fmt(sv.rtk)], ["Reduction", rtkIn ? pct((sv.rtk / rtkIn) * 100) : "–"]]) dl1.append(el("dt", "", k), el("dd", "", v));
+  rtkP.append(dl1, el("p", "note", "All local RTK activity. Filtering commands compress output; proxy/bypass only track it."));
   const hrP = el("section", "panel src");
   const hh = el("div", "head"); const ht = el("div"); ht.append(el("h2", "", "Headroom"), el("p", "sub", "Compresses what Claude sends to the API")); hh.append(ht, el("span", `chip-s ${hr?.running ? "ok" : "off"}`, !hr?.enabled ? "Disabled" : hr.running ? "Running" : "Offline")); hrP.append(hh);
   const hd = hr?.daily || [];
@@ -300,12 +313,12 @@ function render(cur, prev) {
   tbl.append(el("summary", "", "Show data as a table"));
   const t = el("table");
   const thead = el("thead"); const hr0 = el("tr");
-  for (const c of ["Day", "Turns", "Tokens", "Cost", "RTK saved", "Headroom saved"]) hr0.append(el("th", "", c));
+  for (const c of ["Day (UTC)", "Turns", "Known tokens", "Known equivalent cost", "RTK saved", "Headroom saved"]) hr0.append(el("th", "", c));
   thead.append(hr0); t.append(thead);
   const tb = el("tbody");
-  const perDay = days.map(() => ({ turns: 0, tokens: 0, cost: 0 }));
-  for (const x of cur.turns) { const i = idx.get(localDay(x.ts)); if (i == null) continue; perDay[i].turns++; perDay[i].tokens += (x.in || 0) + (x.out || 0); perDay[i].cost += x.cost || 0; }
-  days.forEach((d, i) => { const r = el("tr"); for (const c of [d.title, perDay[i].turns, fmt(perDay[i].tokens), usd(perDay[i].cost), fmt(srows[i].values[0]), fmt(srows[i].values[1])]) r.append(el("td", "", String(c))); tb.append(r); });
+  const perDay = days.map(() => []);
+  for (const x of cur.turns) { const i = idx.get(localDay(x.ts)); if (i != null) perDay[i].push(x); }
+  days.forEach((d, i) => { const s = sumTurns(perDay[i]), r = el("tr"); for (const c of [d.title, s.turns, s.knownTokens ? fmt(s.tokens) : "Unknown", s.knownCost ? usd(s.cost) : "Unknown", fmt(srows[i].values[0]), fmt(srows[i].values[1])]) r.append(el("td", "", String(c))); tb.append(r); });
   t.append(tb);
   const sc = el("div", "scroll"); sc.append(t); tbl.append(sc);
 
@@ -313,11 +326,11 @@ function render(cur, prev) {
   const g2 = el("div", "grid2"); g2.append(modelPanel, toolPanel);
   const g3 = el("div", "grid2"); g3.append(threadPanel, heatPanel);
   root.replaceChildren(kpis, g1, srcs, g2, g3, tbl);
-  if (cur.turns.some((x) => x.b)) root.append(el("p", "muted", "Older turns were reconstructed from conversation logs: their start time is when you sent the message, and token counts exist only for Claude."));
+  if (cur.turns.some((x) => x.b)) root.append(el("p", "muted", "Historical rows were reconstructed from local logs. Missing usage and costs remain unknown; API-equivalent costs do not establish actual billing."));
 }
 
 // ---------- boot ----------
 const m = /^#(\d{4}-\d{2}-\d{2})\.\.(\d{4}-\d{2}-\d{2})$/.exec(location.hash);
-if (m) setRange("custom", new Date(`${m[1]}T00:00:00`).getTime(), Math.min(Date.now(), new Date(`${m[2]}T23:59:59`).getTime()));
+if (m) setRange("custom", new Date(`${m[1]}T00:00:00Z`).getTime(), Math.min(Date.now(), new Date(`${m[2]}T23:59:59Z`).getTime()));
 else setRange(["1", "7", "30", "90"].includes(location.hash.slice(1)) ? location.hash.slice(1) : "7");
 setInterval(() => { if (!document.hidden) void load(); }, 60_000);

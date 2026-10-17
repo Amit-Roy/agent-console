@@ -5,7 +5,7 @@ import path from "node:path";
 
 // The shared "brain" wiki (~/repos/brain, see its CLAUDE.md) is one memory for every agent on this machine. Claude Code reaches it through
 // user-level hooks. Pi and Codex have no equivalent installed, so we do the same two jobs here, for any harness:
-//   recall: hand the harness the same context the Claude hook injects (rules + index) when its process starts
+//   recall: hand the harness only the same brain index the Claude hook injects when its process starts
 //   save:   agents edit wiki pages themselves; after each turn we run `brain commit` (file-locked, idempotent)
 export const BRAIN_BIN = process.env.AGENT_CONSOLE_BRAIN || path.join(os.homedir(), "repos", "brain", "bin", "brain");
 const ttl = 15_000;

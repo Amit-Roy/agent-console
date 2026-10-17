@@ -85,12 +85,18 @@ export function claudeControl(write: (msg: object) => void, emit: (ev: any) => v
   };
 }
 
+// Empty string disables the advisor in the installed CLI settings schema; omitted inherits user/project settings.
+export function claudeAdvisorArgs(advisor?: string): string[] {
+  if (advisor === "off") return ["--settings", JSON.stringify({ advisorModel: "" })];
+  return advisor && advisor !== "default" ? ["--advisor", advisor] : [];
+}
+
 export const claude: Provider = {
   id: "claude",
   label: "Claude Code",
   modes: ["plan", "acceptEdits", "bypassPermissions"],
   defaultMode: "acceptEdits",
-  advisors: ["opus", "fable"],
+  advisors: ["off", "opus", "fable"],
   steer: true,
   models: () => ["sonnet", "opus", "haiku"],
   defaultModel: () => "sonnet",
@@ -109,7 +115,7 @@ export const claude: Provider = {
       "--model", t.model,
     ];
     if (t.effort && t.effort !== "default") args.push("--effort", t.effort);
-    if (t.advisor && t.advisor !== "default") args.push("--advisor", t.advisor); // otherwise the advisorModel in settings.json applies
+    args.push(...claudeAdvisorArgs(t.advisor));
     args.push(...leanMcpArgs());
     fs.mkdirSync(threadDir(t.id), { recursive: true, mode: 0o700 });
     if (t.sessionId) args.push("--resume", t.sessionId);
