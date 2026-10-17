@@ -154,6 +154,70 @@ export function fileViewer(lookup: Lookup, binary = false): RequestHandler {
   };
 }
 
+const VIDEO_TYPES: Record<string, string> = { ".mp4": "video/mp4", ".m4v": "video/mp4", ".mov": "video/quicktime", ".webm": "video/webm" };
+
+function videoMagic(ext: string, head: Buffer): boolean {
+  if (ext === ".webm") return head.length >= 4 && head.readUInt32BE(0) === 0x1a45dfa3;
+  return head.length >= 12 && ["ftyp", "moov", "mdat", "wide", "free", "skip"].includes(head.subarray(4, 8).toString("latin1"));
+}
+
+/** Parse a single `Range: bytes=` spec against `size`. null = ignore the header (serve 200), "bad" = 416. */
+export function parseRange(header: unknown, size: number): { start: number; end: number } | null | "bad" {
+  if (typeof header !== "string" || !header.startsWith("bytes=")) return null;
+  const spec = header.slice(6).trim();
+  if (spec.includes(",")) return null;
+  const m = /^(\d*)-(\d*)$/.exec(spec);
+  if (!m || (m[1] === "" && m[2] === "")) return "bad";
+  let start: number, end: number;
+  if (m[1] === "") { const n = Number(m[2]); if (!n) return "bad"; start = Math.max(0, size - n); end = size - 1; }
+  else { start = Number(m[1]); end = m[2] === "" ? size - 1 : Math.min(Number(m[2]), size - 1); }
+  if (!Number.isSafeInteger(start) || start >= size || end < start) return "bad";
+  return { start, end };
+}
+
+// Video for the inline player. Same scope and secret rules as the viewer; streamed from the verified descriptor with HTTP Range
+// so phones can seek. Only known video containers (extension + magic bytes) are served, always inline under a locked-down CSP.
+export function fileMedia(lookup: Lookup): RequestHandler {
+  return async (req, res) => {
+    res.setHeader("Cache-Control", "private, no-cache");
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    let handle: FileHandle | undefined;
+    try {
+      const scope = viewerScope(req.query, lookup);
+      const { root, target } = await scopedPath(scope.cwd, requestPath(req.query.path));
+      const ext = path.extname(target).toLowerCase();
+      const type = VIDEO_TYPES[ext];
+      if (!type) throw new ViewError(415, "Only MP4, WebM and MOV video can be played.");
+      handle = await openScoped(root, target);
+      const stat = await handle.stat();
+      if (!stat.isFile()) throw new ViewError(415, "Only regular video files can be played.");
+      const head = Buffer.alloc(12);
+      const peek = await handle.read(head, 0, head.length, 0);
+      if (!videoMagic(ext, head.subarray(0, peek.bytesRead))) throw new ViewError(415, "This file is not a playable video.");
+      const range = parseRange(req.headers.range, stat.size);
+      if (range === "bad") { res.setHeader("Content-Range", `bytes */${stat.size}`); throw new ViewError(416, "Invalid byte range."); }
+      const [start, end] = range ? [range.start, range.end] : [0, stat.size - 1];
+      res.status(range ? 206 : 200);
+      if (range) res.setHeader("Content-Range", `bytes ${start}-${end}/${stat.size}`);
+      res.setHeader("Accept-Ranges", "bytes");
+      res.setHeader("Content-Type", type);
+      res.setHeader("Content-Disposition", "inline");
+      res.setHeader("Content-Security-Policy", "default-src 'none'; sandbox");
+      if (stat.size === 0 || req.method === "HEAD") { res.setHeader("Content-Length", stat.size === 0 ? 0 : end - start + 1); await handle.close(); return void res.end(); }
+      res.setHeader("Content-Length", end - start + 1);
+      const stream = handle.createReadStream({ start, end }); // owns the descriptor from here (autoClose)
+      handle = undefined;
+      res.on("close", () => stream.destroy());
+      stream.on("error", () => res.destroy());
+      stream.pipe(res);
+    } catch (error) {
+      await handle?.close().catch(() => {});
+      const result = failure(error);
+      res.status(result.status).json({ error: result.error });
+    }
+  };
+}
+
 // One level only, using Dirent types instead of a stat per child. Symlinks and
 // special files are omitted; opening a direct link still enforces realpath scope.
 // The cursor counts raw directory entries so filtered entries cannot stall paging.

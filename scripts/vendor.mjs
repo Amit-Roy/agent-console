@@ -2,6 +2,7 @@
 // app has no runtime dependency on node_modules for fonts or highlighting, and works offline as a PWA.
 //   fonts:       Inter Variable + JetBrains Mono Variable + Newsreader Variable (SIL OFL 1.1), latin + latin-ext subsets only
 //   highlight.js: core + 13 common languages as ES modules (BSD-3-Clause)
+//   chart.js:    minified UMD build, lazy-loaded by render.js only when a ```chart block appears (MIT)
 import fs from "node:fs";
 import path from "node:path";
 
@@ -28,4 +29,6 @@ for (const l of ["bash", "javascript", "typescript", "json", "python", "css", "x
   copy(nm(`highlight.js/es/languages/${l}.js`), out(`vendor/hljs/languages/${l}.js`));
 }
 copy(nm("highlight.js/LICENSE"), out("vendor/hljs/LICENSE.txt"));
-console.log("vendored fonts + highlight.js into public/");
+copy(nm("chart.js/dist/chart.umd.min.js"), out("vendor/chart.umd.min.js"));
+copy(nm("chart.js/LICENSE.md"), out("vendor/chart.LICENSE.txt"));
+console.log("vendored fonts + highlight.js + chart.js into public/");
