@@ -12,7 +12,7 @@ const check = (name: string, ok: boolean, extra = "") => {
   if (!ok) failed++;
 };
 
-const { CODER_HOST } = await import("../server/auth.ts");
+const { CODER_HOST, CODER_HOSTS } = await import("../server/auth.ts");
 const { request } = await import("node:http");
 const withHost = (host: string) =>
   new Promise<number>((res, rej) => {
@@ -22,7 +22,7 @@ const withHost = (host: string) =>
     r.end();
   });
 if (CODER_HOST) {
-  check("coder host passes without cookie (SSO)", (await withHost(CODER_HOST)) === 200);
+  for (const h of CODER_HOSTS) check(`coder host ${h} passes without cookie (SSO)`, (await withHost(h)) === 200);
   check("wrong host without cookie blocked", (await withHost("evil.example")) === 401);
 } else console.log("SKIP  SSO checks (no VSCODE_PROXY_URI)");
 check("unauthenticated API is blocked", (await fetch(BASE + "/vendor/marked.js")).status === 401);

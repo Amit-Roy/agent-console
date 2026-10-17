@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { threadDir } from "../uploads.ts";
-import { clip, type Agent, type AgentCtx, type Attachment, type Command, type Provider, type ThreadSpec } from "./types.ts";
+import { cleanQuestions, clip, type Agent, type AgentCtx, type Attachment, type Command, type Provider, type QuestionReply, type ThreadSpec } from "./types.ts";
 import { parseJson, spawnLines } from "./proc.ts";
 
 // never let the subscription login be silently replaced by metered API billing
@@ -30,6 +30,61 @@ export function normalizeCommands(raw: any[]): Command[] {
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
+// The SDK control protocol (`--permission-prompt-tool stdio`): the CLI asks its host before any tool that needs the user, as
+//   {"type":"control_request","request_id":R,"request":{"subtype":"can_use_tool","tool_name":T,"input":{...},"tool_use_id":U}}
+// and blocks until {"type":"control_response","response":{"subtype":"success","request_id":R,"response":{"behavior":"allow"|"deny",...}}}.
+// Without a host, headless Claude drops AskUserQuestion from its tools altogether. AskUserQuestion becomes a question card; its
+// answer goes back as updatedInput.answers {question text: "label, label"} (verified on CLI 2.1.301: the tool result reads
+// `"Which color?"="Green"`). Every other prompt is denied, exactly as without a host, so the permission mode still decides.
+export function claudeControl(write: (msg: object) => void, emit: (ev: any) => void, mode: string) {
+  const pending = new Map<string, { input: any; questions: ReturnType<typeof cleanQuestions> }>();
+  const respond = (request_id: string, response: object) => write({ type: "control_response", response: { subtype: "success", request_id, response } });
+  return {
+    pending,
+    // true when the line was a control message (never shown or logged)
+    handle(ev: any): boolean {
+      if (ev?.type === "control_cancel_request") {
+        if (pending.delete(ev.request_id)) emit({ type: "question_answer", id: ev.request_id, cancelled: true });
+        return true;
+      }
+      if (ev?.type === "control_response") return true; // replies to host requests; we send none
+      if (ev?.type !== "control_request") return false;
+      const r = ev.request ?? {};
+      if (r.subtype !== "can_use_tool") {
+        write({ type: "control_response", response: { subtype: "error", request_id: ev.request_id, error: `Unsupported control request: ${r.subtype}` } });
+        return true;
+      }
+      if (r.tool_name === "AskUserQuestion" && Array.isArray(r.input?.questions)) {
+        const questions = cleanQuestions(r.input.questions.map((q: any, i: number) => ({ ...q, id: String(i), allowOther: true })));
+        pending.set(ev.request_id, { input: r.input, questions });
+        emit({ type: "question", id: ev.request_id, tool_use_id: r.tool_use_id, questions, ts: Date.now() });
+        return true;
+      }
+      respond(ev.request_id, { behavior: "deny", message: `Permission for ${r.tool_name} was not granted: this console does not approve tool prompts in ${mode} mode. Continue without it or ask the user to switch the thread to Bypass.` });
+      return true;
+    },
+    answer(id: string, reply: QuestionReply): boolean {
+      const p = pending.get(id);
+      if (!p) throw new Error("This question is no longer waiting for an answer.");
+      pending.delete(id);
+      if (reply.skip || reply.note !== undefined) {
+        const message = reply.note !== undefined
+          ? `The user did not pick an option and replied in chat instead: ${reply.note}`
+          : "The user skipped these questions without answering. Continue with your best judgment and do not ask the same questions again.";
+        respond(id, { behavior: "deny", message });
+        return reply.note !== undefined;
+      }
+      const answers: Record<string, string> = {};
+      p.questions.forEach((q, i) => {
+        const a = (reply.answers[q.id] ?? []).map((x) => String(x).trim()).filter(Boolean);
+        if (a.length) answers[String(p.input.questions[i]?.question ?? q.question)] = a.join(", ");
+      });
+      respond(id, { behavior: "allow", updatedInput: { ...p.input, answers } });
+      return false;
+    },
+  };
+}
+
 export const claude: Provider = {
   id: "claude",
   label: "Claude Code",
@@ -49,6 +104,7 @@ export const claude: Provider = {
       "--verbose",
       "--include-partial-messages",
       "--permission-mode", t.mode,
+      "--permission-prompt-tool", "stdio", // host answers prompts over stdin/stdout: enables AskUserQuestion (see claudeControl)
       "--add-dir", threadDir(t.id), // attachments live outside the project; without this plan/accept-edits could not read them
       "--model", t.model,
     ];
@@ -62,9 +118,11 @@ export const claude: Provider = {
     for (const k of SCRUBBED_ENV) delete env[k];
     const proxy = headroom.url();
     if (proxy && !env.ANTHROPIC_BASE_URL) env.ANTHROPIC_BASE_URL = proxy; // compress context via Headroom while it is up
+    const control = claudeControl((msg) => p.write(JSON.stringify(msg)), ctx.event, t.mode);
     const p = spawnLines("claude", "claude", args, { cwd: t.cwd, env }, ctx, (line) => {
       const ev = parseJson(line);
       if (!ev) return;
+      if (control.handle(ev)) return;
       if (ev.type === "user") {
         delete ev.tool_use_result; // duplicate of message.content, can be huge
         for (const c of ev.message?.content ?? []) {
@@ -105,6 +163,7 @@ export const claude: Provider = {
       // Claude takes a user message mid-turn on stdin and folds it in after the running tool call (verified: it dropped the
       // remaining commands and answered the new message within the same turn).
       steer: (text, images = []) => write(text, images),
+      answer: (id, reply) => control.answer(id, reply),
       abort: () => p.abort(),
       kill: () => p.kill(),
     };

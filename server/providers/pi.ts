@@ -47,12 +47,13 @@ export function parsePiModels(table: string, all = false): string[] {
 
 export function refreshPiModels(): Promise<string[]> {
   return new Promise((resolve) => {
-    if (process.env.AGENT_CONSOLE_PI_MODELS) {
-      cached = process.env.AGENT_CONSOLE_PI_MODELS.split(",").map((s) => s.trim()).filter(Boolean);
+    const env = childEnv(); // so the toggles work from ~/.config/agent-console/env too, not only the server's env
+    if (env.AGENT_CONSOLE_PI_MODELS) {
+      cached = env.AGENT_CONSOLE_PI_MODELS.split(",").map((s) => s.trim()).filter(Boolean);
       return resolve(cached);
     }
-    execFile("pi", ["--list-models"], { env: childEnv(), timeout: 20_000, maxBuffer: 4 << 20 }, (err, stdout, stderr) => {
-      if (!err) cached = parsePiModels(stdout + stderr, process.env.AGENT_CONSOLE_PI_ALL === "1");
+    execFile("pi", ["--list-models"], { env, timeout: 20_000, maxBuffer: 4 << 20 }, (err, stdout, stderr) => {
+      if (!err) cached = parsePiModels(stdout + stderr, env.AGENT_CONSOLE_PI_ALL === "1");
       resolve(cached);
     });
   });
