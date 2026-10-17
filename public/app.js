@@ -277,9 +277,9 @@ function modelMeta(v) {
   return { label: id.replace(/:free$/, ""), desc: [prov, rest.join("/"), free && "free"].filter(Boolean).join(" · ") };
 }
 const ADV = "advisor:";
-const ADVISOR_LABEL = { default: "Settings default", opus: "Opus", fable: "Fable" };
+const ADVISOR_LABEL = { default: "Settings default", off: "Off", opus: "Opus", fable: "Fable" };
 // the model list, then (for agents that have an advisor) "Advisor · X" rows: one dropdown covers both choices
-const withAdvisors = (items, p, advisor = "default") => !p?.advisors?.length ? items : [...items, ...["default", ...p.advisors].map((a) => ({ value: ADV + a, label: `Advisor · ${ADVISOR_LABEL[a] || cap(a)}`, desc: a === "default" ? "Use the advisor from your Claude settings." : "A stronger model Claude consults before big decisions.", icon: "sparkle", keep: true, checked: a === advisor }))];
+const withAdvisors = (items, p, advisor = "default") => !p?.advisors?.length ? items : [...items, ...["default", ...p.advisors].map((a) => ({ value: ADV + a, label: `Advisor · ${ADVISOR_LABEL[a] || cap(a)}`, desc: a === "default" ? "Use the advisor from your Claude settings." : a === "off" ? "No additional advisor model calls." : "A stronger model Claude consults before big decisions (additional usage).", icon: "sparkle", keep: true, checked: a === advisor }))];
 const modelItems = (models, p) => models.map((v) => ({ value: v, ...modelMeta(v), ...(p?.modelDetails?.[v] ? { label: p.modelDetails[v].label, desc: p.modelDetails[v].description ?? modelMeta(v).desc } : {}) }));
 function fillEffort(menu, p, model, value = "default") {
   const meta = p?.modelDetails?.[model];
@@ -336,13 +336,25 @@ const threadActions = (id) => {
   const forks = others.map((p) => ({ value: `fork:${p.id}`, label: `Fork in ${p.label}`, desc: "Replay this conversation in another agent", icon: "fork" }));
   const i = THREAD_ACTIONS.findIndex((a) => a.value === "fork") + 1;
   const filed = !!state.threads.get(id)?.archived;
-  const items = THREAD_ACTIONS.map((a) => a.value === "archive" && filed ? { value: "unarchive", label: "Unarchive", desc: "Back to the working list", icon: "archive" } : a);
+  const thread = state.threads.get(id);
+  const items = THREAD_ACTIONS.map((a) => {
+    if (a.value === "idle-compaction") {
+      const supported = Number.isFinite(thread?.idleCompactionTtlMs) && thread.idleCompactionTtlMs > 30_000;
+      return { ...a, disabled: !supported,
+        label: !supported ? "Automatic compaction unavailable" : thread.idleCompaction === false ? "Enable automatic compaction" : "Disable automatic compaction",
+        desc: supported ? "Substantial idle contexts; 30s before estimated cache expiry" : "Cache lifetime is unknown for this provider" };
+    }
+    return a.value === "archive" && filed ? { value: "unarchive", label: "Unarchive", desc: "Back to the working list", icon: "archive" } : a;
+  });
   return [...items.slice(0, i), ...forks, ...items.slice(i)];
 };
 const THREAD_ACTIONS = [
   { value: "rename", label: "Rename", icon: "pencil" },
   { value: "compact", label: "Compact context", desc: "Reduce context; keep the transcript", icon: "sparkle" },
+  { value: "idle-compaction", label: "Automatic compaction", icon: "sparkle" },
+  { value: "economy", label: "Economy settings", desc: "Use medium effort and turn the advisor off; keep the selected model", icon: "sparkle" },
   { value: "fork", label: "Fork", desc: "Continue in a new thread", icon: "fork" },
+  { value: "fork-recent", label: "Fork with recent context", desc: "Carry a short recent handoff; keep the full transcript available", icon: "fork" },
   { value: "download", label: "Download", desc: "Save as a Markdown file", icon: "download" },
   { value: "share", label: "Share", desc: "Send the conversation as text", icon: "share" },
   { value: "details", label: "Run details", desc: "Model, effort, tokens and load timings", icon: "code" },
@@ -366,6 +378,18 @@ async function runThreadAction(id, action) {
     startRename();
   } else if (action === "compact") {
     send({ t: "compact", thread: id });
+  } else if (action === "idle-compaction") {
+    if (!t.idleCompactionTtlMs) return;
+    const enabled = t.idleCompaction === false;
+    send({ t: "update", thread: id, idleCompaction: enabled });
+    toast(`Automatic compaction ${enabled ? "enabled" : "disabled"} for this thread.`);
+  } else if (action === "economy") {
+    if (t.status === "running") { toast("Apply economy settings when this turn finishes."); return; }
+    const provider = state.providers.get(t.provider);
+    const efforts = provider?.modelDetails?.[t.model]?.efforts || [];
+    const effort = ["medium", "low"].find(e => efforts.includes(e)) || "default";
+    send({ t: "update", thread: id, effort, ...(provider?.advisors?.includes("off") ? { advisor: "off" } : {}) });
+    toast("Economy settings applied; selected model kept.");
   } else if (action === "details") {
     setNav(false);
     if (state.current !== id) openThread(id);
@@ -375,6 +399,8 @@ async function runThreadAction(id, action) {
     send({ t: "archive", thread: id, archived: action === "archive" });
   } else if (action === "delete") {
     if (confirm(`Delete "${t.title}" and its history?`)) send({ t: "delete", thread: id });
+  } else if (action === "fork-recent") {
+    send({ t: "fork", thread: id, context: "recent" });
   } else if (action.startsWith("fork:")) {
     send({ t: "fork", thread: id, provider: action.slice(5) });
   } else if (action === "fork") {
@@ -465,7 +491,7 @@ function renderThreads() {
   for (const t of list) {
     const li = el("li", t.id === state.current ? "sel" : "");
     li.tabIndex = 0;
-    li.title = `${t.title}\n${t.cwd}\n${provLabel(t.provider)} · ${modelMeta(t.model).label}${t.mode === "bypassPermissions" ? " · Bypass" : ""} · $${t.cost.toFixed(3)}`;
+    li.title = `${t.title}\n${t.cwd}\n${provLabel(t.provider)} · ${modelMeta(t.model).label}${t.mode === "bypassPermissions" ? " · Bypass" : ""} · ${t.costMeasured ? `$${t.cost.toFixed(3)} recorded API-equivalent` : "cost not measured"}`;
     if (t.id === state.current) li.setAttribute("aria-current", "true");
     const waiting = questions.count(t.id) || t.waiting;
     const dot = el("span", `dot ${waiting ? "waiting" : t.status}`);
@@ -814,12 +840,15 @@ function renderHead() {
     menus.effort.setDisabled(t.status === "running");
     const run = t.lastRun;
     const tok = run && [run.input_tokens, run.cached_input_tokens, run.output_tokens].some((n) => n != null);
-    facts(run ? [
+    facts([...(run ? [
       ["Model", run.model || t.model],
       ["Effort", effortLabel(run.effort || t.effort || "default"), run.source && run.source !== "thread settings" ? `from ${run.source}` : ""],
       ["Last run", run.duration_ms == null ? "Still running" : fmtMs(run.duration_ms)],
       ...(tok ? [["Tokens", `${run.input_tokens ?? 0} in · ${run.cached_input_tokens ?? 0} from cache · ${run.output_tokens ?? 0} out`, "whole turn, not the context size"]] : []),
-    ] : [["Last run", "None yet"]]);
+    ] : [["Last run", "None yet"]]),
+      ["Automatic compaction", !t.idleCompactionTtlMs ? "Unavailable: cache lifetime unknown" : t.idleCompaction === false ? "Off" : "On for substantial idle contexts",
+        t.idleCompactionDueAt ? `Scheduled around ${new Date(t.idleCompactionDueAt).toLocaleTimeString()}; cache expiry is estimated.` : "Compaction uses tokens and may shorten details. Full transcript is kept."],
+    ]);
     $("diagnostics").title = run ? `Last run: ${run.model || t.model} · effort ${run.effort || t.effort || "default"} (${run.source || "thread settings"})\n${run.duration_ms ?? "?"} ms · input ${run.input_tokens ?? "?"} · cached ${run.cached_input_tokens ?? "?"} · output ${run.output_tokens ?? "?"} tokens` : "No run metrics yet.";
     menus.mode.setValue(t.mode);
   }
@@ -1790,6 +1819,15 @@ function renderUsage() {
   const ctxWrap = el("div", "usage-ctx"); ctxWrap.setAttribute("role", "group"); ctxWrap.setAttribute("aria-label", "Thread context");
   const line = el("div", "usage-ctx-line"); line.append(ctxRow, info);
   ctxWrap.append(line, box); pane.append(ctxWrap);
+  if (hasCtx && t.context.used / t.context.max >= 0.7) {
+    const note = el("div", "usage-note", "Long context increases repeated input. Compact this task, or start a fresh thread for unrelated work.");
+    if (t.status === "idle") {
+      const compact = el("button", "btn sm ghost", "Compact context");
+      compact.type = "button"; compact.onclick = () => send({ t: "compact", thread: t.id });
+      note.append(compact);
+    }
+    pane.append(note);
+  }
   if (rebuildTabs) root.replaceChildren(tabs, pane);
   else root.querySelector(".usage-pane").replaceWith(pane);
   if (focusedTab) $(focusedTab)?.focus({ preventScroll: true });

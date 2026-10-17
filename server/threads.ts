@@ -1,3 +1,4 @@
+import { IdleCompactionTimers, idleCompactionPolicy, idleCompactionDeadline } from "./idle-compaction.ts";
 import { HistoryIndex } from "./history.ts";
 import { historyWireEvent } from "./history-wire.ts";
 import { commandList, CONSOLE_COMMANDS, parseCommand } from "./commands.ts";
@@ -11,8 +12,10 @@ import { Questions, type PendingQuestion } from "./questions.ts";
 import { brainCommit } from "./providers/brain.ts";
 import { createLabeler, needsLabel, type Labeler } from "./providers/label.ts";
 import { suggestTitle } from "./providers/title.ts";
-import { replayPreamble } from "./export.ts";
-import { backfill, claudeTotals, delta, recordTurn, type Turn } from "./analytics.ts";
+import { recentPreamble, replayPreamble } from "./export.ts";
+import { backfill, restoreAccounting, recordTurn, readTurns, type Turn } from "./analytics.ts";
+import { repairAccounting } from "./accounting-repair.ts";
+import { SessionAccounting, codexAccounting, piAccounting, type ModelUsage } from "./accounting.ts";
 import { MAX_ATTACHMENTS, removeUploads, resolveAttachments, threadDir, withFileList } from "./uploads.ts";
 import { clip, DEFAULT_PROVIDER, PROVIDERS, type Agent, type AgentCtx, type Command, type Mode } from "./providers/index.ts";
 
@@ -28,17 +31,25 @@ export interface Thread {
   model: string;
   effort?: string;
   advisor?: string;
+  idleCompaction?: boolean;
+  idleCompactionTtlMs?: number;
+  idleCompactionDueAt?: number;
+  lastUserActivityAt?: number;
+  lastProviderActivityAt?: number;
+  idleCompactionConsumedAt?: number;
   lastRun?: { model?: string; effort?: string; source?: string; duration_ms?: number; input_tokens?: number; output_tokens?: number; cached_input_tokens?: number };
   sessionId?: string;
   forkFrom?: string; // forked from a Claude session: the first run continues a copy of it (cleared once the fork has its own session id)
   context?: { used?: number; max?: number; source?: string }; // tokens in the agent's context now, and the model's window when the harness reports it
   replay?: boolean; // forked from an agent with no native fork: the first message carries the earlier conversation as text
+  replayLimit?: number; // explicit short handoff instead of native session or full text replay
   status: "idle" | "running";
   waiting?: number; // number of live requests that need a user answer
   operation?: "compact";
   lastCompactedAt?: number;
   archived?: number; // when it was archived: it leaves the working list until unarchived or sent to again
   cost: number;
+  costMeasured?: boolean;
   createdAt: number;
   updatedAt: number;
 }
@@ -87,7 +98,7 @@ function mergeQueued(items: Queued[]): { text: string; attachments: unknown } {
 const queuePreview = ({ id, text, revision, editing }: Queued) => ({ id, text: text.slice(0, 200), revision, editing: !!editing });
 
 // what the usage dashboard needs to know about the turn in flight
-interface TurnState { start: number; tools: Record<string, number>; last?: ReturnType<typeof claudeTotals> }
+interface TurnState { start: number; tools: Record<string, number>; usage?: any; models?: ModelUsage[] }
 
 interface Live {
   agent: Agent;
@@ -98,11 +109,13 @@ interface Live {
 
 export class Threads {
   private questions = new Questions();
+  private idleCompactionTimers = new IdleCompactionTimers();
+  private closed = false;
   private historyIndex = new HistoryIndex();
   private threads = new Map<string, Thread>();
   private live = new Map<string, Live>();
   private turns = new Map<string, TurnState>(); // the turn in flight, per thread
-  private cumulative = new Map<string, ReturnType<typeof claudeTotals>>(); // Claude's session-wide counters at the last result
+  private accounting = new SessionAccounting();
   private queues = new Map<string, Queued[]>(); // messages to send, in order, once the running turn ends
   private emit: Emit;
   private labeler: Labeler; // plain-English labels for shell commands that arrive without a description
@@ -142,7 +155,17 @@ export class Threads {
         this.threads.set(t.id, t);
       }
     } catch {}
+    this.accounting = restoreAccounting([...this.threads.values()]);
     try { backfill([...this.threads.values()]); } catch {} // usage history from logs written before the dashboard existed
+    try {
+      repairAccounting(DATA_DIR, true); // startup precedes new turns; preserves an exclusive original backup
+      const rows = readTurns(0, Date.now(), Number.MAX_SAFE_INTEGER).filter(r => r.accounting === 2);
+      for (const t of this.threads.values()) {
+        const known = rows.filter(r => r.thread === t.id && r.cost != null);
+        t.cost = known.reduce((sum, r) => sum + r.cost!, 0);
+        t.costMeasured = known.length > 0;
+      }
+    } catch { /* malformed/incomplete legacy history must not stop the console */ }
     try {
       for (const [id, items] of Object.entries(JSON.parse(fs.readFileSync(QUEUES_FILE, "utf8"))) as [string, Queued[]][]) {
         if (!this.threads.has(id) || !Array.isArray(items)) continue;
@@ -150,6 +173,31 @@ export class Threads {
       }
       setImmediate(() => { for (const id of this.queues.keys()) this.drain(id); });
     } catch {}
+    for (const thread of this.threads.values()) this.refreshIdleCompaction(thread);
+  }
+
+  private refreshIdleCompaction(t: Thread) {
+    this.idleCompactionTimers.cancel(t.id);
+    const policy = idleCompactionPolicy(t);
+    t.idleCompactionTtlMs = policy.ttlMs;
+    delete t.idleCompactionDueAt;
+    const deadline = idleCompactionDeadline(t, policy, !!this.queues.get(t.id)?.length);
+    if (this.closed || deadline == null || deadline <= Date.now()) return;
+    t.idleCompactionDueAt = deadline;
+    const cycle = t.lastUserActivityAt;
+    this.idleCompactionTimers.schedule(t.id, deadline, () => {
+      const current = this.threads.get(t.id);
+      if (this.closed || current !== t || t.lastUserActivityAt !== cycle) return;
+      const currentPolicy = idleCompactionPolicy(t);
+      if (idleCompactionDeadline(t, currentPolicy, !!this.queues.get(t.id)?.length) !== deadline) { this.refreshIdleCompaction(t); return; }
+      // A stalled event loop must not buy compaction after the estimated cache expiry.
+      t.idleCompactionConsumedAt = cycle;
+      delete t.idleCompactionDueAt;
+      this.persist();
+      if (Date.now() >= t.lastProviderActivityAt! + currentPolicy.ttlMs!) { this.touch(t); return; }
+      try { this.compact(t.id); }
+      catch { this.touch(t); } // consume failed attempts; never create a paid retry loop
+    });
   }
 
   getCommands(): Record<string, Command[]> {
@@ -178,6 +226,7 @@ export class Threads {
     const count = this.questions.list(id).length;
     if (count) t.waiting = count;
     else delete t.waiting;
+    this.refreshIdleCompaction(t);
     this.persist();
     this.emit({ t: "thread", thread: t });
   }
@@ -195,6 +244,7 @@ export class Threads {
   }
   private touch(t: Thread) {
     t.updatedAt = Date.now();
+    this.refreshIdleCompaction(t);
     this.persist();
     this.emit({ t: "thread", thread: t });
   }
@@ -223,6 +273,7 @@ export class Threads {
       updatedAt: now,
     };
     this.threads.set(t.id, t);
+    this.refreshIdleCompaction(t);
     this.persist();
     this.emit({ t: "thread", thread: t });
     return t;
@@ -240,11 +291,12 @@ export class Threads {
     if (!t || !!t.archived === archived) return;
     if (archived) t.archived = Date.now();
     else delete t.archived;
+    this.refreshIdleCompaction(t);
     this.persist();
     this.emit({ t: "thread", thread: t });
   }
 
-  update(id: string, patch: { mode?: Mode; model?: string; effort?: string; advisor?: string; title?: string }) {
+  update(id: string, patch: { mode?: Mode; model?: string; effort?: string; advisor?: string; title?: string; idleCompaction?: boolean }) {
     const t = this.threads.get(id);
     if (!t) return;
     const prov = PROVIDERS.get(t.provider);
@@ -258,6 +310,7 @@ export class Threads {
     if (patch.model) t.model = patch.model;
     t.effort = effort;
     if (patch.advisor) t.advisor = patch.advisor;
+    if (typeof patch.idleCompaction === "boolean") t.idleCompaction = patch.idleCompaction;
     if (patch.title) {
       t.title = patch.title.slice(0, 80);
       t.autoTitle = false;
@@ -269,7 +322,7 @@ export class Threads {
   // A new thread that carries on from this one. Claude forks its session, Pi gets a copy of its session directory, and agents with
   // no fork (Codex) replay the earlier conversation as text in the first message. The history and uploads are copied so the fork reads whole.
   // With `provider` set to another agent the fork switches harness: its native session cannot carry over, so it always replays text.
-  fork(id: string, provider?: string): Thread {
+  fork(id: string, provider?: string, recent = false): Thread {
     const src = this.threads.get(id);
     if (!src) throw new Error("Unknown thread");
     const target = provider && provider !== src.provider ? PROVIDERS.get(provider) : undefined;
@@ -290,7 +343,7 @@ export class Threads {
       model: target ? target.defaultModel() : src.model,
       effort: target ? "default" : src.effort,
       advisor: target ? undefined : src.advisor,
-      context: target ? undefined : src.context,
+      context: target || recent ? undefined : src.context,
       status: "idle",
       cost: 0,
       createdAt: now,
@@ -300,7 +353,9 @@ export class Threads {
     const hasHistory = fs.existsSync(log(src.id));
     if (hasHistory) fs.copyFileSync(log(src.id), log(t.id));
     if (fs.existsSync(threadDir(src.id))) fs.cpSync(threadDir(src.id), threadDir(t.id), { recursive: true });
-    if (target) {
+    if (recent) {
+      if (hasHistory) { t.replay = true; t.replayLimit = 6000; }
+    } else if (target) {
       if (hasHistory) t.replay = true;
     } else if (src.provider === "claude") {
       if (src.sessionId) t.forkFrom = src.sessionId;
@@ -318,6 +373,7 @@ export class Threads {
     this.kill(id);
     this.queues.delete(id);
     this.emitQueue(id);
+    this.idleCompactionTimers.cancel(id);
     this.threads.delete(id);
     this.persist();
     fs.rmSync(path.join(LOG_DIR, `${id}.jsonl`), { force: true });
@@ -386,10 +442,13 @@ export class Threads {
     const prov = PROVIDERS.get(t.provider);
     if (!prov) throw new Error(`Unknown provider "${t.provider}".`);
     const live: Live = { agent: undefined as unknown as Agent, aborted: false };
-    this.cumulative.delete(t.id); // a new agent process counts its own tokens and cost from zero
+    let starting = true;
+    const earlyEvents: any[] = [];
     const ctx: AgentCtx = {
       event: (ev) => {
-        if (!live.aborted && (this.live.get(t.id) === live || !live.agent)) this.onEvent(t, ev);
+        if (live.aborted) return;
+        if (starting) earlyEvents.push(ev);
+        else if (this.live.get(t.id) === live) this.onEvent(t, ev);
       },
       commands: (list) => this.setCommands(t.provider, list),
       exited: (info) => {
@@ -408,11 +467,14 @@ export class Threads {
     };
     live.agent = prov.start({ id: t.id, cwd: t.cwd, mode: t.mode, model: t.model, effort: t.effort, advisor: t.advisor, sessionId: t.sessionId, forkFrom: t.sessionId ? undefined : t.forkFrom }, ctx);
     this.live.set(t.id, live);
+    starting = false;
+    for (const event of earlyEvents) if (!live.aborted && this.live.get(t.id) === live) this.onEvent(t, event);
     return live;
   }
 
   // Canonical events from any harness. We only interpret the two that change thread state.
   private onEvent(t: Thread, ev: any) {
+    const compacting = t.operation === "compact";
     if (NOISE.has(kindOf(ev))) return;
     if (ev.type === "question") {
       try { ev = this.questions.add(t.id, ev); }
@@ -436,6 +498,7 @@ export class Threads {
       const windows = claudeWindows(ev);
       if (windows.length) usage.record(t.provider, { windows });
     }
+    if (ev.type === "token_usage") { const turn = this.turns.get(t.id); if (turn) turn.usage = ev; }
     if (ev.type === "run_settings" || ev.type === "token_usage") {
       t.lastRun = { ...(ev.type === "run_settings" ? {} : t.lastRun), ...Object.fromEntries(Object.entries(ev).filter(([k]) => k !== "type")) };
       this.touch(t);
@@ -448,6 +511,7 @@ export class Threads {
       return;
     }
     if (ev.type === "system" && ev.subtype === "init" && ev.session_id && t.sessionId !== ev.session_id) {
+      if (t.forkFrom) this.accounting.seedFork(ev.session_id, t.forkFrom);
       t.sessionId = ev.session_id;
       delete t.forkFrom; // the fork now has its own session
       this.persist();
@@ -456,6 +520,7 @@ export class Threads {
       const live = this.live.get(t.id);
       if (live) live.compactConfirmed = true;
       t.lastCompactedAt = Date.now();
+      t.idleCompactionConsumedAt = t.lastUserActivityAt;
       t.context = { max: t.context?.max, source: t.context?.source };
       this.emit({ t: "thread", thread: t });
     }
@@ -473,6 +538,10 @@ export class Threads {
       }
       if (live?.compactWait) { clearTimeout(live.compactWait); live.compactWait = undefined; }
       this.finishTurn(t, ev);
+      if (!compacting) {
+        t.lastProviderActivityAt = Math.max(Date.now(), t.lastUserActivityAt ?? 0);
+        if (ev.is_error) t.idleCompactionConsumedAt = t.lastUserActivityAt;
+      }
       if (t.operation === "compact") {
         if (!ev.is_error && !this.live.get(t.id)?.compactConfirmed) {
           ev = { ...ev, is_error: true, subtype: "error" };
@@ -484,7 +553,6 @@ export class Threads {
       t.lastRun = { ...t.lastRun, duration_ms: ev.duration_ms };
       // a message that arrived just as the turn ended starts the next one straight away: Claude says so in queued_turn_count
       t.status = Number(ev.queued_turn_count) > 0 ? "running" : "idle";
-      if (typeof ev.total_cost_usd === "number") t.cost += ev.total_cost_usd;
       this.touch(t);
       brainCommit(); // agents may have written wiki pages this turn; keep the shared brain's git history current
       if (t.status === "idle" && (!ev.is_error || parseCommand(this.queues.get(t.id)?.[0]?.text || "")?.name === "compact")) this.drain(t.id);
@@ -498,21 +566,18 @@ export class Threads {
   }
 
   private finishTurn(t: Thread, ev: any) {
+    const measured = ev.modelUsage ? this.accounting.consume(ev.session_id || t.sessionId || t.id, ev) : undefined;
+    if (measured?.duplicate) return;
     const turn = this.turns.get(t.id);
     if (!turn) return;
     this.turns.delete(t.id);
-    const row: Turn = { ts: turn.start, thread: t.id, provider: t.provider, model: t.model, effort: t.effort, ms: ev.duration_ms };
+    const row: Turn = { ts: turn.start, thread: t.id, provider: t.provider, model: t.lastRun?.model || t.model, effort: t.effort, ms: ev.duration_ms, accounting: 2 };
     if (Object.keys(turn.tools).length) row.tools = turn.tools;
     if (ev.is_error) row.err = 1;
-    if (ev.modelUsage) {
-      const now = claudeTotals(ev);
-      const last = this.cumulative.get(t.id);
-      if (now.cost != null) row.cost = delta(now.cost, last?.cost);
-      row.in = delta(now.in, last?.in); row.out = delta(now.out, last?.out); row.cache = delta(now.cache, last?.cache);
-      this.cumulative.set(t.id, now);
-    } else if (t.lastRun?.input_tokens != null) {
-      row.in = t.lastRun.input_tokens; row.out = t.lastRun.output_tokens; row.cache = t.lastRun.cached_input_tokens;
-    }
+    if (measured) Object.assign(row, measured);
+    else if (t.provider === "codex") Object.assign(row, codexAccounting(turn.usage, row.model!));
+    else if (ev.usageModels) Object.assign(row, piAccounting(ev.usageModels));
+    if (row.cost != null) { t.cost += row.cost; t.costMeasured = true; }
     try { recordTurn(row); } catch {}
   }
 
@@ -545,6 +610,9 @@ export class Threads {
     if (t.operation === "compact" || this.queues.get(id)?.some(q => parseCommand(q.text)?.name === "compact")) throw new Error("Context compaction is already running or queued.");
     if (t.status === "running") return this.whileRunning(t, `/compact${instructions ? " " + instructions : ""}`, { mode: "queue" });
     if (!fs.existsSync(path.join(LOG_DIR, `${id}.jsonl`)) || (t.provider === "codex" && !t.sessionId)) throw new Error("Send a message before compacting this thread.");
+    t.idleCompactionConsumedAt = t.lastUserActivityAt;
+    this.idleCompactionTimers.cancel(id);
+    delete t.idleCompactionDueAt;
     this.kill(id); // native sessions resume from disk; never share a mutable session with an idle subprocess
     const live = this.start(t);
     if (!live.agent.compact) { this.kill(id); throw new Error("This agent does not support context compaction."); }
@@ -553,6 +621,7 @@ export class Threads {
     t.status = "running";
     this.publish(id, { type: "user_input", text: `/compact${instructions ? " " + instructions : ""}`, command: true, ts: Date.now() });
     this.publish(id, { type: "command_status", command: "compact", status: "running", text: "Compacting context…" });
+    this.turns.set(id, { start: Date.now(), tools: {} });
     this.touch(t);
     try { live.agent.compact(instructions); }
     catch (error) { this.kill(id); delete t.operation; t.status = "idle"; this.touch(t); throw error; }
@@ -565,6 +634,11 @@ export class Threads {
     const t = this.threads.get(id);
     if (!t) throw new Error("Unknown thread");
     if (!opts.auto && this.command(t, text, opts.attachments)) return;
+    if (!opts.auto) {
+      t.lastUserActivityAt = Math.max(Date.now(), (t.lastUserActivityAt ?? 0) + 1);
+      this.idleCompactionTimers.cancel(id);
+      delete t.idleCompactionDueAt;
+    }
     if (t.status === "running") {
       if (opts.auto) throw new Error("A turn is already running.");
       return this.whileRunning(t, text, opts);
@@ -572,8 +646,9 @@ export class Threads {
     const attachments = resolveAttachments(id, opts.attachments);
     let prompt = withFileList(text, attachments);
     if (t.replay && !opts.auto) {
-      prompt = replayPreamble(this.history(id)) + prompt; // before publish: the transcript must not include this message
+      prompt = (t.replayLimit === 6000 ? recentPreamble(this.history(id)) : replayPreamble(this.history(id))) + prompt; // exclude this new message
       t.replay = false;
+      delete t.replayLimit;
     }
     if (!opts.auto) delete t.archived; // writing to an archived thread puts it back to work (touch below persists it)
     let live = this.live.get(id);
@@ -729,8 +804,12 @@ export class Threads {
     const live = this.live.get(id);
     if (!t) return;
     this.cancelQuestions(id);
+    t.idleCompactionConsumedAt = t.lastUserActivityAt;
+    this.idleCompactionTimers.cancel(id);
+    delete t.idleCompactionDueAt;
+    this.persist();
     if (this.queues.delete(id)) this.emitQueue(id); // Stop means stop: nothing queued behind it runs
-    if (!live) return;
+    if (!live) { this.touch(t); return; }
     live.aborted = true;
     this.live.delete(id); // next send starts a fresh agent and resumes the session
     live.agent.abort();
@@ -759,6 +838,8 @@ export class Threads {
   }
 
   shutdown() {
+    this.closed = true;
+    this.idleCompactionTimers.shutdown();
     for (const id of [...this.live.keys()]) this.kill(id);
   }
 }
