@@ -76,10 +76,15 @@ openrouter  nvidia/nemotron-3-super-120b-a12b                   262.1K   235.9K 
 openrouter  nvidia/nemotron-3-super-120b-a12b:free              262.1K   235.9K   yes       no
 nvidia      stepfun-ai/step-5-preview                            1.0M     131.1K   yes       yes
 nvidia      nvidia/nemotron-3-super-120b-a12b                    262.1K   262.1K   yes       no
+nvidia      meta/llama-3.2-11b-vision-instruct                   128K     4.1K     no        yes
+nvidia      nvidia/nemotron-3.5-super-vl-120b-a12b                262.1K   131.1K   yes       yes
+nvidia      openai/gpt-oss-20b                                    131.1K   32.8K    yes       no
+nvidia      google/gemma-3-12b-it                                 131.1K   16.4K    no        yes
 openai      gpt-4o                                              128K     16K      no        yes`;
-check("pi models: openrouter and unverified NVIDIA models filtered by default", JSON.stringify(parsePiModels(table)) === JSON.stringify(["openrouter/nvidia/nemotron-3-super-120b-a12b:free", "nvidia/stepfun-ai/step-5-preview", "openai/gpt-4o"]));
-check("pi models: working NVIDIA free model included, other NVIDIA models excluded", JSON.stringify(parsePiModels(table)) === JSON.stringify(["openrouter/nvidia/nemotron-3-super-120b-a12b:free", "nvidia/stepfun-ai/step-5-preview", "openai/gpt-4o"]));
-check("pi models: all=true keeps paid", parsePiModels(table, true).length === 5);
+const freeDefault = ["openrouter/nvidia/nemotron-3-super-120b-a12b:free", "nvidia/stepfun-ai/step-5-preview", "nvidia/nvidia/nemotron-3-super-120b-a12b", "nvidia/meta/llama-3.2-11b-vision-instruct", "nvidia/nvidia/nemotron-3.5-super-vl-120b-a12b", "nvidia/openai/gpt-oss-20b", "openai/gpt-4o"];
+check("pi models: free OpenRouter and working NVIDIA models included by default", JSON.stringify(parsePiModels(table)) === JSON.stringify(freeDefault));
+check("pi models: unavailable NVIDIA model excluded", !parsePiModels(table).includes("nvidia/google/gemma-3-12b-it"));
+check("pi models: all=true keeps paid", parsePiModels(table, true).length === 9);
 check("pi models: 'No models available' message yields none", parsePiModels("No models available. Use /login\n  /home/x/docs/providers.md\n").length === 0);
 
 // ---- pi tool normalisation
