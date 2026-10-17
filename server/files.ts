@@ -119,16 +119,25 @@ function timing(res: Parameters<RequestHandler>[1], start: number, kind: "file" 
 type Lookup = (id: string) => { cwd: string } | undefined;
 
 // These routes mount after authentication. Every request resolves scope afresh;
-// image URLs never grant access beyond the selected thread's real cwd.
+// image URLs stay within the selected thread's real cwd or the fixed repos root.
+function viewerScope(query: Record<string, unknown>, lookup: Lookup) {
+  if (query.scope !== undefined) {
+    if (query.scope !== "repos" || query.thread !== undefined) throw new ViewError(400, "Choose a valid file scope.");
+    return { cwd: path.join(os.homedir(), "repos"), params: { scope: "repos" } };
+  }
+  const thread = typeof query.thread === "string" ? lookup(query.thread) : undefined;
+  if (!thread) throw new ViewError(404, "Unknown thread.");
+  return { cwd: thread.cwd, params: { thread: String(query.thread) } };
+}
+
 export function fileViewer(lookup: Lookup, binary = false): RequestHandler {
   return async (req, res) => {
     const start = performance.now();
     res.setHeader("Cache-Control", "no-store");
     res.setHeader("X-Content-Type-Options", "nosniff");
     try {
-      const thread = typeof req.query.thread === "string" ? lookup(req.query.thread) : undefined;
-      if (!thread) throw new ViewError(404, "Unknown thread.");
-      const file = await readProjectFile(thread.cwd, requestPath(req.query.path), binary);
+      const scope = viewerScope(req.query, lookup);
+      const file = await readProjectFile(scope.cwd, requestPath(req.query.path), binary);
       const read_ms = timing(res, start, "file");
       if (binary && file.kind === "image" && file.data) {
         res.setHeader("Content-Type", file.media_type!);
@@ -136,7 +145,7 @@ export function fileViewer(lookup: Lookup, binary = false): RequestHandler {
         res.setHeader("Content-Security-Policy", "default-src 'none'; sandbox");
         return void res.send(file.data);
       }
-      const url = file.kind === "image" ? `/api/file-image?${new URLSearchParams({ thread: String(req.query.thread), path: file.path })}` : undefined;
+      const url = file.kind === "image" ? `/api/file-image?${new URLSearchParams({ ...scope.params, path: file.path })}` : undefined;
       res.json({ ...file, url, read_ms });
     } catch (error) {
       timing(res, start, "file");
@@ -153,9 +162,8 @@ export function fileTree(lookup: Lookup): RequestHandler {
     const start = performance.now();
     res.setHeader("Cache-Control", "no-store");
     try {
-      const thread = typeof req.query.thread === "string" ? lookup(req.query.thread) : undefined;
-      if (!thread) throw new ViewError(404, "Unknown thread.");
-      const { root, target } = await scopedPath(thread.cwd, requestPath(req.query.path ?? "."));
+      const scope = viewerScope(req.query, lookup);
+      const { root, target } = await scopedPath(scope.cwd, requestPath(req.query.path ?? "."));
       const rawCursor = req.query.cursor;
       const offset = rawCursor === undefined ? 0 : typeof rawCursor === "string" && /^\d{1,6}$/.test(rawCursor) ? Number(rawCursor) : -1;
       if (offset < 0 || offset > MAX_TREE_OFFSET) throw new ViewError(400, "Invalid folder cursor.");

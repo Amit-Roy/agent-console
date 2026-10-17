@@ -46,6 +46,10 @@ try{
  assert.ok(!JSON.stringify(data).includes('NEVER_STORE_VIEWER'));
  store.record(Array(3).fill({...sample,kind:'viewer_tree'}),lookup);assert.equal(store.summary().count,5);
  assert.equal(store.summary(Date.now()+15*86400_000).count,0);
+ assert.equal(store.record([{...sample,thread:'viewer:repos',kind:'open'},{...sample,thread:'viewer:other',kind:'viewer_tree'}],lookup),0);
+ assert.equal(store.record([{...sample,thread:'viewer:repos',kind:'viewer_tree',path:'NEVER_STORE_WORKSPACE_PATH'}],lookup),1);
+ assert.equal(store.summary().groups['viewer_tree/workspace/mobile/visible'].count,1);
+ assert.ok(!JSON.stringify(store.summary()).includes('NEVER_STORE_WORKSPACE_PATH'));
  // Upgrade an existing database without losing history or interpreting absent stage times as zero.
  const oldFile=path.join(dir,'old.sqlite'),old=new DatabaseSync(oldFile);
  old.exec(`CREATE TABLE latency (id INTEGER PRIMARY KEY,at INTEGER NOT NULL,thread TEXT NOT NULL,provider TEXT NOT NULL,kind TEXT NOT NULL,total_ms REAL NOT NULL,server_ms REAL,render_ms REAL,wait_ms REAL,events INTEGER,bytes INTEGER,width INTEGER NOT NULL,height INTEGER NOT NULL,touch INTEGER NOT NULL,hidden INTEGER NOT NULL)`);

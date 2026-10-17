@@ -31,7 +31,7 @@ export class LatencyStore {
     const rows: any[][] = [];
     for (const s of samples) {
       if (!s || !KINDS.has(s.kind) || typeof s.thread !== 'string' || !duration(s.total_ms)) continue;
-      const t = thread(s.thread);
+      const t = s.thread === 'viewer:repos' && s.kind.startsWith('viewer_') ? {provider: 'workspace'} : thread(s.thread);
       if (!t || !size(s.width, 16384) || !s.width || !size(s.height, 16384) || !s.height) continue;
       if (STAGES.some(k => s[k] != null && !duration(s[k]))) continue;
       if (s.events != null && !size(s.events, 100_000) || ['bytes','wire_bytes'].some(k => s[k] != null && !size(s[k], 64 * 1024 * 1024))) continue;

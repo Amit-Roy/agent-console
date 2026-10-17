@@ -126,7 +126,7 @@ blocked by Coder's login wall.
 - Password login (fallback) → signed HttpOnly/Secure/SameSite=Strict cookie; failed-login limiter.
 - WebSocket requires the cookie **and** a matching Origin header (blocks cross-site hijacking).
 - Thread folders are restricted to your home directory.
-- The file viewer reads text files up to 1 MiB and verified raster images within the current thread folder, including realpath checks for symlinks. Credentials, environment files, unsupported binary files and special files are refused; source HTML is displayed as text. Uploaded images use their existing authenticated attachment URLs.
+- The file viewer reads text files up to 1 MiB and verified raster images within the current thread folder, including realpath checks for symlinks. The sidebar Files button opens an empty browser rooted at `~/repos`, independent of the selected thread; files load only when selected. Its authenticated APIs use the explicit fixed `scope=repos`; chat file links keep their thread folder scope. Credentials, environment files, unsupported binary files and special files are refused; source HTML is displayed as text. Uploaded images use their existing authenticated attachment URLs.
 - `ANTHROPIC_API_KEY` is stripped from the child environment so the subscription login is never swapped for metered billing.
 - Bypass mode means a prompt can run any command as this user. Treat the password like a shell login.
 

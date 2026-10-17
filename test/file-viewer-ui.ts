@@ -12,9 +12,11 @@ const port = process.env.FILE_VIEWER_TEST_PORT || '7074';
 assert.match(port, /^707[1-5]$/, 'use an isolated scratch port, 7071–7075');
 const base = `http://127.0.0.1:${port}`;
 const data = fs.mkdtempSync(path.join(os.tmpdir(), 'ac-file-viewer-data-'));
-const fixture = fs.mkdtempSync(path.join(os.homedir(), '.cache', 'ac-file-viewer-'));
+const fixture = fs.mkdtempSync(path.join(os.homedir(), 'repos', 'ac-file-viewer-'));
 const cwd = path.join(fixture, 'project');
 fs.mkdirSync(cwd);
+fs.writeFileSync(path.join(fixture, 'workspace.ts'), 'export const workspace = true;');
+fs.writeFileSync(path.join(fixture, 'workspace.md'), '# Workspace report\n\n[Sibling source](./workspace.ts:1)\n');
 fs.mkdirSync(path.join(cwd, 'scripts'));
 fs.writeFileSync(path.join(cwd, 'scripts', 'nested.ts'), 'export const nested = true;');
 fs.writeFileSync(path.join(cwd, 'scripts', 'report.md'), '# Usage audit\n\nReadable **report**.\n\n| Provider | Tokens |\n|---|---:|\n| Mock | 42 |\n\n```bash\necho "hello"\n```\n\n[Sibling source](../sample.ts:4)\n\n<script>window.__markdownExecuted = true</script>\n');
@@ -23,6 +25,7 @@ for (let i = 0; i < 205; i++) fs.writeFileSync(path.join(cwd, 'many', `file${Str
 fs.writeFileSync(path.join(cwd, 'codex-code-mode-host'), '#!/usr/bin/env bash\nset -euo pipefail\nif [[ -f "$HOME/.codex/config.toml" ]]; then\n  echo "hello"\nfi\n');
 const png = await sharp({create: {width: 320, height: 200, channels: 4, background: '#7e8bd6'}}).png().toBuffer();
 fs.writeFileSync(path.join(cwd, 'preview.png'), png);
+fs.writeFileSync(path.join(fixture, 'workspace.png'), png);
 const sample = path.join(cwd, 'sample.ts');
 fs.writeFileSync(sample, Array.from({length: 100}, (_, n) => `export const line${n + 1} = ${n + 1};`).join('\n'));
 fs.writeFileSync(path.join(cwd, 'unsafe.html'), '<script>window.__fileViewerExecuted = true</script>\n<img src=x onerror="window.__fileViewerExecuted = true">');
@@ -117,6 +120,8 @@ try {
   const page = await context.newPage();
   const errors: string[] = [];
   page.on('pageerror', e => errors.push(e.message));
+  const fileRequests: string[] = [];
+  page.on('request', req => { if (['/api/file', '/api/file-image'].includes(new URL(req.url()).pathname)) fileRequests.push(req.url()); });
   const treeRequests: string[] = [];
   page.on('request', req => { if (new URL(req.url()).pathname === '/api/files') treeRequests.push(req.url()); });
   const assets: string[] = [];
@@ -286,6 +291,44 @@ try {
   assert.deepEqual(errors, []);
   console.log('PASS file viewer: executable HTML escaped, missing/outside errors, external links unchanged');
 
+  const workspaceEntry = (p: Page, name: string) => p.locator('.file-tree-entry').filter({hasText: new RegExp(`^[▸▾·]${name.replaceAll('.', '\\.')}$$`)});
+  const openWorkspace = async (p: Page) => {
+    await p.locator('#files').click(); await settled(p);
+    assert.equal(await p.locator('#file-viewer-title').textContent(), 'Files');
+    assert.equal(await p.locator('#file-viewer-path').textContent(), '~/repos');
+    assert.equal(await p.locator('#file-viewer-code').textContent(), 'Select a file to preview.');
+    assert.equal(await p.locator('#file-viewer-tree').isVisible(), true);
+    assert.equal(await p.getByRole('button', {name: 'Copy file', exact: true}).isDisabled(), true);
+    assert.equal(await p.locator('.file-tree-entry[aria-current]').count(), 0);
+  };
+  await screenshot(page, 'sidebar-files-desktop.png');
+  const beforeWorkspaceFiles = fileRequests.length;
+  await openWorkspace(page);
+  await workspaceEntry(page, path.basename(fixture)).waitFor();
+  assert.equal(fileRequests.length, beforeWorkspaceFiles, 'sidebar browser does not choose a file');
+  assert.equal(new URL(treeRequests.at(-1)!).searchParams.get('scope'), 'repos');
+  assert.equal(new URL(treeRequests.at(-1)!).searchParams.has('thread'), false);
+  await screenshot(page, 'sidebar-files-empty-desktop.png');
+  await workspaceEntry(page, path.basename(fixture)).click();
+  await workspaceEntry(page, 'workspace.md').click(); await settled(page);
+  assert.equal(await page.locator('#file-viewer-code h1').textContent(), 'Workspace report');
+  await page.locator('#file-viewer-code a').filter({hasText: 'Sibling source'}).click(); await settled(page);
+  assert.equal(await page.locator('#file-viewer-title').textContent(), 'workspace.ts');
+  assert.equal(new URL(fileRequests.at(-1)!).searchParams.get('scope'), 'repos', 'Markdown sibling navigation keeps workspace scope');
+  await workspaceEntry(page, 'workspace.png').click(); await settled(page);
+  assert.equal(await page.locator('#file-viewer-code .file-viewer-image').count(), 1);
+  assert.equal(new URL(fileRequests.at(-1)!).searchParams.get('scope'), 'repos', 'image download keeps workspace scope');
+  await close(page);
+  const afterWorkspaceFiles = fileRequests.length;
+  await openWorkspace(page);
+  assert.equal(fileRequests.length, afterWorkspaceFiles, 'reopening clears image without reloading it');
+  await close(page);
+  await open(page, 'Outside project');
+  assert.match(await page.locator('#file-viewer-status').textContent() || '', /outside|not allowed|within|folder|project/i, 'chat scope remains narrow after workspace browsing');
+  await close(page);
+  assert.equal(await page.locator('#threads > li:not(.empty-list)').count(), 1, 'Files never creates a thread');
+  console.log('PASS sidebar Files: fixed repos root from narrow thread, blank each click, no automatic file read, Markdown/image navigation and unchanged chat scope');
+
   const mobile = await context.newPage();
   const mobileAssets: string[] = [];
   mobile.on('request', req => { if (/\/file-viewer\.(js|css)$/.test(new URL(req.url()).pathname)) mobileAssets.push(req.url()); });
@@ -310,6 +353,17 @@ try {
   await mobile.getByRole('button', {name: 'Close file viewer', exact: true}).click();
   await mobile.locator('#file-viewer[open]').waitFor({state: 'hidden'});
   console.log('PASS file viewer: mobile modal fits, tree toggles, close is reachable, no page overflow');
+  await mobile.locator('#menu').click();
+  await screenshot(mobile, 'sidebar-files-mobile.png');
+  await openWorkspace(mobile);
+  await workspaceEntry(mobile, path.basename(fixture)).waitFor();
+  await screenshot(mobile, 'sidebar-files-empty-mobile.png');
+  await workspaceEntry(mobile, path.basename(fixture)).click();
+  await workspaceEntry(mobile, 'workspace.ts').click(); await settled(mobile);
+  assert.equal(await mobile.locator('#file-viewer-title').textContent(), 'workspace.ts');
+  await close(mobile);
+  await mobile.locator('#menu').click(); await openWorkspace(mobile); await close(mobile);
+  console.log('PASS sidebar Files: mobile entry shows tree, file selection works and next entry is blank');
   await page.waitForTimeout(5200);
   const samples = await page.evaluate(async () => (await fetch('/api/latency')).json());
   assert.ok(samples.groups.viewer_open, 'viewer open timings persisted to same-server latency API');
@@ -318,7 +372,41 @@ try {
   const local = await page.evaluate(() => (window as any).agentConsoleViewerMetrics);
   assert.ok(local.length <= 30 && local.length > 0);
   assert.ok(local.every((m: any) => !('path' in m) && !('content' in m)), 'metrics exclude file paths and contents');
+  assert.ok(samples.groups['viewer_tree/workspace/desktop/visible'], 'workspace timings persist without using thread scope');
   console.log('PASS file viewer: bounded local diagnostics and persisted viewer timings');
+  // Remove only this scratch thread, then prove the browser works in a genuinely empty installation.
+  await page.evaluate(async id => {
+    await new Promise<void>((resolve, reject) => {
+      const socket = new WebSocket(`${location.origin.replace('http', 'ws')}/ws`);
+      socket.onmessage = event => {
+        const message = JSON.parse(event.data);
+        if (message.t === 'hello') socket.send(JSON.stringify({t: 'delete', thread: id}));
+        if (message.t === 'removed') { socket.close(); resolve(); }
+      };
+      socket.onerror = () => reject(new Error('scratch delete socket failed'));
+    });
+  }, thread.id);
+  const emptyContext = await browser.newContext({viewport: {width: 1280, height: 900}, serviceWorkers: 'block'});
+  await emptyContext.addCookies([{name: 'ac_session', value: makeToken(), url: base}]);
+  await emptyContext.addInitScript(() => { window.requestIdleCallback = (() => 1) as any; });
+  const empty = await emptyContext.newPage();
+  const emptyRequests: string[] = [];
+  empty.on('request', req => { if (/file-viewer|\/api\/files?/.test(new URL(req.url()).pathname)) emptyRequests.push(req.url()); });
+  await empty.goto(base);
+  await empty.locator('#chat .empty').waitFor();
+  assert.equal(await empty.locator('#threads > li:not(.empty-list)').count(), 0);
+  assert.deepEqual(emptyRequests, [], 'empty installation keeps viewer unloaded');
+  await openWorkspace(empty);
+  await workspaceEntry(empty, path.basename(fixture)).waitFor();
+  assert.ok(emptyRequests.some(url => new URL(url).pathname === '/api/files'));
+  assert.ok(!emptyRequests.some(url => ['/api/file', '/api/file-image'].includes(new URL(url).pathname)));
+  await workspaceEntry(empty, path.basename(fixture)).click();
+  await workspaceEntry(empty, 'workspace.ts').click(); await settled(empty);
+  assert.equal(await empty.locator('#file-viewer-title').textContent(), 'workspace.ts');
+  assert.equal(await empty.locator('#threads > li:not(.empty-list)').count(), 0);
+  await close(empty); await openWorkspace(empty); await screenshot(empty, 'sidebar-files-empty-no-threads.png');
+  await emptyContext.close();
+  console.log('PASS sidebar Files: zero threads, lazy assets/tree, blank startup and scoped file navigation without creating threads');
 } finally {
   await browser?.close();
   if (server.exitCode === null) {

@@ -100,12 +100,12 @@ const checkSignIn = () => apiFetch("/manifest.webmanifest", { cache: "no-store" 
 
 // File viewing adds no request to startup. Warm its module and stylesheet only after history has painted, in idle time.
 let fileViewer, fileViewerLoad, fileWarmupScheduled = false;
-function loadFileViewer() {
+function loadFileViewer(metricThread = state.current) {
   const at = performance.now();
   return fileViewerLoad ||= import("/file-viewer.js").then(async module => {
     await module.prepare();
     const viewer = fileViewer ||= module.createFileViewer(apiFetch, sample => latency.record(sample));
-    viewer.record({ kind: "viewer_module", thread: state.current, total_ms: performance.now() - at, module_ms: performance.now() - at });
+    viewer.record({ kind: "viewer_module", thread: metricThread, total_ms: performance.now() - at, module_ms: performance.now() - at });
     return viewer;
   }).catch(error => { fileViewerLoad = null; throw error; });
 }
@@ -132,6 +132,16 @@ function openFileLink(event) {
     if (state.current === thread && link.isConnected) viewer.open({ thread, ref, opener: link, openedAt, module_ms: performance.now() - openedAt });
   }).catch(error => toast(error.message || "Could not load the file viewer. Try again.")).finally(() => link.removeAttribute("aria-busy"));
 }
+$("files").onclick = async () => {
+  const opener = $("files"), openedAt = performance.now();
+  opener.setAttribute("aria-busy", "true");
+  try {
+    const viewer = await loadFileViewer("viewer:repos");
+    setNav(false);
+    viewer.openWorkspace({ opener, openedAt, module_ms: performance.now() - openedAt });
+  } catch (error) { toast(error.message || "Could not load the file viewer. Try again."); }
+  finally { opener.removeAttribute("aria-busy"); }
+};
 $("chat").addEventListener("click", openFileLink);
 $("chat").addEventListener("auxclick", openFileLink);
 
