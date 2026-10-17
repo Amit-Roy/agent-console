@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { spawnLines, parseJson } from "./proc.ts";
 import { childEnv } from "./env.ts";
 import { brainContext } from "./brain.ts";
@@ -10,11 +11,12 @@ import { cleanQuestions, IMAGE_ONLY_PROMPT, type Agent, type AgentCtx, type Atta
 // request_user_input is offered to the model in Plan collaboration mode, or in default mode behind the
 // default_mode_request_user_input feature, which we enable (AGENT_CONSOLE_CODEX_ASK=0 turns it off). Returns undefined for
 // requests that cannot be shown as a question card.
-export function codexQuestion(method: string, params: any): { questions: Question[]; reply(r: QuestionReply): any } | undefined {
+export function codexQuestion(method: string, params: any): { questions: Question[]; consumesNote: boolean; reply(r: QuestionReply): any } | undefined {
   if (method === "item/tool/requestUserInput" && Array.isArray(params?.questions)) {
     const questions = cleanQuestions(params.questions.map((q: any) => ({ ...q, options: q.options ?? [], allowOther: q.isOther || !q.options?.length, secret: q.isSecret })));
     return {
       questions,
+      consumesNote: true,
       reply: (r) => {
         if (r.note !== undefined) return { answers: questions[0] ? { [questions[0].id]: { answers: [r.note] } } : {} };
         if (r.skip) return { answers: {} };
@@ -22,10 +24,14 @@ export function codexQuestion(method: string, params: any): { questions: Questio
       },
     };
   }
-  if (method === "mcpServer/elicitation/request" && params?.mode === "form" && params.requestedSchema?.properties) {
+  if (method === "mcpServer/elicitation/request" && ["form", "openai/form"].includes(params?.mode) && params.requestedSchema?.properties) {
     const props = Object.entries<any>(params.requestedSchema.properties);
     const required = new Set<string>(params.requestedSchema.required ?? []);
     const enumOf = (s: any): string[] => s?.enum ?? s?.oneOf?.map((o: any) => o.const) ?? s?.anyOf?.map((o: any) => o.const) ?? [];
+    // Nested objects and large forms need a dedicated form renderer. Decline
+    // unsupported schemas instead of silently truncating or changing their types.
+    if (!props.length || props.length > 10 || props.some(([, s]) => !s || !["string", "boolean", "number", "integer", "array"].includes(s.type)
+      || (s.type === "array" && (s.items?.type !== "string" && !Array.isArray(s.items?.enum))) || enumOf(s.type === "array" ? s.items : s).length > 20)) return undefined;
     const questions = cleanQuestions(props.map(([key, s], i) => {
       const multi = s.type === "array";
       const values = s.type === "boolean" ? ["Yes", "No"] : enumOf(multi ? s.items : s);
@@ -40,12 +46,18 @@ export function codexQuestion(method: string, params: any): { questions: Questio
     }));
     return {
       questions,
+      consumesNote: false,
       reply: (r) => {
         if (r.skip || r.note !== undefined) return { action: "decline", content: null, _meta: null };
         const content: Record<string, unknown> = {};
         for (const [key, s] of props) {
           const a = (r.answers[key] ?? []).map(String).filter(Boolean);
-          if (!a.length) continue;
+          if (!a.length) {
+            if (required.has(key)) throw new Error(`Please answer ${s.title || key}.`);
+            continue;
+          }
+          if (["number", "integer"].includes(s.type) && (!Number.isFinite(Number(a[0])) || (s.type === "integer" && !Number.isInteger(Number(a[0]))))) throw new Error(`Enter a valid ${s.type} for ${s.title || key}.`);
+          if (s.type === "boolean" && !["Yes", "No"].includes(a[0])) throw new Error(`Choose Yes or No for ${s.title || key}.`);
           content[key] = s.type === "array" ? a : s.type === "boolean" ? a[0] === "Yes" : s.type === "number" || s.type === "integer" ? Number(a[0]) : a[0];
         }
         return { action: "accept", content, _meta: null };
@@ -77,12 +89,20 @@ export function startCodexApp(t: ThreadSpec, ctx: AgentCtx, translate: (row: any
     translate(error ? { type: "turn.failed", error: { message: error } } : { type: "turn.completed" });
   };
   const failed = (error: any) => { finish(String(error?.message || error)); p.kill(); };
-  const asks = new Map<string, { rpcId: any; reply: (r: QuestionReply) => any }>(); // pending questions by canonical id
+  const asks = new Map<string, { rpcId: any; consumesNote: boolean; reply: (r: QuestionReply) => any }>(); // pending questions by canonical id
+  // App-server request ids restart with each child process. History persists
+  // across those restarts, so canonical ids also need a process-specific prefix.
+  const questionPrefix = `codex-${randomUUID()}-`;
+  const cancelQuestions = () => {
+    for (const id of asks.keys()) ctx.event({ type: "question_answer", id, cancelled: true });
+    asks.clear();
+  };
   const ask = process.env.AGENT_CONSOLE_CODEX_ASK === "0" ? [] : ["--enable", "default_mode_request_user_input"];
   const p = spawnLines("codex", "codex", ["app-server", "-c", "analytics.enabled=false", "-c", "feedback.enabled=false", ...ask], { cwd: t.cwd, env: childEnv() }, {
     ...ctx,
     exited(info) {
       alive = false;
+      cancelQuestions();
       for (const wait of pending.values()) { clearTimeout(wait.timer); wait.reject(new Error(`Codex connection closed (${info.code ?? info.signal}).`)); }
       pending.clear(); clearTimeout(compactTimer);
       ctx.exited(info);
@@ -99,8 +119,8 @@ export function startCodexApp(t: ThreadSpec, ctx: AgentCtx, translate: (row: any
     if (r.id != null && r.method) {
       const q = codexQuestion(r.method, r.params);
       if (q && q.questions.length) {
-        const id = `codex-${r.id}`;
-        asks.set(id, { rpcId: r.id, reply: q.reply });
+        const id = `${questionPrefix}${r.id}`;
+        asks.set(id, { rpcId: r.id, consumesNote: q.consumesNote, reply: q.reply });
         ctx.event({ type: "question", id, questions: q.questions, ts: Date.now() });
         return;
       }
@@ -111,7 +131,7 @@ export function startCodexApp(t: ThreadSpec, ctx: AgentCtx, translate: (row: any
     const v = r.params || {};
     if (v.threadId && v.threadId !== session) return;
     if (r.method === "serverRequest/resolved") {
-      const id = `codex-${v.requestId}`;
+      const id = `${questionPrefix}${v.requestId}`;
       if (asks.delete(id)) ctx.event({ type: "question_answer", id, cancelled: true });
       return;
     }
@@ -121,6 +141,7 @@ export function startCodexApp(t: ThreadSpec, ctx: AgentCtx, translate: (row: any
       translate({ type: "turn.started" });
     } else if (r.method === "turn/completed") {
       if (active && v.turn?.id && active !== v.turn.id) return;
+      cancelQuestions();
       finish(v.turn?.status === "completed" ? undefined : v.turn?.error?.message || `Codex turn ${v.turn?.status || "failed"}.`);
     } else if (r.method === "item/started" || r.method === "item/completed") {
       const it = v.item || {}, done = r.method === "item/completed";
@@ -200,11 +221,12 @@ export function startCodexApp(t: ThreadSpec, ctx: AgentCtx, translate: (row: any
     answer(id, reply) {
       const a = asks.get(id);
       if (!a || !alive) throw new Error("This question is no longer waiting for an answer.");
+      const result = a.reply(reply);
+      p.write(JSON.stringify({ id: a.rpcId, result }));
       asks.delete(id);
-      p.write(JSON.stringify({ id: a.rpcId, result: a.reply(reply) }));
-      return reply.note !== undefined && a.reply === a.reply && !("action" in (a.reply({ answers: {}, skip: true }) ?? {}));
+      return reply.note !== undefined && a.consumesNote;
     },
-    abort() { operation = undefined; clearTimeout(compactTimer); p.abort(); },
-    kill() { operation = undefined; clearTimeout(compactTimer); p.kill(); },
+    abort() { operation = undefined; clearTimeout(compactTimer); cancelQuestions(); p.abort(); },
+    kill() { operation = undefined; clearTimeout(compactTimer); cancelQuestions(); p.kill(); },
   };
 }

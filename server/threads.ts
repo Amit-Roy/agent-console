@@ -7,8 +7,8 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DATA_DIR } from "./auth.ts";
+import { Questions, type PendingQuestion } from "./questions.ts";
 import { brainCommit } from "./providers/brain.ts";
-import { createNudger, type Nudger } from "./providers/nudge.ts";
 import { createLabeler, needsLabel, type Labeler } from "./providers/label.ts";
 import { suggestTitle } from "./providers/title.ts";
 import { replayPreamble } from "./export.ts";
@@ -34,6 +34,7 @@ export interface Thread {
   context?: { used?: number; max?: number; source?: string }; // tokens in the agent's context now, and the model's window when the harness reports it
   replay?: boolean; // forked from an agent with no native fork: the first message carries the earlier conversation as text
   status: "idle" | "running";
+  waiting?: number; // number of live requests that need a user answer
   operation?: "compact";
   lastCompactedAt?: number;
   archived?: number; // when it was archived: it leaves the working list until unarchived or sent to again
@@ -96,13 +97,13 @@ interface Live {
 }
 
 export class Threads {
+  private questions = new Questions();
   private historyIndex = new HistoryIndex();
   private threads = new Map<string, Thread>();
   private live = new Map<string, Live>();
   private turns = new Map<string, TurnState>(); // the turn in flight, per thread
   private cumulative = new Map<string, ReturnType<typeof claudeTotals>>(); // Claude's session-wide counters at the last result
   private queues = new Map<string, Queued[]>(); // messages to send, in order, once the running turn ends
-  private nudgers = new Map<string, Nudger>(); // brain-save reminders for harnesses without hooks (Claude's Stop hook does its own)
   private emit: Emit;
   private labeler: Labeler; // plain-English labels for shell commands that arrive without a description
   private commands: Record<string, Command[]> = {}; // per provider: each harness has its own slash commands and skills
@@ -118,6 +119,7 @@ export class Threads {
     try {
       for (const t of JSON.parse(fs.readFileSync(THREADS_FILE, "utf8")) as Thread[]) {
         t.status = "idle"; // nothing survives a server restart
+        delete t.waiting;
         delete t.operation;
         t.provider ||= DEFAULT_PROVIDER;
         if (t.provider === "codex" && t.context?.source !== "codex/last_request") delete t.context;
@@ -159,6 +161,34 @@ export class Threads {
   }
   get(id: string) {
     return this.threads.get(id);
+  }
+  getQuestions(): Record<string, PendingQuestion[]>;
+  getQuestions(id: string): PendingQuestion[];
+  getQuestions(id?: string) { return id === undefined ? this.questions.all() : this.questions.list(id); }
+
+  answer(thread: string, id: string, answers: unknown, skip = false) {
+    const result = this.questions.answer(thread, id, answers, this.live.get(thread)?.agent, skip);
+    this.publish(thread, result.event);
+    this.updateWaiting(thread);
+  }
+
+  private updateWaiting(id: string) {
+    const t = this.threads.get(id);
+    if (!t) return;
+    const count = this.questions.list(id).length;
+    if (count) t.waiting = count;
+    else delete t.waiting;
+    this.persist();
+    this.emit({ t: "thread", thread: t });
+  }
+
+  private cancelQuestions(id: string) {
+    const pending = this.questions.list(id);
+    for (const request of pending) {
+      this.questions.remove(id, request.id);
+      this.publish(id, { type: "question_answer", id: request.id, cancelled: true, ts: Date.now() });
+    }
+    if (pending.length) this.updateWaiting(id);
   }
   private persist() {
     fs.writeFileSync(THREADS_FILE, JSON.stringify([...this.threads.values()], null, 1), { mode: 0o600 });
@@ -288,7 +318,6 @@ export class Threads {
     this.kill(id);
     this.queues.delete(id);
     this.emitQueue(id);
-    this.nudgers.delete(id);
     this.threads.delete(id);
     this.persist();
     fs.rmSync(path.join(LOG_DIR, `${id}.jsonl`), { force: true });
@@ -333,7 +362,7 @@ export class Threads {
       if (cut < 0) cut = Math.max(0, items.length - limit);
       if (cut > 0) { start = items[cut].line; items = items.slice(cut); }
     }
-    return { ...page, start, events: items.map((x) => x.e), ...(delta ? { delta: true } : {}), server_ms: Math.round((performance.now() - at) * 10) / 10 };
+    return { ...page, start, events: items.map((x) => x.e), questions: this.questions.list(id), ...(delta ? { delta: true } : {}), server_ms: Math.round((performance.now() - at) * 10) / 10 };
   }
 
   private log(id: string, ev: unknown) {
@@ -359,12 +388,15 @@ export class Threads {
     const live: Live = { agent: undefined as unknown as Agent, aborted: false };
     this.cumulative.delete(t.id); // a new agent process counts its own tokens and cost from zero
     const ctx: AgentCtx = {
-      event: (ev) => this.onEvent(t, ev),
+      event: (ev) => {
+        if (!live.aborted && (this.live.get(t.id) === live || !live.agent)) this.onEvent(t, ev);
+      },
       commands: (list) => this.setCommands(t.provider, list),
       exited: (info) => {
         const current = this.live.get(t.id) === live;
         if (current) this.live.delete(t.id);
         if (!current || t.status !== "running") return; // a replaced or aborted agent's exit says nothing about the new turn
+        this.cancelQuestions(t.id);
         t.status = "idle";
         delete t.operation;
         if (!info.aborted && !live.aborted) {
@@ -381,8 +413,16 @@ export class Threads {
 
   // Canonical events from any harness. We only interpret the two that change thread state.
   private onEvent(t: Thread, ev: any) {
-    const compacting = t.operation === "compact";
     if (NOISE.has(kindOf(ev))) return;
+    if (ev.type === "question") {
+      try { ev = this.questions.add(t.id, ev); }
+      catch { this.publish(t.id, { type: "console_error", text: "The agent sent an invalid question request." }); return; }
+      this.updateWaiting(t.id);
+    }
+    if (ev.type === "question_answer") {
+      if (!this.questions.remove(t.id, ev.id)) return;
+      this.updateWaiting(t.id);
+    }
     if (ev.type === "provider_usage") {
       const windows = codexWindows(ev.rateLimits);
       if (windows.length) {
@@ -424,6 +464,7 @@ export class Threads {
       if (turn) for (const b of ev.message?.content ?? []) if (b?.type === "tool_use") turn.tools[b.name] = (turn.tools[b.name] ?? 0) + 1;
     }
     if (ev.type === "result") {
+      this.cancelQuestions(t.id);
       const live = this.live.get(t.id);
       // Claude answers /compact with an empty result straight away, then compacts and sends compact_boundary and the real result
       if (t.operation === "compact" && t.provider === "claude" && live && !live.compactConfirmed && !live.compactWait && !ev.is_error && !ev.num_turns) {
@@ -454,7 +495,6 @@ export class Threads {
         if (b?.type === "tool_use" && needsLabel(b.name, b.input)) this.labeler.request({ thread: t.id, id: b.id, command: b.input.command, cwd: t.cwd });
       }
     }
-    if (t.provider !== "claude" && !compacting) this.nudge(t, ev);
   }
 
   private finishTurn(t: Thread, ev: any) {
@@ -474,20 +514,6 @@ export class Threads {
       row.in = t.lastRun.input_tokens; row.out = t.lastRun.output_tokens; row.cache = t.lastRun.cached_input_tokens;
     }
     try { recordTurn(row); } catch {}
-  }
-
-  private nudge(t: Thread, ev: any) {
-    let n = this.nudgers.get(t.id);
-    if (!n) this.nudgers.set(t.id, (n = createNudger()));
-    n.observe(ev);
-    if (ev.type !== "result" || ev.is_error) return;
-    const msg = n.check();
-    if (!msg) return;
-    setTimeout(() => {
-      try {
-        if (this.threads.get(t.id)?.status === "idle") this.send(t.id, msg, { auto: "brain" }); // skipped if the user already started a turn
-      } catch {}
-    }, 300).unref();
   }
 
   private command(t: Thread, text: string, attachments?: unknown): boolean {
@@ -575,6 +601,15 @@ export class Threads {
   private whileRunning(t: Thread, text: string, opts: { attachments?: unknown; mode?: "steer" | "queue" }) {
     const attachments = resolveAttachments(t.id, opts.attachments); // reject bad ids now, not when the queue drains
     const agent = this.live.get(t.id)?.agent;
+    // A normal chat reply also releases a waiting tool; otherwise steering can sit behind that tool forever.
+    if (opts.mode !== "queue" && !attachments.length && text.trim()) {
+      for (const question of this.questions.list(t.id)) {
+        const result = this.questions.answer(t.id, question.id, {}, agent, false, text);
+        this.publish(t.id, result.event);
+        this.updateWaiting(t.id);
+        if (result.consumed) return;
+      }
+    }
     if (t.operation !== "compact" && opts.mode !== "queue" && agent?.steer) {
       const accepted = () => this.publish(t.id, {
         type: "user_input",
@@ -693,6 +728,7 @@ export class Threads {
     const t = this.threads.get(id);
     const live = this.live.get(id);
     if (!t) return;
+    this.cancelQuestions(id);
     if (this.queues.delete(id)) this.emitQueue(id); // Stop means stop: nothing queued behind it runs
     if (!live) return;
     live.aborted = true;
@@ -705,6 +741,7 @@ export class Threads {
   }
 
   private kill(id: string) {
+    this.cancelQuestions(id);
     const live = this.live.get(id);
     if (live) {
       live.aborted = true;

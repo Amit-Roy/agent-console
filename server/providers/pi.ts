@@ -2,17 +2,20 @@ import { execFile } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { DATA_DIR } from "../auth.ts";
 import { brainContext } from "./brain.ts";
 import { childEnv } from "./env.ts";
 import { parseJson, spawnLines } from "./proc.ts";
+import { piQuestions } from "./pi-questions.ts";
 import { clip, IMAGE_ONLY_PROMPT, type Agent, type AgentCtx, type Attachment, type Command, type Provider, type ThreadSpec } from "./types.ts";
 
 // pi (github.com/earendil-works/pi) in RPC mode: one long-lived process per thread, any model pi knows about
 // (OpenRouter, OpenAI, Google, local, ...). Pi has no per-action approvals, so only Plan (read-only tools) and Bypass exist.
 
 const SESSIONS = path.join(DATA_DIR, "pi-sessions");
-const READ_ONLY_TOOLS = "read,grep,find,ls";
+const READ_ONLY_TOOLS = "read,grep,find,ls,ask_user";
+const QUESTIONS_EXTENSION = fileURLToPath(new URL("./pi-questions-extension.mjs", import.meta.url));
 
 let cached: string[] = [];
 const thinking = new Set<string>();
@@ -184,7 +187,7 @@ export const pi: Provider = {
   modes: ["plan", "bypassPermissions"],
   defaultMode: "bypassPermissions",
   steer: true,
-  note: "Pi never asks before acting: Plan limits it to read-only tools, Bypass gives it everything.",
+  note: "Plan limits Pi to read-only tools. Bypass gives it everything. Both support user questions.",
   models: () => cached,
   // a free model known to answer reliably (others come and go upstream); otherwise the first listed
   defaultModel: () => cached.find((m) => m.includes("nemotron-3-super-120b-a12b:free")) ?? cached[0] ?? "",
@@ -197,15 +200,19 @@ export const pi: Provider = {
   start(t: ThreadSpec, ctx: AgentCtx): Agent {
     const dir = path.join(SESSIONS, t.id);
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-    const args = ["--mode", "rpc", "--model", t.model, "--session-dir", dir];
+    const args = ["--mode", "rpc", "--model", t.model, "--session-dir", dir, "--extension", QUESTIONS_EXTENSION];
     if (fs.readdirSync(dir).length) args.push("--continue");
     if (t.mode === "plan") args.push("--tools", READ_ONLY_TOOLS);
     const brain = brainContext();
     if (brain) args.push("--append-system-prompt", brain); // shared memory, same text the Claude hook injects
     const translate = piTranslator((ev) => ctx.event(ev), (list) => ctx.commands(list), () => contexts.get(t.model));
-    const p = spawnLines("pi", "pi", args, { cwd: t.cwd, env: childEnv() }, ctx, (line) => {
+    const questions = piQuestions(msg => p.write(JSON.stringify(msg)), ctx.event);
+    const p = spawnLines("pi", "pi", args, { cwd: t.cwd, env: childEnv() }, {
+      ...ctx,
+      exited(info) { questions.cancelAll(); ctx.exited(info); },
+    }, (line) => {
       const r = parseJson(line);
-      if (r) translate(r);
+      if (r && !questions.handle(r)) translate(r);
     });
     if (t.effort && t.effort !== "default") p.write(JSON.stringify({ id: "effort", type: "set_thinking_level", level: t.effort }));
     p.write(JSON.stringify({ id: "cmds", type: "get_commands" }));
@@ -222,8 +229,9 @@ export const pi: Provider = {
       send: (text, images = []) => p.write(JSON.stringify({ id: `p${++n}`, type: "prompt", ...body(text, images) })),
       // Pi's `steer` is delivered after the current assistant turn finishes its tool calls, before the next model call
       steer: (text, images = []) => p.write(JSON.stringify({ id: `p${++n}`, type: "steer", ...body(text, images) })),
-      abort: () => p.abort(),
-      kill: () => p.kill(),
+      answer: (id, reply) => questions.answer(id, reply),
+      abort: () => { questions.cancelAll(); p.abort(); },
+      kill: () => { questions.cancelAll(); p.kill(); },
     };
   },
 };
