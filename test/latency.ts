@@ -12,6 +12,7 @@ try{
  assert.equal(store.record(Array(21).fill(sample),lookup),0);
  assert.equal(store.record([10,20,30,400,800].map(total_ms=>({...sample,total_ms,prompt:'NEVER_STORE_THIS',url:'https://third-party.invalid'})),lookup),5);
  let data=store.summary();assert.equal(data.groups.open.median_ms,30);assert.equal(data.groups.open.p95_ms,800);assert.equal(data.groups['open/mock/mobile/visible'].count,5);assert.equal(data.recent.length,5);assert.ok(!JSON.stringify(data).includes('NEVER_STORE_THIS'));
+ assert.equal(data.groups['open/visible/recent'].count,5);assert.equal(data.groups['open/visible/recent'].median_ms,30);
  assert.equal(fs.statSync(file).mode&0o777,0o600);
  store.close();store=new LatencyStore(file,5);assert.equal(store.summary().count,5);
  store.record([{...sample,kind:'cached',total_ms:5}],lookup);assert.equal(store.summary().count,5);assert.equal(store.summary().groups.cached.count,1);

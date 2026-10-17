@@ -7,7 +7,7 @@ export PATH="$HOME/.local/bin:$PATH"
 running() { [ -f "$RUN/pid" ] && kill -0 "$(cat "$RUN/pid")" 2>/dev/null; }
 case "${1:-status}" in
   start) running && { echo "already running"; exit 0; }
-         (cd "$DIR" && PORT=$PORT exec nohup node server/index.ts >"$RUN/log" 2>&1) & sleep 1.5; "$0" status; "$0" url ;;
+         (cd "$DIR" && PORT=$PORT AGENT_CONSOLE_PID_FILE="$RUN/pid" exec nohup node server/index.ts >"$RUN/log" 2>&1) & sleep 1.5; "$0" status; "$0" url ;;
   stop)  running && kill "$(cat "$RUN/pid")" && echo stopped || echo "not running" ;;
   restart) "$0" stop; sleep 1; "$0" start ;;
   # for agents: run as the last step of a turn that changed the server. Returns at once; a detached watcher waits for every running

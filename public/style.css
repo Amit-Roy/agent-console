@@ -692,12 +692,25 @@ body.login{display:grid;place-items:center;overflow:auto;padding:var(--sp-4)}
 #queued{max-height:10rem;overflow-y:auto}
 
 /* Provider usage: allowance and current context are separate measures. */
-.usage-tabs { display:flex; gap:4px; }
-.usage-tab { flex:1; min-width:0; min-height:36px; padding:4px; background:transparent; border:0; border-radius:8px; color:var(--t2); font:inherit; cursor:pointer; }
-.usage-tab[aria-selected=true] { background:var(--s3); color:var(--t1); }
-.usage-pane { display:flex; flex-direction:column; gap:8px; }
+.usage-tabs { display:flex; gap:2px; padding:2px; border-radius:var(--r-sm); background:var(--s2); }
+.usage-tab { flex:1; min-width:0; min-height:32px; padding:4px; background:transparent; border:0; border-radius:calc(var(--r-sm) - 2px); color:var(--t2); font:inherit; cursor:pointer; }
+.usage-tab[aria-selected=true] { background:var(--s1); color:var(--t1); box-shadow:0 1px 2px rgb(0 0 0 / .12); }
+.usage-pane { display:flex; flex-direction:column; gap:var(--sp-2); }
 .usage-label { color:var(--t2); font-weight:600; }
-.usage-head { display:flex; align-items:center; justify-content:space-between; margin-top:6px; }
+.usage-head { display:flex; align-items:center; gap:var(--sp-2); }
+.usage-head .usage-label { flex:1; min-width:0; }
+.usage-stamp { color:var(--t3); font-variant-numeric:tabular-nums; }
+/* right rail: refresh (header) and info (context) share one column with the percentages left of it */
+.usage-head .usage-refresh, .usage-info { flex:none; margin:-6px calc(var(--sp-2) * -1) -6px 0; color:var(--t3); }
+.usage-pane > .u { margin-right:calc(var(--ctl-h-sm) - var(--sp-2)); }
+.usage-ctx { margin-top:var(--sp-1); padding-top:var(--sp-1); border-top:1px solid var(--edge); }
+.usage-ctx-line { display:flex; align-items:center; }
+.usage-ctx-line .u { flex:1; min-width:0; }
+.usage-ctx-line { min-height:var(--ctl-h-sm); }
+.usage-info[aria-expanded=true] { background:var(--hover); color:var(--t1); }
+.usage-ctx-detail { display:flex; flex-direction:column; gap:2px; padding:var(--sp-2) var(--sp-3); border-radius:var(--r-sm); background:var(--s2); color:var(--t2); line-height:1.4; }
+.usage-ctx-detail[hidden] { display:none; }
+.usage-ctx-detail .usage-thread { color:var(--t3); white-space:normal; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; }
 .usage-refresh.spinning .ico { animation:usage-spin 1s linear infinite; }
 @keyframes usage-spin { to { transform:rotate(360deg); } }
 @media (prefers-reduced-motion:reduce) { .usage-refresh.spinning .ico { animation:none; } }
@@ -721,7 +734,11 @@ body.login{display:grid;place-items:center;overflow:auto;padding:var(--sp-4)}
 .compact-card.running .cc-bar{display:block}
 @media (prefers-reduced-motion:reduce){.compact-card .cc-bar{animation:none}}
 
-.dash-link{justify-content:flex-start;text-decoration:none;margin-bottom:var(--sp-2)}
+/* sidebar shortcuts: three equal icon+label tiles in one row */
+.side-actions{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:var(--sp-2);padding:var(--sp-2) 0 0}
+.side-actions .tile{width:100%;min-width:0;gap:var(--sp-1);padding:0 var(--sp-2);background:var(--s2);color:var(--t2);font:var(--fw-med) var(--f-sm);letter-spacing:var(--ls-sm);text-decoration:none}
+.side-actions .tile:hover:not(:disabled){background:var(--s3);color:var(--t1)}
+.side-actions .tile .ico{width:1rem;height:1rem}
 #queued .steer{flex:none;min-height:1.75rem;padding:0 var(--sp-3);background:var(--accent-tint);color:var(--accent)}
 #queued .steer:hover:not(:disabled){background:var(--sel)}
 @media (pointer:coarse){#queued .steer{min-height:2.25rem}}

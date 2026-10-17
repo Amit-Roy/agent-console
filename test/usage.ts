@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { CodexTelemetry, codexTokenEvent } from "../server/providers/codex-telemetry.ts";
-import { createLabelCompletion, askRouter } from "../server/providers/small-model.ts";
+import { createLabelCompletion, askRouter, askNvidia } from "../server/providers/small-model.ts";
 import { claudeWindows, codexWindows, routerUsage } from "../server/usage.ts";
 import { parseLabels } from "../server/providers/label.ts";
 import { codexTranslator } from "../server/providers/codex.ts";
@@ -55,10 +55,16 @@ try {
   process.env.OPENROUTER_API_KEY = "fixture-only";
   globalThis.fetch = (async (_url: any, opts: any) => { sent = JSON.parse(opts.body); return new Response(JSON.stringify({ choices: [{ message: { content: "Fixture label" } }] }), { status: 200 }); }) as typeof fetch;
   assert.equal(await askRouter("fixture", "labels"), "Fixture label");
-  assert.ok(Array.isArray(sent.models), "router helper supplies an ordered fallback list");
-  assert.equal(sent.models[0], process.env.AGENT_CONSOLE_LABEL_ROUTER_MODEL || "cohere/north-mini-code:free");
-  assert.deepEqual(sent.models.slice(1), ["nvidia/nemotron-3-super-120b-a12b:free", "openrouter/free"]);
-  assert.ok(sent.models.every((model: string) => model === process.env.AGENT_CONSOLE_LABEL_ROUTER_MODEL || model.endsWith(":free") || model === "openrouter/free"), "automatic fallbacks stay free");
+  assert.deepEqual(sent.models, ["nvidia/nemotron-3-super-120b-a12b:free"], "fallback is the same Nemotron model, free tier only");
   assert.equal(sent.reasoning.effort, "none"); // prevent free reasoning models consuming the label's entire output budget
+  const originalNvidia = process.env.NVIDIA_API_KEY;
+  process.env.NVIDIA_API_KEY = "fixture-only";
+  let url = "";
+  globalThis.fetch = (async (u: any, opts: any) => { url = String(u); sent = JSON.parse(opts.body); return new Response(JSON.stringify({ choices: [{ message: { content: "Nvidia label" } }] }), { status: 200 }); }) as typeof fetch;
+  assert.equal(await askNvidia("fixture", "labels"), "Nvidia label");
+  assert.equal(url, "https://integrate.api.nvidia.com/v1/chat/completions");
+  assert.equal(sent.model, process.env.AGENT_CONSOLE_LABEL_NVIDIA_MODEL || "nvidia/nemotron-3-super-120b-a12b");
+  assert.equal(sent.chat_template_kwargs.enable_thinking, false);
+  if (originalNvidia === undefined) delete process.env.NVIDIA_API_KEY; else process.env.NVIDIA_API_KEY = originalNvidia;
 } finally { globalThis.fetch = originalFetch; if (originalKey === undefined) delete process.env.OPENROUTER_API_KEY; else process.env.OPENROUTER_API_KEY = originalKey; }
 console.log("PASS context vs cumulative usage, Codex tailing, provider allowances, no invented limits, validated helper fallback and cooldown");
