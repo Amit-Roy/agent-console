@@ -46,7 +46,7 @@ try{
   await page.evaluate(()=>window.dispatchEvent(new Event('pagehide')));
   await page.waitForFunction(async()=>{const d=await fetch('/api/latency').then(r=>r.json());return d.groups?.cached?.count>0&&d.groups?.open?.count>0;});
   const result=await page.evaluate(()=>fetch('/api/latency').then(r=>r.json()));assert.ok(result.count>0);assert.ok(result.recent.every((s:any)=>typeof s.total_ms==='number'&&s.width>0));assert.ok(!JSON.stringify(result).includes('PRIVATE'));assert.ok(result.groups.open.p95_ms>=result.groups.open.median_ms);
-  await page.locator('#more').click();await page.getByRole('menuitem',{name:/Run details/}).click();await page.waitForFunction(()=>document.querySelector('#latency-summary')?.textContent?.includes('Thread opens:'));await page.getByRole('button',{name:'Done',exact:true}).click();
+  await page.locator('#more').click();await page.getByRole('menuitem',{name:/Run details/}).click();await page.waitForFunction(()=>document.querySelector('#latency-summary')?.textContent?.includes('Open a thread'));await page.getByRole('button',{name:'Done',exact:true}).click();
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);assert.deepEqual(errors,[]);
   console.log(`PASS ${width}px queue editor/full text/save/cancel/reconnect, real latency upload/storage, cached timing, private authenticated summary and Run details`);await context.close();
  }

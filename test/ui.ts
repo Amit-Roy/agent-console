@@ -773,7 +773,7 @@ for (const scheme of ["dark", "light"] as const) {
     const earlySkeleton = await page.evaluate(async (i) => { (document.querySelectorAll("#threads li")[i] as HTMLElement).click(); await new Promise((r) => setTimeout(r, 100)); return !!document.querySelector(".skeleton"); }, big === 0 ? 1 : 0);
     check("loading: nothing flashes in the first 150ms", !earlySkeleton);
     await rows.nth(big).click();
-    check("switching: revisiting an idle thread restores its cached view immediately", /Cached/.test(await page.locator("#diagnostics").textContent()));
+    check("switching: revisiting an idle thread restores its cached view immediately", /from cache/.test(await page.locator("#diagnostics").textContent()));
     // Refresh from the latest position. Reading older pages intentionally defers replacement.
     await page.locator('#chat').evaluate(chat => { chat.scrollTop = chat.scrollHeight; });
     await page.waitForTimeout(50);

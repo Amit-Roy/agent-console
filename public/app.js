@@ -482,7 +482,7 @@ function openThread(id) {
     const total_ms = Math.round(performance.now() - state.openAt);
     window.agentConsoleMetrics = { thread: id, cached: true, total_ms };
     latency.record({ kind: "cached", thread: id, total_ms, render_ms: total_ms, wait_ms: 0 });
-    $("diagnostics").textContent = `Cached · ${total_ms} ms`;
+    showLoad(`Opened from cache in ${fmtMs(total_ms)}`);
     views.delete(id);
     if (cached.stale || cur()?.status === "running") {
       state.snapshot = cached;
@@ -609,8 +609,10 @@ async function showHistory(m) {
   state.snapshot = null;
   $("conversation-updating")?.remove();
   window.agentConsoleMetrics = refreshing ? { ...cachedMetrics, refresh: metrics } : metrics;
-  $("diagnostics").textContent = `${metrics.total_ms} ms · prepare ${Math.round(metrics.prepare_ms)} ms · round-trip ${Math.round(metrics.roundtrip_ms)} ms (read ${metrics.server_ms ?? "?"} ms) · decode ${Math.round(metrics.decode_ms)} ms · render ${metrics.render_ms} ms · ${metrics.events} events · ${Math.round(metrics.payload_bytes / 1024)} KB decoded`;
-  if (refreshing) $("diagnostics").textContent = `Cached · ${cachedMetrics.total_ms} ms · updated in ${metrics.total_ms} ms`;
+  const other = Math.max(0, metrics.total_ms - metrics.roundtrip_ms - metrics.render_ms);
+  const detail = `Network ${fmtMs(metrics.roundtrip_ms)} · drawing ${fmtMs(metrics.render_ms)} · other ${fmtMs(other)} ${metrics.events ? ` · ${metrics.events} events, ${Math.round(metrics.payload_bytes / 1024)} KB` : ""}`;
+  if (refreshing) showLoad(`Opened from cache in ${fmtMs(cachedMetrics.total_ms)}, then updated in ${fmtMs(metrics.total_ms)}`, detail);
+  else showLoad(`Loaded in ${fmtMs(metrics.total_ms)}`, detail);
   console.debug("Agent Console history", metrics);
 }
 function earlierButton() {
@@ -694,7 +696,13 @@ function renderHead() {
     fillEffort(menus.effort, p, t.model, t.effort || "default");
     menus.effort.setDisabled(t.status === "running");
     const run = t.lastRun;
-    $("run-metrics").textContent = run ? `Model: ${run.model || t.model}\nEffort: ${run.effort || t.effort || "default"} · ${run.source || "thread settings"}\nDuration: ${run.duration_ms == null ? "pending" : (run.duration_ms / 1000).toFixed(1) + " s"}\nCumulative turn tokens (not context): ${run.input_tokens ?? "—"} input · ${run.cached_input_tokens ?? "—"} cached · ${run.output_tokens ?? "—"} output` : "No run metrics yet.";
+    const tok = run && [run.input_tokens, run.cached_input_tokens, run.output_tokens].some((n) => n != null);
+    facts(run ? [
+      ["Model", run.model || t.model],
+      ["Effort", effortLabel(run.effort || t.effort || "default"), run.source && run.source !== "thread settings" ? `from ${run.source}` : ""],
+      ["Last run", run.duration_ms == null ? "Still running" : fmtMs(run.duration_ms)],
+      ...(tok ? [["Tokens", `${run.input_tokens ?? 0} in · ${run.cached_input_tokens ?? 0} from cache · ${run.output_tokens ?? 0} out`, "whole turn, not the context size"]] : []),
+    ] : [["Last run", "None yet"]]);
     $("diagnostics").title = run ? `Last run: ${run.model || t.model} · effort ${run.effort || t.effort || "default"} (${run.source || "thread settings"})\n${run.duration_ms ?? "?"} ms · input ${run.input_tokens ?? "?"} · cached ${run.cached_input_tokens ?? "?"} · output ${run.output_tokens ?? "?"} tokens` : "No run metrics yet.";
     menus.mode.setValue(t.mode);
   }
@@ -808,20 +816,40 @@ function finishQueuedEdit(cancel) {
 $("queue-edit-form").onsubmit = e => { e.preventDefault(); finishQueuedEdit(false); };
 $("queue-cancel").onclick = () => finishQueuedEdit(true);
 $("queue-editor").addEventListener("cancel", e => { e.preventDefault(); finishQueuedEdit(true); });
+// Run details, in words: one fact per row, times as "167 ms" or "1.2 s".
+const fmtMs = (ms) => (ms == null ? "—" : ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)} s`);
+function facts(rows) {
+  const dl = $("run-metrics");
+  dl.replaceChildren(...rows.flatMap(([k, v, note]) => { const dd = el("dd", "", v); if (note) dd.append(el("span", "note", note)); return [el("dt", "", k), dd]; }));
+}
+function showLoad(main, detail) {
+  $("diagnostics").replaceChildren(el("p", "lead", main), ...(detail ? [el("p", "note", detail)] : []));
+}
+const SPEED = [["open", "Open a thread"], ["cached", "Switch back"], ["refresh", "Check for new"], ["page", "Older messages"]];
+const speedWord = (ms) => (ms < 300 ? "fast" : ms < 1000 ? "ok" : "slow");
 async function loadLatencySummary() {
   if (!state.features.latency) { $("latency-summary").textContent = "Local measurements will be available after the server reconnects."; return; }
   latency.flush();
-  $("latency-summary").textContent = "Loading local measurements…";
+  $("latency-summary").textContent = "Loading measurements…";
   try {
     const response = await apiFetch("/api/latency", { cache: "no-store" });
     if (!response.ok) throw Error();
     const data = await response.json();
     if (!data.available) throw Error();
-    $("latency-summary").textContent = data.count ? [["open", "Thread opens"], ["cached", "Cached switches"], ["refresh", "Background refreshes"], ["page", "Older pages"], ["cancelled", "Interrupted loads"]].flatMap(([key, label]) => {
-      const s = data.groups[`${key}/visible`], d = data.groups[`${key}/visible/recent`];
-      const fmt = (g) => `median ${Math.round(g.median_ms)} ms · p95 ${Math.round(g.p95_ms)} ms (${g.count})`;
-      return s ? [`${label}: latest ${fmt(d)} · 14 days ${fmt(s)}`] : [];
-    }).join("\n") + "\nForeground samples · this server only · latest 20 and up to 14 days." : "No local latency samples yet. Open or switch threads to collect measurements.";
+    if (!data.count) { $("latency-summary").textContent = "No measurements yet. Open or switch threads to collect some."; return; }
+    const table = el("table", "speed"), head = el("tr");
+    for (const [t, tip] of [["", ""], ["Typical", "Median of your last 20"], ["Slowest", "Slowest 1 in 20 of your last 20"], ["14 days", "Typical over 14 days"]]) { const th = el("th", "", t); th.scope = "col"; if (tip) th.title = tip; head.append(th); }
+    table.append(el("thead"), el("tbody")); table.tHead.append(head);
+    for (const [key, label] of SPEED) {
+      const all = data.groups[`${key}/visible`], now = data.groups[`${key}/visible/recent`];
+      if (!all) continue;
+      const tr = el("tr"), name = el("th"), word = speedWord(now.median_ms);
+      name.scope = "row";
+      name.append(el("span", `dot ${word}`), label, el("span", "sr-only", ` (${word})`));
+      tr.append(name, el("td", "", fmtMs(now.median_ms)), el("td", "", fmtMs(now.p95_ms)), el("td", "", fmtMs(all.median_ms)));
+      table.tBodies[0].append(tr);
+    }
+    $("latency-summary").replaceChildren(table, el("p", "note", "Typical and Slowest cover your last 20 loads of each kind; 14 days is the typical time over two weeks. Counts only loads while the app was on screen."));
   } catch { $("latency-summary").textContent = "Local measurements are unavailable until the server reconnects."; }
 }
 const fmtTok = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(n >= 1e7 ? 0 : 1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(n));

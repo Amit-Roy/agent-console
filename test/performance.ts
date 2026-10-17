@@ -66,11 +66,11 @@ try {
   for (let i = 0; i < Math.min(5, await rows.count()); i++) {
     await page.evaluate(() => { (window as any).agentConsoleMetrics = null; });
     await rows.nth(i).click();
-    await page.waitForFunction(() => !!(window as any).agentConsoleMetrics || document.querySelector("#diagnostics")?.textContent?.startsWith("Cached"));
+    await page.waitForFunction(() => !!(window as any).agentConsoleMetrics || document.querySelector("#diagnostics")?.textContent?.startsWith("Opened from cache"));
     samples.push(await page.evaluate(() => (window as any).agentConsoleMetrics || document.querySelector("#diagnostics")?.textContent));
   }
   await rows.nth(0).click();
-  assert.match(await page.locator("#diagnostics").textContent(), /Cached/);
+  assert.match(await page.locator("#diagnostics").textContent(), /from cache/);
   console.log("History timings", JSON.stringify(samples));
   console.log("Cached switch", await page.locator("#diagnostics").textContent());
   await ctx.close();
