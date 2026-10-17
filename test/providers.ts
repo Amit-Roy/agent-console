@@ -74,9 +74,12 @@ check("replay: long conversations keep the newest part", replayPreamble(Array.fr
 const table = `provider    model                                               context  max-out  thinking  images
 openrouter  nvidia/nemotron-3-super-120b-a12b                   262.1K   235.9K   yes       no
 openrouter  nvidia/nemotron-3-super-120b-a12b:free              262.1K   235.9K   yes       no
+nvidia      stepfun-ai/step-5-preview                            1.0M     131.1K   yes       yes
+nvidia      nvidia/nemotron-3-super-120b-a12b                    262.1K   262.1K   yes       no
 openai      gpt-4o                                              128K     16K      no        yes`;
-check("pi models: openrouter limited to :free by default", JSON.stringify(parsePiModels(table)) === JSON.stringify(["openrouter/nvidia/nemotron-3-super-120b-a12b:free", "openai/gpt-4o"]));
-check("pi models: all=true keeps paid", parsePiModels(table, true).length === 3);
+check("pi models: openrouter and unverified NVIDIA models filtered by default", JSON.stringify(parsePiModels(table)) === JSON.stringify(["openrouter/nvidia/nemotron-3-super-120b-a12b:free", "nvidia/stepfun-ai/step-5-preview", "openai/gpt-4o"]));
+check("pi models: working NVIDIA free model included, other NVIDIA models excluded", JSON.stringify(parsePiModels(table)) === JSON.stringify(["openrouter/nvidia/nemotron-3-super-120b-a12b:free", "nvidia/stepfun-ai/step-5-preview", "openai/gpt-4o"]));
+check("pi models: all=true keeps paid", parsePiModels(table, true).length === 5);
 check("pi models: 'No models available' message yields none", parsePiModels("No models available. Use /login\n  /home/x/docs/providers.md\n").length === 0);
 
 // ---- pi tool normalisation
