@@ -13,6 +13,7 @@ const timeoutMs = Number(option("--timeout", "30000"));
 const maxTokens = Number(option("--max-tokens", "8"));
 const listCommand = option("--pi", "pi");
 const endpoint = option("--endpoint", "https://integrate.api.nvidia.com/v1/chat/completions");
+const requestIntervalMs = 1100;
 const help = args.includes("--help") || args.includes("-h");
 
 if (help) {
@@ -72,7 +73,11 @@ if (!models.length) {
 }
 
 const results = [];
+let nextRequestAt = 0;
 for (const model of models) {
+  const waitMs = nextRequestAt - Date.now();
+  if (waitMs > 0) await new Promise((resolve) => setTimeout(resolve, waitMs));
+  nextRequestAt = Date.now() + requestIntervalMs;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
