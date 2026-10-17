@@ -2,6 +2,7 @@ import { $, el, icon, iconButton, wireCopy, renderMarkdown, highlightInto, langF
 import { createMenu } from "/menu.js";
 import { toolName, toolSummary } from "/tool-display.js";
 import { createLatencyReporter } from "/telemetry.js";
+import { createQuestions } from "/questions.js";
 
 const MODE_META = {
   plan: { label: "Plan", desc: "Read-only. Plans without editing.", icon: "eye" },
@@ -29,9 +30,11 @@ function connect() {
   ws.onopen = () => {
     retry = 0;
     signedOut = false;
+    questions.setConnected(true);
     banner("");
   };
   ws.onclose = () => {
+    questions.setConnected(false);
     if (queueEditor) {
       queueEditor.pending = false;
       $("queue-edit-error").textContent = "Disconnected. Reconnect to save, or reopen this editor after reconnecting.";
@@ -56,6 +59,7 @@ function connect() {
   };
 }
 const send = (o) => { if (ws?.readyState !== 1) return false; ws.send(JSON.stringify(o)); return true; };
+const questions = createQuestions({ send, root: () => $("chat"), changed: () => { renderThreads(); updateWorking(); } });
 const latency = createLatencyReporter(samples => {
   if (ws?.readyState !== 1 || !state.features.latency) return false;
   ws.send(JSON.stringify({ t: "telemetry", samples }));
@@ -169,6 +173,10 @@ function handle(m) {
       state.commands = m.commands || {};
       state.usage = m.usage || {};
       state.queues = m.queues || {};
+      for (const t of m.threads) {
+        const events = m.questions?.[t.id] || [];
+        questions.sync(t.id, Array.isArray(events) ? events : [events]);
+      }
       state.dirs = m.dirs;
       state.providers = new Map(m.providers.map((p) => [p.id, p]));
       menus.model.provider = null; // re-read per-agent model lists below
@@ -216,7 +224,12 @@ function handle(m) {
       break;
     case "history":
       if (m.thread !== state.current || (m.request != null && m.request !== state.request)) break;
+      if (m.before == null && m.questions) questions.sync(m.thread, m.questions);
       void (m.before != null ? showEarlier(m) : m.delta ? showDelta(m) : showHistory(m));
+      break;
+    case "answer_done":
+    case "answer_error":
+      questions.reply(m);
       break;
     case "queue":
       state.queues[m.thread] = m.items;
@@ -228,6 +241,10 @@ function handle(m) {
       queuedEditReply(m);
       break;
     case "event":
+      if (m.event.type === "question" || m.event.type === "question_answer") {
+        questions.receive(m.thread, m.event, true);
+        renderThreads(); updateWorking();
+      }
       if (views.has(m.thread)) views.get(m.thread).stale = true;
       if (m.event.type === "rate_limit_event") setUsage(m.event, state.threads.get(m.thread)?.provider || "claude");
       if (m.thread !== state.current) break;
@@ -450,7 +467,8 @@ function renderThreads() {
     li.tabIndex = 0;
     li.title = `${t.title}\n${t.cwd}\n${provLabel(t.provider)} · ${modelMeta(t.model).label}${t.mode === "bypassPermissions" ? " · Bypass" : ""} · $${t.cost.toFixed(3)}`;
     if (t.id === state.current) li.setAttribute("aria-current", "true");
-    const dot = el("span", `dot ${t.status}`);
+    const waiting = questions.count(t.id) || t.waiting;
+    const dot = el("span", `dot ${waiting ? "waiting" : t.status}`);
     dot.setAttribute("aria-hidden", "true");
     const meta = el("div", "meta");
     if (base(t.cwd) !== usualDir) meta.append(el("span", "dir", base(t.cwd)));
@@ -461,6 +479,7 @@ function renderThreads() {
       tag.append(icon("shield-off"), el("span", "sr-only", "Bypass"));
       meta.append(tag);
     }
+    if (waiting) meta.append(el("span", "tag question-tag", "Needs input"));
     const time = el("time", "", ago(t.updatedAt));
     time.dateTime = new Date(t.updatedAt).toISOString();
     meta.append(time);
@@ -478,7 +497,8 @@ function renderThreads() {
     });
     more.setAttribute("aria-label", `Actions for ${t.title}`);
     li.append(dot, el("div", "t", t.title), meta, more);
-    if (t.status === "running") li.append(el("span", "sr-only", "Running"));
+    if (waiting) li.append(el("span", "sr-only", "Needs your input"));
+    else if (t.status === "running") li.append(el("span", "sr-only", "Running"));
     const pick = () => {
       setNav(false);
       openThread(t.id);
@@ -541,6 +561,7 @@ function openThread(id) {
     clearTimeout(state.loadTimer); state.loading = null;
     state.cards = cached.cards; state.subs = cached.subs; state.subTools = cached.subTools; state.start = cached.start; state.latestStart = cached.latestStart; state.end = cached.end; state.live = cached.live; state.compact = cached.compact;
     $("chat").replaceChildren(...cached.nodes);
+    questions.ensure(id);
     $("chat").querySelector(":scope > .earlier")?.removeAttribute("disabled");
     $("chat").scrollTop = cached.scroll;
     state.lastScrollTop = $("chat").scrollTop;
@@ -695,6 +716,8 @@ function showDelta(m) {
   historyDone(m, true, cachedMetrics);
 }
 function historyDone(m, refreshing, cachedMetrics) {
+  questions.ensure(m.thread);
+  updateWorking();
   const metrics = { thread: m.thread, total_ms: Math.round(performance.now() - (refreshing ? state.refreshAt : state.openAt)), server_ms: m.server_ms, render_ms: Math.round(performance.now() - state.historyAt), events: m.events.length, bytes: m.bytes, prepare_ms: Math.max(0, m.receivedAt - m.roundtrip_ms - (refreshing ? state.refreshAt : state.openAt)), roundtrip_ms: m.roundtrip_ms, decode_ms: m.decode_ms, payload_bytes: m.wire_bytes };
   latency.record({ ...metrics, kind: refreshing ? "refresh" : "open", wait_ms: m.receivedAt - (refreshing ? state.refreshAt : state.openAt), wire_bytes: m.wire_bytes, prepare_ms: Math.max(0, m.receivedAt - m.roundtrip_ms - (state.measurement?.at || 0)), roundtrip_ms: m.roundtrip_ms, decode_ms: m.decode_ms, hidden: state.measurement?.hidden });
   state.measurement = null;
@@ -804,14 +827,14 @@ function renderHead() {
   menus.model.setDisabled(!t || running);
   menus.mode.setDisabled(!t || running);
   $("more").disabled = !t;
-  $("state").hidden = !running;
+  $("state").hidden = !running && !questions.count(state.current);
   $("input").disabled = !t;
   $("attach").disabled = !t;
   // While the agent works the composer stays live: Enter steers it (or queues, for agents that cannot take input mid-turn)
   const canSteer = !t?.operation && !!prov(t?.provider)?.steer;
   renderAction();
   $("cbox").classList.toggle("running", running);
-  $("input").placeholder = !t ? "Message the agent" : running ? (t?.operation ? "Queue a message to send after compaction…" : "Queue a message for after this turn…") : "Message the agent";
+  $("input").placeholder = !t ? "Message the agent" : questions.count(t.id) || t.waiting ? "Reply to the agent, or choose an option above…" : running ? (t?.operation ? "Queue a message to send after compaction…" : "Queue a message for after this turn…") : "Message the agent";
   renderQueue();
   renderCtx();
   renderUsage();
@@ -824,13 +847,14 @@ function renderHead() {
 function renderAction() {
   const t = cur();
   const running = t?.status === "running";
+  const waiting = questions.count(t?.id) || t?.waiting;
   const empty = !$("input").value.trim() && !pending.length;
   const stop = running && empty;
   $("stop").hidden = !stop;
   $("send").hidden = stop;
   $("send").disabled = !t || (empty && !running);
-  $("send").title = running ? "Queue: sent when this turn ends (Enter)" : "Send (Enter)";
-  $("send").setAttribute("aria-label", running ? "Queue message" : "Send");
+  $("send").title = waiting ? "Reply to the agent (Enter)" : running ? "Queue: sent when this turn ends (Enter)" : "Send (Enter)";
+  $("send").setAttribute("aria-label", waiting ? "Reply to agent" : running ? "Queue message" : "Send");
 }
 // ---------- queued messages and the context meter ----------
 function renderQueue() {
@@ -1033,8 +1057,9 @@ function renderCtx() {
 }
 // "Working" in the header, plus how many subagents are still going
 function updateWorking() {
+  $("state").classList.toggle("waiting", !!(questions.count(state.current) || cur()?.waiting));
   const n = [...state.cards.values()].filter((c) => c.classList.contains("agent") && (c.classList.contains("pending") || c.querySelector(".task-chip.running"))).length;
-  $("state-t").textContent = cur()?.operation === "compact" ? "Compacting context" : n ? `Working · ${n} agent${n > 1 ? "s" : ""}` : "Working";
+  $("state-t").textContent = questions.count(state.current) || cur()?.waiting ? "Needs your input" : cur()?.operation === "compact" ? "Compacting context" : n ? `Working · ${n} agent${n > 1 ? "s" : ""}` : "Working";
 }
 
 function startRename() {
@@ -1514,6 +1539,17 @@ function onEvent(e, live) {
   // what a subagent says and does arrives with the id of the call that spawned it: it belongs inside that card, not in the main thread
   if (e.parent_tool_use_id && (e.type === "assistant" || e.type === "user" || e.type === "stream_event")) return subEvent(e, live);
   switch (e.type) {
+    case "question":
+      push(questions.mount(state.current, e), live);
+      break;
+    case "question_answer": {
+      questions.receive(state.current, e);
+      const host = state.into || $("chat");
+      const exists = [...host.querySelectorAll(".question-card")].some(card => card.dataset.questionId === e.id);
+      if (!exists && ![...$("chat").querySelectorAll(".question-card")].some(card => card.dataset.questionId === e.id)) push(questions.mount(state.current, e), live);
+      questions.refresh(host);
+      break;
+    }
     case "command_status":
       if (e.command === "compact") return void compactCard(e, live);
       addNote(e.text, e.status === "failed" ? "errtxt" : "note command-note");
@@ -1778,6 +1814,7 @@ async function submit(mode) {
     }
     const attachments = pending.filter((p) => p.id).map((p) => ({ id: p.id, ...(p.n ? { n: p.n } : {}) }));
     if (!text && !attachments.length) return;
+    if (!mode && !attachments.length && (questions.count(state.current) || cur()?.waiting)) mode = "steer";
     // mid-turn a message queues until the turn ends; mode "steer" (Alt+Enter, or Steer on a queued card) hands it to the agent now
     send({ t: "send", thread: state.current, text, attachments, ...(mode ? { mode } : {}) });
     box.value = "";

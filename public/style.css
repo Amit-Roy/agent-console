@@ -784,3 +784,46 @@ body.login{display:grid;place-items:center;overflow:auto;padding:var(--sp-4)}
 #queued .steer{flex:none;min-height:1.75rem;padding:0 var(--sp-3);background:var(--accent-tint);color:var(--accent)}
 #queued .steer:hover:not(:disabled){background:var(--sel)}
 @media (pointer:coarse){#queued .steer{min-height:2.25rem}}
+
+
+/* An agent's question stays in the conversation, with a deliberate hand-off back to the user. */
+.question-card{border:1px solid var(--edge-strong);border-radius:var(--r-lg);padding:var(--sp-5);background:var(--s2);font:var(--f-md);content-visibility:visible!important}
+.question-head{display:flex;align-items:center;justify-content:space-between;gap:var(--sp-3);margin-bottom:var(--sp-4);font:var(--f-xs);color:var(--t2)}
+.question-status{display:inline-flex;align-items:center;gap:var(--sp-2);font-weight:var(--fw-med);color:var(--accent)}
+.question-status::before{content:"";width:.375rem;height:.375rem;border-radius:var(--r-full);background:currentColor}
+.question-progress{white-space:nowrap;color:var(--t2)}
+.question-field{border:0;padding:0;margin:0;min-width:0}
+.question-title{font:var(--f-lg);font-weight:var(--fw-med);letter-spacing:var(--ls-lg);color:var(--t1);padding:0;max-width:100%;overflow-wrap:anywhere}
+.question-hint{font:var(--f-sm);color:var(--t2);margin:var(--sp-2) 0 var(--sp-4)}
+.question-choices{display:flex;flex-direction:column;gap:var(--sp-2)}
+.question-option{display:flex;align-items:flex-start;gap:var(--sp-3);padding:var(--sp-3);border:1px solid var(--edge-strong);border-radius:var(--r-sm);background:var(--s1);cursor:pointer;min-height:2.75rem;transition:background var(--dur-1),border-color var(--dur-1);overflow-wrap:anywhere}
+.question-option:hover{background:var(--s3)}
+.question-option:has(input:checked){border-color:var(--accent);background:var(--accent-tint)}
+.question-option:has(input:focus-visible){outline:2px solid var(--focus);outline-offset:2px}
+.question-option input{flex:0 0 auto;width:1rem;height:1rem;margin:.125rem 0 0;accent-color:var(--accent)}
+.question-option-text{display:flex;flex-direction:column;gap:var(--sp-1);min-width:0}
+.question-option-label{font:var(--f-md);font-weight:var(--fw-med);color:var(--t1)}
+.question-option-description{font:var(--f-sm);color:var(--t2)}
+.question-custom{padding:var(--sp-2) var(--sp-1) 0}
+.question-custom[hidden]{display:none}
+.question-custom-label{display:block;margin-bottom:var(--sp-2);font:var(--f-sm);color:var(--t2)}
+.question-text{display:block;box-sizing:border-box;width:100%;max-width:100%;min-height:2.75rem;resize:vertical;padding:var(--sp-3);border:1px solid var(--edge-strong);border-radius:var(--r-sm);background:var(--s1);color:var(--t1);font:var(--f-base)}
+.question-text::placeholder{color:var(--t3)}
+.question-text:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.question-footer,.question-nav{display:flex;align-items:center;gap:var(--sp-2)}
+.question-footer{justify-content:space-between;margin-top:var(--sp-5)}
+.question-footer .btn{min-height:2.75rem;padding-inline:var(--sp-4)}
+.question-error{font:var(--f-sm);color:var(--t2);margin:var(--sp-3) 0 0;overflow-wrap:anywhere}
+.question-summary{background:transparent;border-color:var(--edge);padding:var(--sp-3) var(--sp-4)}
+.question-summary-head{display:flex;align-items:center;gap:var(--sp-2);font:var(--f-sm);color:var(--t2);font-weight:var(--fw-med)}
+.question-answer-note{font:var(--f-sm);color:var(--t1);margin:var(--sp-2) 0 0;white-space:pre-wrap;overflow-wrap:anywhere}
+.question-answers{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,2fr);gap:var(--sp-2) var(--sp-4);margin:var(--sp-3) 0 0;font:var(--f-sm)}
+.question-answers dt{color:var(--t2);overflow-wrap:anywhere}
+.question-answers dd{margin:0;color:var(--t1);white-space:pre-wrap;overflow-wrap:anywhere}
+.dot.waiting{background:var(--accent);box-shadow:0 0 0 2px var(--accent-tint)}
+.question-tag{color:var(--accent)}
+@media(max-width:440px){.question-card{padding:var(--sp-4)}.question-answers{grid-template-columns:minmax(0,1fr);gap:var(--sp-1)}.question-answers dd+dt{margin-top:var(--sp-2)}.question-footer .btn{padding-inline:var(--sp-3)}}
+@media(prefers-reduced-motion:reduce){.question-option{transition:none}}
+@media(forced-colors:active){.question-option:has(input:checked){outline:2px solid Highlight}.question-status::before{background:CanvasText}.dot.waiting{background:Highlight}}
+
+#state.waiting .dot.running{animation:none;box-shadow:0 0 0 2px var(--accent-tint)}

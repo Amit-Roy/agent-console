@@ -204,7 +204,7 @@ wss.on("connection", (ws) => {
   clients.add(ws);
   void refreshRouterUsage(); // quota refresh only on demand; no idle network polling
   const reply = (m: unknown) => ws.readyState === ws.OPEN && ws.send(JSON.stringify(m));
-  reply({ t: "hello", build: BUILD, features: { queueEditing: true, latency: !!latency, selectiveEvents: true }, usage: usage.all(), commands: threads.getCommands(), threads: threads.list(), queues: threads.getQueues(), dirs: dirs(), providers: providerInfo() });
+  reply({ t: "hello", build: BUILD, features: { queueEditing: true, questions: true, latency: !!latency, selectiveEvents: true }, questions: threads.getQuestions(), usage: usage.all(), commands: threads.getCommands(), threads: threads.list(), queues: threads.getQueues(), dirs: dirs(), providers: providerInfo() });
   let metricsWindow = Date.now(), metricsCount = 0;
   const ping = setInterval(() => ws.readyState === ws.OPEN && ws.ping(), 25_000);
   ws.on("close", () => {
@@ -222,6 +222,14 @@ wss.on("connection", (ws) => {
           return;
         }
         case "refresh_usage": void refreshUsage(); return;
+        case "answer": {
+          try {
+            threads.answer(m.thread, m.id, m.answers, m.skip === true);
+            return reply({ t: "answer_done", thread: m.thread, id: m.id, request: m.request });
+          } catch (e: any) {
+            return reply({ t: "answer_error", thread: m.thread, id: m.id, request: m.request, message: e?.message || "Could not send your answer." });
+          }
+        }
         case "queue_edit":
         case "queue_save":
         case "queue_cancel_edit": {

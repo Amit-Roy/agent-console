@@ -41,6 +41,10 @@ export function claudeControl(write: (msg: object) => void, emit: (ev: any) => v
   const respond = (request_id: string, response: object) => write({ type: "control_response", response: { subtype: "success", request_id, response } });
   return {
     pending,
+    cancelAll() {
+      for (const id of pending.keys()) emit({ type: "question_answer", id, cancelled: true });
+      pending.clear();
+    },
     // true when the line was a control message (never shown or logged)
     handle(ev: any): boolean {
       if (ev?.type === "control_cancel_request") {
@@ -56,6 +60,10 @@ export function claudeControl(write: (msg: object) => void, emit: (ev: any) => v
       }
       if (r.tool_name === "AskUserQuestion" && Array.isArray(r.input?.questions)) {
         const questions = cleanQuestions(r.input.questions.map((q: any, i: number) => ({ ...q, id: String(i), allowOther: true })));
+        if (!questions.length) {
+          respond(ev.request_id, { behavior: "deny", message: "No questions were provided. Continue with your best judgment." });
+          return true;
+        }
         pending.set(ev.request_id, { input: r.input, questions });
         emit({ type: "question", id: ev.request_id, tool_use_id: r.tool_use_id, questions, ts: Date.now() });
         return true;
@@ -66,12 +74,12 @@ export function claudeControl(write: (msg: object) => void, emit: (ev: any) => v
     answer(id: string, reply: QuestionReply): boolean {
       const p = pending.get(id);
       if (!p) throw new Error("This question is no longer waiting for an answer.");
-      pending.delete(id);
       if (reply.skip || reply.note !== undefined) {
         const message = reply.note !== undefined
           ? `The user did not pick an option and replied in chat instead: ${reply.note}`
           : "The user skipped these questions without answering. Continue with your best judgment and do not ask the same questions again.";
         respond(id, { behavior: "deny", message });
+        pending.delete(id);
         return reply.note !== undefined;
       }
       const answers: Record<string, string> = {};
@@ -80,6 +88,7 @@ export function claudeControl(write: (msg: object) => void, emit: (ev: any) => v
         if (a.length) answers[String(p.input.questions[i]?.question ?? q.question)] = a.join(", ");
       });
       respond(id, { behavior: "allow", updatedInput: { ...p.input, answers } });
+      pending.delete(id);
       return false;
     },
   };
@@ -125,10 +134,14 @@ export const claude: Provider = {
     const proxy = headroom.url();
     if (proxy && !env.ANTHROPIC_BASE_URL) env.ANTHROPIC_BASE_URL = proxy; // compress context via Headroom while it is up
     const control = claudeControl((msg) => p.write(JSON.stringify(msg)), ctx.event, t.mode);
-    const p = spawnLines("claude", "claude", args, { cwd: t.cwd, env }, ctx, (line) => {
+    const p = spawnLines("claude", "claude", args, { cwd: t.cwd, env }, {
+      ...ctx,
+      exited(info) { control.cancelAll(); ctx.exited(info); },
+    }, (line) => {
       const ev = parseJson(line);
       if (!ev) return;
       if (control.handle(ev)) return;
+      if (ev.type === "result") control.cancelAll();
       if (ev.type === "user") {
         delete ev.tool_use_result; // duplicate of message.content, can be huge
         for (const c of ev.message?.content ?? []) {
@@ -170,8 +183,8 @@ export const claude: Provider = {
       // remaining commands and answered the new message within the same turn).
       steer: (text, images = []) => write(text, images),
       answer: (id, reply) => control.answer(id, reply),
-      abort: () => p.abort(),
-      kill: () => p.kill(),
+      abort: () => { control.cancelAll(); p.abort(); },
+      kill: () => { control.cancelAll(); p.kill(); },
     };
   },
 };

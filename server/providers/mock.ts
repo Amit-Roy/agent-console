@@ -1,4 +1,5 @@
 import type { Agent, AgentCtx, Provider, ThreadSpec } from "./types.ts";
+import crypto from "node:crypto";
 
 // Deterministic fake agent for tests and UI work: no network, no quota. Enabled with AGENT_CONSOLE_MOCK=1.
 //   "slow ..."   streams for ~10s (to test Stop)      "fail ..."  ends the turn with an error
@@ -24,6 +25,7 @@ export const mock: Provider = {
     const delta = (text: string) => ctx.event({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text } } });
     const done = (extra: object = {}) => ctx.event({ type: "result", subtype: "success", is_error: false, duration_ms: 50, ...extra });
     let turns = 0;
+    let questionId: string | undefined;
     return {
       get alive() {
         return !dead;
@@ -36,8 +38,19 @@ export const mock: Provider = {
       steer(text) {
         delta(` [steered: ${text}]`);
       },
+      answer(id, reply) {
+        if (dead || id !== questionId) throw new Error("This question is no longer waiting for an answer.");
+        questionId = undefined;
+        at(20, () => {
+          const text = reply.note !== undefined ? `Continuing with your message: ${reply.note}` : reply.skip ? "Question skipped; continuing." : `Continuing with ${JSON.stringify(reply.answers)}.`;
+          ctx.event({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text }] } });
+          done();
+        });
+        return true;
+      },
       send(text, images = []) {
         stop();
+        questionId = undefined;
         turns++;
         ctx.event({ type: "system", subtype: "status", status: "requesting" }); // chatter the manager must drop
         const forced = /^ctx (\d+)/.exec(text);
@@ -45,7 +58,14 @@ export const mock: Provider = {
         ctx.event({ type: "system", subtype: "init", session_id: t.sessionId ?? `mock-${t.id}` });
         ctx.event({ type: "stream_event", event: { type: "message_start" } });
         const reply = `mock reply (${t.mode}, ${t.model}): ${text}${images.length ? ` [${images.length} image(s): ${images.map((i) => i.media_type).join(", ")}]` : ""}`;
-        if (text.startsWith("slow")) {
+        if (text.startsWith("question")) {
+          questionId = `fixture-question-${crypto.randomUUID()}`;
+          const id = questionId;
+          at(10, () => ctx.event({ type: "question", id, questions: [
+            { id: "scope", header: "Scope", question: "How much should I review?", options: [{ label: "Quick pass", description: "Focus on the changed code." }, { label: "Full review", description: "Review the complete implementation." }], allowOther: true },
+            { id: "checks", header: "Checks", question: "Which checks should I run?", options: [{ label: "Tests", description: "Run the relevant automated checks." }, { label: "Screenshots", description: "Inspect desktop and mobile layouts." }], multiSelect: true, allowOther: true },
+          ] }));
+        } else if (text.startsWith("slow")) {
           for (let i = 0; i < 50; i++) at(200 * i, () => delta(`tick ${i} `));
           at(10_500, () => done());
         } else if (text.startsWith("fail")) {

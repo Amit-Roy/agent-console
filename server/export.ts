@@ -27,6 +27,11 @@ export function turnsOf(events: any[], opts: { tools?: boolean } = {}): Turn[] {
     if (e?.type === "user_input" && !e.auto) {
       const names = (e.attachments ?? []).map((a: any) => a.name);
       push("user", [e.text ?? "", ...(names.length ? [`(attached: ${names.join(", ")})`] : [])].filter(Boolean).join("\n"));
+    } else if (e?.type === "question") {
+      for (const q of e.questions ?? []) push("agent", q.question);
+    } else if (e?.type === "question_answer") {
+      if (e.cancelled) continue;
+      push("user", e.skip ? "Skipped these questions; continue with your best judgment." : e.note ?? Object.values<string[]>(e.answers ?? {}).map(a => a.join(", ")).join("\n"));
     } else if (e?.type === "assistant") {
       for (const original of e.message?.content ?? []) {
         const update = original.type === "tool_use" && updates.get(original.id);

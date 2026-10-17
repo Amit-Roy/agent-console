@@ -179,7 +179,7 @@ if (hello.providers.some((p: any) => p.id === "mock")) {
 
   // ---- steering, queued messages, context meter, noise, paged history
   const steerT = (await create({ provider: "mock", model: "echo", title: "steer" })).thread.id;
-  check("claude offers advisors (opus, fable); mock offers none", JSON.stringify(hello.providers.find((p: any) => p.id === "claude")?.advisors) === '["opus","fable"]' && hello.providers.find((p: any) => p.id === "mock")?.advisors.length === 0);
+  check("claude offers explicit advisor Off plus opus/fable; mock offers none", JSON.stringify(hello.providers.find((p: any) => p.id === "claude")?.advisors) === '["off","opus","fable"]' && hello.providers.find((p: any) => p.id === "mock")?.advisors.length === 0);
   check("providers advertise native steering", hello.providers.filter((p: any) => p.steer).map((p: any) => p.id).sort().join() === ["claude", "codex", "mock", "pi"].sort().join(), JSON.stringify(hello.providers.map((p: any) => [p.id, p.steer])));
   clear();
   ws.send(JSON.stringify({ t: "send", thread: steerT, text: "slow burn for steering" }));
