@@ -1,5 +1,5 @@
 import { constants, fstatSync, lstatSync, realpathSync, readSync, renameSync, unlinkSync } from "node:fs";
-import { open, realpath, lstat, opendir } from "node:fs/promises";
+import { open, realpath, lstat, opendir, readlink } from "node:fs/promises";
 import { randomBytes, createHash } from "node:crypto";
 import path from "node:path";
 import type { RequestHandler } from "express";
@@ -47,7 +47,8 @@ export function createAcodeBridge(lookup: Lookup, now: () => number = Date.now) 
   async function checked(grant: Grant, write = false) {
     if (grant.project) await checkedProject(grant.project);
     const resolved = await scopedPath(grant.cwd, grant.requested, grant.threadId);
-    if (resolved.target !== grant.target || resolved.candidate !== grant.candidate || (await lstat(resolved.candidate)).isSymbolicLink()) throw new ViewError(409, "File path has changed. Reopen the file.");
+    if (grant.project && await projectPath(grant.project, path.relative(grant.project.root, resolved.candidate)) !== grant.target) throw new ViewError(409, "File path has changed. Reopen the file.");
+    if (resolved.target !== grant.target || resolved.candidate !== grant.candidate) throw new ViewError(409, "File path has changed. Reopen the file.");
     const handle = await open(grant.target, (write ? constants.O_RDWR : constants.O_RDONLY) | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     try {
       const info = await handle.stat();
@@ -99,15 +100,31 @@ export function createAcodeBridge(lookup: Lookup, now: () => number = Date.now) 
     if (typeof requested !== "string" || requested.length > 8192 || requested.includes("\0") || path.isAbsolute(requested) || requested.split(/[\\/]/).includes("..") || (!directory && !requested)) throw new ViewError(400, "Choose a valid project path.");
     const candidate = path.resolve(grant.root, requested);
     if (!inside(grant.root, candidate) || sensitive(candidate) || candidate.split(path.sep).some(part => part.startsWith(".agent-console-edit-"))) throw new ViewError(403, "This path cannot be opened.");
-    // Reject every symlink component, including links that stay within the project.
-    let current = grant.root;
-    for (const part of path.relative(grant.root, candidate).split(path.sep).filter(Boolean)) {
-      current = path.join(current, part);
-      if (sensitive(current) || path.basename(current).startsWith(".agent-console-edit-")) throw new ViewError(403, "This path cannot be opened.");
-      if ((await lstat(current)).isSymbolicLink()) throw new ViewError(403, "Symbolic links cannot be opened.");
+    // Only file links are supported. Check every alias in the chain so neither
+    // credential names nor directory links can bypass the project boundary.
+    let target = candidate;
+    for (let hop = 0; hop < 40; hop++) {
+      if (!inside(grant.root, target)) throw new ViewError(403, "This file is outside the project.");
+      let current = grant.root;
+      const parts = path.relative(grant.root, target).split(path.sep).filter(Boolean);
+      let followed = false;
+      for (let index = 0; index < parts.length; index++) {
+        current = path.join(current, parts[index]);
+        if (sensitive(current) || path.basename(current).startsWith(".agent-console-edit-")) throw new ViewError(403, "This path cannot be opened.");
+        if ((await lstat(current)).isSymbolicLink()) {
+          if (directory || index !== parts.length - 1) throw new ViewError(403, "Directory symbolic links cannot be opened.");
+          target = path.resolve(path.dirname(current), await readlink(current));
+          followed = true;
+          break;
+        }
+      }
+      if (!followed) {
+        if (target !== candidate && !(await lstat(target)).isFile()) throw new ViewError(403, "Only file symbolic links can be opened.");
+        if (await realpath(candidate) !== target) throw new ViewError(409, "File path has changed. Reopen the file.");
+        return target;
+      }
     }
-    if (await realpath(candidate) !== candidate) throw new ViewError(403, "This path cannot be opened.");
-    return candidate;
+    throw new ViewError(403, "Symbolic link chain is too long.");
   }
   const tree = handler(async (req, res) => {
     const grant = await project(req);
@@ -130,9 +147,13 @@ export function createAcodeBridge(lookup: Lookup, now: () => number = Date.now) 
           const entry = await directory.read();
           if (!entry) break;
           offset++; scanned++;
-          if (entry.isSymbolicLink() || (!entry.isFile() && !entry.isDirectory())) continue;
+          if (!entry.isSymbolicLink() && !entry.isFile() && !entry.isDirectory()) continue;
           const absolute = path.join(target, entry.name);
           if (sensitive(absolute) || entry.name.startsWith(".agent-console-edit-")) continue;
+          if (entry.isSymbolicLink()) {
+            try { await projectPath(grant, path.relative(grant.root, absolute)); }
+            catch { continue; }
+          }
           entries.push({ name: entry.name, path: path.relative(grant.root, absolute), type: entry.isDirectory() ? "directory" : "file" });
         }
         if (offset < 100000 && (scanned === 1000 || entries.length === 200)) next = offset;
@@ -144,24 +165,32 @@ export function createAcodeBridge(lookup: Lookup, now: () => number = Date.now) 
   const openFile = handler(async (req, res) => {
     const projectGrant = await project(req);
     const target = await projectPath(projectGrant, req.body?.path);
+    const candidate = path.resolve(projectGrant.root, req.body.path);
     const info = await lstat(target);
     if (!info.isFile()) throw new ViewError(415, "Only regular text files can be edited.");
-    const grant: Grant = { project: projectGrant, cwd: projectGrant.root, requested: target, target, candidate: target, dev: info.dev, ino: info.ino, expiresAt: now() + SESSION_MS };
+    const grant: Grant = { project: projectGrant, cwd: projectGrant.root, requested: candidate, target, candidate, dev: info.dev, ino: info.ino, expiresAt: now() + SESSION_MS };
     const file = await checked(grant);
     try {
       await project(req);
       if (!inside(projectGrant.root, await realpath(`/proc/self/fd/${file.handle.fd}`))) throw new ViewError(403, "This file is outside the project.");
       prune(sessions); const session = token(); sessions.set(session, grant);
-      res.json({ token: session, expiresAt: grant.expiresAt, name: path.basename(target), path: target, content: file.content, revision: file.revision });
+      res.json({ token: session, expiresAt: grant.expiresAt, name: path.basename(candidate), path: candidate, content: file.content, revision: file.revision });
     } finally { await file.handle.close(); }
   });
   const create = handler(async (req, res) => {
     const scope = viewerScope(req.query, lookup);
     if (typeof req.query.path !== "string" || !req.query.path || req.query.path.includes("\0")) throw new ViewError(400, "Choose a valid file path.");
     const resolved = await scopedPath(scope.cwd, req.query.path, scope.threadId);
-    if ((await lstat(resolved.candidate)).isSymbolicLink()) throw new ViewError(403, "Open the original file to edit it.");
+    const workspace = await realpath(scope.cwd);
+    const isAlias = resolved.candidate !== resolved.target;
+    let aliasProject: Project | undefined;
+    if (isAlias) {
+      const info = await lstat(workspace);
+      aliasProject = { root: workspace, dev: info.dev, ino: info.ino, expiresAt: now() + SESSION_MS };
+      await projectPath(aliasProject, path.relative(workspace, resolved.candidate));
+    }
     const info = await lstat(resolved.target);
-    const grant: Grant = { cwd: scope.cwd, requested: req.query.path, threadId: scope.threadId, ...resolved, dev: info.dev, ino: info.ino, expiresAt: now() + TICKET_MS };
+    const grant: Grant = { project: aliasProject, cwd: scope.cwd, requested: req.query.path, threadId: scope.threadId, ...resolved, dev: info.dev, ino: info.ino, expiresAt: now() + TICKET_MS };
     const file = await checked(grant); await file.handle.close();
     prune(tickets); const ticket = token(); tickets.set(ticket, grant);
     res.json({ ticket, expiresAt: grant.expiresAt, endpoint: res.locals.acodeEndpoint });
@@ -174,11 +203,11 @@ export function createAcodeBridge(lookup: Lookup, now: () => number = Date.now) 
     prune(sessions); const session = token(); const expiresAt = now() + SESSION_MS;
     sessions.set(session, { ...grant, expiresAt });
     prune(projects); const projectToken = token(); const projectGrant = await projectRoot(grant); projects.set(projectToken, projectGrant);
-    res.json({ project: { token: projectToken, root: projectGrant.root, name: path.basename(projectGrant.root) }, token: session, expiresAt, name: path.basename(grant.target), path: grant.target, content: file.content, revision: file.revision });
+    res.json({ project: { token: projectToken, root: projectGrant.root, name: path.basename(projectGrant.root) }, token: session, expiresAt, name: path.basename(grant.candidate), path: grant.candidate, content: file.content, revision: file.revision });
   });
   const read = handler(async (req, res) => {
     const grant = session(req); const file = await checked(grant);
-    try { res.json({ name: path.basename(grant.target), path: grant.target, content: file.content, revision: file.revision }); }
+    try { res.json({ name: path.basename(grant.candidate), path: grant.candidate, content: file.content, revision: file.revision }); }
     finally { await file.handle.close(); }
   });
   const save = handler(async (req, res) => {
@@ -210,7 +239,7 @@ export function createAcodeBridge(lookup: Lookup, now: () => number = Date.now) 
         // From this check through rename, synchronous operations prevent other bridge
         // saves from interleaving. The pinned directory prevents parent-path swaps.
         const unchanged = (current: typeof original) => current.dev === original.dev && current.ino === original.ino && current.size === original.size && current.mtimeNs === original.mtimeNs && current.ctimeNs === original.ctimeNs && current.nlink === 1n;
-        if (resolved.target !== grant.target || resolved.candidate !== grant.candidate || realpathSync(directoryPath) !== path.dirname(grant.target) || realpathSync(grant.candidate) !== grant.target || lstatSync(grant.candidate).isSymbolicLink()) throw new ViewError(409, "File path has changed. Reopen the file.");
+        if (resolved.target !== grant.target || resolved.candidate !== grant.candidate || realpathSync(directoryPath) !== path.dirname(grant.target) || realpathSync(grant.candidate) !== grant.target) throw new ViewError(409, "File path has changed. Reopen the file.");
         const currentRevision = () => {
           const buffer = Buffer.alloc(MAX_VIEW_BYTES + 1);
           let length = 0;
