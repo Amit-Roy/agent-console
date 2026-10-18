@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { open, opendir, realpath, stat as statPath } from "node:fs/promises";
+import { lstat, open, opendir, readlink, realpath, stat as statPath } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import { performance } from "node:perf_hooks";
 import os from "node:os";
@@ -43,7 +43,25 @@ async function scopedPath(cwd: string, requested: string) {
   const lexicalInside = inside(path.resolve(cwd), candidate) || inside(root, candidate);
   const target = await realpath(candidate).catch(error => { if (lexicalInside) throw error; throw new ViewError(403, "This file is outside the thread folder or contains private credentials."); });
   if (!inside(root, target) || sensitive(target)) throw new ViewError(403, "This file is outside the thread folder or contains private credentials.");
-  return { root, target };
+  return { root, target, candidate };
+}
+
+// Link chain for a requested path (max 8 hops) so the viewer can show what a symlink points to.
+async function linkChain(root: string, candidate: string) {
+  const chain: { path: string; to: string; inside: boolean }[] = [];
+  let current = candidate;
+  for (let hop = 0; hop < 8; hop++) {
+    const info = await lstat(current).catch(() => undefined);
+    if (!info?.isSymbolicLink()) break;
+    const to = path.resolve(path.dirname(current), await readlink(current));
+    chain.push({ path: current, to, inside: inside(root, to) });
+    current = to;
+  }
+  return chain;
+}
+
+function fileMeta(stat: { mode: number; uid: number; mtimeMs: number; size: number; nlink: number }, chain: { path: string; to: string; inside: boolean }[]) {
+  return { size: stat.size, mode: (stat.mode & 0o777).toString(8).padStart(3, "0"), uid: stat.uid, mtime: Math.round(stat.mtimeMs), nlink: stat.nlink, symlink: chain.length ? chain : undefined };
 }
 
 async function openScoped(root: string, target: string, directory = false): Promise<FileHandle> {
@@ -68,10 +86,11 @@ function imageType(bytes: Buffer): string | null {
 }
 
 async function readProjectFile(cwd: string, requested: string, binary = false) {
-  const { root, target } = await scopedPath(cwd, requested);
+  const { root, target, candidate } = await scopedPath(cwd, requested);
   const handle = await openScoped(root, target);
   try {
     const stat = await handle.stat();
+    const meta = fileMeta(stat, await linkChain(root, candidate));
     if (!stat.isFile()) throw new ViewError(415, "Only regular text and image files can be viewed.");
     const head = Buffer.alloc(16);
     const peek = await handle.read(head, 0, head.length, 0);
@@ -80,7 +99,7 @@ async function readProjectFile(cwd: string, requested: string, binary = false) {
     if (stat.size > limit) throw new ViewError(413, `The file is too large to preview (maximum ${limit >> 20} MB).`);
     if (binary && !media_type) throw new ViewError(415, "Only PNG, JPEG, GIF and WebP images can be previewed.");
     // Metadata does not read the whole image; the authenticated image request does.
-    if (media_type && !binary) return { kind: "image" as const, root, path: target, name: path.basename(target), media_type, bytes: stat.size };
+    if (media_type && !binary) return { kind: "image" as const, root, path: target, name: path.basename(target), media_type, bytes: stat.size, meta };
     const buffer = Buffer.alloc(Math.min(stat.size + 1, limit + 1));
     let size = 0;
     while (size < buffer.length) {
@@ -90,13 +109,13 @@ async function readProjectFile(cwd: string, requested: string, binary = false) {
     }
     if (size > limit) throw new ViewError(413, `The file is too large to preview (maximum ${limit >> 20} MB).`);
     if (size > stat.size) throw new ViewError(409, "This file changed while opening. Open it again.");
-    if (media_type) return { kind: "image" as const, root, path: target, name: path.basename(target), media_type, bytes: size, data: buffer.subarray(0, size) };
+    if (media_type) return { kind: "image" as const, root, path: target, name: path.basename(target), media_type, bytes: size, meta, data: buffer.subarray(0, size) };
     let content: string;
     try { content = new TextDecoder("utf-8", { fatal: true }).decode(buffer.subarray(0, size)); }
     catch { throw new ViewError(415, "Only UTF-8 text files can be viewed."); }
     if (/[\u0000-\u0008\u000b\u000e-\u001f\u007f]/.test(content)) throw new ViewError(415, "Only text files can be viewed.");
     if (/-----BEGIN (?:[A-Z]+ )*PRIVATE KEY-----/.test(content)) throw new ViewError(403, "Private keys cannot be previewed.");
-    return { kind: "text" as const, root, path: target, name: path.basename(target), content, bytes: size };
+    return { kind: "text" as const, root, path: target, name: path.basename(target), content, bytes: size, meta };
   } finally { await handle.close(); }
 }
 
@@ -234,7 +253,7 @@ export function fileTree(lookup: Lookup): RequestHandler {
       const offset = rawCursor === undefined ? 0 : typeof rawCursor === "string" && /^\d{1,6}$/.test(rawCursor) ? Number(rawCursor) : -1;
       if (offset < 0 || offset > MAX_TREE_OFFSET) throw new ViewError(400, "Invalid folder cursor.");
       const handle = await openScoped(root, target, true);
-      const entries: { name: string; path: string; kind: "directory" | "file" }[] = [];
+      const entries: { name: string; path: string; kind: "directory" | "file"; link?: string }[] = [];
       let index = 0, done = false;
       try {
         const dir = await opendir(process.platform === "linux" ? `/proc/self/fd/${handle.fd}` : target, { bufferSize: 64 });
@@ -255,7 +274,7 @@ export function fileTree(lookup: Lookup): RequestHandler {
                 kind = target?.isDirectory() ? "directory" : target?.isFile() ? "file" : undefined;
               }
             }
-            if (kind) entries.push({ name: entry.name, path: child, kind });
+            if (kind) entries.push({ name: entry.name, path: child, kind, ...(entry.isSymbolicLink() ? { link: await readlink(child).catch(() => undefined) } : {}) });
           }
         } finally { await dir.close(); }
       } finally { await handle.close(); }
