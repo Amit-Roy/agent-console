@@ -45,26 +45,27 @@
   <symbol id="i-globe" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5"/><path d="M2.5 8h11M8 2.5c1.7 1.6 2.5 3.4 2.5 5.5S9.7 11.9 8 13.5C6.3 11.9 5.5 10.1 5.5 8S6.3 4.1 8 2.5z"/></symbol>
   <symbol id="i-folder" viewBox="0 0 16 16"><path d="M2 4.5a1 1 0 0 1 1-1h3l1.5 1.5H13a1 1 0 0 1 1 1v5.5a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1z"/></symbol>
   <symbol id="i-alert" viewBox="0 0 16 16"><path d="M8 2.75 14 13H2z"/><path d="M8 6.75v2.75M8 11.25h.01"/></symbol>
+  <symbol id="i-compose" viewBox="0 0 16 16"><path d="M7.5 2.75H4a1.5 1.5 0 0 0-1.5 1.5V12A1.5 1.5 0 0 0 4 13.5h7.75a1.5 1.5 0 0 0 1.5-1.5V8.5"/><path d="M11.75 2.25a1.24 1.24 0 0 1 1.75 1.75L8.5 9 6.5 9.5 7 7.5z"/></symbol>
+  <symbol id="i-bell" viewBox="0 0 16 16"><path d="M4.25 11.5V7.25a3.75 3.75 0 0 1 7.5 0v4.25l1 1.25H3.25zM6.5 13.75a1.6 1.6 0 0 0 3 0"/></symbol>
+  <symbol id="i-chart" viewBox="0 0 16 16"><path d="M3 13V8.5M8 13V3M13 13V6"/></symbol>
   <symbol id="i-wrap" viewBox="0 0 16 16"><path d="M2.5 4h11M2.5 12h4M2.5 8h8.5a2 2 0 0 1 0 4H9.5m1.25-1.5L9.25 12l1.5 1.5"/></symbol>
 </defs></svg>
 <div id="app">
   <aside id="side" aria-label="Threads">
     <div class="brand"><img src="/icon.svg" alt="" width="24" height="24"><span>Agent Console</span>
       <div class="side-actions" role="group" aria-label="Console shortcuts">
-        <a id="dash-link" class="btn sm icon ghost" href="/dashboard" title="Usage and savings dashboard" aria-label="Usage dashboard"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 13V8.5M8 13V3M13 13V6"/></svg></a>
-        <button id="reload" class="btn sm icon ghost" type="button" title="Reload this page (the server keeps running)" aria-label="Reload page"><svg class="ico" aria-hidden="true"><use href="#i-refresh"/></svg></button>
-        <button id="restart" class="btn sm icon ghost" type="button" title="Restart the server once every thread is idle, then reload this page" aria-label="Restart server"><svg class="ico" aria-hidden="true"><use href="#i-power"/></svg></button>
+        <button id="files" class="btn sm icon ghost" type="button" title="Browse ~/repos" aria-label="Files" aria-haspopup="dialog"><svg class="ico" aria-hidden="true"><use href="#i-folder"/></svg></button>
+        <button id="new" class="btn sm icon ghost" type="button" title="New thread" aria-label="New thread"><svg class="ico" aria-hidden="true"><use href="#i-compose"/></svg></button>
+        <button id="side-more" class="btn sm icon ghost" type="button" title="More" aria-label="More"><svg class="ico" aria-hidden="true"><use href="#i-more"/></svg></button>
       </div>
     </div>
-    <button id="new" class="btn block" type="button">
-      <svg class="ico" aria-hidden="true"><use href="#i-plus"/></svg><span>New thread</span>
-    </button>
-    <button id="files" class="btn block ghost" type="button" title="Browse ~/repos" aria-haspopup="dialog">
-      <svg class="ico" aria-hidden="true"><use href="#i-folder"/></svg><span>Files</span>
-    </button>
-    <button id="notifications" class="btn block ghost" type="button" aria-haspopup="dialog">
-      <svg class="ico" aria-hidden="true"><use href="#i-alert"/></svg><span>Notifications</span>
-    </button>
+    <!-- reached from the More menu; kept as elements so their handlers and live labels stay in one place -->
+    <div hidden>
+      <a id="dash-link" href="/dashboard">Usage dashboard</a>
+      <button id="notifications" type="button" aria-haspopup="dialog">Notifications</button>
+      <button id="reload" type="button">Reload page</button>
+      <button id="restart" type="button">Restart server</button>
+    </div>
     <div class="side-scroll">
       <h2 class="side-label">Threads</h2>
       <ul id="threads" class="thread-list" aria-label="Thread list"></ul>
