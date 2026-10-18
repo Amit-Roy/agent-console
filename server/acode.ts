@@ -6,7 +6,8 @@ import type { RequestHandler } from "express";
 import { MAX_VIEW_BYTES, ViewError, reachable, scopedPath, viewerScope, sensitive, type Lookup } from "./files.ts";
 
 const TICKET_MS = 60_000;
-const SESSION_MS = 8 * 60 * 60_000;
+// File and project grants have no practical time limit; process restart revokes them.
+const SESSION_EXPIRES_AT = Number.MAX_SAFE_INTEGER;
 const MAX_GRANTS = 1000;
 const token = () => randomBytes(32).toString("base64url");
 const revision = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
@@ -79,7 +80,7 @@ export function createAcodeBridge(lookup: Lookup, now: () => number = Date.now) 
     // instructions file must not narrow ~/repos to its backing brain repository.
     const root = inside(cwd, grant.target) ? cwd : path.dirname(grant.target);
     const info = await lstat(root);
-    return { root, dev: info.dev, ino: info.ino, expiresAt: now() + SESSION_MS };
+    return { root, dev: info.dev, ino: info.ino, expiresAt: SESSION_EXPIRES_AT };
   }
   async function project(req: Parameters<RequestHandler>[0]) {
     const match = /^Bearer ([A-Za-z0-9_-]{43})$/.exec(req.get("Authorization") || "");
@@ -168,7 +169,7 @@ export function createAcodeBridge(lookup: Lookup, now: () => number = Date.now) 
     const candidate = path.resolve(projectGrant.root, req.body.path);
     const info = await lstat(target);
     if (!info.isFile()) throw new ViewError(415, "Only regular text files can be edited.");
-    const grant: Grant = { project: projectGrant, cwd: projectGrant.root, requested: candidate, target, candidate, dev: info.dev, ino: info.ino, expiresAt: now() + SESSION_MS };
+    const grant: Grant = { project: projectGrant, cwd: projectGrant.root, requested: candidate, target, candidate, dev: info.dev, ino: info.ino, expiresAt: SESSION_EXPIRES_AT };
     const file = await checked(grant);
     try {
       await project(req);
@@ -186,7 +187,7 @@ export function createAcodeBridge(lookup: Lookup, now: () => number = Date.now) 
     let aliasProject: Project | undefined;
     if (isAlias) {
       const info = await lstat(workspace);
-      aliasProject = { root: workspace, dev: info.dev, ino: info.ino, expiresAt: now() + SESSION_MS };
+      aliasProject = { root: workspace, dev: info.dev, ino: info.ino, expiresAt: SESSION_EXPIRES_AT };
       await projectPath(aliasProject, path.relative(workspace, resolved.candidate));
     }
     const info = await lstat(resolved.target);
@@ -200,7 +201,7 @@ export function createAcodeBridge(lookup: Lookup, now: () => number = Date.now) 
     const grant = tickets.get(ticket); tickets.delete(ticket);
     if (!grant || grant.expiresAt <= now()) throw new ViewError(401, "Edit ticket expired. Reopen the file.");
     const file = await checked(grant); await file.handle.close();
-    prune(sessions); const session = token(); const expiresAt = now() + SESSION_MS;
+    prune(sessions); const session = token(); const expiresAt = SESSION_EXPIRES_AT;
     sessions.set(session, { ...grant, expiresAt });
     prune(projects); const projectToken = token(); const projectGrant = await projectRoot(grant); projects.set(projectToken, projectGrant);
     res.json({ project: { token: projectToken, root: projectGrant.root, name: path.basename(projectGrant.root) }, token: session, expiresAt, name: path.basename(grant.candidate), path: grant.candidate, content: file.content, revision: file.revision });
