@@ -22,6 +22,8 @@ export interface ThreadSpec {
   forkFrom?: string; // a forked thread's first run continues a copy of this session instead of starting fresh (adapters that can)
 }
 
+export type Settings = Pick<ThreadSpec, "mode" | "model" | "effort" | "advisor">;
+
 export interface ExitInfo {
   code: number | null;
   signal: string | null;
@@ -98,6 +100,10 @@ export interface Agent {
   // false means the caller must still deliver the note as an ordinary message. Throws when the question is no longer pending.
   answer?(id: string, reply: QuestionReply): boolean;
   abort(): void; // stop the current turn; the manager discards this agent and starts a fresh one on the next send
+  // Stop the current turn but keep the process for the next message. The harness ends the turn with a `result` event.
+  interrupt?(): void;
+  // Apply new thread settings to the idle process. false: unsupported, so the manager restarts it with new flags.
+  configure?(from: Settings, to: Settings): boolean;
   kill(): void;
 }
 

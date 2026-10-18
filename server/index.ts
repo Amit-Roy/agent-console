@@ -283,6 +283,9 @@ wss.on("connection", (ws) => {
           return reply({ t: "created", thread: threads.fork(m.thread, typeof m.provider === "string" ? m.provider : undefined, m.context === "recent") });
         case "abort":
           return threads.abort(m.thread);
+        case "warm":
+          if (typeof m.thread === "string") threads.warm(m.thread);
+          return;
         case "update": {
           return threads.update(m.thread, {
             mode: typeof m.mode === "string" ? m.mode : undefined,

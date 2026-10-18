@@ -194,6 +194,7 @@ export const claude: Provider = {
         : text;
       p.write(JSON.stringify({ type: "user", message: { role: "user", content } }));
     };
+    let requests = 0;
     return {
       get alive() {
         return p.alive();
@@ -204,6 +205,20 @@ export const claude: Provider = {
       // remaining commands and answered the new message within the same turn).
       steer: (text, images = []) => write(text, images),
       answer: (id, reply) => control.answer(id, reply),
+      // Verified on CLI 2.1.302: `interrupt` ends the turn with a zero-usage error result and the process stays up;
+      // set_model, set_permission_mode (except into bypass) and apply_flag_settings {effortLevel} change the next request, no model call.
+      interrupt: () => { control.cancelAll(); p.write(JSON.stringify({ type: "control_request", request_id: `int-${++requests}`, request: { subtype: "interrupt" } })); },
+      configure: (from, to) => {
+        const level = (e?: string) => !!e && e !== "default" && e !== "ultracode"; // default/ultracode change flags, not a level
+        // the CLI refuses to enter bypassPermissions unless launched in it ("bypass_not_launched"): restart for that
+        if (to.mode === "bypassPermissions" && from.mode !== to.mode) return false;
+        if (from.advisor !== to.advisor || (from.effort !== to.effort && !(level(from.effort) && level(to.effort)))) return false;
+        const ask = (request: object) => p.write(JSON.stringify({ type: "control_request", request_id: `cfg-${++requests}`, request }));
+        if (from.model !== to.model) ask({ subtype: "set_model", model: to.model });
+        if (from.mode !== to.mode) ask({ subtype: "set_permission_mode", mode: to.mode });
+        if (from.effort !== to.effort) ask({ subtype: "apply_flag_settings", settings: { effortLevel: to.effort } });
+        return true;
+      },
       abort: () => { control.cancelAll(); p.abort(); },
       kill: () => { control.cancelAll(); p.kill(); },
     };

@@ -4,7 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "node test/codex-async-questions.ts && node test/async-questions.ts && node test/questions.ts && node test/brain.ts && node test/provider-questions.ts && node test/latency.ts && node test/turn-timing.ts && node test/queue-edit.ts && node test/commands.ts && node test/usage.ts && node test/history.ts && node test/history-wire.ts && node test/codex-settings.ts && node test/codex-web.ts && node test/providers.ts && node test/e2e.ts",
+    "test": "node test/codex-async-questions.ts && node test/async-questions.ts && node test/questions.ts && node test/brain.ts && node test/prewarm.ts && node test/provider-questions.ts && node test/latency.ts && node test/turn-timing.ts && node test/queue-edit.ts && node test/commands.ts && node test/usage.ts && node test/history.ts && node test/history-wire.ts && node test/codex-settings.ts && node test/codex-web.ts && node test/providers.ts && node test/e2e.ts",
     "start": "node server/index.ts",
     "icons": "node scripts/make-icons.mjs",
     "test:questions": "node test/codex-async-questions.ts && node test/async-questions.ts && node test/questions.ts && node test/provider-questions.ts",
