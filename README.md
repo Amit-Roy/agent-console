@@ -15,6 +15,7 @@ Anthropic's terms restrict third-party products that offer claude.ai login, so d
     bin/agent-console password     # sign-in password (generated once, ~/.config/agent-console/password)
 
 ## Features
+- [Automatic GitHub triage](docs/github-triage.md) labels issues and pull requests by effort and priority through a signed webhook, with Pi small-model classification and subscription fallbacks.
 - Type `/` in the composer for a command/skill menu (list comes from `claude`'s own `commands_changed` event, cached in `~/.config/agent-console/commands.json`). Skills run headless when a message starts with `/name`.
 - Several agents behind one UI: Claude Code, Pi (any model Pi knows: OpenRouter, OpenAI, Google, local), Codex. Pick one per thread; see Providers.
 - Threads (each its own agent session, resumable), streaming output, markdown, tool cards with diffs
