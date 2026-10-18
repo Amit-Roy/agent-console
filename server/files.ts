@@ -13,7 +13,7 @@ export const TREE_PAGE_SIZE = 200;
 const TREE_SCAN_SIZE = 1000;
 const MAX_TREE_OFFSET = 100_000;
 
-class ViewError extends Error {
+export class ViewError extends Error {
   status: number;
   constructor(status: number, message: string) { super(message); this.status = status; }
 }
@@ -37,7 +37,7 @@ function sensitive(file: string): boolean {
 
 // Beyond the thread folder the viewer reaches the rest of home and temp (screenshots, notes);
 // system paths such as /proc stay closed because they can expose the server's environment.
-function reachable(root: string, file: string): boolean {
+export function reachable(root: string, file: string): boolean {
   return !sensitive(file) && [root, os.homedir(), os.tmpdir(), "/tmp"].some(dir => inside(dir, file));
 }
 
@@ -63,7 +63,7 @@ async function resolveRelative(cwd: string, requested: string, threadId?: string
   return hits.length === 1 ? hits[0] : direct;
 }
 
-async function scopedPath(cwd: string, requested: string, threadId?: string) {
+export async function scopedPath(cwd: string, requested: string, threadId?: string) {
   const root = await realpath(cwd);
   const expanded = requested.startsWith("~/") ? path.join(os.homedir(), requested.slice(2)) : requested;
   const candidate = path.isAbsolute(expanded) || expanded.split("/").includes("..") ? path.resolve(cwd, expanded) : await resolveRelative(cwd, expanded, threadId);
@@ -165,11 +165,11 @@ function timing(res: Parameters<RequestHandler>[1], start: number, kind: "file" 
   return ms;
 }
 
-type Lookup = (id: string) => { cwd: string; id?: string } | undefined;
+export type Lookup = (id: string) => { cwd: string; id?: string } | undefined;
 
 // These routes mount after authentication. Every request resolves scope afresh;
 // image URLs stay within the selected thread's real cwd or the fixed repos root.
-function viewerScope(query: Record<string, unknown>, lookup: Lookup) {
+export function viewerScope(query: Record<string, unknown>, lookup: Lookup) {
   if (query.scope !== undefined) {
     if (query.scope !== "repos" || query.thread !== undefined) throw new ViewError(400, "Choose a valid file scope.");
     return { cwd: path.join(os.homedir(), "repos"), threadId: undefined as string | undefined, params: { scope: "repos" } };

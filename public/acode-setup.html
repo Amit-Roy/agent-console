@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Acode editing · Agent Console</title>
+  <link rel="stylesheet" href="/style.css">
+  <style>
+    body { display: block; overflow: auto; }
+    main { max-width: 38rem; margin: 8vh auto; padding: 1.5rem; }
+    h1 { font-size: 1.6rem; }
+    li { margin: 1rem 0; line-height: 1.6; }
+    p { line-height: 1.6; }
+  </style>
+  <script src="/acode-setup.js" defer></script>
+</head>
+<body>
+  <main>
+    <h1>Edit files in Acode</h1>
+    <p>Install the bridge once. No SSH, SFTP, passwords, or server settings to enter.</p>
+    <ol>
+      <li>Install or update <a href="https://acode.app/" target="_blank" rel="noopener noreferrer">Acode</a>.</li>
+      <li><a id="download" aria-disabled="true">Download the Agent Console plugin ZIP</a>.</li>
+      <li>In Acode, open <strong>Plugins → + → Local</strong> and select that ZIP.</li>
+      <li>Return to Agent Console, open a text file, and tap <strong>Edit</strong>.</li>
+    </ol>
+    <p id="status" role="status">Loading plugin download…</p>
+    <p>Save in Acode to update the workspace file. If another tool changes the file, saving stops with a conflict and keeps your edits open.</p>
+    <p>Save before closing Acode. Bridge tabs are not restored after an app restart.</p>
+    <a href="/">Back to Agent Console</a>
+  </main>
+</body>
+</html>

@@ -19,6 +19,8 @@ import { contextAllocation } from "./context-allocation.ts";
 import { headroom } from "./headroom.ts";
 import { LatencyStore } from "./latency.ts";
 import { fileMedia, fileTree, fileViewer } from "./files.ts";
+import { createAcodeBridge } from "./acode.ts";
+import { acodeConfig, acodePublicApp } from "./acode-http.ts";
 import { DATA_DIR } from "./auth.ts";
 import { isId, MAX_FILE_BYTES, removeUpload, SAFE_NAME, saveUpload, sniffImageFile, UPLOAD_DIR } from "./uploads.ts";
 
@@ -40,6 +42,8 @@ const broadcast = (msg: unknown) => {
   }
 };
 const threads = new Threads(broadcast);
+const acode = createAcodeBridge(id => threads.get(id));
+const acodeSettings = acodeConfig();
 let latency: LatencyStore | undefined;
 try { latency = new LatencyStore(path.join(DATA_DIR, "latency.sqlite")); }
 catch { console.warn("Local latency storage is unavailable."); }
@@ -155,6 +159,17 @@ app.get("/api/turn-latency", (req, res) => {
   catch { res.status(503).json({ available: false }); }
 });
 app.get("/api/file", fileViewer(id => threads.get(id)));
+app.post("/api/acode/edit", sameOrigin, (req, res, next) => {
+  if (!acodeSettings) return void res.status(503).json({ error: "Acode editing is not configured on this server." });
+  // Never derive the capability endpoint from a client-controlled Host header.
+  res.locals.acodeEndpoint = acodeSettings.endpoint;
+  next();
+}, acode.create);
+app.get("/acode-setup", (_req, res) => res.sendFile(path.join(ROOT, "public", "acode-setup.html")));
+app.get("/api/acode/setup", (_req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ available: !!acodeSettings, plugin: acodeSettings ? `${acodeSettings.endpoint}/acode-plugin.zip` : null });
+});
 app.get("/api/file-image", fileViewer(id => threads.get(id), true));
 app.get("/api/file-media", fileMedia(id => threads.get(id)));
 app.get("/api/files", fileTree(id => threads.get(id)));
@@ -353,6 +368,11 @@ wss.on("connection", (ws) => {
 
 void refreshPiModels();
 await headroom.start();
+
+if (acodeSettings) {
+  const bridgeServer = acodePublicApp(acode, ROOT).listen(acodeSettings.port, HOST);
+  bridgeServer.on("error", () => { console.error("Acode bridge could not listen on its configured port."); process.exit(1); });
+}
 
 server.listen(PORT, HOST, () => {
   if (PID_FILE) fs.writeFileSync(PID_FILE, String(process.pid)); // only the process that holds the port may claim it
