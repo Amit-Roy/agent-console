@@ -571,6 +571,7 @@ function openThread(id) {
   }
   state.revalidating = false;
   state.loadingEarlier = false;
+  state.earlierChain = 0;
   state.deferredRefresh = false;
   state.waitingLive = [];
   state.snapshot = null;
@@ -815,12 +816,19 @@ async function showEarlier(m) {
   const anchor = btn?.nextElementSibling || chat.firstElementChild;
   const anchorTop = anchor?.getBoundingClientRect().top;
   const fromBottom = chat.scrollHeight - chat.scrollTop;
+  const heightBefore = chat.scrollHeight;
   if (btn) btn.after(...host.childNodes);
   else chat.prepend(...host.childNodes);
   state.start = m.start;
+  // Pages are counted in events, and a run of tool/sub-agent events can fold into existing rows and add nothing visible:
+  // keep fetching (button stays "Loading…") until a screenful appears, so one tap always shows something.
+  const fetchMore = m.start > 0 && btn && chat.scrollHeight - heightBefore < chat.clientHeight && (state.earlierChain = (state.earlierChain || 0) + 1) < 20;
+  if (!fetchMore) state.earlierChain = 0;
   if (m.start > 0 && btn) {
-    btn.disabled = false;
-    btn.textContent = "Show earlier messages";
+    if (!fetchMore) {
+      btn.disabled = false;
+      btn.textContent = "Show earlier messages";
+    }
   } else btn?.remove();
   chat.scrollTop = chat.scrollHeight - fromBottom;
   if (anchor && anchorTop != null) holdHistoryAnchor(anchor, anchorTop);
@@ -837,6 +845,7 @@ async function showEarlier(m) {
   for (const e of state.pendingLive.splice(0)) onEvent(e, true);
   latency.record({ kind: "page", thread: m.thread, total_ms: performance.now() - pageAt, wait_ms: m.receivedAt - pageAt, server_ms: m.server_ms, render_ms: performance.now() - m.receivedAt, events: m.events.length, bytes: m.bytes, wire_bytes: m.wire_bytes, prepare_ms: Math.max(0, m.receivedAt - m.roundtrip_ms - (state.measurement?.at || 0)), roundtrip_ms: m.roundtrip_ms, decode_ms: m.decode_ms, hidden: state.measurement?.hidden });
   state.measurement = null;
+  if (fetchMore) return requestEarlier(m.thread);
   if (state.deferredRefresh && nearBottom()) refreshConversation();
 }
 
