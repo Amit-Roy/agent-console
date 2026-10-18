@@ -71,8 +71,15 @@ try {
   const readState = () => JSON.parse(fs.readFileSync(stateFile, "utf8"));
   assert.equal(readState().devices.length, 1);
   assert.equal(readState().devices[0].origin, origin);
+  assert.equal(readState().devices[0].silent, false);
+  assert.equal((await request("POST", { ...subscription, silent: "true" })).status, 400);
+  assert.equal((await request("POST", { ...subscription, silent: true })).status, 200);
+  assert.equal(readState().devices[0].silent, true, "Silent mode is saved for background deliveries.");
   assert.equal((await request("POST", subscription)).status, 200);
   assert.equal(readState().devices.length, 1, "Repeated subscription updates the same device.");
+  assert.equal(readState().devices[0].silent, true, "Old clients preserve the saved sound preference.");
+  assert.equal((await request("POST", { ...subscription, silent: false })).status, 200);
+  assert.equal(readState().devices[0].silent, false, "Sound defaults can be restored.");
   assert.equal((await request("DELETE", {})).status, 400);
   assert.equal((await request("DELETE", { endpoint: subscription.endpoint })).status, 200);
   assert.deepEqual(readState().devices, []);

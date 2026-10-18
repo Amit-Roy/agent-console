@@ -16,6 +16,7 @@ self.addEventListener("push", (event) => {
     body: payload.body || "Open the thread for details.",
     tag: payload.tag || `thread-${payload.thread}`,
     icon: "/icon.svg",
+    silent: payload.silent === true,
     data: { url: url.href },
   }));
 });
