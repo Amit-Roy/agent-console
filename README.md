@@ -41,7 +41,8 @@ Anthropic's terms restrict third-party products that offer claude.ai login, so d
 - Codex keeps an app-server connection open so Enter steers the active native turn (`turn/steer` with its turn ID); Alt+Enter explicitly queues.
   A steer is shown as delivered only after acknowledgement. A rejection is visible and falls back to the next message.
 - Background telemetry/error reporting/update checks are disabled for agent children. RTK runs locally via Codex/Claude hooks and the Pi extension, with telemetry blocked.
-  Headroom runs as a loopback-only proxy child of the server (`server/headroom.ts`, port 8790, `AGENT_CONSOLE_HEADROOM=0` disables, beacon/telemetry off) and Claude is pointed at it with `ANTHROPIC_BASE_URL` only while it answers health checks, so a dead proxy never breaks a turn.
+  Headroom is **off by default** after a resource incident. `AGENT_CONSOLE_HEADROOM=1` explicitly opts into the conservative loopback proxy (`server/headroom.ts`, port 8790, beacon/telemetry off). New Claude processes use it only after a health check; an existing proxied turn cannot transparently switch to a direct connection if the proxy fails.
+  Opt-in uses bounded compression/server concurrency, low process priority, resource monitoring, and private metadata-only diagnostics. See [incident findings and policy](docs/headroom-incident-2026-10-18.md). `AGENT_CONSOLE_HEADROOM=0` explicitly keeps it disabled.
   Codex (ChatGPT sign-in) and Pi (OpenRouter) use hosts the proxy cannot serve, so they rely on RTK alone. Its MCP server stays off.
 - Title/tool-label helpers use **Nemotron 3 Super 120B direct from NVIDIA** (thinking off), falling back to the same model on OpenRouter's free tier. Haiku and Codex Luna are not used. Errors and malformed replies trigger a 45 s cooldown.
   `AGENT_CONSOLE_LABEL_NVIDIA_MODEL` overrides the model. Needs `NVIDIA_API_KEY` in `~/.config/agent-console/env`. These helper calls do not replace the thread's selected agent/model.

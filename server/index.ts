@@ -305,10 +305,13 @@ function buildId() {
 }
 const BUILD = buildId();
 
+let shuttingDown = false;
 for (const sig of ["SIGINT", "SIGTERM"] as const) {
-  process.on(sig, () => {
+  process.on(sig, async () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     threads.shutdown();
-    headroom.stop();
+    await headroom.stop();
     latency?.close();
     process.exit(0);
   });

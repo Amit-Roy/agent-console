@@ -111,6 +111,16 @@ export function claudeConsoleSettingsArgs(advisor?: string): string[] {
   return ["--settings", JSON.stringify({ idleCompaction: false }), ...args];
 }
 
+// A nested console can inherit its parent's local proxy URL. Never keep that
+// managed URL when this console has disabled the proxy or cannot reach it.
+export function claudeRoutingEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const routed = { ...env };
+  if (routed.ANTHROPIC_BASE_URL?.replace(/\/+$/, "") === headroom.state().url) delete routed.ANTHROPIC_BASE_URL;
+  const proxy = headroom.url();
+  if (proxy && !routed.ANTHROPIC_BASE_URL) routed.ANTHROPIC_BASE_URL = proxy;
+  return routed;
+}
+
 export const claude: Provider = {
   id: "claude",
   label: "Claude Code",
@@ -142,10 +152,8 @@ export const claude: Provider = {
     fs.mkdirSync(threadDir(t.id), { recursive: true, mode: 0o700 });
     if (t.sessionId) args.push("--resume", t.sessionId);
     else if (t.forkFrom) args.push("--resume", t.forkFrom, "--fork-session"); // a forked thread: continue a copy of the parent session
-    const env = { ...process.env };
+    const env = claudeRoutingEnv(process.env);
     for (const k of SCRUBBED_ENV) delete env[k];
-    const proxy = headroom.url();
-    if (proxy && !env.ANTHROPIC_BASE_URL) env.ANTHROPIC_BASE_URL = proxy; // compress context via Headroom while it is up
     const control = claudeControl((msg) => p.write(JSON.stringify(msg)), ctx.event, t.mode);
     const p = spawnLines("claude", "claude", args, { cwd: t.cwd, env }, {
       ...ctx,
