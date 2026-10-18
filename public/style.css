@@ -205,11 +205,7 @@ main{position:relative;flex:1;min-width:0;display:flex;flex-direction:column;
 .brand{display:flex;align-items:center;gap:var(--sp-2);padding:0 0 var(--sp-3) var(--sp-2);min-height:var(--ctl-h)}
 .brand img{width:1.5rem;height:1.5rem;border-radius:var(--r-xs)}
 .brand span{flex:1;min-width:0;font:var(--fw-semi) var(--f-md);letter-spacing:var(--ls-md);color:var(--t1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-/* New thread: a quiet tonal row, not a loud accent slab; the accent lives in the plus */
-#new{margin:0 0 var(--sp-2);justify-content:flex-start;padding:0 var(--sp-3);background:transparent;color:var(--t1);box-shadow:inset 0 0 0 1px var(--edge)}
-#new:hover{background:var(--hover)}
 #new .ico{color:var(--accent)}
-#files{flex:none;margin:0 0 var(--sp-2);justify-content:flex-start;padding:0 var(--sp-3);color:var(--t2)}
 .side-label{padding:var(--sp-2) var(--sp-3) var(--sp-1);font:var(--fw-med) var(--f-xs);letter-spacing:.04em;text-transform:uppercase;color:var(--t3)}
 /* the working list and the archive scroll together; the usage block stays pinned below */
 .side-scroll{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:var(--s3) transparent;padding-bottom:var(--sp-2)}
@@ -255,6 +251,14 @@ li.sel .dot{background:var(--press)}
 
 .usage{margin:0 var(--sp-1);padding:var(--sp-3) var(--sp-2) calc(var(--sp-3) + env(safe-area-inset-bottom));border-top:1px solid var(--edge);font:var(--fw-reg) var(--f-xs);letter-spacing:var(--ls-xs);color:var(--t3);display:flex;flex-direction:column;gap:var(--sp-2)}
 .usage:empty{display:none}
+/* collapsed usage: one tappable line (provider + window meters); details open below */
+.usage-sum{display:flex;align-items:center;gap:var(--sp-3);width:100%;min-height:var(--item-h);margin:calc(var(--sp-2) * -1) 0;padding:0;border:0;background:none;color:var(--t2);font:inherit;font-variant-numeric:tabular-nums;cursor:pointer;text-align:left;-webkit-tap-highlight-color:transparent}
+.usage-sum b{font-weight:var(--fw-med);color:var(--t1)}
+.usage-sum .ico{margin-left:auto;width:.75rem;height:.75rem;color:var(--t3);transition:transform var(--dur-1) var(--ease)}
+.usage-sum[aria-expanded=true] .ico{transform:rotate(90deg)}
+.usage-sum:hover b{color:var(--t1)}.usage-sum:focus-visible{outline-offset:2px}
+.usage-body{margin-top:var(--sp-3)}
+.usage-body[hidden]{display:none}
 .usage .u{display:grid;grid-template-columns:2.75rem 1fr 2.25rem;align-items:center;gap:var(--sp-2)}
 .usage .bar{height:.25rem;border-radius:var(--r-full);background:var(--s3);overflow:hidden}
 .usage .bar>i{display:block;height:100%;background:var(--accent);border-radius:inherit}
