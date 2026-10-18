@@ -38,8 +38,10 @@ async function scopedPath(cwd: string, requested: string) {
   const root = await realpath(cwd);
   const expanded = requested.startsWith("~/") ? path.join(os.homedir(), requested.slice(2)) : requested;
   const candidate = path.resolve(cwd, expanded);
-  if ((!inside(path.resolve(cwd), candidate) && !inside(root, candidate)) || sensitive(candidate)) throw new ViewError(403, "This file is outside the thread folder or contains private credentials.");
-  const target = await realpath(candidate);
+  if (sensitive(candidate)) throw new ViewError(403, "This file is outside the thread folder or contains private credentials.");
+  // A lexically outside link (~/.claude/CLAUDE.md) is fine when its real target is inside the root.
+  const lexicalInside = inside(path.resolve(cwd), candidate) || inside(root, candidate);
+  const target = await realpath(candidate).catch(error => { if (lexicalInside) throw error; throw new ViewError(403, "This file is outside the thread folder or contains private credentials."); });
   if (!inside(root, target) || sensitive(target)) throw new ViewError(403, "This file is outside the thread folder or contains private credentials.");
   return { root, target };
 }

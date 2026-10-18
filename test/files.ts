@@ -82,6 +82,9 @@ try {
   assert.equal((await file("escape")).status, 403, "symlink cannot escape cwd");
   fs.symlinkSync(path.join(cwd, "hello.ts"), path.join(cwd, "inside"));
   assert.equal((await file("inside")).status, 200, "in-project symlink is safe");
+  fs.mkdirSync(path.join(temp, "home"));
+  fs.symlinkSync(path.join(cwd, "hello.ts"), path.join(temp, "home", "link.ts"));
+  assert.equal((await file(path.join(temp, "home", "link.ts"))).status, 200, "outside-path link resolving inside cwd is viewable");
   for (const name of [".env", ".env.local", "credentials.json", "auth.json", "id_ed25519", "secret", "private.pem"]) {
     put(name, "private fixture"); assert.equal((await file(name)).status, 403, `refuse ${name}`);
   }
