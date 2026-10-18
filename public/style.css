@@ -451,6 +451,9 @@ details[open]>summary .chev{transform:rotate(90deg)}
 .card .body pre+pre{margin-top:var(--sp-2)}
 /* open card: the row wraps to show the whole label (said once, not repeated in the body) */
 .card[open]>summary .sum{white-space:normal;overflow-wrap:anywhere;padding-block:var(--sp-1)}
+/* an open agent card puts its task on a line of its own: beside the name and status chip it squeezes to a letter per line */
+.card.agent[open]>summary{flex-wrap:wrap;row-gap:0}
+.card.agent[open]>summary .sum{order:1;flex-basis:100%;overflow-wrap:break-word;padding:0 0 var(--sp-1) calc(var(--ico) + var(--sp-2))}
 .card .body:has(.tool-cmd,.tool-out){display:flex;flex-direction:column;gap:var(--sp-2)}
 .card .body:has(.tool-cmd,.tool-out) pre+pre{margin-top:0}
 /* Bash command: "$ cmd" with a hanging indent, copy at the trailing edge */
@@ -483,6 +486,7 @@ details[open]>summary .chev{transform:rotate(90deg)}
 @media (max-width:640px){.card.agent .stats{display:none}}
 .task-chip{display:inline-flex;align-items:center;gap:var(--sp-1);flex:none;padding:0 var(--sp-2);height:1.25rem;border-radius:var(--r-full);background:var(--accent-tint);color:var(--accent);font:var(--fw-med) var(--f-xs);letter-spacing:var(--ls-xs);white-space:nowrap}
 .task-chip[hidden]{display:none}
+.card.agent>summary:has(.task-chip:not([hidden])) .st{display:none} /* the chip already says how the subagent is doing */
 .task-chip.done{background:transparent;color:var(--t2)}
 .task-chip.err{background:var(--bad-tint);color:var(--bad)}
 .task-chip .spin{width:.625rem;height:.625rem;border-width:1.5px}
@@ -490,7 +494,8 @@ details[open]>summary .chev{transform:rotate(90deg)}
 .card.agent .now{padding:var(--sp-1) var(--sp-3) var(--sp-2);color:var(--t2);font:var(--fw-reg) var(--f-sm);letter-spacing:var(--ls-sm)}
 .card.agent .now:empty{display:none}
 .sub-prompt{margin:0 0 var(--sp-2)}
-.sub-prompt>summary{cursor:pointer;color:var(--t2);font:var(--fw-med) var(--f-sm);letter-spacing:var(--ls-sm);padding:var(--sp-1) var(--sp-3);list-style:none}
+.sub-prompt>summary{cursor:pointer;display:flex;align-items:center;gap:var(--sp-1);min-height:2rem;color:var(--t2);font:var(--fw-med) var(--f-sm);letter-spacing:var(--ls-sm);padding:var(--sp-1) var(--sp-3);list-style:none}
+.sub-prompt>summary .chev{margin-left:0;width:.875rem;height:.875rem}
 .sub-prompt>summary::-webkit-details-marker{display:none}
 .sub-prompt>summary:hover{color:var(--t1)}
 .sub-log{list-style:none;margin:0 0 var(--sp-2) var(--sp-4);padding:0 0 0 var(--sp-3);border-left:2px solid var(--s3)}
