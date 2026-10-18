@@ -88,6 +88,12 @@ try {
   assert.equal((await file("pub/uniq.js")).status, 200, "relative path found in the single subfolder holding it");
   fs.mkdirSync(path.join(cwd, "projy", "pub"), { recursive: true }); fs.writeFileSync(path.join(cwd, "projy", "pub", "uniq.js"), "2");
   assert.equal((await file("pub/uniq.js")).status, 404, "ambiguous relative path stays missing");
+  // Thread log says the agent cd'd into projy, so the ambiguous path now resolves there.
+  fs.mkdirSync(path.join(data, "logs"), { recursive: true });
+  fs.writeFileSync(path.join(data, "logs", `${id}.jsonl`), "{}\n" + JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", name: "Bash", input: { command: "cd projy && ls" } }] } }) + "\n");
+  const hinted = await file("pub/uniq.js");
+  assert.equal(hinted.status, 200, "cd in tool calls disambiguates relative path");
+  assert.equal((await hinted.json()).path, path.join(cwd, "projy", "pub", "uniq.js"));
   fs.mkdirSync(path.join(temp, "home"));
   fs.symlinkSync(path.join(cwd, "hello.ts"), path.join(temp, "home", "link.ts"));
   assert.equal((await file(path.join(temp, "home", "link.ts"))).status, 200, "outside-path link resolving inside cwd is viewable");

@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { contextDirs } from "./cwd-hints.ts";
 import { access, lstat, open, readdir, opendir, readlink, realpath, stat as statPath } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import { performance } from "node:perf_hooks";
@@ -44,9 +45,15 @@ const DENIED = "This file is outside your home folder or contains private creden
 
 // Agents often cite paths relative to a subproject they cd'd into (public/render.js while the thread cwd is ~/repos).
 // When a relative path is missing under cwd, accept it if exactly one immediate subfolder holds it.
-async function resolveRelative(cwd: string, requested: string) {
+async function resolveRelative(cwd: string, requested: string, threadId?: string) {
   const direct = path.resolve(cwd, requested);
-  if (await access(direct).then(() => true, () => false)) return direct;
+  const exists = (file: string) => access(file).then(() => true, () => false);
+  if (await exists(direct)) return direct;
+  // Folders the thread's tool calls worked in (cd targets, edited files), newest first.
+  if (threadId) for (const dir of contextDirs(threadId, cwd)) {
+    const child = path.join(dir, requested);
+    if (!sensitive(child) && await exists(child)) return child;
+  }
   const hits: string[] = [];
   for (const entry of await readdir(cwd, { withFileTypes: true }).catch(() => [])) {
     if (!entry.isDirectory() || entry.name.startsWith(".") || entry.name === "node_modules") continue;
@@ -56,10 +63,10 @@ async function resolveRelative(cwd: string, requested: string) {
   return hits.length === 1 ? hits[0] : direct;
 }
 
-async function scopedPath(cwd: string, requested: string) {
+async function scopedPath(cwd: string, requested: string, threadId?: string) {
   const root = await realpath(cwd);
   const expanded = requested.startsWith("~/") ? path.join(os.homedir(), requested.slice(2)) : requested;
-  const candidate = path.isAbsolute(expanded) || expanded.split("/").includes("..") ? path.resolve(cwd, expanded) : await resolveRelative(cwd, expanded);
+  const candidate = path.isAbsolute(expanded) || expanded.split("/").includes("..") ? path.resolve(cwd, expanded) : await resolveRelative(cwd, expanded, threadId);
   if (!reachable(path.resolve(cwd), candidate) && !reachable(root, candidate)) throw new ViewError(403, DENIED);
   const target = await realpath(candidate);
   if (!reachable(root, target)) throw new ViewError(403, DENIED);
@@ -105,8 +112,8 @@ function imageType(bytes: Buffer): string | null {
   return null;
 }
 
-async function readProjectFile(cwd: string, requested: string, binary = false) {
-  const { root, target, candidate } = await scopedPath(cwd, requested);
+async function readProjectFile(cwd: string, requested: string, binary = false, threadId?: string) {
+  const { root, target, candidate } = await scopedPath(cwd, requested, threadId);
   const handle = await openScoped(root, target);
   try {
     const stat = await handle.stat();
@@ -157,18 +164,18 @@ function timing(res: Parameters<RequestHandler>[1], start: number, kind: "file" 
   return ms;
 }
 
-type Lookup = (id: string) => { cwd: string } | undefined;
+type Lookup = (id: string) => { cwd: string; id?: string } | undefined;
 
 // These routes mount after authentication. Every request resolves scope afresh;
 // image URLs stay within the selected thread's real cwd or the fixed repos root.
 function viewerScope(query: Record<string, unknown>, lookup: Lookup) {
   if (query.scope !== undefined) {
     if (query.scope !== "repos" || query.thread !== undefined) throw new ViewError(400, "Choose a valid file scope.");
-    return { cwd: path.join(os.homedir(), "repos"), params: { scope: "repos" } };
+    return { cwd: path.join(os.homedir(), "repos"), threadId: undefined as string | undefined, params: { scope: "repos" } };
   }
   const thread = typeof query.thread === "string" ? lookup(query.thread) : undefined;
   if (!thread) throw new ViewError(404, "Unknown thread.");
-  return { cwd: thread.cwd, params: { thread: String(query.thread) } };
+  return { cwd: thread.cwd, threadId: thread.id, params: { thread: String(query.thread) } };
 }
 
 export function fileViewer(lookup: Lookup, binary = false): RequestHandler {
@@ -178,7 +185,7 @@ export function fileViewer(lookup: Lookup, binary = false): RequestHandler {
     res.setHeader("X-Content-Type-Options", "nosniff");
     try {
       const scope = viewerScope(req.query, lookup);
-      const file = await readProjectFile(scope.cwd, requestPath(req.query.path), binary);
+      const file = await readProjectFile(scope.cwd, requestPath(req.query.path), binary, scope.threadId);
       const read_ms = timing(res, start, "file");
       if (binary && file.kind === "image" && file.data) {
         res.setHeader("Content-Type", file.media_type!);
@@ -225,7 +232,7 @@ export function fileMedia(lookup: Lookup): RequestHandler {
     let handle: FileHandle | undefined;
     try {
       const scope = viewerScope(req.query, lookup);
-      const { root, target } = await scopedPath(scope.cwd, requestPath(req.query.path));
+      const { root, target } = await scopedPath(scope.cwd, requestPath(req.query.path), scope.threadId);
       const ext = path.extname(target).toLowerCase();
       const type = VIDEO_TYPES[ext];
       if (!type) throw new ViewError(415, "Only MP4, WebM and MOV video can be played.");
@@ -268,7 +275,7 @@ export function fileTree(lookup: Lookup): RequestHandler {
     res.setHeader("Cache-Control", "no-store");
     try {
       const scope = viewerScope(req.query, lookup);
-      const { root, target } = await scopedPath(scope.cwd, requestPath(req.query.path ?? "."));
+      const { root, target } = await scopedPath(scope.cwd, requestPath(req.query.path ?? "."), scope.threadId);
       const rawCursor = req.query.cursor;
       const offset = rawCursor === undefined ? 0 : typeof rawCursor === "string" && /^\d{1,6}$/.test(rawCursor) ? Number(rawCursor) : -1;
       if (offset < 0 || offset > MAX_TREE_OFFSET) throw new ViewError(400, "Invalid folder cursor.");
