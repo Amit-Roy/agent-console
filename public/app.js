@@ -1617,6 +1617,7 @@ function onEvent(e, live) {
       addNote(e.text, e.status === "failed" ? "errtxt" : "note command-note");
       break;
     case "user_input": {
+      if (e.questionAnswer) break; // The inline answered card already shows this async reply.
       if (e.command) break; // /compact is shown as its progress card, not as a message bubble
       if (e.auto === "brain") {
         push(el("div", "msg note", "Reminder sent: save anything durable to the shared brain."), live);

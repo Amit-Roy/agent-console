@@ -24,7 +24,7 @@ export function turnsOf(events: any[], opts: { tools?: boolean } = {}): Turn[] {
     if (text.trim()) out.push({ role, text, ...(tool ? { tool: true } : {}) });
   };
   for (const e of events) {
-    if (e?.type === "user_input" && !e.auto) {
+    if (e?.type === "user_input" && !e.auto && !e.questionAnswer) {
       const names = (e.attachments ?? []).map((a: any) => a.name);
       push("user", [e.text ?? "", ...(names.length ? [`(attached: ${names.join(", ")})`] : [])].filter(Boolean).join("\n"));
     } else if (e?.type === "question") {
