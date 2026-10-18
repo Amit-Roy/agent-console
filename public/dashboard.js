@@ -335,7 +335,7 @@ function render(cur, prev) {
     kpi("Tokens processed", cs.knownTokens ? fmt(cs.tokens) : "—", `${cs.knownTokens}/${cs.turns} turns with token counts · ${fmt(cs.cache)} verified cache reads included`, false),
     kpi("Estimated API cost", cs.knownCost ? usd(cs.cost) : "—", `${cs.knownCost}/${cs.turns} turns priced${cs.knownCost < cs.turns ? " · partial coverage" : ""} · public list prices`, false),
     kpi("RTK output reduction", fmt(sv.rtk), "Command output; all local CLI activity", true),
-    kpi("Headroom input reduction", fmt(sv.hr), "Claude proxy activity; separate scope", true),
+    kpi("Headroom input reduction", fmt(sv.hr), "Claude + Codex proxy activity; separate scope", true),
   );
 
   // usage chart with a metric switch
@@ -412,7 +412,7 @@ function render(cur, prev) {
   for (const [k, v] of [["Commands tracked", fmt(rtkCmd)], ["Captured output before filtering", fmt(rtkIn)], ["Tokens saved", fmt(sv.rtk)], ["Reduction", rtkIn ? pct((sv.rtk / rtkIn) * 100) : "–"]]) dl1.append(el("dt", "", k), el("dd", "", v));
   rtkP.append(dl1, el("p", "note", "All local RTK activity. Filtering commands compress output; proxy/bypass only track it."));
   const hrP = el("section", "panel src");
-  const hh = el("div", "head"); const ht = el("div"); ht.append(el("h2", "", "Headroom"), el("p", "sub", "Compresses what Claude sends to the API")); hh.append(ht, el("span", `chip-s ${hr?.running ? "ok" : "off"}`, !hr?.enabled ? "Disabled" : hr.running ? "Running" : "Offline")); hrP.append(hh);
+  const hh = el("div", "head"); const ht = el("div"); ht.append(el("h2", "", "Headroom"), el("p", "sub", "Compresses Claude and Codex model input")); hh.append(ht, el("span", `chip-s ${hr?.running ? "ok" : "off"}`, !hr?.enabled ? "Disabled" : hr.running ? "Running" : "Offline")); hrP.append(hh);
   const hd = hr?.daily || [];
   const sum = (k) => hd.reduce((s, d) => s + (d[k] || 0), 0);
   const dl2 = el("dl");
