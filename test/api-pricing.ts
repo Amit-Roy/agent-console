@@ -14,6 +14,8 @@ assert.equal(apiPricedTurn({ ...original, models: [{ ...model, model: "claude-op
 assert.equal(apiPricedTurn({ ...original, models: [{ ...model, model: "claude-sonnet-5-5" }] }).cost, 49.7);
 assert.equal(apiPricedTurn({ ...original, models: [{ ...model, model: "claude-haiku-5-5" }] }).cost, 2.495);
 assert.equal(apiPricedTurn({ accounting: 2, provider: "codex", models: [{ model: "gpt-6.1-sol", role: "agent", fresh: 1_000_000, cacheRead: 2_000_000, output: 3_000_000 }] }).cost, 32.2);
+assert.equal(apiPricedTurn({ accounting: 2, provider: "codex", models: [{ model: "gpt-5.5-codex", role: "agent", fresh: 1_000_000, cacheRead: 2_000_000, output: 3_000_000 }] }).cost, 32.2);
+assert.equal(apiPricedTurn({ accounting: 2, provider: "codex", models: [{ model: "gpt-6.1", role: "agent", fresh: 1_000_000, cacheRead: 2_000_000, output: 3_000_000 }] }).cost, 32.2);
 assert.equal(apiPricedTurn({ ...original, models: [{ ...model, model: "gpt-6-astra" }] }).cost, 249.5);
 assert.equal(apiPricedTurn({ ...original, models: [{ ...model, model: "gpt-6-luna-2026-10-17" }] }).cost, 2.495);
 const partial = apiPricedTurn({ ...original, models: [model, { ...model, model: "default" }] });

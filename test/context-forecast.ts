@@ -33,11 +33,13 @@ assert.equal(limited.points.at(-1)!.added, 4000, "never project through native w
 assert.equal(forecastContext({ ...scenario, context: NaN }), null);
 assert.equal(forecastContext({ ...scenario, context: 0 }), null);
 assert.equal(forecastContext({ ...scenario, rate: [2, NaN, 2, 10] })!.priced, false);
-const rates = { "gpt-6.1-sol": scenario.rate, "claude-sonnet-5-5": scenario.rate };
+const rates = { "gpt-5.5": scenario.rate, "gpt-6.1": scenario.rate, "gpt-6.1-sol": scenario.rate, "claude-sonnet-5-5": scenario.rate };
 assert.deepEqual(forecastModel({ model: "default", resolvedModel: "gpt-6.1-sol" }, rates).rate, scenario.rate);
 assert.equal(forecastModel({ model: "unknown", resolvedModel: "gpt-6.1-sol" }, rates).rate, undefined);
 assert.equal(forecastModel({ provider: "codex", model: "default", lastRun: { model: "gpt-6.1-sol" } }, rates).rate, undefined, "CLI default cannot inherit a previous model's price");
 assert.equal(forecastModel({ model: "gpt-6.1-sol-2026-10-17" }, rates).rate, scenario.rate);
+assert.equal(forecastModel({ model: "gpt-5.5-codex" }, rates).rate, scenario.rate);
+assert.equal(forecastModel({ model: "gpt-6.1", resolvedModel: "gpt-6.1-codex" }, rates).rate, scenario.rate);
 assert.equal(forecastModel({ provider: "claude", model: "sonnet", lastRun: { model: "claude-sonnet-5-5" } }, rates).rate, scenario.rate);
 assert.equal(forecastModel({ provider: "claude", model: "opus", lastRun: { model: "claude-sonnet-5-5" } }, rates).rate, undefined);
 console.log("PASS context forecast: warm/stale cache, compaction overhead, delayed resume, gaps, break-even, unknown prices and window limits");

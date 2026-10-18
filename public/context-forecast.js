@@ -90,14 +90,35 @@ export function forecastModel(thread, rates = {}) {
   const selected = thread.model;
   const observed = thread.provider === "codex" ? thread.resolvedModel
     : thread.resolvedModel || thread.lastRun?.timing?.model || thread.lastRun?.model;
+  const canonical = (model) => {
+    if (typeof model !== "string") return undefined;
+    const lower = model.trim().toLowerCase();
+    const digits = new Set();
+    const keys = [lower, lower.replace(/[:_\s]+/g, "-"), lower.replace(/\./g, "-"), lower.replace(/-(?:\d{8}|\d{4}-\d{2}-\d{2})$/, "")];
+    for (const key of keys) {
+      digits.add(key);
+      if (key.startsWith("gpt-")) {
+        digits.add(key.replace(/-(\d)(?=-)/g, ".$1"));
+        digits.add(key.replace(/-(\d+)(?=-|$)/g, ".$1"));
+      }
+    }
+    for (const key of digits) {
+      if (rates[key]) return rates[key];
+    }
+    const family = lower.match(/^gpt[-_.:]*([56])(?:[-_.:]*(\d+))?(?:[-_.:]*(?:codex|mini|nano|pro|sol|astra|luna|max))*$/);
+    if (family) {
+      const key = family[1] === "5" ? "gpt-5.5" : "gpt-6.1";
+      if (rates[key]) return rates[key];
+    }
+    return undefined;
+  };
   // Never use the previous model's price after a selection change.
   const candidates = [selected];
   if (selected === "default" || (thread.provider === "claude" && ["sonnet", "opus", "haiku"].includes(selected)
       && observed?.startsWith(`claude-${selected}-`))) candidates.push(observed);
   for (const model of candidates) {
-    if (typeof model !== "string") continue;
-    const canonical = model.replace(/-(?:\d{8}|\d{4}-\d{2}-\d{2})$/, "");
-    if (rates[canonical]) return { model, rate: rates[canonical] };
+    const rate = canonical(model);
+    if (rate) return { model, rate };
   }
   return { model: selected === "default" ? observed || selected : selected, rate: undefined };
 }
