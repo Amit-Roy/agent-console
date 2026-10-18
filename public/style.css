@@ -508,6 +508,8 @@ details[open]>summary .chev{transform:rotate(90deg)}
 
 /* opening a thread: bars shaped like a conversation, plus a spinner so it never looks stuck */
 .loading{display:flex;align-items:center;justify-content:center;gap:var(--sp-2);padding:var(--sp-4) 0 var(--sp-2);color:var(--t2);font:var(--fw-med) var(--f-sm);letter-spacing:var(--ls-sm)}
+/* floats over the conversation: taking layout space would shift the list under the reader's finger when it appears and again when it goes */
+#conversation-updating{position:absolute;top:calc(3.5rem + env(safe-area-inset-top) + var(--sp-2));left:50%;transform:translateX(-50%);z-index:2;padding:var(--sp-1) var(--sp-3);border-radius:999px;background:var(--s1);pointer-events:none}
 .skeleton{display:flex;flex-direction:column;gap:var(--sp-6);padding-top:var(--sp-4)}
 .sk{display:flex;flex-direction:column;gap:var(--sp-2)}
 .sk.u{align-items:flex-end}

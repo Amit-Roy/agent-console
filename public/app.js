@@ -596,7 +596,7 @@ function openThread(id) {
     state.cards = cached.cards; state.subs = cached.subs; state.subTools = cached.subTools; state.start = cached.start; state.latestStart = cached.latestStart; state.end = cached.end; state.live = cached.live; state.compact = cached.compact;
     $("chat").replaceChildren(...cached.nodes);
     questions.ensure(id);
-    $("chat").querySelector(":scope > .earlier")?.removeAttribute("disabled");
+    earlierIdle();
     $("chat").scrollTop = cached.scroll;
     state.lastScrollTop = $("chat").scrollTop;
     state.stick = nearBottom();
@@ -690,10 +690,7 @@ async function showHistory(m) {
   state.latestStart = state.start;
   state.end = m.end;
   const more = state.start > 0 ? earlierButton() : null;
-  if (more) {
-    more.disabled = true; // not before the newest page is drawn: two renders at once would fight over the scroll position
-    if (!refreshing) $("chat").append(more);
-  }
+  if (more && !refreshing) $("chat").append(more); // tappable while the newest page draws: requestEarlier waits, so two renders never fight over the scroll position
   const host = document.createDocumentFragment();
   if (refreshing && more) host.append(more);
   state.into = host;
@@ -723,7 +720,6 @@ async function showHistory(m) {
   if (cur()?.operation !== "compact") settleCompact("interrupted");
   $("chat").setAttribute("aria-busy", "false");
   state.lastScrollTop = $("chat").scrollTop;
-  if (more) more.disabled = false;
   for (const e of state.pendingLive.splice(0)) onEvent(e, true);
   historyDone(m, refreshing, cachedMetrics);
 }
@@ -744,7 +740,7 @@ function showDelta(m) {
   if (follow) scrollDown(true);
   state.end = m.end;
   if (cur()?.operation !== "compact") settleCompact("interrupted");
-  chat.querySelector(":scope > .earlier")?.removeAttribute("disabled");
+  earlierIdle();
   state.lastScrollTop = chat.scrollTop;
   historyDone(m, true, cachedMetrics);
 }
@@ -768,24 +764,38 @@ function historyDone(m, refreshing, cachedMetrics) {
 function earlierButton() {
   const b = el("button", "btn earlier", "Show earlier messages");
   b.type = "button";
-  const load = (token) => {
-    if (token !== state.renderToken || !b.isConnected) return;
-    // A refresh or page draw in flight would swallow the click, so wait for it instead of ignoring it.
-    if (state.revalidating && !state.deferredRefresh || state.rendering || state.loadingEarlier) return void setTimeout(load, 100, token);
-    state.pageAt = performance.now();
-    state.measurement = { thread: state.current, at: state.pageAt, hidden: document.hidden };
-    state.requestSentAt = performance.now();
-    // The socket may be down (phone woke up, reconnecting): a dropped request would leave the button dead, so retry until it is sent.
-    if (!send({ t: "open", thread: state.current, before: state.start, request: state.request, small: SMALL_PAGES })) return void setTimeout(load, 300, token);
-    state.loadingEarlier = true;
-  };
   b.onclick = () => {
     if (b.disabled) return;
-    b.disabled = true;
-    b.textContent = "Loading…";
-    load(state.renderToken);
+    requestEarlier(state.current);
   };
+  if (state.earlierWanted === state.current) earlierLoading(b); // a tap queued before a redraw replaced the button
   return b;
+}
+function earlierIdle() {
+  const b = $("chat").querySelector(":scope > .earlier");
+  if (!b || state.loadingEarlier || state.earlierWanted === state.current) return;
+  b.disabled = false;
+  b.textContent = "Show earlier messages";
+}
+function earlierLoading(b) {
+  if (!b) return;
+  b.disabled = true;
+  b.textContent = "Loading…";
+}
+// A tap is kept per thread, not per button or draw: a refresh redraw replaces the button mid-wait and must not swallow it.
+function requestEarlier(thread) {
+  if (thread !== state.current) return void (state.earlierWanted = null);
+  state.earlierWanted = thread;
+  earlierLoading($("chat").querySelector(":scope > .earlier"));
+  // A refresh or page draw in flight would swallow the click, so wait for it instead of ignoring it.
+  if (state.revalidating && !state.deferredRefresh || state.rendering || state.loadingEarlier) return void setTimeout(requestEarlier, 100, thread);
+  state.pageAt = performance.now();
+  state.measurement = { thread, at: state.pageAt, hidden: document.hidden };
+  state.requestSentAt = performance.now();
+  // The socket may be down (phone woke up, reconnecting): a dropped request would leave the button dead, so retry until it is sent.
+  if (!send({ t: "open", thread, before: state.start, request: state.request, small: SMALL_PAGES })) return void setTimeout(requestEarlier, 300, thread);
+  state.earlierWanted = null;
+  state.loadingEarlier = true;
 }
 // Older events are drawn off-screen, then slid in above what is there with the scroll position held, so the page does not jump.
 async function showEarlier(m) {
