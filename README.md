@@ -206,3 +206,11 @@ The viewer's Performance control shows recent timings for module loading, file/i
 ## Lean context
 
 Claude threads start with about 19k tokens of fixed context. Measured (haiku, trivial prompt): MCP servers ~3.5k, skills + slash-command lists ~6.6k, core prompt and tools ~8k. Threads now load only `codegraph` by default (`AGENT_CONSOLE_MCP=name,name`, or `all` for everything), cutting ~18%. Skills are the next biggest item; `--disable-slash-commands` would save ~6.6k but removes the `/` skill menu.
+
+## Notifications
+
+Open **Notifications** in the sidebar and choose **Enable notifications**. Allow the browser permission prompt. This device receives browser push alerts when a thread finishes, fails, or needs input, even when the app is closed. Clicking an alert opens its thread. Use **Disable notifications** on each device to stop its alerts.
+
+Push requires HTTPS or localhost and a browser with Push API support. On iPhone and iPad, use the installed Home Screen app. Delivery depends on browser and operating system notification settings. Reset alerts are deferred.
+
+The server generates VAPID keys automatically and stores keys and device subscriptions in `notifications.json` under its data directory, with mode `0600`. Preserve this file across restarts and deployments. Expired subscriptions are removed automatically. Notification previews contain only the thread title and status, never conversation text. Push uses the maintained [web-push library](https://github.com/web-push-libs/web-push).
