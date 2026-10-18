@@ -1,0 +1,100 @@
+// Isolated browser checks: provider messages are intercepted; no provider turns run.
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { spawn } from "node:child_process";
+import { chromium } from "playwright";
+const data = fs.mkdtempSync(path.join(os.tmpdir(), "ac-context-ui-"));
+const root = process.env.APP_ROOT || process.cwd();
+const port = process.env.TEST_PORT || "7074", base = `http://127.0.0.1:${port}`;
+fs.mkdirSync(path.join(data, "uploads"));
+const now = Date.now();
+const fixture = { id: "forecast-codex", provider: "codex", model: "gpt-6.1-sol", title: "Forecast fixture", cwd: root, mode: "bypassPermissions", effort: "medium", status: "idle", cost: 0, createdAt: now, updatedAt: now, sessionId: "scratch-only" };
+fs.writeFileSync(path.join(data, "threads.json"), JSON.stringify([fixture]));
+process.env.AGENT_CONSOLE_DATA = data;
+const { makeToken } = await import("../server/auth.ts");
+const server = spawn(process.execPath, ["server/index.ts"], { cwd: root, env: { ...process.env, PORT: port, AGENT_CONSOLE_RUN: path.join(data, "run"), AGENT_CONSOLE_MOCK: "1", AGENT_CONSOLE_HEADROOM: "0", AGENT_CONSOLE_WARM_MAX: "0", AGENT_CONSOLE_IDLE_COMPACT_CODEX_TTL_MS: "300000" }, stdio: "ignore" });
+let browser;
+try {
+  await new Promise<void>((resolve, reject) => {
+    const deadline = setTimeout(() => { clearInterval(timer); reject(Error("Scratch startup timeout")); }, 15000);
+    const timer = setInterval(async () => { try { if ((await fetch(base)).status < 500) { clearTimeout(deadline); clearInterval(timer); resolve(); } } catch {} }, 100);
+  });
+  browser = await chromium.launch();
+  for (const width of [1280, 390]) {
+    const context = await browser.newContext({ viewport: { width, height: 900 }, colorScheme: "dark" });
+    await context.addCookies([{ name: "ac_session", value: makeToken(), url: base }]);
+    await context.addInitScript(() => localStorage.setItem("ac_thread", "forecast-codex"));
+    const page = await context.newPage(), errors: string[] = [], sent: any[] = [];
+    page.on("pageerror", e => errors.push(e.message));
+    let client: any, current: any;
+    await page.routeWebSocket(/\/ws$/, socket => {
+      client = socket;
+      const upstream = socket.connectToServer();
+      socket.onMessage(raw => { const m = JSON.parse(String(raw)); if (["compact", "update"].includes(m.t)) sent.push(m); else upstream.send(raw); });
+      upstream.onMessage(raw => {
+        const m = JSON.parse(String(raw));
+        if (m.t === "hello") {
+          current = { ...m.threads[0], ...fixture, context: { used: 100000, max: 272000, source: "test" }, lastProviderActivityAt: Date.now() - 60000, idleCompactionTtlMs: 300000, idleCompaction: true };
+          m.threads = [current];
+        }
+        socket.send(JSON.stringify(m));
+      });
+    });
+    await page.goto(base, { waitUntil: "domcontentloaded", timeout: 15000 }); 
+    await page.locator("#usage-ctx-info").waitFor({ state: "attached" });
+    if (width === 390) await page.locator("#menu").click();
+    const open = async () => { await page.locator("#usage .u-ctx").click(); await page.waitForFunction(() => !!document.querySelector(".context-forecast-summary")?.textContent); };
+    const change = async (label: string, value: string) => { await page.getByLabel(label, { exact: true }).fill(value); await page.getByLabel(label, { exact: true }).dispatchEvent("change"); };
+    await open();
+    const dialog = page.getByRole("dialog");
+    fs.mkdirSync(path.join(root, "test-output"), { recursive: true });
+    await page.screenshot({ timeout: 10000, animations: "disabled", path: path.join(root, `test-output/context-${width}.png`) });
+    assert.match(await dialog.innerText(), /Cache estimated warm at resume/);
+    assert.match(await page.locator(".context-forecast-summary").innerText(), /continue \$/);
+    assert.equal(await page.locator("canvas").evaluate((el: any) => (window as any).Chart.getChart(el).data.datasets.length), 2);
+    const warm = await page.locator(".context-forecast-summary").innerText();
+    await change("Resume in (minutes)", "10");
+    assert.match(await dialog.innerText(), /Cache estimated stale at resume/);
+    assert.notEqual(await page.locator(".context-forecast-summary").innerText(), warm);
+    await change("Gap per request (minutes)", "10");
+    await change("Cache lifetime estimate (minutes)", "0");
+    assert.match(await dialog.innerText(), /No cache assumed/);
+    await dialog.getByRole("combobox").selectOption("tokens");
+    assert.match(await page.locator("canvas").getAttribute("aria-label") || "", /Processed tokens/);
+    await page.getByText("Forecast data and assumptions", { exact: true }).click();
+    assert.ok(await dialog.locator("table tr").count() > 2);
+    assert.equal(await dialog.evaluate(e => e.scrollWidth > e.clientWidth + 1), false);
+    await page.screenshot({ timeout: 10000, animations: "disabled", path: `/tmp/context-economics-${width}.png` });
+    await page.keyboard.press("Escape");
+    await dialog.waitFor({ state: "detached" });
+    assert.equal(await page.locator("#usage .u-ctx").evaluate(e => e === document.activeElement), true);
+    assert.equal(await page.locator("#usage-ctx-info").isVisible(), true, "Escape keeps the sidebar open");
+    await page.locator("#usage-ctx-info").click();
+    await page.getByRole("button", { name: "Disable automatic compaction", exact: true }).click();
+    assert.deepEqual(sent.pop(), { t: "update", thread: fixture.id, idleCompaction: false });
+    await open();
+    await page.getByRole("button", { name: "Compact now", exact: true }).click();
+    assert.deepEqual(sent.pop(), { t: "compact", thread: fixture.id });
+    current = { ...current, waiting: true };
+    client.send(JSON.stringify({ t: "thread", thread: current }));
+    await open();
+    assert.equal(await page.getByRole("button", { name: "Compact now", exact: true }).isDisabled(), true);
+    await page.getByRole("button", { name: "Close context forecast" }).click();
+    current = { ...current, waiting: false, model: "unknown-price-model" };
+    client.send(JSON.stringify({ t: "thread", thread: current }));
+    await open();
+    assert.match(await page.locator(".context-forecast-summary").innerText(), /showing tokens only/);
+    await page.keyboard.press("Escape");
+    current = { ...current, context: null };
+    client.send(JSON.stringify({ t: "thread", thread: current }));
+    await page.locator("#usage-ctx-info").click();
+    await page.getByText("Context size is not reported yet.", { exact: false }).waitFor();
+    await page.keyboard.press("Escape");
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+    assert.deepEqual(errors, []);
+    console.log(`PASS ${width}px graph paths, staleness controls, tokens, table, actions, unknown model/context, focus, overflow`);
+    await context.close();
+  }
+} catch (error) { console.error(error); throw error; } finally { await browser?.close(); await new Promise<void>(resolve => { if (server.exitCode != null) resolve(); else { server.once("exit", () => resolve()); server.kill(); } }); fs.rmSync(data, { recursive: true, force: true, maxRetries: 3 }); }

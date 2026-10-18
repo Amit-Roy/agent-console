@@ -37,12 +37,13 @@ try {
     assert.match(await page.locator("#usage").innerText(), /Allowance/);
     await page.getByRole("tab", { name: "Codex", exact: true }).click(); const green = await color();
     const info = page.locator("#usage-ctx-info");
-    assert.equal(await info.getAttribute("aria-expanded"), "false");
-    assert.doesNotMatch(await page.locator("#usage").innerText(), /\d+k of [\d.]+[kM] tokens/i, "context details start collapsed");
+    assert.equal(await info.getAttribute("aria-haspopup"), "dialog");
     await info.click();
-    assert.equal(await info.getAttribute("aria-expanded"), "true");
-    assert.match(await page.locator("#usage").innerText(), /\d+k of [\d.]+[kM] tokens/i);
-    assert.doesNotMatch(await page.locator("#usage").innerText(), /5\.7M/);
+    const forecast = page.getByRole("dialog");
+    await forecast.waitFor();
+    assert.match(await forecast.innerText(), /Context: continue or compact\?/);
+    await page.keyboard.press("Escape");
+    await forecast.waitFor({ state: "detached" });
     const tabNode = await page.locator("#usage-tab-codex").elementHandle();
     const refreshThread = hello.threads.find((t: any) => t.provider === "codex");
     client.send(JSON.stringify({ t: "thread", thread: { ...refreshThread, title: refreshThread.title + " usage refresh" } }));
