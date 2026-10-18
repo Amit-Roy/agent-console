@@ -27,7 +27,7 @@ export interface Thread {
   provider: string;
   title: string;
   autoTitle?: boolean; // still carries the folder-name default: the first message renames it (cleared by a manual rename)
-  autoNamed?: boolean; // the current title was written by the title helper, so it may be refreshed (cleared by a manual rename)
+  titleLocked?: boolean; // the user chose this title (at creation or by renaming): the title helper never rewrites it. Threads from before this flag count as unlocked
   prompts?: number; // user prompts sent so far (not auto nudges); every RETITLE_EVERY-th refreshes an auto-written title
   recent?: string[]; // text of the last user prompts, media-free and clipped: what the title helper reads
   cwd: string;
@@ -327,6 +327,7 @@ export class Threads {
       provider: prov.id,
       title: opts.title?.trim() || path.basename(opts.cwd) || "thread",
       autoTitle: !opts.title?.trim(),
+      ...(opts.title?.trim() ? { titleLocked: true } : {}),
       cwd: opts.cwd,
       mode,
       model,
@@ -380,7 +381,7 @@ export class Threads {
     if (patch.title) {
       t.title = patch.title.slice(0, 80);
       t.autoTitle = false;
-      t.autoNamed = false; // a name the user chose is never rewritten
+      t.titleLocked = true;
     }
     if (patch.mode || patch.model || patch.effort || patch.advisor) {
       const live = this.live.get(id), after = { mode: t.mode, model: t.model, effort: t.effort, advisor: t.advisor };
@@ -835,7 +836,7 @@ export class Threads {
   }
 
   // Record a user prompt for naming. The first message with substance names the thread; after that every RETITLE_EVERY-th prompt
-  // refreshes a title the helper wrote. Media is not part of `text`, so an image-only message names nothing.
+  // refreshes any title the user did not choose. Media is not part of `text`, so an image-only message names nothing.
   private notePrompt(t: Thread, text: string) {
     const clean = titleText(text);
     if (clean) t.recent = [...(t.recent ?? []), clean].slice(-MAX_MESSAGES);
@@ -844,7 +845,7 @@ export class Threads {
     if (t.autoTitle && clean.split(" ").length >= 3) {
       t.autoTitle = false; // one first-name attempt per thread, whatever the outcome
       void this.retitle(t);
-    } else if (t.autoNamed && t.prompts % RETITLE_EVERY === 0) void this.retitle(t);
+    } else if (!t.autoTitle && !t.titleLocked && t.prompts % RETITLE_EVERY === 0) void this.retitle(t);
   }
 
   private whileRunning(t: Thread, text: string, opts: { attachments?: unknown; mode?: "steer" | "queue"; questionAnswer?: true }) {
@@ -973,7 +974,6 @@ export class Threads {
     const title = await suggestTitle(t.recent ?? []).catch(() => undefined);
     if (!title || !this.threads.has(t.id) || t.title !== original) return; // deleted, or the user renamed it meanwhile
     t.title = title;
-    t.autoNamed = true;
     this.touch(t);
   }
 
