@@ -146,7 +146,7 @@ function needSignIn() {
   banner("Coder sign-in expired.", { label: "Sign in again", run: signInAgain });
 }
 function signInAgain() {
-  try { if ($("input").value) sessionStorage.setItem("ac_draft", $("input").value); } catch {}
+  saveDraft();
   location.reload();
 }
 async function apiFetch(url, opts = {}) {
@@ -267,12 +267,15 @@ function handle(m) {
     case "removed":
       state.threads.delete(m.thread);
       views.delete(m.thread);
+      writeDraft(m.thread, "");
       if (pending.length && pending[0].thread === m.thread) {
         pending.length = 0; // the server already deleted that thread's uploads
         renderThumbs();
       }
       if (state.current === m.thread) {
         state.current = null;
+        $("input").value = "";
+        sizeInput();
         clearChat();
         renderHead();
         const first = [...state.threads.values()][0];
@@ -623,7 +626,37 @@ function setNav(open) {
   $("menu").setAttribute("aria-expanded", String(open));
 }
 
+// Write on every edit: mobile app termination need not fire pagehide or beforeunload.
+const drafts = new Map();
+function writeDraft(id, text) {
+  if (!id) return;
+  drafts.set(id, text);
+  try {
+    if (text) localStorage.setItem(`ac_draft:${id}`, text);
+    else localStorage.removeItem(`ac_draft:${id}`);
+  } catch {} // Keep thread switching usable when browser storage is unavailable.
+}
+function saveDraft() {
+  writeDraft(state.current, $("input").value);
+}
+function restoreDraft(id) {
+  let text = drafts.get(id) || "";
+  try { text = localStorage.getItem(`ac_draft:${id}`) ?? text; } catch {}
+  try {
+    const legacy = sessionStorage.getItem("ac_draft");
+    if (legacy && !text) { text = legacy; writeDraft(id, text); }
+    sessionStorage.removeItem("ac_draft");
+  } catch {}
+  $("input").value = text;
+  sizeInput();
+  closeSlash();
+}
+addEventListener("pagehide", saveDraft);
+document.addEventListener("visibilitychange", () => { if (document.hidden) saveDraft(); });
+
 function openThread(id) {
+  const switching = state.current !== id;
+  if (switching) saveDraft();
   if (state.measurement) latency.record({ kind: "cancelled", thread: state.measurement.thread, total_ms: performance.now() - state.measurement.at, hidden: state.measurement.hidden });
   state.measurement = null;
   releaseHistoryAnchor();
@@ -648,6 +681,7 @@ function openThread(id) {
   state.request = (state.request || 0) + 1;
   if (pending.length && pending[0].thread !== id) clearPending(); // attachments belong to the thread they were uploaded to
   state.current = id;
+  if (switching) restoreDraft(id);
   state.usageTab = state.threads.get(id)?.provider || "claude";
   try { localStorage.setItem("ac_thread", id); } catch {}
   state.stick = true;
@@ -2032,13 +2066,15 @@ async function submit(mode) {
   if (!box.value.trim() && !pending.length) return;
   submitting = true;
   const tapAt = performance.now();
+  const thread = state.current;
   try {
     await Promise.all(pending.map((p) => p.ready)); // uploads still in flight; failed ones remove themselves
+    if (state.current !== thread) return; // Upload completion must not submit another thread's draft.
     const text = box.value.trim();
     if (/^\/(model|effort)$/i.test(text)) {
       if (text.toLowerCase() === "/effort" && $("effort").hidden) { toast("This agent does not expose effort settings."); return; }
       if (cur()?.status === "running") { toast("Stop the running operation before changing settings."); return; }
-      box.value = ""; closeSlash();
+      box.value = ""; saveDraft(); closeSlash();
       menus[text.slice(1).toLowerCase()].open();
       return;
     }
@@ -2049,6 +2085,7 @@ async function submit(mode) {
     const startsTurn = !mode && cur()?.status !== "running";
     if (sendReliable({ t: "send", thread: state.current, text, attachments, ...(mode ? { mode } : {}) }) && startsTurn) firstToken = { thread: state.current, at: tapAt, wait_ms: performance.now() - tapAt };
     box.value = "";
+    saveDraft();
     box.style.height = "";
     pending.length = 0;
     imageCount = 0;
@@ -2401,6 +2438,7 @@ function sizeInput() {
   box.style.height = Math.max(line, Math.min(box.scrollHeight, viewport * 0.35, viewport - reserve)) + "px";
 }
 $("input").addEventListener("input", () => {
+  saveDraft();
   sizeInput();
   slash.dismissed = false;
   slash.idx = 0;
@@ -2453,14 +2491,6 @@ $("dform").addEventListener("submit", (e) => {
 });
 
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
-try {
-  const draft = sessionStorage.getItem("ac_draft");
-  sessionStorage.removeItem("ac_draft");
-  if (draft && !$("input").value) {
-    $("input").value = draft;
-    $("input").dispatchEvent(new Event("input")); // resize the composer and enable Send
-  }
-} catch {}
 clearChat();
 renderHead();
 connect();
