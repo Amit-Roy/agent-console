@@ -5,13 +5,18 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { createTriageService, type GithubRequest } from "../server/github-triage.ts";
+import { createTriageService, TRIAGE_COMMENT_MARKER, TRIAGE_COMMENT_VERSION_MARKER, triageSourceMarker, type GithubRequest } from "../server/github-triage.ts";
 
 const secret = "test-only-webhook-secret-never-used-live";
 const repo = "Amit-Roy/agent-console";
 const directory = fs.mkdtempSync(path.join(os.tmpdir(), "ac-github-triage-"));
 let sequence = 0;
-const decision = { effort: "bau", priority: "p1", reason: "Fixture", model: "fixture/small" } as const;
+const decision = { effort: "bau", priority: "p1", reason: "Fixture", model: "fixture/small", scorecard: {
+  version: 2, metrics: { breadth: { value: 1, evidence: "Fixture title" } }, unknowns: [],
+  work: [{ step: "Implement fixture", check: "Fixture passes" }],
+  design: { level: "light", reason: "One known surface" },
+  tokens: { input: [8000, 20000], output: [2000, 5000], workUnits: 2, formula: "fixed work units", confidence: "planning" },
+} } as const;
 const payload = (number = 1, kind = "issues", action = "opened") => ({
   action, repository: { full_name: repo }, [kind === "issues" ? "issue" : "pull_request"]: { number },
 });
@@ -21,11 +26,37 @@ function fakeGithub() {
     [1, { state: "open", title: "Fixture title", body: "Private fixture body", labels: [{ name: "bug" }, { name: "Eff: Deep" }, { name: "Pri: P3" }] }],
     [2, { state: "open", title: "Fixture PR", body: "PR body", labels: [{ name: "enhancement" }], pull_request: {} }],
   ]);
+  const pullRequests = new Map<number, any>([[2, { state: "open", draft: true, head: { sha: "first-head" }, changed_files: 2, additions: 12, deletions: 3 }]]);
   const labels = new Set(["Eff: Deep", "Pri: P3"]);
   const calls: { method: string; endpoint: string; body?: any }[] = [];
   let deleteFailures = 0;
+  let lostCommentResponse = false;
+  const comments = new Map<number, any[]>();
+  let commentSequence = 0;
   const github: GithubRequest = async (method, endpoint, body) => {
     calls.push({ method, endpoint, body });
+    if (endpoint === "user" && method === "GET") return { login: "fixture-bot" };
+    const listMatch = endpoint.match(/\/issues\/(\d+)\/comments(?:\?per_page=100&page=(\d+))?$/);
+    if (listMatch) {
+      const number = Number(listMatch[1]);
+      const rows = comments.get(number) ?? [];
+      if (method === "GET") return structuredClone(rows);
+      if (method === "POST") {
+        const row = { id: ++commentSequence, body: body.body, user: { login: "fixture-bot" } };
+        rows.push(row); comments.set(number, rows);
+        if (lostCommentResponse) { lostCommentResponse = false; throw new Error("Response lost after successful comment creation"); }
+        return structuredClone(row);
+      }
+    }
+    const commentMatch = endpoint.match(/\/issues\/comments\/(\d+)$/);
+    if (commentMatch && method === "PATCH") {
+      for (const rows of comments.values()) {
+        const row = rows.find(row => row.id === Number(commentMatch[1]));
+        if (row) { row.body = body.body; return structuredClone(row); }
+      }
+      throw new Error("Missing comment");
+    }
+    if (endpoint.includes("/issues?state=open&")) return [...items.entries()].map(([number, item]) => ({ number, ...structuredClone(item) }));
     const itemMatch = endpoint.match(/\/issues\/(\d+)(?:\/labels(?:\/(.+))?)?$/);
     const labelMatch = endpoint.match(/\/labels\/(.+)$/);
     if (itemMatch) {
@@ -45,7 +76,7 @@ function fakeGithub() {
       }
     }
     if (endpoint.includes("/pulls/2/files?")) return [{ filename: "server/example.ts" }, { filename: "test/example.ts" }];
-    if (endpoint.endsWith("/pulls/2")) return { state: "open", draft: true };
+    if (endpoint.endsWith("/pulls/2")) return structuredClone(pullRequests.get(2));
     if (method === "GET" && labelMatch) {
       const name = decodeURIComponent(labelMatch[1]);
       if (!labels.has(name)) throw Object.assign(new Error("Missing label"), { status: 404 });
@@ -54,7 +85,7 @@ function fakeGithub() {
     if (method === "POST" && endpoint === `repos/${repo}/labels`) { labels.add(body.name); return body; }
     throw new Error("Unexpected fixture API route");
   };
-  return { github, items, calls, failNextDelete() { deleteFailures = 1; } };
+  return { github, items, pullRequests, calls, comments, failNextDelete() { deleteFailures = 1; }, loseNextCommentResponse() { lostCommentResponse = true; } };
 }
 
 async function start(name: string, extras: Record<string, any> = {}) {
@@ -120,7 +151,18 @@ try {
     assert.deepEqual(inputs[1].files, ["server/example.ts", "test/example.ts"]);
     assert.equal(inputs[1].draft, true);
     assert.equal(inputs[1].kind, "pull_request");
-    assert.equal(fixture.calls.some(call => call.endpoint.includes("/comments")), false);
+    assert.equal(inputs[1].changedFiles, 2);
+    assert.equal(inputs[1].additions, 12);
+    assert.equal(inputs[1].deletions, 3);
+    assert.equal(fixture.comments.get(1)?.length, 1);
+    assert.equal(fixture.comments.get(2)?.length, 1);
+    const report = fixture.comments.get(1)![0].body;
+    for (const section of ["### Book of work", "### Estimated token usage", "### Level of design", "### Metric evidence"]) assert.ok(report.includes(section));
+    assert.ok(report.includes(TRIAGE_COMMENT_VERSION_MARKER));
+    await fixture.post(payload());
+    await fixture.service.waitForIdle();
+    assert.equal(fixture.comments.get(1)?.length, 1);
+    assert.equal(fixture.calls.filter(call => call.method === "POST" && call.endpoint.endsWith("/comments")).length, 2);
   } finally { await fixture.close(); }
   const duplicate = await start("validation", { classify: async () => { throw new Error("Duplicate must never classify"); } });
   try {
@@ -211,6 +253,109 @@ try {
     assert.equal(resumed.service.status().done, 1);
     assert.equal(resumed.service.status().failed, 0);
   } finally { await resumed.close(); }
+
+  const lostComment = await start("lost-comment-response");
+  lostComment.loseNextCommentResponse();
+  try {
+    await lostComment.post(payload());
+    await lostComment.service.waitForIdle();
+    assert.equal(lostComment.service.status().done, 1);
+    assert.equal(lostComment.comments.get(1)?.length, 1);
+    assert.equal(lostComment.calls.filter(call => call.method === "POST" && call.endpoint.endsWith("/comments")).length, 1);
+  } finally { await lostComment.close(); }
+
+  const repairLost = await start("repair-lost-comment");
+  repairLost.items.get(1).labels = [{ name: "bug" }];
+  repairLost.loseNextCommentResponse();
+  try {
+    await repairLost.post({ ...payload(1, "issues", "unlabeled"), label: { name: "Eff: Deep" } });
+    await repairLost.service.waitForIdle();
+    assert.equal(repairLost.service.status().done, 1);
+    assert.equal(repairLost.comments.get(1)?.length, 1);
+  } finally { await repairLost.close(); }
+
+  let stale: Awaited<ReturnType<typeof start>>;
+  let staleClassifications = 0;
+  stale = await start("stale-source", { classify: async () => {
+    if (++staleClassifications === 1) stale.items.get(1).body = "Changed during model call";
+    return decision;
+  } });
+  try {
+    await stale.post(payload());
+    await stale.service.waitForIdle();
+    assert.equal(staleClassifications, 2);
+    assert.equal(stale.service.status().done, 1);
+    assert.ok(stale.comments.get(1)![0].body.includes(triageSourceMarker(stale.items.get(1))));
+  } finally { await stale.close(); }
+
+  let stalePr: Awaited<ReturnType<typeof start>>;
+  let prClassifications = 0;
+  stalePr = await start("stale-pr-source", { classify: async () => {
+    if (++prClassifications === 1) stalePr.pullRequests.get(2).head.sha = "new-head";
+    return decision;
+  } });
+  try {
+    await stalePr.post(payload(2, "pull_request"), { event: "pull_request" });
+    await stalePr.service.waitForIdle();
+    assert.equal(prClassifications, 2);
+    assert.ok(stalePr.comments.get(2)![0].body.includes(triageSourceMarker(stalePr.items.get(2), stalePr.pullRequests.get(2))));
+  } finally { await stalePr.close(); }
+
+  let repairCount = 0;
+  const repair = await start("removed-labels", { classify: async () => { repairCount++; return decision; } });
+  try {
+    repair.items.get(1).labels = [{ name: "bug" }];
+    assert.equal((await repair.post({ ...payload(1, "issues", "unlabeled"), label: { name: "bug" } })).status, 200);
+    assert.equal(repairCount, 0);
+    await Promise.all([
+      repair.post({ ...payload(1, "issues", "unlabeled"), label: { name: "Eff: Deep" } }),
+      repair.post({ ...payload(1, "issues", "unlabeled"), label: { name: "Pri: P3" } }),
+    ]);
+    await repair.service.waitForIdle();
+    assert.equal(repairCount, 1);
+    assert.deepEqual(repair.items.get(1).labels.map((label: any) => label.name).sort(), ["Eff: BAU", "Pri: P1", "bug"].sort());
+    assert.equal(repair.comments.get(1)?.length, 1);
+    // The bot's removal of a conflicting old label must not invoke the model again.
+    await repair.post({ ...payload(1, "issues", "unlabeled"), label: { name: "Eff: Deep" } });
+    await repair.service.waitForIdle();
+    assert.equal(repairCount, 1);
+    repair.items.get(2).labels = [{ name: "enhancement" }];
+    await repair.post({ ...payload(2, "pull_request", "unlabeled"), label: { name: "Pri: P3" } }, { event: "pull_request" });
+    await repair.service.waitForIdle();
+    assert.equal(repairCount, 2);
+    assert.equal(repair.comments.get(2)?.length, 1);
+  } finally { await repair.close(); }
+
+  let reconcileCount = 0;
+  const reconcile = await start("reconcile", { classify: async () => { reconcileCount++; return decision; } });
+  try {
+    const initial = await reconcile.service.reconcile(repo);
+    assert.equal(initial.scanned, 2);
+    await reconcile.service.waitForIdle();
+    assert.equal(reconcileCount, 2);
+    assert.deepEqual(await reconcile.service.reconcile(repo), { scanned: 2, queued: 0 });
+    // A missed edited webhook is detected even when both labels and a current-version comment exist.
+    reconcile.items.get(1).body = "Edited while worker was down";
+    assert.deepEqual(await reconcile.service.reconcile(repo), { scanned: 2, queued: 1 });
+    await reconcile.service.waitForIdle();
+    assert.equal(reconcileCount, 3);
+    assert.equal(reconcile.comments.get(1)?.length, 1);
+    assert.ok(reconcile.comments.get(1)![0].body.includes(triageSourceMarker(reconcile.items.get(1))));
+    // Spoofed marker comments from another account cannot suppress or receive bot updates.
+    const spoof = { id: 9999, user: { login: "other-account" }, body: `${TRIAGE_COMMENT_MARKER}\n${TRIAGE_COMMENT_VERSION_MARKER}\n${triageSourceMarker(reconcile.items.get(1))}` };
+    reconcile.comments.set(1, [spoof]);
+    assert.equal((await reconcile.service.reconcile()).queued, 1);
+    await reconcile.service.waitForIdle();
+    assert.equal(reconcile.comments.get(1)?.length, 2);
+    assert.equal(reconcile.comments.get(1)![0].body, spoof.body);
+    const body = JSON.stringify({ repository: { full_name: repo } });
+    assert.equal((await fetch(`${reconcile.url}/reconcile`, { method: "POST", body })).status, 401);
+    const headers = { "x-hub-signature-256": `sha256=${createHmac("sha256", secret).update(body).digest("hex")}` };
+    const response = await fetch(`${reconcile.url}/reconcile`, { method: "POST", body, headers });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { scanned: 2, queued: 0 });
+  } finally { await reconcile.close(); }
+  console.log("PASS one upserted scorecard, lost-response recovery, managed-label repair, event coalescing, stale-source reconciliation and comment ownership");
 
   let unblock!: () => void;
   const gate = new Promise<void>(resolve => { unblock = resolve; });
