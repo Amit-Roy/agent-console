@@ -9,7 +9,7 @@ const data=fs.mkdtempSync(path.join(os.tmpdir(),'ac-queue-ui-'));
 const base='http://127.0.0.1:17776';
 const a='11111111-1111-4111-8111-111111111111',b='22222222-2222-4222-8222-222222222222';
 const original='UNSENT_ORIGINAL_PRIVATE '+ 'full message '.repeat(35);
-const create=(id:string,title:string)=>({id,title,provider:'mock',model:'echo',mode:'plan',cwd:process.cwd(),status:'idle',cost:0,createdAt:1,updatedAt:1});
+const create=(id:string,title:string)=>({id,title,provider:'mock',model:'echo',mode:'plan',cwd:process.cwd(),status:'idle',cost:0,createdAt:1,updatedAt:1,titleLocked:true}); // named threads, like Threads.create with a title: prompts never retitle them
 const seed=()=>{
  fs.writeFileSync(path.join(data,'threads.json'),JSON.stringify([create(a,'Queue A'),create(b,'Queue B')]));
  fs.writeFileSync(path.join(data,'queues.json'),JSON.stringify({[a]:[{id:'qa',text:original,revision:0,editing:true,attachments:[]}],[b]:[{id:'qb',text:'Cancel keeps this original.',revision:0,editing:true,attachments:[]}]}));

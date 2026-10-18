@@ -152,8 +152,9 @@ try {
   await ref(page, 'Absolute reference').scrollIntoViewIfNeeded();
   await ref(page, 'Absolute reference').focus();
   const scrollBefore = await page.locator('#chat').evaluate(e => e.scrollTop);
+  const urlBefore = page.url(); // includes #thread=<id> since thread deep links
   await open(page, 'Absolute reference');
-  assert.equal(page.url(), base + '/', 'file click keeps the conversation URL');
+  assert.equal(page.url(), urlBefore, 'file click keeps the conversation URL');
   assert.equal(await context.pages().length, 1, 'file click creates no broken navigation tab');
   assert.equal(await page.locator('#file-viewer-title').textContent(), 'sample.ts');
   assert.equal(await page.locator('#file-viewer-path').textContent(), sample);
@@ -223,12 +224,13 @@ try {
   await close(page);
   for (const selector of ['#chat .imgref', '#chat .imgs a']) {
     const beforeImageTrees = treeRequests.length;
+    const urlBeforeImage = page.url();
     await page.locator(selector).click(); await settled(page);
     assert.equal(await page.locator('#file-viewer-code .file-viewer-image').count(), 1, await page.locator('#file-viewer-status').textContent() || 'image missing');
     assert.ok(await page.locator('.file-viewer-image').evaluate((img: HTMLImageElement) => img.naturalWidth > 0), 'preview image decoded successfully');
     assert.deepEqual(await page.evaluate(() => (window as any).__csp), [], 'authenticated blob image previews comply with CSP');
     assert.equal(context.pages().length, 1, 'image links create no tabs');
-    assert.equal(page.url(), base + '/');
+    assert.equal(page.url(), urlBeforeImage, 'image links keep the conversation URL');
     await screenshot(page, selector.includes('imgref') ? 'file-viewer-image.png' : 'file-viewer-image-thumb.png');
     await close(page);
   }

@@ -821,6 +821,11 @@ export class Threads {
       if (opts.auto) throw new Error("A turn is already running.");
       return this.whileRunning(t, text, opts);
     }
+    // older queued messages are about to drain (or wait on an edit): a new one joins behind them, never jumps ahead
+    if (!opts.auto && !opts.delivery && this.queues.get(id)?.length) {
+      this.enqueue(t, text, opts);
+      return this.drain(id);
+    }
     const attachments = incomingAttachments;
     let prompt = withFileList(text, attachments);
     if (t.replay && !opts.auto) {
@@ -902,6 +907,10 @@ export class Threads {
       } else accepted();
       return;
     }
+    this.enqueue(t, text, opts);
+  }
+
+  private enqueue(t: Thread, text: string, opts: { attachments?: unknown; questionAnswer?: true }) {
     const q = this.queues.get(t.id) ?? [];
     if (q.length >= MAX_QUEUE) throw new Error("Too many queued messages.");
     q.push({ id: crypto.randomUUID(), text, attachments: opts.attachments, revision: 0, at: Date.now(), ...(opts.questionAnswer ? { questionAnswer: true } : {}) });
