@@ -28,5 +28,9 @@ try{
  assert.equal(fs.statSync(path.join(dir,'queues.json')).mode&0o777,0o600);
  threads.send(t.id,'one',{mode:'queue',attachments:[{id:upload.id}]});threads.send(t.id,'two [Image #1]',{mode:'queue'});threads.send(t.id,'/compact',{mode:'queue'});threads.send(t.id,'three',{mode:'queue'});
  const n=sent.length;ctx.event({type:'result',subtype:'success'});await sleep();assert.equal(sent.length,n+1);assert.ok(sent.at(-1)!.startsWith('one\n\ntwo [Image #1]'),'queued messages are joined in order, a command stops the batch');assert.equal(threads.getQueues()[t.id].length,2);
- console.log('PASS queue edits: full text, delivery hold/order, attachment preservation, validation, stale writes, cancel, restart persistence and removed-message race');
+ // a message sent in the gap between turn end and the queue draining joins behind the queue, never ahead of it
+ const r=threads.create({provider:'fixture',cwd:dir,title:'Race'});threads.send(r.id,'busy');threads.send(r.id,'older',{mode:'queue'});
+ const m=sent.length;ctx.event({type:'result',subtype:'success'});threads.send(r.id,'newer');assert.equal(sent.length,m,'newer waits for the queue');
+ await sleep();assert.equal(sent.length,m+1);assert.equal(sent.at(-1),'older\n\nnewer','queued first, then the late message, as one prompt');
+ console.log('PASS queue edits: full text, delivery hold/order, attachment preservation, validation, stale writes, cancel, restart persistence, removed-message race and late-message ordering');
 }finally{threads.shutdown();fs.rmSync(dir,{recursive:true,force:true});}

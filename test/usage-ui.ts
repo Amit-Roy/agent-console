@@ -64,11 +64,18 @@ try {
       assert.ok(await page.getByRole("option", { name: "Effort · High", exact: true }).count());
       await page.keyboard.press("Escape");
       if (width === 390) {
-        await page.evaluate(() => { document.querySelector("#cbox")!.classList.add("running"); (document.querySelector("#stop") as HTMLButtonElement).hidden = false; (document.querySelector("#queue") as HTMLButtonElement).hidden = false; });
-        assert.equal(await page.locator("#effort").isVisible(), false); // locked settings yield space to active actions on mobile
-        assert.equal(await page.locator("#send").isVisible(), true);
-        assert.equal(await page.locator("#stop").isVisible(), true);
-        assert.ok(await page.evaluate(() => { const toolbar = document.querySelector(".toolbar")!; return toolbar.scrollWidth <= toolbar.clientWidth + 1 && [...toolbar.querySelectorAll("button")].every(b => { const r = b.getBoundingClientRect(); return !r.width || r.right <= innerWidth; }); }));
+        // a real running state from the server: settings stay visible on mobile (user rule), Stop replaces Send until text is typed
+        client.send(JSON.stringify({ t: "thread", thread: { ...claude, status: "running" } }));
+        await page.locator("#stop").waitFor();
+        assert.equal(await page.locator("#effort").isVisible(), true, "effort stays visible during a run");
+        assert.equal(await page.locator("#model").isVisible(), true, "model stays visible during a run");
+        assert.equal(await page.locator("#mode").isVisible(), true, "permissions stay visible during a run");
+        assert.equal(await page.locator("#send").isVisible(), false);
+        await page.locator("#input").fill("queued follow-up");
+        assert.equal(await page.locator("#send").isVisible(), true, "typing mid-run offers Send (queues)");
+        assert.equal(await page.locator("#stop").isVisible(), false);
+        await page.locator("#input").fill("");
+        assert.ok(await page.evaluate(() => { const toolbar = document.querySelector(".toolbar")!; return toolbar.scrollWidth <= toolbar.clientWidth + 1 && [...toolbar.querySelectorAll("button")].every(b => { const r = b.getBoundingClientRect(); return !r.width || r.right <= innerWidth; }); }), "running toolbar fits the phone width");
       }
     }
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
