@@ -94,12 +94,27 @@ function friendlyError(msg: string): string {
   return clip(m ? m[1] : msg, 500);
 }
 
+function taskMeta(r: any) {
+  const taskId = r?.task_id ?? r?.taskId ?? r?.id ?? r?.task?.id;
+  const toolUseId = r?.tool_use_id ?? r?.toolUseId ?? r?.toolCallId ?? r?.tool_call_id ?? r?.tool_call?.id;
+  const description = typeof r?.description === "string" ? r.description : typeof r?.task?.description === "string" ? r.task.description : undefined;
+  const summary = typeof r?.summary === "string" ? r.summary : typeof r?.result === "string" ? r.result : typeof r?.task?.summary === "string" ? r.task.summary : undefined;
+  const status = (typeof r?.status === "string" ? r.status : typeof r?.state === "string" ? r.state : typeof r?.task?.status === "string" ? r.task.status : "").toLowerCase();
+  const usage = r?.usage ?? r?.task?.usage ?? r?.details?.usage;
+  return { taskId, toolUseId, description, summary, status, usage };
+}
+
 // Pure translator: pi session event -> canonical (Claude-shaped) events. Exported so it can be tested without a model.
 export function piTranslator(emit: (ev: any) => void, onCommands?: (list: Command[]) => void, contextWindow?: () => number | undefined) {
   let started = 0;
   let cost = 0;
   let usageModels: any[] = [];
   let failure: string | undefined;
+  const active = new Map<string, { description?: string; summary?: string }>();
+  const emitBackground = () => {
+    const tasks = [...active.entries()].filter(([id]) => id).map(([id, info]) => ({ task_id: id, description: info.description || info.summary || "Task" }));
+    emit({ type: "system", subtype: "background_tasks_changed", tasks });
+  };
   const settle = (aborted = false) => {
     if (failure) emit({ type: "console_error", text: failure });
     emit({
@@ -157,6 +172,28 @@ export function piTranslator(emit: (ev: any) => void, onCommands?: (list: Comman
       case "auto_retry_end":
         if (r.success === false) failure = friendlyError(String(r.finalError ?? "request failed"));
         break;
+      case "task_started":
+      case "task_progress":
+      case "task_notification": {
+        const meta = taskMeta(r);
+        const id = meta.taskId ?? meta.toolUseId;
+        const kind = r?.type === "task_started" ? "task_started" : r?.type === "task_progress" ? "task_progress" : "task_notification";
+        if (!id) break;
+        if (r?.type === "task_started") {
+          active.set(id, { description: meta.description, summary: meta.summary });
+          emit({ type: "system", subtype: "task_started", task_id: id, tool_use_id: meta.toolUseId || id, task_type: "local_agent", is_backgrounded: true, description: meta.description || meta.summary, subagent_type: r?.subagent_type || r?.task?.subagent_type || "task" });
+          emitBackground();
+        } else if (r?.type === "task_progress") {
+          active.set(id, { description: meta.description || active.get(id)?.description, summary: meta.summary || active.get(id)?.summary });
+          emit({ type: "system", subtype: "task_progress", task_id: id, tool_use_id: meta.toolUseId || id, description: meta.description || meta.summary, subagent_type: r?.subagent_type || r?.task?.subagent_type || "task", usage: meta.usage && { ...(meta.usage ?? {}), tool_uses: meta.usage?.tool_uses ?? meta.usage?.tools ?? 0, total_tokens: meta.usage?.total_tokens ?? meta.usage?.totalTokens ?? 0, duration_ms: meta.usage?.duration_ms ?? meta.usage?.durationMs ?? 0 } });
+        } else if (r?.type === "task_notification") {
+          const finalStatus = meta.status || "completed";
+          active.delete(id);
+          emit({ type: "system", subtype: "task_notification", task_id: id, tool_use_id: meta.toolUseId || id, status: finalStatus, summary: meta.summary || meta.description || "Task finished" });
+          emitBackground();
+        }
+        break;
+      }
       case "agent_settled":
         settle(!!r.aborted);
         break;
