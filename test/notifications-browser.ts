@@ -44,7 +44,7 @@ try {
     await page.evaluate(async () => { await navigator.serviceWorker.ready; });
     assert.ok(await page.evaluate(async () => (await navigator.serviceWorker.getRegistration())?.active));
     if (width === 390) await page.getByRole("button", { name: "Threads", exact: true }).click();
-    await page.getByRole("button", { name: /^Notifications:/ }).click();
+    await page.locator("#side-more").click(); await page.getByRole("menuitem", { name: /^Notifications/ }).click();
     const dialog = page.getByRole("dialog", { name: "Notifications", exact: true });
     await dialog.waitFor();
     await page.waitForFunction(() => !document.getElementById("notifications-status")!.textContent!.includes("Checking"));
@@ -60,13 +60,13 @@ try {
     await page.reload();
     await page.getByRole("heading", { name: "Notification target", exact: true }).waitFor();
     if (width === 390) await page.getByRole("button", { name: "Threads", exact: true }).click();
-    await page.getByRole("button", { name: /^Notifications:/ }).click();
+    await page.locator("#side-more").click(); await page.getByRole("menuitem", { name: /^Notifications/ }).click();
     await page.waitForFunction(() => !document.getElementById("notifications-status")!.textContent!.includes("Checking"));
     assert.equal(await silentToggle.isChecked(), true, "Silent notifications survive a page reload");
     await dialog.getByRole("button", { name: "Done", exact: true }).click();
     const cdp = await context.newCDPSession(page);
     await cdp.send("Browser.setPermission", { permission: { name: "notifications" }, setting: "denied", origin: base });
-    await page.getByRole("button", { name: /^Notifications:/ }).click();
+    await page.locator("#side-more").click(); await page.getByRole("menuitem", { name: /^Notifications/ }).click();
     await page.waitForFunction(() => document.getElementById("notifications-status")!.textContent!.includes("blocked"));
     assert.equal(await page.getByRole("button", { name: "Enable notifications", exact: true }).isDisabled(), true);
     await dialog.getByRole("button", { name: "Done", exact: true }).click();
