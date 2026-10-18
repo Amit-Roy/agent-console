@@ -11,6 +11,8 @@ const expand = (p: string) => p === "~" ? os.homedir() : p.startsWith("~/") ? pa
  * Folders a thread has been working in, newest first, read from the tail of its event log: `cd` targets in Bash calls,
  * plus every folder from the thread cwd down to any absolute path a tool call touched. Lets the viewer resolve
  * a relative citation like `public/render.js` that the agent wrote after `cd agent-console`.
+ * Folders outside cwd (a screenshot in /tmp/shots) count only themselves, and paths quoted in replies count too,
+ * so a bare `after-open.png` finds the file the agent named earlier. The viewer still applies its own scope rules.
  */
 export function contextDirs(threadId: string, cwd: string): string[] {
   let text = "";
@@ -26,20 +28,24 @@ export function contextDirs(threadId: string, cwd: string): string[] {
   const found: string[] = [];
   const add = (target: string) => {
     let dir = path.resolve(target);
-    if (!within(cwd, dir)) return;
     if (/\.[\w-]+$/.test(path.basename(dir))) dir = path.dirname(dir);
+    if (!within(cwd, dir)) return void found.push(dir);
     for (; within(cwd, dir) && dir !== cwd; dir = path.dirname(dir)) found.push(dir);
   };
   for (const line of text.split("\n").slice(1)) { // first line may be cut by the tail window
-    if (!line.includes('"tool_use"')) continue;
+    if (!line.includes('"tool_use"') && !line.includes('"text"')) continue;
     let event: any; try { event = JSON.parse(line); } catch { continue; }
     for (const block of event?.message?.content || []) {
+      if (block?.type === "text" && event.type === "assistant" && typeof block.text === "string") {
+        for (const m of block.text.matchAll(/(?<![\w.~\/-])(?:~|\/(?:home|tmp)\b)[^\s"'`;|&()<>\[\]*]*\.\w+/g)) add(expand(m[0]));
+        continue;
+      }
       if (block?.type !== "tool_use" || !block.input) continue;
       const input = block.input;
       for (const key of ["file_path", "path", "notebook_path"]) if (typeof input[key] === "string" && path.isAbsolute(expand(input[key]))) add(expand(input[key]));
       if (typeof input.command !== "string") continue;
       let cur = cwd;
-      for (const m of input.command.matchAll(/\bcd\s+(?:"([^"]+)"|'([^']+)'|([^\s;&|]+))/g)) { cur = path.resolve(cur, expand(m[1] ?? m[2] ?? m[3])); add(cur); }
+      for (const m of input.command.matchAll(/\bcd\s+(?:"([^"]+)"|'([^']+)'|([^\s;&|`()]+))/g)) { cur = path.resolve(cur, expand(m[1] ?? m[2] ?? m[3])); add(cur); }
       for (const m of input.command.matchAll(/(?:~|\/home\/[\w.-]+)\/[^\s"'`;|&)<>]+/g)) add(expand(m[0]));
     }
   }
