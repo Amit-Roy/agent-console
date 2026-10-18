@@ -1756,6 +1756,10 @@ function onEvent(e, live) {
         push(el("div", "msg note", "Reminder sent: save anything durable to the shared brain."), live);
         break;
       }
+      if (e.auto === "subagent") {
+        push(el("div", "msg note", "Background subagent finished. Its result was sent to the agent."), live);
+        break;
+      }
       const d = el("div", "msg user");
       if (e.attachments?.length) d.append(...attachmentRows(e.attachments, live));
       if (e.text?.trim()) {
