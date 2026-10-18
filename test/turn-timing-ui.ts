@@ -141,7 +141,16 @@ try {
   for (let i = 0; i < 30 && !groups.first_token; i++) { groups = (await (await fetch(`${base}/api/latency`, cookie)).json()).groups || {}; if (!groups.first_token) await page.waitForTimeout(100); }
   check("phone first_token samples stored", groups.first_token?.count === 2, JSON.stringify(groups.first_token || {}).slice(0, 80));
   const api = await (await fetch(`${base}/api/turn-latency?from=${now - 60_000}&to=${Date.now() + 60_000}`, cookie)).json();
-  check("api: turn latency stats", api.available && api.turns === 2 && api.cold.cold === 1 && api.tools[0]?.name === "Bash" && api.ttft[0]?.provider === "mock", JSON.stringify({ turns: api.turns, cold: api.cold }));
+  // Prewarm: opening the thread spawns its agent, so one process serves both turns and a turn is cold only if that spawn
+  // happened at send time (prewarm off or lost the race). The cold flag must match the agent_process record either way.
+  const { DatabaseSync } = await import("node:sqlite");
+  const pdb = new DatabaseSync(path.join(data, "latency.sqlite"), { readOnly: true });
+  const spawns = (pdb.prepare("SELECT at FROM agent_process WHERE thread = ? AND kind = 'spawn' ORDER BY at").all("mock-timing") as any[]).map((r) => r.at);
+  const firstTurn = (pdb.prepare("SELECT MIN(turn_ts) t FROM turn_timing WHERE thread = ? AND turn_ts > ?").get("mock-timing", now - 60_000) as any).t;
+  pdb.close();
+  const expectCold = spawns.length && spawns[0] >= firstTurn ? 1 : 0;
+  check("api: one agent process served both turns", spawns.length === 1, JSON.stringify(spawns.length));
+  check("api: turn latency stats", api.available && api.turns === 2 && api.cold.cold === expectCold && api.tools[0]?.name === "Bash" && api.ttft[0]?.provider === "mock", JSON.stringify({ turns: api.turns, cold: api.cold.cold, expectCold }));
   check("api: no prompt text", !JSON.stringify(api).includes("tool first"));
   check("api: refuses ranges over 400 days", (await fetch(`${base}/api/turn-latency?from=1&to=${Date.now()}`, cookie)).status === 400);
   const logLines = fs.readFileSync(path.join(data, "logs", "mock-timing.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
