@@ -4,8 +4,8 @@
 Run from the repository with:
     ssh vps 'python3 -' < scripts/github-triage-caddy.py
 
-This installs a root-owned refresh worker and timer. The Console remains behind
-Coder authentication; only POST webhook requests reach the signature-checking worker.
+This installs a root-owned refresh worker, process watchdog, and timer. The Console
+remains behind Coder authentication; only POST webhooks reach the signed receiver.
 """
 
 from pathlib import Path
@@ -14,7 +14,7 @@ import subprocess
 
 
 REFRESH_SOURCE = r'''#!/usr/bin/env python3
-"""Refresh the public webhook's private Docker upstream without exposing Console."""
+"""Refresh the webhook route and supervise triage in an already-running workspace."""
 from pathlib import Path
 import fcntl
 import ipaddress
@@ -52,12 +52,36 @@ def restore(path, old):
         atomic_write(path, old)
 
 
-def refresh():
-    upstream = subprocess.check_output([
+def workspace():
+    result = subprocess.run([
         "docker", "inspect", "--format",
-        '{{(index .NetworkSettings.Networks "coder_default").IPAddress}}',
+        '{{.State.Running}}\n{{(index .NetworkSettings.Networks "coder_default").IPAddress}}\n{{.HostConfig.RestartPolicy.Name}}',
         CONTAINER,
-    ], text=True).strip()
+    ], capture_output=True, text=True, timeout=15)
+    if result.returncode:
+        print("The workspace is absent; triage supervision will retry on the next tick.")
+        return None
+    running, upstream, restart = result.stdout.strip().split("\n")
+    if running != "true":
+        print("The workspace is stopped; triage supervision leaves it stopped.")
+        return None
+    if restart != "unless-stopped":
+        subprocess.run(["docker", "update", "--restart", "unless-stopped", CONTAINER], check=True, capture_output=True, timeout=15)
+        print("The running workspace now survives host reboots while respecting intentional stops.")
+    return upstream
+
+def supervise():
+    result = subprocess.run([
+        "docker", "exec", "--user", "coder", "--env", "HOME=/home/coder",
+        "--env", "PATH=/home/coder/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        CONTAINER, "/home/coder/repos/agent-console/bin/github-triage", "watchdog",
+    ], capture_output=True, text=True, timeout=210)
+    if result.returncode:
+        raise RuntimeError("The triage watchdog failed; supervision will retry on the next tick.")
+    if result.stdout.strip():
+        print(result.stdout.strip())
+
+def refresh(upstream):
     address = ipaddress.ip_address(upstream)
     if address.version != 4 or not address.is_private:
         raise RuntimeError("The workspace requires a private IPv4 address.")
@@ -125,7 +149,10 @@ if __name__ == "__main__":
         raise SystemExit("Run this refresh worker as root.")
     with open("/run/lock/agent-console-github-triage-caddy.lock", "w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        refresh()
+        upstream = workspace()
+        if upstream:
+            refresh(upstream)
+            supervise()
 '''
 
 
@@ -139,22 +166,24 @@ def main():
     subprocess.run(["python3", str(worker)], check=True)
     units = {
         "agent-console-github-triage-caddy.service": """[Unit]
-Description=Refresh the Agent Console GitHub webhook Caddy route
+Description=Supervise Agent Console GitHub triage and refresh its Caddy route
 After=docker.service caddy.service
 
 [Service]
 Type=oneshot
+TimeoutStartSec=240
 ExecStart=/usr/bin/python3 /usr/local/lib/agent-console/github-triage-caddy.py
 User=root
 Group=root
 UMask=0022
 """,
         "agent-console-github-triage-caddy.timer": """[Unit]
-Description=Track the Agent Console workspace webhook address
+Description=Recover Agent Console GitHub triage and track its workspace address
 
 [Timer]
 OnBootSec=60s
 OnUnitActiveSec=60s
+Persistent=true
 AccuracySec=5s
 
 [Install]
@@ -169,7 +198,7 @@ WantedBy=timers.target
     subprocess.run([
         "systemctl", "enable", "--now", "agent-console-github-triage-caddy.timer",
     ], check=True, capture_output=True)
-    print("The webhook route and automatic address refresh are installed.")
+    print("The webhook route, triage watchdog, and five-minute reconciliation are installed.")
 
 
 if __name__ == "__main__":

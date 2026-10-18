@@ -1,3 +1,4 @@
+import { createHash, randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -6,16 +7,19 @@ import { DatabaseSync } from "node:sqlite";
 import { verify } from "@octokit/webhooks-methods";
 import { childEnv } from "./providers/env.ts";
 import { classifyTriage, type TriageInput, type TriageDecision } from "./providers/triage-model.ts";
+import { METRIC_MAX, TRIAGE_RULES, TRIAGE_SCORECARD_VERSION } from "./providers/triage-scorecard.ts";
 
 export const EFFORT_LABELS = { trivial: "Eff: Trivial", bau: "Eff: BAU", deep: "Eff: Deep" } as const;
 export const PRIORITY_LABELS = { p0: "Pri: P0", p1: "Pri: P1", p2: "Pri: P2", p3: "Pri: P3" } as const;
 const MANAGED = new Set<string>([...Object.values(EFFORT_LABELS), ...Object.values(PRIORITY_LABELS)]);
+export const TRIAGE_COMMENT_MARKER = "<!-- agent-console-triage -->";
+export const TRIAGE_COMMENT_VERSION_MARKER = `<!-- agent-console-triage-version:${TRIAGE_SCORECARD_VERSION} -->`;
 const ACTIONS = {
-  issues: new Set(["opened", "edited", "reopened"]),
-  pull_request: new Set(["opened", "edited", "reopened", "synchronize", "ready_for_review"]),
+  issues: new Set(["opened", "edited", "reopened", "unlabeled"]),
+  pull_request: new Set(["opened", "edited", "reopened", "unlabeled", "synchronize", "ready_for_review"]),
 };
 type Kind = "issue" | "pull_request";
-type Job = { delivery: string; repo: string; number: number; kind: Kind; attempts: number };
+type Job = { delivery: string; repo: string; number: number; kind: Kind; attempts: number; reason: "webhook" | "repair" | "reconcile" };
 export type GithubRequest = (method: string, endpoint: string, body?: unknown) => Promise<any>;
 type Options = {
   secret: string;
@@ -59,6 +63,54 @@ function labelNames(issue: any): string[] {
     .filter((label: unknown): label is string => typeof label === "string");
 }
 
+function completeLabels(issue: any): boolean {
+  const labels = labelNames(issue);
+  return Object.values(EFFORT_LABELS).filter(label => labels.includes(label)).length === 1
+    && Object.values(PRIORITY_LABELS).filter(label => labels.includes(label)).length === 1;
+}
+
+export function triageSourceMarker(issue: any, pr?: any): string {
+  const source = JSON.stringify([issue.title ?? "", issue.body ?? "", pr?.head?.sha ?? null, Boolean(pr?.draft)]);
+  return `<!-- agent-console-triage-source:${createHash("sha256").update(source).digest("hex")} -->`;
+}
+
+// Quotes and model text are escaped so issue content cannot add HTML, mentions, or headings.
+const safeText = (value: unknown) => String(value ?? "").replace(/[&<>@|`!*_#[\]\\\r\n]/g, char =>
+  char === "\r" || char === "\n" ? " " : `&#${char.charCodeAt(0)};`);
+
+export function renderTriageComment(decision: TriageDecision, sourceMarker: string): string {
+  const score = decision.scorecard;
+  const lines = [TRIAGE_COMMENT_MARKER, TRIAGE_COMMENT_VERSION_MARKER, sourceMarker,
+    "## Triage assessment", `${EFFORT_LABELS[decision.effort]} · ${PRIORITY_LABELS[decision.priority]}`,
+    safeText(decision.reason), "", "### Book of work"];
+  if (score) {
+    score.work.forEach((item, index) => lines.push(`${index + 1}. ${safeText(item.step)} — Check: ${safeText(item.check)}`));
+  } else lines.push("Assessment unavailable; re-triage with the current scorecard model.");
+  lines.push("", "### Estimated token usage");
+  if (score) {
+    lines.push(`Implementation input: **${score.tokens.input[0].toLocaleString("en-US")}–${score.tokens.input[1].toLocaleString("en-US")} tokens**.`,
+      `Implementation output: **${score.tokens.output[0].toLocaleString("en-US")}–${score.tokens.output[1].toLocaleString("en-US")} tokens**.`,
+      `Planning estimate, not measured usage. Confidence: **${safeText(score.tokens.confidence)}**.`,
+      `Work units: ${score.tokens.workUnits}. Formula: ${safeText(score.tokens.formula)}.`);
+  } else lines.push("Unavailable without a structured scorecard.");
+  lines.push("", "### Level of design");
+  if (score) lines.push(`**${safeText(score.design.level)}** — ${safeText(score.design.reason)}`);
+  else lines.push("Unknown.");
+  lines.push("", "### Metric evidence", "| Metric | Score | Source evidence |", "| --- | --- | --- |");
+  if (score) {
+    for (const [metric, assessment] of Object.entries(score.metrics)) {
+      lines.push(`| ${safeText(metric)} | ${assessment.value === null ? "unknown" : `${assessment.value}/${METRIC_MAX[metric as keyof typeof METRIC_MAX]}`} | ${assessment.evidence ? safeText(assessment.evidence) : "Not stated; needs confirmation"} |`);
+    }
+    if (score.unknowns.length) lines.push("", `Unknowns: ${score.unknowns.map(safeText).join(", ")}.`);
+    if (score.facts && Object.keys(score.facts).length) {
+      lines.push("", `PR facts: ${Object.entries(score.facts).map(([key, value]) => `${safeText(key)}=${value}`).join(", ")}.`);
+    }
+  }
+  if (score) lines.push("", "<details><summary>Scoring rules</summary>", "", ...Object.values(TRIAGE_RULES).map(rule => safeText(rule)), "", "</details>");
+  lines.push("", `Model: ${safeText(decision.model)}. Automated estimate; maintainers can revise scope and priority.`);
+  return lines.join("\n");
+}
+
 function managedLabels(issue: any): string {
   return labelNames(issue).filter(label => MANAGED.has(label)).sort().join("\n");
 }
@@ -85,6 +137,14 @@ export function createTriageService(options: Options) {
       next_attempt INTEGER NOT NULL DEFAULT 0, updated INTEGER NOT NULL, model TEXT
     );
     UPDATE github_triage SET status='queued' WHERE status='running';`);
+  if (!(db.prepare("PRAGMA table_info(github_triage)").all() as any[]).some(column => column.name === "reason")) {
+    db.exec("ALTER TABLE github_triage ADD COLUMN reason TEXT NOT NULL DEFAULT 'webhook'");
+  }
+  let actor: Promise<string> | undefined;
+  const actorLogin = () => actor ??= github("GET", "user").then(user => {
+    if (typeof user?.login !== "string" || !user.login) throw new Error("Missing GitHub actor");
+    return user.login;
+  }).catch(error => { actor = undefined; throw error; });
   let closing = false;
   let closed = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -123,17 +183,78 @@ export function createTriageService(options: Options) {
     }
   }
 
+  async function findComment(repo: string, number: number) {
+    const login = await actorLogin();
+    for (let page = 1; page <= 100; page++) {
+      const comments = await github("GET", `repos/${repo}/issues/${number}/comments?per_page=100&page=${page}`);
+      if (!Array.isArray(comments)) throw new Error("Invalid GitHub comments response");
+      const comment = comments.find(comment => comment.user?.login === login && typeof comment.body === "string"
+        && comment.body.split("\n")[0] === TRIAGE_COMMENT_MARKER && Number.isSafeInteger(comment.id));
+      if (comment) return comment;
+      if (comments.length < 100) return undefined;
+    }
+    throw new Error("Too many comments to safely locate triage assessment");
+  }
+
+  function enqueue(repo: string, number: number, kind: Kind, reason: Job["reason"], delivery = randomUUID()) {
+    if (closing) throw new Error("Shutting down");
+    if (reason !== "webhook" && db.prepare("SELECT 1 FROM github_triage WHERE repo=? AND number=? AND status='queued' LIMIT 1").get(repo, number)) return false;
+    const inserted = db.prepare("INSERT OR IGNORE INTO github_triage(delivery,repo,number,kind,reason,updated) VALUES(?,?,?,?,?,?)")
+      .run(delivery, repo, number, kind, reason, Date.now());
+    schedule();
+    return inserted.changes > 0;
+  }
+
+  const reconciling = new Map<string, Promise<{ scanned: number; queued: number }>>();
+  async function scan(selectedRepo?: string) {
+    let scanned = 0;
+    let queued = 0;
+    for (const repo of selectedRepo ? [selectedRepo] : repos) {
+      for (let page = 1; page <= 100; page++) {
+        const items = await github("GET", `repos/${repo}/issues?state=open&per_page=100&page=${page}`);
+        if (!Array.isArray(items)) throw new Error("Invalid GitHub issues response");
+        for (const issue of items) {
+          if (issue.state !== "open" || !Number.isSafeInteger(issue.number) || issue.number <= 0) continue;
+          scanned++;
+          if (db.prepare("SELECT 1 FROM github_triage WHERE repo=? AND number=? AND status IN ('queued','running') LIMIT 1").get(repo, issue.number)) continue;
+          const kind = issue.pull_request ? "pull_request" : "issue";
+          if (completeLabels(issue)) {
+            const pr = kind === "pull_request" ? await github("GET", `repos/${repo}/pulls/${issue.number}`) : undefined;
+            const comment = await findComment(repo, issue.number);
+            if (comment?.body.includes(TRIAGE_COMMENT_VERSION_MARKER) && comment.body.includes(triageSourceMarker(issue, pr))) continue;
+          }
+          if (enqueue(repo, issue.number, kind, "reconcile")) queued++;
+        }
+        if (items.length < 100) break;
+        if (page === 100) throw new Error("Too many open items to reconcile safely");
+      }
+    }
+    return { scanned, queued };
+  }
+
+  function reconcile(repo?: string) {
+    if (repo !== undefined && !repos.has(repo)) return Promise.reject(new Error("Repository not allowed"));
+    const key = repo ?? "*";
+    const existing = reconciling.get(key) ?? reconciling.get("*");
+    if (existing) return existing;
+    const pending = scan(repo).finally(() => { reconciling.delete(key); });
+    reconciling.set(key, pending);
+    return pending;
+  }
+
   async function processJob(job: Job): Promise<{ status: "done" | "skipped"; model?: string }> {
     if (!repos.has(job.repo)) return { status: "skipped" };
     const endpoint = `repos/${job.repo}/issues/${job.number}`;
     const issue = await github("GET", endpoint);
     if (issue.state !== "open") return { status: "skipped" };
     if ((job.kind === "pull_request") !== Boolean(issue.pull_request)) return { status: "skipped" };
+    if (job.reason === "repair" && job.attempts === 0 && completeLabels(issue)) return { status: "skipped" };
     const files: string[] = [];
+    let pr: any;
     let draft = false;
     let head: string | undefined;
     if (job.kind === "pull_request") {
-      const pr = await github("GET", `repos/${job.repo}/pulls/${job.number}`);
+      pr = await github("GET", `repos/${job.repo}/pulls/${job.number}`);
       if (pr.state !== "open") return { status: "skipped" };
       draft = Boolean(pr.draft);
       head = pr.head?.sha;
@@ -144,10 +265,14 @@ export function createTriageService(options: Options) {
         if (rows.length < 100) break;
       }
     }
+    const sourceMarker = triageSourceMarker(issue, pr);
+    let existingComment = await findComment(job.repo, job.number);
+    if (job.reason === "reconcile" && completeLabels(issue) && existingComment?.body.includes(TRIAGE_COMMENT_VERSION_MARKER) && existingComment.body.includes(sourceMarker)) return { status: "skipped" };
     const decision = await classify({
       repo: job.repo, number: job.number, kind: job.kind,
       title: typeof issue.title === "string" ? issue.title : "",
       body: typeof issue.body === "string" ? issue.body : "", files, draft,
+      changedFiles: pr?.changed_files, additions: pr?.additions, deletions: pr?.deletions,
     });
     if (!Object.hasOwn(EFFORT_LABELS, decision.effort) || !Object.hasOwn(PRIORITY_LABELS, decision.priority)
       || typeof decision.model !== "string" || !decision.model.length || decision.model.length > 200) {
@@ -173,6 +298,12 @@ export function createTriageService(options: Options) {
         catch (error) { if ((error as any)?.status !== 404) throw error; }
       }
     }
+    const body = renderTriageComment(decision, sourceMarker);
+    // Re-read after label writes: a previous POST may have succeeded before its response was lost.
+    existingComment = await findComment(job.repo, job.number);
+    if (existingComment) {
+      if (existingComment.body !== body) await github("PATCH", `repos/${job.repo}/issues/comments/${existingComment.id}`, { body });
+    } else await github("POST", `${endpoint}/comments`, { body });
     return { status: "done", model: decision.model };
   }
 
@@ -184,7 +315,7 @@ export function createTriageService(options: Options) {
     timer = setTimeout(() => {
       timer = undefined;
       if (closing) return;
-      const job = db.prepare("SELECT delivery,repo,number,kind,attempts FROM github_triage WHERE status='queued' AND next_attempt<=? ORDER BY next_attempt, rowid LIMIT 1").get(Date.now()) as Job | undefined;
+      const job = db.prepare("SELECT delivery,repo,number,kind,attempts,reason FROM github_triage WHERE status='queued' AND next_attempt<=? ORDER BY next_attempt, rowid LIMIT 1").get(Date.now()) as Job | undefined;
       if (!job) { schedule(); return; }
       db.prepare("UPDATE github_triage SET status='running',attempts=attempts+1,updated=? WHERE delivery=?").run(Date.now(), job.delivery);
       active = (async () => {
@@ -216,14 +347,15 @@ export function createTriageService(options: Options) {
       respond(res, closing ? 503 : 200, { ok: !closing, ...status() });
       return;
     }
-    if (req.method !== "POST" || req.url !== "/api/github/webhook") { respond(res, 404, { error: "Not found" }); return; }
+    const reconciliation = req.url === "/reconcile";
+    if (req.method !== "POST" || (req.url !== "/api/github/webhook" && !reconciliation)) { respond(res, 404, { error: "Not found" }); return; }
     if (closing) { respond(res, 503, { error: "Shutting down" }); return; }
     const signature = req.headers["x-hub-signature-256"];
     const delivery = req.headers["x-github-delivery"];
     const event = req.headers["x-github-event"];
     if (typeof signature !== "string" || !/^sha256=[a-f0-9]{64}$/.test(signature)
-      || typeof delivery !== "string" || !/^[A-Za-z0-9-]{1,128}$/.test(delivery)
-      || typeof event !== "string") { respond(res, 401, { error: "Invalid webhook headers" }); req.resume(); return; }
+      || (!reconciliation && (typeof delivery !== "string" || !/^[A-Za-z0-9-]{1,128}$/.test(delivery)
+      || typeof event !== "string"))) { respond(res, 401, { error: "Invalid webhook headers" }); req.resume(); return; }
     const limit = options.maxBodyBytes ?? 1024 * 1024;
     if (Number(req.headers["content-length"]) > limit) { respond(res, 413, { error: "Body too large" }); req.resume(); return; }
     const chunks: Buffer[] = [];
@@ -244,18 +376,25 @@ export function createTriageService(options: Options) {
     try { payload = JSON.parse(text); }
     catch { respond(res, 400, { error: "Invalid JSON" }); return; }
     if (!payload || typeof payload !== "object" || Array.isArray(payload)) { respond(res, 400, { error: "Invalid payload" }); return; }
+    if (reconciliation) {
+      if (typeof payload.repository?.full_name !== "string" || !repos.has(payload.repository.full_name)) {
+        respond(res, 403, { error: "Repository not allowed" }); return;
+      }
+      respond(res, 200, await reconcile(payload.repository.full_name)); return;
+    }
+    if (typeof event !== "string" || typeof delivery !== "string") { respond(res, 401, { error: "Invalid webhook headers" }); return; }
     if (event === "ping") { respond(res, 200, { pong: true }); return; }
     if (!Object.hasOwn(ACTIONS, event)) { respond(res, 200, { ignored: true }); return; }
     const repo = payload.repository?.full_name;
     if (typeof repo !== "string" || !repos.has(repo)) { respond(res, 403, { error: "Repository not allowed" }); return; }
     if (!ACTIONS[event as keyof typeof ACTIONS].has(payload.action)) { respond(res, 200, { ignored: true }); return; }
+    if (payload.action === "unlabeled" && !MANAGED.has(payload.label?.name)) { respond(res, 200, { ignored: true }); return; }
     const item = event === "issues" ? payload.issue : payload.pull_request;
     const number = item?.number;
     if (!Number.isSafeInteger(number) || number <= 0) { respond(res, 400, { error: "Invalid item number" }); return; }
     if (event === "issues" && item.pull_request) { respond(res, 200, { ignored: true }); return; }
-    const inserted = db.prepare("INSERT OR IGNORE INTO github_triage(delivery,repo,number,kind,updated) VALUES(?,?,?,?,?)")
-      .run(delivery, repo, number, event === "issues" ? "issue" : "pull_request", Date.now());
-    respond(res, 202, { accepted: true, duplicate: inserted.changes === 0 });
+    const inserted = enqueue(repo, number, event === "issues" ? "issue" : "pull_request", payload.action === "unlabeled" ? "repair" : "webhook", delivery);
+    respond(res, 202, { accepted: true, duplicate: !inserted });
     schedule();
   }
 
@@ -280,11 +419,11 @@ export function createTriageService(options: Options) {
     if (closed) return;
     closing = true;
     if (timer) clearTimeout(timer);
-    await active;
+    await Promise.allSettled([active, ...reconciling.values()].filter(Boolean));
     db.close();
     closed = true;
     for (const resolve of idleListeners) resolve();
   }
   schedule();
-  return { handler, status, waitForIdle, close };
+  return { handler, status, waitForIdle, reconcile, close };
 }
