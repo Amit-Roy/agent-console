@@ -44,7 +44,7 @@ export function createFileViewer(apiFetch, report = () => {}) {
   const path = el("p", "file-viewer-path"); path.id = "file-viewer-path";
   const meta = el("div", "file-viewer-meta");
   const status = el("span"); status.id = "file-viewer-status"; status.setAttribute("role", "status");
-  meta.append(el("span", "file-viewer-readonly", "Read only"), status);
+  meta.append(status);
   heading.append(title, path, meta);
   const close = iconButton("x", "Close file viewer");
   close.autofocus = true;
@@ -63,10 +63,16 @@ export function createFileViewer(apiFetch, report = () => {}) {
   files.type = "button"; files.setAttribute("aria-label", "Show files"); files.setAttribute("aria-controls", "file-viewer-tree");
   const timings = el("button", "btn sm ghost", "Info");
   timings.type = "button"; timings.setAttribute("aria-expanded", "false"); timings.setAttribute("aria-controls", "file-viewer-performance");
-  toolbar.append(files, source, wrap, copy, timings, position);
+  const edit = el("a", "btn sm ghost", "Edit");
+  edit.id = "file-viewer-edit"; edit.hidden = true;
+  edit.title = "Edit in Acode"; edit.setAttribute("aria-label", "Edit");
+  toolbar.append(files, edit, source, wrap, copy, timings, position);
   const performanceDetails = el("div", "file-viewer-performance"); performanceDetails.id = "file-viewer-performance"; performanceDetails.hidden = true;
   const infoList = el("dl", "file-viewer-info"), timingList = el("div", "file-viewer-timings");
   performanceDetails.append(infoList, timingList);
+  const setup = el("a", "", "Set up Acode editing");
+  setup.href = "/acode-setup"; setup.target = "_blank"; setup.rel = "noopener";
+  performanceDetails.append(setup);
   const linkPill = el("span", "file-viewer-readonly", "Symlink"); linkPill.hidden = true;
   const outsidePill = el("span", "file-viewer-readonly file-viewer-warn", "Outside repo"); outsidePill.hidden = true;
   const extra = el("span"); meta.append(linkPill, outsidePill, extra);
@@ -85,11 +91,61 @@ export function createFileViewer(apiFetch, report = () => {}) {
   document.body.append(dialog);
   let controller, current, content = "", restoreFocus, generation = 0, imageObjectUrl;
   let currentTextFile, markdownSource = false;
+  let editTicket, editTimer, editPending;
   let treeGeneration = 0, treeThread, treeRoot, treeEntries = 0, treeShown = !matchMedia("(max-width:640px)").matches;
   const directories = new Map(), treeControllers = new Set();
   const metrics = window.agentConsoleViewerMetrics ||= [];
   const metricThread = request => request.scope === "repos" ? "viewer:repos" : request.thread;
   const scopeParams = request => request.scope === "repos" ? { scope: "repos" } : { thread: request.thread };
+  function resetEdit() {
+    clearTimeout(editTimer); editTicket = null; editPending = null;
+    edit.hidden = true; edit.removeAttribute("href"); edit.removeAttribute("aria-disabled");
+  }
+  async function prepareEdit(token) {
+    if (!currentTextFile || token !== generation || !dialog.open) return;
+    if (editPending) return editPending;
+    const request = current, file = currentTextFile.file;
+    const pending = (async () => {
+      const params = new URLSearchParams({ ...scopeParams(request), path: file.path });
+      const response = await apiFetch(`/api/acode/edit?${params}`, { method: "POST", cache: "no-store" });
+      const grant = await response.json();
+      if (token !== generation || !dialog.open) return;
+      if (!response.ok) throw new Error(grant.error || "Could not prepare Acode editing.");
+      if (typeof grant.ticket !== "string" || !grant.endpoint || !Number.isFinite(grant.expiresAt)) throw new Error("Could not prepare Acode editing.");
+      editTicket = grant;
+      const payload = { endpoint: grant.endpoint, ticket: grant.ticket, line: request.ref.line || 1, column: request.ref.column || 1 };
+      edit.href = `acode://agent-console/edit/${encodeURIComponent(JSON.stringify(payload))}`;
+      clearTimeout(editTimer);
+      editTimer = setTimeout(() => {
+        if (document.visibilityState === "visible") prepareEdit(token).catch(() => {});
+      }, Math.max(1000, grant.expiresAt - Date.now() - 15000));
+    })();
+    editPending = pending;
+    try { await pending; } finally { if (editPending === pending) editPending = null; }
+  }
+  edit.onclick = event => {
+    if (editTicket && editTicket.expiresAt > Date.now() + 1000 && edit.hasAttribute("href")) {
+      // A real anchor with a ready URL preserves Android's user gesture for app launch.
+      editTicket = null; edit.removeAttribute("aria-disabled");
+      status.textContent = "Opening Acode… Bridge plugin required once (Info → setup).";
+      clearTimeout(editTimer);
+      editTimer = setTimeout(() => prepareEdit(generation).catch(() => {}), 1000);
+      return;
+    }
+    event.preventDefault();
+    const token = generation;
+    edit.setAttribute("aria-disabled", "true"); status.textContent = "Preparing Acode…";
+    prepareEdit(token).then(() => {
+      if (token === generation && dialog.open) { edit.removeAttribute("aria-disabled"); status.textContent = "Ready. Tap Edit to open Acode."; }
+    }).catch(error => {
+      if (token === generation && dialog.open) { edit.removeAttribute("aria-disabled"); status.textContent = error.message; }
+    });
+  };
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState !== "visible" || !dialog.open || !currentTextFile) return;
+    // Refresh content and access after returning from the native editor.
+    load({ ...current, openedAt: performance.now(), module_ms: 0 });
+  });
   function record(sample) {
     const safe = { kind: sample.kind, thread: sample.thread };
     for (const [key, value] of Object.entries(sample)) if (typeof value === "number" && Number.isFinite(value)) safe[key] = Math.max(0, Math.round(value * 10) / 10);
@@ -156,6 +212,7 @@ export function createFileViewer(apiFetch, report = () => {}) {
     if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) dialog.close();
   });
   dialog.addEventListener("close", () => {
+    resetEdit();
     controller?.abort(); generation++; treeGeneration++;
     for (const request of treeControllers) request.abort(); treeControllers.clear();
     if (imageObjectUrl) URL.revokeObjectURL(imageObjectUrl); imageObjectUrl = null;
@@ -314,6 +371,7 @@ export function createFileViewer(apiFetch, report = () => {}) {
     return { bytes: blob.size, imageNetwork: receivedAt - at, imageDecode: readyAt - decodeAt, readyAt, receivedAt };
   }
   async function load(request) {
+    resetEdit();
     controller?.abort(); controller = new AbortController();
     const token = ++generation, at = request.openedAt || performance.now();
     if (imageObjectUrl) URL.revokeObjectURL(imageObjectUrl); imageObjectUrl = null;
@@ -349,6 +407,8 @@ export function createFileViewer(apiFetch, report = () => {}) {
           if (typeof file.content !== "string") throw new Error("The server returned an invalid file.");
           currentTextFile = { file, ref: request.ref }; markdownSource = !!request.ref.line;
           renderFile(file, request.ref, token); applyMeta(file);
+          edit.hidden = false;
+          prepareEdit(token).catch(() => {});
         }
       }
       if (token !== generation || !dialog.open) return;
@@ -369,6 +429,7 @@ export function createFileViewer(apiFetch, report = () => {}) {
   return {
     record,
     openWorkspace({ opener, openedAt, module_ms }) {
+      resetEdit();
       controller?.abort(); generation++;
       for (const request of treeControllers) request.abort(); treeControllers.clear();
       treeGeneration++; treeThread = null; treeRoot = null; treeEntries = 0;

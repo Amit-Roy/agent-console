@@ -29,7 +29,7 @@ fs.writeFileSync(path.join(fixture, 'workspace.png'), png);
 const sample = path.join(cwd, 'sample.ts');
 fs.writeFileSync(sample, Array.from({length: 100}, (_, n) => `export const line${n + 1} = ${n + 1};`).join('\n'));
 fs.writeFileSync(path.join(cwd, 'unsafe.html'), '<script>window.__fileViewerExecuted = true</script>\n<img src=x onerror="window.__fileViewerExecuted = true">');
-fs.writeFileSync(path.join(fixture, 'outside.txt'), 'OUTSIDE_CONTENT_MUST_NOT_APPEAR');
+fs.writeFileSync(path.join(fixture, 'outside.txt'), 'Home-folder notes outside the project');
 const links = [
   `[Absolute reference](${sample}:32)`,
   '[Relative reference](./sample.ts:65:4)',
@@ -44,6 +44,7 @@ const links = [
   '[Markdown line](./scripts/report.md:5)',
   '[Missing file](./missing.ts:2)',
   '[Outside project](../outside.txt)',
+  '[System file](/etc/hostname)',
   '[External reference](https://example.com/reference)',
 ].join('\n\n');
 const thread = {id: '22222222-2222-4222-8222-222222222222', provider: 'mock', model: 'echo', effort: 'medium', mode: 'plan', title: 'File viewer fixture', cwd, status: 'idle', cost: 0, createdAt: 1, updatedAt: 1};
@@ -276,8 +277,11 @@ try {
   assert.match(await page.locator('#file-viewer-code').textContent() || '', /export const recovered = true/);
   await close(page);
   await open(page, 'Outside project');
+  assert.match(await page.locator('#file-viewer-code').textContent() || '', /Home-folder notes outside the project/);
+  await close(page);
+  await open(page, 'System file');
   assert.match(await page.locator('#file-viewer-status').textContent() || '', /outside|not allowed|within|folder|project/i);
-  assert.equal((await page.locator('#file-viewer').textContent())?.includes('OUTSIDE_CONTENT_MUST_NOT_APPEAR'), false);
+  assert.equal(await page.locator('#file-viewer-code').isVisible(), false);
   await close(page);
   await context.route('https://example.com/reference', route => route.fulfill({body: 'external fixture', contentType: 'text/plain'}));
   assert.equal(await ref(page, 'External reference').getAttribute('target'), '_blank');
@@ -289,7 +293,7 @@ try {
   assert.equal(await page.locator('#file-viewer[open]').count(), 0);
   await popup.close();
   assert.deepEqual(errors, []);
-  console.log('PASS file viewer: executable HTML escaped, missing/outside errors, external links unchanged');
+  console.log('PASS file viewer: executable HTML escaped, home-folder files allowed, missing/system errors, external links unchanged');
 
   const workspaceEntry = (p: Page, name: string) => p.locator('.file-tree-entry').filter({hasText: new RegExp(`^[▸▾·]${name.replaceAll('.', '\\.')}$$`)});
   const openWorkspace = async (p: Page) => {
@@ -323,8 +327,10 @@ try {
   await openWorkspace(page);
   assert.equal(fileRequests.length, afterWorkspaceFiles, 'reopening clears image without reloading it');
   await close(page);
-  await open(page, 'Outside project');
-  assert.match(await page.locator('#file-viewer-status').textContent() || '', /outside|not allowed|within|folder|project/i, 'chat scope remains narrow after workspace browsing');
+  await open(page, 'System file');
+  assert.match(await page.locator('#file-viewer-status').textContent() || '', /outside|not allowed|within|folder|project/i, 'system files stay blocked after workspace browsing');
+  assert.equal(new URL(fileRequests.at(-1)!).searchParams.get('thread'), thread.id, 'chat links restore thread scope');
+  assert.equal(new URL(fileRequests.at(-1)!).searchParams.has('scope'), false);
   await close(page);
   assert.equal(await page.locator('#threads > li:not(.empty-list)').count(), 1, 'Files never creates a thread');
   console.log('PASS sidebar Files: fixed repos root from narrow thread, blank each click, no automatic file read, Markdown/image navigation and unchanged chat scope');
