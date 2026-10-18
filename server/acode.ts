@@ -74,14 +74,9 @@ export function createAcodeBridge(lookup: Lookup, now: () => number = Date.now) 
   }
   async function projectRoot(grant: Grant) {
     const cwd = await realpath(grant.cwd);
-    let root = path.dirname(grant.target);
-    if (inside(cwd, grant.target)) {
-      while (true) {
-        if (await lstat(path.join(root, ".git")).then(() => true, () => false)) break;
-        if (root === cwd) break;
-        root = path.dirname(root);
-      }
-    }
+    // Preserve the chosen workspace, including sibling repositories. A symlinked
+    // instructions file must not narrow ~/repos to its backing brain repository.
+    const root = inside(cwd, grant.target) ? cwd : path.dirname(grant.target);
     const info = await lstat(root);
     return { root, dev: info.dev, ino: info.ino, expiresAt: now() + SESSION_MS };
   }
