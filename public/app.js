@@ -1631,7 +1631,9 @@ function agentCard(b) {
   const body = el("div", "body");
   if (b.input?.prompt) {
     const det = el("details", "sub-prompt");
-    det.append(el("summary", "", "Instructions"), el("pre", "", String(b.input.prompt).slice(0, 4000)));
+    const label = el("summary");
+    label.append(icon("chev-right", "chev"), el("span", "", "Instructions"));
+    det.append(label, el("pre", "", String(b.input.prompt).slice(0, 4000)));
     body.append(det);
   }
   const log = el("ol", "sub-log");
@@ -1850,7 +1852,9 @@ function onEvent(e, live) {
         const st = card.querySelector(".st");
         st.replaceChildren(icon(c.is_error ? "x" : "check"), el("span", "sr-only", c.is_error ? "error" : "done"));
         const text = typeof c.content === "string" ? c.content : (c.content ?? []).map((x) => x.text ?? "").join("\n");
-        if (text) {
+        // a background subagent's launch receipt is harness bookkeeping; its status chip and activity say the same
+        const launched = card.classList.contains("agent") && (card.querySelector(".task-chip:not([hidden])") || /^Async agent launched/.test(text));
+        if (text && !launched) {
           const out = toolOutput(text, !!c.is_error);
           card.querySelector(".body").append(out);
           if (card.open) fitOutput(out);
