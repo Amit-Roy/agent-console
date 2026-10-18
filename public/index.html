@@ -62,6 +62,9 @@
     <button id="files" class="btn block ghost" type="button" title="Browse ~/repos" aria-haspopup="dialog">
       <svg class="ico" aria-hidden="true"><use href="#i-folder"/></svg><span>Files</span>
     </button>
+    <button id="notifications" class="btn block ghost" type="button" aria-haspopup="dialog">
+      <svg class="ico" aria-hidden="true"><use href="#i-alert"/></svg><span>Notifications</span>
+    </button>
     <div class="side-scroll">
       <h2 class="side-label">Threads</h2>
       <ul id="threads" class="thread-list" aria-label="Thread list"></ul>
@@ -159,5 +162,10 @@
   <p id="d-warn" class="callout" role="alert" hidden><svg class="ico" aria-hidden="true"><use href="#i-alert"/></svg><span>Bypass mode runs every tool without asking. Use only in folders you trust.</span></p>
   <div class="row"><button value="cancel" class="btn" formnovalidate>Cancel</button><button value="ok" class="btn primary" id="d-ok">Create thread</button></div>
 </form></dialog>
+<dialog id="notifications-dialog" aria-labelledby="notifications-title">
+  <h3 id="notifications-title">Notifications</h3>
+  <p id="notifications-status" class="sub" role="status" aria-live="polite"></p>
+  <form method="dialog"><div class="row"><button id="notifications-toggle" class="btn primary" type="button">Enable notifications</button><button class="btn">Done</button></div></form>
+</dialog>
 <script type="module" src="/app.js"></script>
 </body></html>

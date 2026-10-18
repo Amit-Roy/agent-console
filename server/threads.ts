@@ -1,3 +1,4 @@
+import type { ThreadNotice } from "./notifications.ts";
 import { IdleCompactionTimers, idleCompactionPolicy, idleCompactionDeadline } from "./idle-compaction.ts";
 import { HistoryIndex } from "./history.ts";
 import { historyWireEvent } from "./history-wire.ts";
@@ -149,9 +150,12 @@ export class Threads {
   private accounting = new SessionAccounting();
   private queues = new Map<string, Queued[]>(); // messages to send, in order, once the running turn ends
   private emit: Emit;
+  private notificationTurns = new Set<string>();
+  private onNotification?: (notice: ThreadNotice) => void;
   private labeler: Labeler; // plain-English labels for shell commands that arrive without a description
   private commands: Record<string, Command[]> = {}; // per provider: each harness has its own slash commands and skills
-  constructor(emit: Emit) {
+  constructor(emit: Emit, onNotification?: (notice: ThreadNotice) => void) {
+    this.onNotification = onNotification;
     this.emit = emit;
     this.labeler = createLabeler((job, label) => {
       if (this.threads.has(job.thread)) this.publish(job.thread, { type: "tool_label", tool_use_id: job.id, label });
@@ -512,6 +516,10 @@ export class Threads {
     this.emit({ t: "commands", provider, commands: commandList(list) });
   }
 
+  private notify(t: Thread, kind: ThreadNotice["kind"]) {
+    try { this.onNotification?.({ kind, thread: t.id, title: t.title }); } catch { /* notification transport cannot interrupt a turn */ }
+  }
+
   private start(t: Thread, warm = false): Live {
     const prov = PROVIDERS.get(t.provider);
     if (!prov) throw new Error(`Unknown provider "${t.provider}".`);
@@ -538,12 +546,15 @@ export class Threads {
         if (live.rewarm) { live.rewarm = false; setImmediate(() => this.warm(t.id)); } // the old process no longer holds the session
         if (current && t.background) { delete t.background; this.emit({ t: "thread", thread: t }); }
         if (!current || t.status !== "running") return; // a replaced or aborted agent's exit says nothing about the new turn
+        const notifyFailure = !t.operation && !info.aborted && !live.aborted && this.notificationTurns.delete(t.id);
+        this.notificationTurns.delete(t.id);
         this.cancelQuestions(t.id);
         t.status = "idle";
         delete t.operation;
         if (!info.aborted && !live.aborted) {
           this.publish(t.id, { type: "console_error", text: `${prov.label} exited (${info.signal ?? info.code}). ${info.stderr.trim().slice(-500)}` });
         }
+        if (notifyFailure) this.notify(t, "failed");
         this.endTiming(t, { subtype: "exited", is_error: true });
         this.touch(t);
         if (parseCommand(this.queues.get(t.id)?.[0]?.text || "")?.name === "compact") this.drain(t.id);
@@ -602,6 +613,7 @@ export class Threads {
       try { ev = this.questions.add(t.id, ev); }
       catch { this.publish(t.id, { type: "console_error", text: "The agent sent an invalid question request." }); return; }
       this.updateWaiting(t.id);
+      if (!compacting && this.notificationTurns.has(t.id)) this.notify(t, "needs_input");
     }
     if (ev.type === "question_answer") {
       if (!this.questions.remove(t.id, ev.id)) return;
@@ -675,6 +687,12 @@ export class Threads {
       t.lastRun = { ...t.lastRun, duration_ms: ev.duration_ms };
       // a message that arrived just as the turn ended starts the next one straight away: Claude says so in queued_turn_count
       t.status = Number(ev.queued_turn_count) > 0 ? "running" : "idle";
+      if (!compacting && this.notificationTurns.has(t.id) && (ev.is_error || t.status === "idle")) {
+        const queued = !!this.queues.get(t.id)?.length;
+        this.notificationTurns.delete(t.id);
+        if (ev.is_error) this.notify(t, "failed");
+        else if (!queued && !this.questions.list(t.id).length) this.notify(t, "finished");
+      }
       this.touch(t);
       brainCommit(); // agents may have written wiki pages this turn; keep the shared brain's git history current
       if (t.status === "idle" && (!ev.is_error || parseCommand(this.queues.get(t.id)?.[0]?.text || "")?.name === "compact")) this.drain(t.id);
@@ -831,7 +849,13 @@ export class Threads {
     });
     this.touch(t);
     if (live.held) this.release(t, live); // a warm agent's start-up events, after the message as on a cold start
-    live.agent.send(prompt, attachments.filter((a) => a.kind === "image"));
+    if (opts.auto) this.notificationTurns.delete(id);
+    else this.notificationTurns.add(id);
+    try { live.agent.send(prompt, attachments.filter((a) => a.kind === "image")); }
+    catch (error) {
+      if (this.notificationTurns.delete(id)) this.notify(t, "failed");
+      throw error;
+    }
     if (!opts.auto) this.notePrompt(t, text);
   }
 
@@ -859,7 +883,7 @@ export class Threads {
       }
     }
     if (t.operation !== "compact" && opts.mode !== "queue" && agent?.steer) {
-      const accepted = () => { this.notePrompt(t, text); this.publish(t.id, {
+      const accepted = () => { this.notificationTurns.add(t.id); this.notePrompt(t, text); this.publish(t.id, {
         type: "user_input",
         text,
         ts: Date.now(),
@@ -977,6 +1001,7 @@ export class Threads {
   }
 
   abort(id: string) {
+    this.notificationTurns.delete(id);
     const t = this.threads.get(id);
     const live = this.live.get(id);
     if (!t) return;
@@ -1007,6 +1032,7 @@ export class Threads {
   }
 
   private kill(id: string, reason = "kill", rewarm = false) {
+    this.notificationTurns.delete(id);
     this.cancelQuestions(id);
     const live = this.live.get(id);
     if (live) {

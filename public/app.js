@@ -5,6 +5,7 @@ import { createLatencyReporter } from "/telemetry.js";
 import { createQuestions } from "/questions.js";
 import { openContextEconomics } from "/context-economics.js";
 import { openBreakdown, closeBreakdown } from "/turn-breakdown.js";
+import { setupNotifications } from "/notifications.js";
 
 const MODE_META = {
   plan: { label: "Plan", desc: "Read-only. Plans without editing.", icon: "eye" },
@@ -249,7 +250,9 @@ function handle(m) {
       renderThreads();
       let last = null;
       try { last = localStorage.getItem("ac_thread"); } catch {}
-      if (state.current && state.threads.has(state.current)) openThread(state.current);
+      const linked = linkedThread();
+      if (linked && state.threads.has(linked)) openThread(linked);
+      else if (state.current && state.threads.has(state.current)) openThread(state.current);
       else if (last && state.threads.has(last)) openThread(last); // first load: reopen the thread the reader last had open
       else if (state.threads.size) openThread([...state.threads.values()][0].id);
       else {
@@ -681,6 +684,7 @@ function openThread(id) {
   state.request = (state.request || 0) + 1;
   if (pending.length && pending[0].thread !== id) clearPending(); // attachments belong to the thread they were uploaded to
   state.current = id;
+  history.replaceState(null, "", `${location.pathname}${location.search}#thread=${encodeURIComponent(id)}`);
   if (switching) restoreDraft(id);
   state.usageTab = state.threads.get(id)?.provider || "claude";
   try { localStorage.setItem("ac_thread", id); } catch {}
@@ -2490,7 +2494,26 @@ $("dform").addEventListener("submit", (e) => {
   if (e.submitter?.value === "ok") send({ t: "create", provider: menus.dProv.value, cwd: menus.dCwd.value, model: menus.dModel.value, effort: menus.dEffort.value, mode: menus.dMode.value });
 });
 
-if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
+function linkedThread() {
+  return new URLSearchParams(location.hash.slice(1)).get("thread");
+}
+addEventListener("hashchange", () => {
+  const id = linkedThread();
+  if (id && state.ready && state.threads.has(id)) openThread(id);
+});
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("/sw.js").catch(() => {});
+  navigator.serviceWorker.addEventListener("message", event => {
+    if (event.data?.type !== "notification-open") return;
+    let url;
+    try { url = new URL(event.data.url, location.origin); } catch { return; }
+    if (url.origin !== location.origin || url.pathname !== "/") return;
+    const id = new URLSearchParams(url.hash.slice(1)).get("thread");
+    if (id && state.ready && state.threads.has(id)) openThread(id);
+    location.hash = url.hash;
+  });
+}
+setupNotifications({ apiFetch });
 clearChat();
 renderHead();
 connect();
