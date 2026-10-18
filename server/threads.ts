@@ -11,7 +11,7 @@ import { DATA_DIR } from "./auth.ts";
 import { Questions, type PendingQuestion } from "./questions.ts";
 import { brainCommit } from "./providers/brain.ts";
 import { createLabeler, needsLabel, type Labeler } from "./providers/label.ts";
-import { suggestTitle } from "./providers/title.ts";
+import { suggestTitle, titleText, MAX_MESSAGES } from "./providers/title.ts";
 import { recentPreamble, replayPreamble } from "./export.ts";
 import { backfill, restoreAccounting, recordTurn, readTurns, type Turn } from "./analytics.ts";
 import { repairAccounting } from "./accounting-repair.ts";
@@ -27,6 +27,9 @@ export interface Thread {
   provider: string;
   title: string;
   autoTitle?: boolean; // still carries the folder-name default: the first message renames it (cleared by a manual rename)
+  autoNamed?: boolean; // the current title was written by the title helper, so it may be refreshed (cleared by a manual rename)
+  prompts?: number; // user prompts sent so far (not auto nudges); every RETITLE_EVERY-th refreshes an auto-written title
+  recent?: string[]; // text of the last user prompts, media-free and clipped: what the title helper reads
   cwd: string;
   mode: Mode;
   model: string;
@@ -70,6 +73,7 @@ const LOG_DIR = path.join(DATA_DIR, "logs");
 fs.mkdirSync(LOG_DIR, { recursive: true, mode: 0o700 });
 
 const IDLE_KILL_MS = 30 * 60 * 1000;
+const RETITLE_EVERY = 5; // keep an auto-written thread title fresh: rename after every 5th user prompt
 // Pre-warm: opening/focusing a thread spawns its idle agent so the first send skips the harness cold start. Spawning sends no
 // prompt and makes no model request (verified per harness). At most WARM_MAX unused processes; unused ones are reaped sooner.
 const WARM_MAX = Number(process.env.AGENT_CONSOLE_WARM_MAX ?? 2);
@@ -376,6 +380,7 @@ export class Threads {
     if (patch.title) {
       t.title = patch.title.slice(0, 80);
       t.autoTitle = false;
+      t.autoNamed = false; // a name the user chose is never rewritten
     }
     if (patch.mode || patch.model || patch.effort || patch.advisor) {
       const live = this.live.get(id), after = { mode: t.mode, model: t.model, effort: t.effort, advisor: t.advisor };
@@ -826,11 +831,20 @@ export class Threads {
     this.touch(t);
     if (live.held) this.release(t, live); // a warm agent's start-up events, after the message as on a cold start
     live.agent.send(prompt, attachments.filter((a) => a.kind === "image"));
+    if (!opts.auto) this.notePrompt(t, text);
+  }
+
+  // Record a user prompt for naming. The first message with substance names the thread; after that every RETITLE_EVERY-th prompt
+  // refreshes a title the helper wrote. Media is not part of `text`, so an image-only message names nothing.
+  private notePrompt(t: Thread, text: string) {
+    const clean = titleText(text);
+    if (clean) t.recent = [...(t.recent ?? []), clean].slice(-MAX_MESSAGES);
+    t.prompts = (t.prompts ?? 0) + 1;
     // "ok" / "hi" say nothing about the topic: wait for a first message with substance
-    if (t.autoTitle && !opts.auto && (attachments.length || text.trim().split(/\s+/).length >= 3)) {
-      t.autoTitle = false; // one attempt per thread, whatever the outcome
-      void this.retitle(t, text.trim() || attachments.map((a) => a.name).join(" "));
-    }
+    if (t.autoTitle && clean.split(" ").length >= 3) {
+      t.autoTitle = false; // one first-name attempt per thread, whatever the outcome
+      void this.retitle(t);
+    } else if (t.autoNamed && t.prompts % RETITLE_EVERY === 0) void this.retitle(t);
   }
 
   private whileRunning(t: Thread, text: string, opts: { attachments?: unknown; mode?: "steer" | "queue"; questionAnswer?: true }) {
@@ -846,14 +860,14 @@ export class Threads {
       }
     }
     if (t.operation !== "compact" && opts.mode !== "queue" && agent?.steer) {
-      const accepted = () => this.publish(t.id, {
+      const accepted = () => { this.notePrompt(t, text); this.publish(t.id, {
         type: "user_input",
         text,
         ts: Date.now(),
         delivery: "steer",
         ...(opts.questionAnswer ? { questionAnswer: true } : {}),
         ...(attachments.length ? { attachments: attachments.map(({ id, name, kind, media_type, size, n }) => ({ id, name, kind, media_type, size, ...(n ? { n } : {}) })) } : {}),
-      });
+      }); };
       const delivery = agent.steer(withFileList(text, attachments), attachments.filter((a) => a.kind === "image"));
       if (delivery instanceof Promise) {
         void delivery.then(accepted).catch((error) => {
@@ -953,12 +967,13 @@ export class Threads {
     }, 250).unref();
   }
 
-  // Name the thread after what the first message is about. Never blocks the turn; on any failure the folder name stays.
-  private async retitle(t: Thread, message: string) {
+  // Name the thread after its last two user messages. Never blocks the turn; on any failure the current title stays.
+  private async retitle(t: Thread) {
     const original = t.title;
-    const title = await suggestTitle(message).catch(() => undefined);
+    const title = await suggestTitle(t.recent ?? []).catch(() => undefined);
     if (!title || !this.threads.has(t.id) || t.title !== original) return; // deleted, or the user renamed it meanwhile
     t.title = title;
+    t.autoNamed = true;
     this.touch(t);
   }
 

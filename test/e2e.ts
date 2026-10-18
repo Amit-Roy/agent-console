@@ -158,7 +158,17 @@ if (hello.providers.some((p: any) => p.id === "mock")) {
   ws.send(JSON.stringify({ t: "send", thread: autoId, text: "now something unrelated entirely" }));
   await waitFor((m) => m.t === "event" && m.event.type === "result", 5000);
   await new Promise((r) => setTimeout(r, 300));
-  check("title: only the first message renames", !inbox.some((m) => m.t === "thread" && m.thread.id === autoId && m.thread.title !== "fix the flaky login"));
+  check("title: prompts 3 and 4 do not rename", !inbox.some((m) => m.t === "thread" && m.thread.id === autoId && m.thread.title !== "fix the flaky login"));
+  clear();
+  ws.send(JSON.stringify({ t: "send", thread: autoId, text: "also a fourth question here" }));
+  await waitFor((m) => m.t === "event" && m.event.type === "result", 5000);
+  await new Promise((r) => setTimeout(r, 300));
+  check("title: the 4th prompt does not rename", !inbox.some((m) => m.t === "thread" && m.thread.id === autoId && m.thread.title !== "fix the flaky login"));
+  clear();
+  ws.send(JSON.stringify({ t: "send", thread: autoId, text: "![shot](/tmp/x.png) [Image #1] refactor the billing module now" }));
+  const refreshed = await waitFor((m) => m.t === "thread" && m.thread.id === autoId && m.thread.title !== "fix the flaky login", 5000);
+  check("title: the 5th prompt refreshes it from the latest text, media dropped", refreshed?.thread?.title === "refactor the billing module", refreshed?.thread?.title);
+  await waitFor((m) => m.t === "event" && m.event.type === "result", 5000);
   ws.send(JSON.stringify({ t: "delete", thread: autoId }));
   await waitFor((m) => m.t === "removed", 3000);
   const typed = await create({ provider: "mock", model: "echo", title: "" });
