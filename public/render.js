@@ -480,7 +480,7 @@ function numericColumns(table) {
 // -- links in prose --
 /** Bare URL or file path (with an extension) that is the whole content of an inline code span. */
 function codeTarget(t) {
-  if (!t || /\s/.test(t) || t.length > 2000) return null;
+  if (!t || /\s/.test(t) || t.length > 2000 || t.startsWith("@")) return null; // `@AGENTS.md` is an import, not a path
   if (HTTP_URL.test(t)) { try { new URL(t); return { url: t }; } catch { return null; } }
   if (!/^(?:file:\/\/|~\/|\.{1,2}\/|\/)?[^\s/][^\s]*\.[A-Za-z0-9]{1,10}(?::\d+(?::\d+)?)?(?:#L\d+(?:-L?\d+)?)?$/.test(t) && !/^(?:file:\/\/|~\/|\.{1,2}\/|\/)[^\s]+\.[A-Za-z0-9]{1,10}(?::\d+(?::\d+)?)?$/.test(t)) return null;
   const ref = parseFileRef(t);

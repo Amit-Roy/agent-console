@@ -37,7 +37,7 @@ const message = [
   '![Remote picture](https://img.test/remote.png)',
   '![Demo clip](./clip.webm)',
   'Bare https://example.com/some/very/long/path?with=query&and=more and [Sonnet API rates](https://example.com/rates).',
-  'Code URL `http://127.0.0.1:8765/x.mp4` and path `' + path.join(cwd, 'sample.ts') + ':1` but not `npm run test`.',
+  'Code URL `http://127.0.0.1:8765/x.mp4` and path `' + path.join(cwd, 'sample.ts') + ':1` but not `npm run test` or import `@AGENTS.md`.',
   '| Name | Count | Share |\n|---|---:|---|\n| alpha | 1,200 | 12% |\n| beta | 34 | 3.5% |\n| gamma | 5 | 0.1% |',
   '```chart\n' + chart + '\n```',
 ].join('\n\n');
@@ -166,6 +166,7 @@ try {
   assert.ok(await urlCode.locator('code').count(), 'keeps code styling');
   assert.equal(await chat.locator('video[src="http://127.0.0.1:8765/x.mp4"]').count() + await chat.locator('.md-fail', {hasText: 'x.mp4'}).count(), 1, 'video link gets a player (or its fallback)');
   assert.equal(await chat.locator('a.code-link', {hasText: 'npm run test'}).count(), 0, 'plain commands are not linked');
+  assert.equal(await chat.locator('a.code-link', {hasText: '@AGENTS.md'}).count(), 0, 'at-imports are not linked');
   const pathCode = chat.locator('a.code-link[data-file-ref]', {hasText: 'sample.ts'});
   await pathCode.click();
   await page.locator('#file-viewer[open]').waitFor();
