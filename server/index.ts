@@ -13,6 +13,7 @@ import { authed, CODER_HOSTS, cookieFrom, limited, makeToken, passwordOk, PASSWO
 import { providerInfo, refreshPiModels } from "./providers/index.ts";
 import { threadToMarkdown } from "./export.ts";
 import { Threads, turnTiming } from "./threads.ts";
+import { Notifications } from "./notifications.ts";
 import { dashboard } from "./analytics.ts";
 import { pricing, rates } from "./api-pricing.ts";
 import { contextAllocation } from "./context-allocation.ts";
@@ -41,7 +42,12 @@ const broadcast = (msg: unknown) => {
     c.send(invalidation && selected && selected !== event.thread ? invalidation : s);
   }
 };
-const threads = new Threads(broadcast);
+let notifications: Notifications | undefined;
+try { notifications = new Notifications(DATA_DIR); }
+catch { console.warn("Browser notification storage is unavailable."); }
+const threads = new Threads(broadcast, notice => {
+  void notifications?.notify(notice).catch(() => console.warn("Browser notification delivery failed."));
+});
 const acode = createAcodeBridge(id => threads.get(id));
 const acodeSettings = acodeConfig();
 let latency: LatencyStore | undefined;
@@ -95,6 +101,26 @@ const sameOrigin: express.RequestHandler = (req, res, next) => {
   } catch {}
   res.status(403).json({ error: "Cross-site request refused." });
 };
+// Browser push is opt-in per device. Both writes require a same-origin session.
+app.get("/api/notifications", (_req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ enabled: !!notifications, publicKey: notifications?.publicKey });
+});
+app.post("/api/notifications/subscriptions", sameOrigin, express.json({ limit: "8kb" }), (req, res) => {
+  if (!notifications) return void res.status(503).json({ error: "Notifications are unavailable." });
+  try {
+    notifications.subscribe(req.body, String(req.headers.origin));
+    res.json({ ok: true });
+  } catch (error: any) { res.status(400).json({ error: error.message }); }
+});
+app.delete("/api/notifications/subscriptions", sameOrigin, express.json({ limit: "8kb" }), (req, res) => {
+  if (!notifications) return void res.status(503).json({ error: "Notifications are unavailable." });
+  if (typeof req.body?.endpoint !== "string") return void res.status(400).json({ error: "Missing subscription endpoint." });
+  try {
+    notifications.unsubscribe(req.body.endpoint, String(req.headers.origin));
+    res.json({ ok: true });
+  } catch { res.status(503).json({ error: "Could not save notification settings." }); }
+});
 // Restart button: the same detached watcher as `bin/agent-console restart-when-idle` (waits for running turns, then replaces this process).
 const RUN_DIR = process.env.AGENT_CONSOLE_RUN || path.join(os.homedir(), ".cache", "agent-console");
 // Set by bin/agent-console for the server it starts. Removed from our env so agents and the scratch servers their tests start
