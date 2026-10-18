@@ -15,7 +15,7 @@ export async function openContextEconomics({ getThread, send, trigger }) {
   dialog.id = "context-economics";
   dialog.setAttribute("aria-labelledby", "context-economics-title");
   const head = el("div", "context-economics-head");
-  const title = el("h3", "", "Context: continue or compact?"); title.id = "context-economics-title";
+  const title = el("h2", "", "Context: continue or compact?"); title.id = "context-economics-title";
   const close = iconButton("x", "Close context forecast", "btn icon ghost");
   close.onclick = () => dialog.close();
   head.append(title, close);
@@ -54,7 +54,7 @@ export async function openContextEconomics({ getThread, send, trigger }) {
   recommendation.setAttribute("aria-atomic", "true");
   recommendation.setAttribute("aria-labelledby", "context-recommendation-title");
   const recommendationLabel = el("p", "context-recommendation-label", "Recommendation");
-  const recommendationTitle = el("h4", "context-recommendation-title");
+  const recommendationTitle = el("h3", "context-recommendation-title");
   recommendationTitle.id = "context-recommendation-title";
   const recommendationDetail = el("p", "context-recommendation-detail");
   recommendation.append(recommendationLabel, recommendationTitle, recommendationDetail);

@@ -2,3 +2,7 @@ node_modules/
 *.log
 .env
 test/tmp/
+
+# Impeccable design hook: shared config is committed, per-developer state is not
+.impeccable/*
+!.impeccable/config.json

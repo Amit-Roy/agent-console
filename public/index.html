@@ -132,19 +132,19 @@
 <div id="toast" role="status" hidden></div>
 <div id="announce" class="sr-only" role="status" aria-live="polite"></div>
 <dialog id="run-details" aria-labelledby="run-details-title">
-  <h3 id="run-details-title">Run details</h3>
+  <h2 id="run-details-title">Run details</h2>
   <div id="run-thread" class="thread-id"></div>
   <dl id="run-metrics" class="facts"></dl>
-  <section id="turn-timing" class="turn-timing" aria-labelledby="turn-timing-title" hidden><h4 id="turn-timing-title">Last turn</h4><div id="turn-timing-body"></div></section>
-  <h4>This thread loaded</h4>
+  <section id="turn-timing" class="turn-timing" aria-labelledby="turn-timing-title" hidden><h3 id="turn-timing-title">Last turn</h3><div id="turn-timing-body"></div></section>
+  <h3>This thread loaded</h3>
   <div id="diagnostics" class="diagnostics" aria-label="Load diagnostics">No load measurements yet.</div>
-  <h4>Speed on this server</h4>
+  <h3>Speed on this server</h3>
   <div id="latency-summary"></div>
   <section id="turn-breakdown" class="turn-timing turn-breakdown" aria-labelledby="tb-title" hidden></section>
   <form method="dialog"><div class="row"><button class="btn" autofocus>Done</button></div></form>
 </dialog>
 <dialog id="queue-editor" aria-labelledby="queue-edit-title"><form id="queue-edit-form">
-  <h3 id="queue-edit-title">Edit queued message</h3>
+  <h2 id="queue-edit-title">Edit queued message</h2>
   <p id="queue-edit-note" class="sub"></p>
   <label class="sr-only" for="queue-draft">Queued message</label>
   <textarea id="queue-draft" class="input" rows="6" maxlength="100000"></textarea>
@@ -152,7 +152,7 @@
   <div class="row"><button id="queue-cancel" class="btn" type="button">Cancel</button><button id="queue-save" class="btn primary" type="submit">Save</button></div>
 </form></dialog>
 <dialog id="dlg" aria-labelledby="dlg-title"><form method="dialog" id="dform">
-  <h3 id="dlg-title">New thread</h3>
+  <h2 id="dlg-title">New thread</h2>
   <p class="sub">Run a coding agent in one of your folders.</p>
   <div class="fld"><span class="lbl" id="l-prov">Agent</span><button type="button" id="d-prov" class="btn field" aria-labelledby="l-prov d-prov"><span></span></button></div>
   <div class="fld"><span class="lbl" id="l-cwd">Folder</span><button type="button" id="d-cwd" class="btn field" aria-labelledby="l-cwd d-cwd"><span></span></button></div>
@@ -164,7 +164,7 @@
   <div class="row"><button value="cancel" class="btn" formnovalidate>Cancel</button><button value="ok" class="btn primary" id="d-ok">Create thread</button></div>
 </form></dialog>
 <dialog id="notifications-dialog" aria-labelledby="notifications-title">
-  <h3 id="notifications-title">Notifications</h3>
+  <h2 id="notifications-title">Notifications</h2>
   <p id="notifications-status" class="sub" role="status" aria-live="polite"></p>
   <label class="fld"><input id="notifications-silent" type="checkbox" aria-describedby="notifications-silent-help"> Silent notifications</label>
   <p id="notifications-silent-help" class="sub">No sound or vibration. Applies to this device.</p>

@@ -77,7 +77,6 @@ try {
     await page.keyboard.press("Escape");
     await page.getByRole("dialog").waitFor({ state: "detached" });
     if (width === 390) await page.locator("#menu").click();
-    await page.locator("#usage-sum").click();
     const open = async () => { await page.locator("#usage .u-ctx").click(); await page.waitForFunction(() => !!document.querySelector(".context-forecast-summary")?.textContent); };
     const change = async (label: string, value: string) => { await page.getByLabel(label, { exact: true }).fill(value); await page.getByLabel(label, { exact: true }).dispatchEvent("change"); };
     await open();
