@@ -11,7 +11,7 @@ Vanilla-JS PWA + Node 24 server (no build). Drives Claude Code / Pi / Codex. Rea
 
 ## Rich chat output
 Markdown renders inline. Phone: few, small media.
-- Image `![alt](/abs/path.png)`; video `![alt](/abs/path.mp4)` (mp4/webm/mov/m4v). Abs, `~/`, relative, `file://`, http(s) ok. Space = `%20`. Outside `~/repos` or secret files refused.
+- Image `![alt](/abs/path.png)`; video `![alt](/abs/path.mp4)` (mp4/webm/mov/m4v). Abs, `~/`, relative, `file://`, http(s) ok. Space = `%20`. Outside `~` and `/tmp` or secret files refused.
 - Chart: fenced `chart` block, strict JSON Chart.js (`type`, `data`, opt `options`; no functions). Small data.
 - Table: GFM.
 - Links: bare URL or markdown. Abs path in backticks opens file viewer.

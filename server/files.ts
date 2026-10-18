@@ -28,11 +28,19 @@ function sensitive(file: string): boolean {
   const parts = file.split(path.sep).map(part => part.toLowerCase());
   if (parts.some(part => [".git", ".ssh", ".gnupg", ".aws", ".azure", ".kube", ".docker"].includes(part))) return true;
   const name = parts.at(-1) || "";
-  if (/^(?:\.env(?:\..*)?|\.npmrc|\.netrc|\.git-credentials|credentials(?:\..*)?|auth\.json|password|secret|id_(?:rsa|dsa|ecdsa|ed25519)(?:\..*)?)$/.test(name)) return true;
+  if (/^(?:\.env(?:\..*)?|\.npmrc|\.netrc|\.pgpass|\.pypirc|\.git-credentials|\.?credentials(?:\..*)?|\.claude\.json|auth\.json|password|secret|id_(?:rsa|dsa|ecdsa|ed25519)(?:\..*)?|\.\w*_history)$/.test(name)) return true;
   if (/\.(?:pem|key|p12|pfx|keystore)$/.test(name)) return true;
   const home = os.homedir();
   return [".config", ".local/share/keyrings"].some(dir => inside(path.join(home, dir), file));
 }
+
+// Beyond the thread folder the viewer reaches the rest of home and temp (screenshots, notes);
+// system paths such as /proc stay closed because they can expose the server's environment.
+function reachable(root: string, file: string): boolean {
+  return !sensitive(file) && [root, os.homedir(), os.tmpdir(), "/tmp"].some(dir => inside(dir, file));
+}
+
+const DENIED = "This file is outside your home folder or contains private credentials.";
 
 // Agents often cite paths relative to a subproject they cd'd into (public/render.js while the thread cwd is ~/repos).
 // When a relative path is missing under cwd, accept it if exactly one immediate subfolder holds it.
@@ -52,11 +60,9 @@ async function scopedPath(cwd: string, requested: string) {
   const root = await realpath(cwd);
   const expanded = requested.startsWith("~/") ? path.join(os.homedir(), requested.slice(2)) : requested;
   const candidate = path.isAbsolute(expanded) || expanded.split("/").includes("..") ? path.resolve(cwd, expanded) : await resolveRelative(cwd, expanded);
-  if (sensitive(candidate)) throw new ViewError(403, "This file is outside the thread folder or contains private credentials.");
-  // A lexically outside link (~/.claude/CLAUDE.md) is fine when its real target is inside the root.
-  const lexicalInside = inside(path.resolve(cwd), candidate) || inside(root, candidate);
-  const target = await realpath(candidate).catch(error => { if (lexicalInside) throw error; throw new ViewError(403, "This file is outside the thread folder or contains private credentials."); });
-  if (!inside(root, target) || sensitive(target)) throw new ViewError(403, "This file is outside the thread folder or contains private credentials.");
+  if (!reachable(path.resolve(cwd), candidate) && !reachable(root, candidate)) throw new ViewError(403, DENIED);
+  const target = await realpath(candidate);
+  if (!reachable(root, target)) throw new ViewError(403, DENIED);
   return { root, target, candidate };
 }
 
@@ -85,7 +91,7 @@ async function openScoped(root: string, target: string, directory = false): Prom
     // Verify the opened inode too, closing parent-directory symlink races on Linux.
     if (process.platform === "linux") {
       const opened = await realpath(`/proc/self/fd/${handle.fd}`);
-      if (!inside(root, opened) || sensitive(opened)) throw new ViewError(403, "This file is outside the thread folder or contains private credentials.");
+      if (!reachable(root, opened)) throw new ViewError(403, DENIED);
     }
     return handle;
   } catch (error) { await handle.close(); throw error; }
@@ -283,7 +289,7 @@ export function fileTree(lookup: Lookup): RequestHandler {
             // Symlinks (CLAUDE.md, AGENTS.md, .mcp.json in ~/repos) list as their target kind; opening still enforces realpath scope.
             if (!kind && entry.isSymbolicLink()) {
               const real = await realpath(child).catch(() => undefined);
-              if (real && inside(root, real) && !sensitive(real)) {
+              if (real && reachable(root, real)) {
                 const target = await statPath(real).catch(() => undefined);
                 kind = target?.isDirectory() ? "directory" : target?.isFile() ? "file" : undefined;
               }

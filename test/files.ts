@@ -46,12 +46,12 @@ try {
   assert.equal(rootListing.root, repos); assert.equal(rootListing.path, repos);
   assert.equal((await scoped("files", { path: workspace })).status, 200);
   assert.equal((await scoped("file", { path: path.join(workspace, "workspace.ts") })).status, 200, "workspace needs no thread");
-  assert.equal((await file(path.join(workspace, "workspace.ts"))).status, 403, "thread scope stays narrow");
-  assert.equal((await scoped("file", { path: path.join(temp, "outside.txt") })).status, 403);
+  assert.equal((await file(path.join(workspace, "workspace.ts"))).status, 200, "thread scope reaches the rest of home");
+  assert.equal((await scoped("file", { path: "/etc/hostname" })).status, 403, "system files stay closed");
   fs.writeFileSync(path.join(workspace, ".env"), "private workspace fixture");
-  fs.symlinkSync(cwd, path.join(workspace, "outside"));
+  fs.symlinkSync("/etc", path.join(workspace, "outside"));
   assert.equal((await scoped("file", { path: path.join(workspace, ".env") })).status, 403);
-  assert.equal((await scoped("file", { path: path.join(workspace, "outside", "hello.ts") })).status, 403);
+  assert.equal((await scoped("file", { path: path.join(workspace, "outside", "hostname") })).status, 403);
   for (const endpoint of ["files", "file", "file-image"]) {
     assert.equal((await scoped(endpoint, { scope: "home", path: workspace })).status, 400);
     assert.equal((await scoped(endpoint, { thread: id, path: workspace })).status, 400, "reject ambiguous scope");
@@ -76,10 +76,12 @@ try {
   assert.equal((await file("bad\0path")).status, 400);
   assert.equal((await file(".")).status, 415);
   fs.writeFileSync(path.join(temp, "outside.txt"), "outside");
-  assert.equal((await file("../outside.txt")).status, 403);
-  assert.equal((await file(path.join(temp, "outside.txt"))).status, 403);
-  fs.symlinkSync(path.join(temp, "outside.txt"), path.join(cwd, "escape"));
-  assert.equal((await file("escape")).status, 403, "symlink cannot escape cwd");
+  assert.equal((await file("../outside.txt")).status, 200, "temp outside cwd is viewable");
+  assert.equal((await file(path.join(temp, "outside.txt"))).status, 200);
+  assert.equal((await file("/proc/self/environ")).status, 403, "server environment stays closed");
+  assert.equal((await file(path.join(os.homedir(), ".claude", ".credentials.json"))).status, 403);
+  fs.symlinkSync("/etc/hostname", path.join(cwd, "escape"));
+  assert.equal((await file("escape")).status, 403, "symlink cannot escape home");
   fs.symlinkSync(path.join(cwd, "hello.ts"), path.join(cwd, "inside"));
   assert.equal((await file("inside")).status, 200, "in-project symlink is safe");
   fs.mkdirSync(path.join(cwd, "projx", "pub"), { recursive: true }); fs.writeFileSync(path.join(cwd, "projx", "pub", "uniq.js"), "1");
@@ -89,7 +91,7 @@ try {
   fs.mkdirSync(path.join(temp, "home"));
   fs.symlinkSync(path.join(cwd, "hello.ts"), path.join(temp, "home", "link.ts"));
   assert.equal((await file(path.join(temp, "home", "link.ts"))).status, 200, "outside-path link resolving inside cwd is viewable");
-  for (const name of [".env", ".env.local", "credentials.json", "auth.json", "id_ed25519", "secret", "private.pem"]) {
+  for (const name of [".env", ".env.local", "credentials.json", ".credentials.json", ".bash_history", "auth.json", "id_ed25519", "secret", "private.pem"]) {
     put(name, "private fixture"); assert.equal((await file(name)).status, 403, `refuse ${name}`);
   }
   fs.symlinkSync(path.join(cwd, ".env"), path.join(cwd, "friendly.txt"));
@@ -154,7 +156,7 @@ try {
   for (const excluded of [".git", ".env", ".env.local", "credentials.json", "escape", "friendly.txt", "pipe"]) assert.ok(!listing.entries.some((e: any) => e.name === excluded), `omit sensitive/symlink/special entry ${excluded}`);
   assert.ok(listing.entries.some((e: any) => e.name === "inside" && e.kind === "file"), "in-root symlink listed");
   const nested = await (await tree("src")).json(); assert.equal(nested.parent, cwd); assert.equal(nested.entries.length, 1);
-  assert.equal((await tree("../")).status, 403); assert.equal((await tree(".git")).status, 403);
+  assert.equal((await tree("../")).status, 200); assert.equal((await tree("/etc")).status, 403); assert.equal((await tree(".git")).status, 403);
   assert.equal((await tree(".", "-1")).status, 400); assert.equal((await tree(".", "100001")).status, 400);
   assert.equal((await tree(".", "broken")).status, 400); assert.equal((await tree(".", undefined, "missing")).status, 404);
   assert.equal((await tree("hello.ts")).status, 404);
