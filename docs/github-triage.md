@@ -12,11 +12,11 @@ Each item receives one effort label and one priority label. Existing labels outs
 | `Eff: BAU` | Standard implementation work with a clear direction, possibly across several files. |
 | `Eff: Deep` | Cross-cutting work, uncertain requirements, architecture, or substantial investigation. |
 | `Pri: P0` | An urgent outage, security problem, or data-loss risk. |
-| `Pri: P1` | Work that blocks app delivery or daily productive use. |
+| `Pri: P1` | Work that unblocks delivery, improves essential reliability, or substantially reduces babysitting. |
 | `Pri: P2` | A useful workflow enhancement that does not block delivery. |
 | `Pri: P3` | Polish or speculative optimization. |
 
-The priority prompt favors building and shipping apps. It does not hardcode issue numbers or classifications.
+The priority prompt measures relative app-building payoff, rather than requiring an explicit incident or deadline. It does not hardcode issue numbers or classifications.
 
 ## Setup
 
