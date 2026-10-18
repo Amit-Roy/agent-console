@@ -49,7 +49,20 @@ export async function openContextEconomics({ getThread, send, trigger }) {
   const threadTitle = el("p", "sub", initial.title);
   const status = el("p", "context-cache-state");
   const basis = el("p", "sub");
-  const recommendation = el("p", "context-recommendation"); recommendation.setAttribute("aria-live", "polite");
+  const recommendation = el("section", "context-recommendation");
+  recommendation.setAttribute("aria-live", "polite");
+  recommendation.setAttribute("aria-atomic", "true");
+  recommendation.setAttribute("aria-labelledby", "context-recommendation-title");
+  const recommendationLabel = el("p", "context-recommendation-label", "Recommendation");
+  const recommendationTitle = el("h4", "context-recommendation-title");
+  recommendationTitle.id = "context-recommendation-title";
+  const recommendationDetail = el("p", "context-recommendation-detail");
+  recommendation.append(recommendationLabel, recommendationTitle, recommendationDetail);
+  const showRecommendation = (action, title, detail) => {
+    recommendation.dataset.action = action;
+    recommendationTitle.textContent = title;
+    recommendationDetail.textContent = detail;
+  };
   allocation = createContextAllocation(getThread);
   const controls = el("div", "context-assumptions");
   const input = (label, value, min, max, step = 1) => {
@@ -99,7 +112,7 @@ export async function openContextEconomics({ getThread, send, trigger }) {
   }
   const table = el("table");
   data.append(notes, sources, table);
-  body.replaceChildren(threadTitle, status, recommendation, allocation.root, basis, stage, chartError, summary, controls, automatic, actions, data);
+  body.replaceChildren(threadTitle, recommendation, status, allocation.root, basis, stage, chartError, summary, controls, automatic, actions, data);
   void allocation.refresh();
   try { Chart = await loadChart(); }
   catch { chartError.hidden = false; chartError.textContent = "Graph could not load. Forecast values remain available below."; stage.hidden = true; }
@@ -122,16 +135,22 @@ export async function openContextEconomics({ getThread, send, trigger }) {
     const result = forecastContext(scenario);
     if (!result) {
       summary.textContent = "Context changed. Reopen after token usage is reported.";
-      recommendation.textContent = "Recommendation: Wait for fresh context usage before comparing compaction points.";
+      showRecommendation("unknown", "More data needed", "Wait for fresh context usage before comparing compaction points.");
       compact.disabled = true; stage.hidden = true; void allocation.refresh(); return;
     }
     if (Chart) stage.hidden = false;
     const best = recommendCompaction(scenario);
-    recommendation.textContent = t.status === "running" ? "Recommendation: Recheck when the current run finishes; context is still changing."
-      : best.action === "unknown" ? "Recommendation: Not enough context, pricing, or remaining window to compare compaction points."
-      : best.action === "continue" ? `Recommendation: Keep the current context for the next ${best.horizonRequests} requests. Compaction does not repay its cost in this scenario.`
-      : best.action === "now" ? `Recommendation: Compact now at ${tokens(best.atContextTokens)} context tokens for the lowest modeled cost over ${best.horizonRequests} requests. Estimated savings: ${usd(best.savings)}.`
-      : `Recommendation: Compact around ${tokens(best.atContextTokens)} context tokens, after ${tokens(best.afterAddedTokens)} new input tokens (${best.afterRequests} requests). Estimated savings: ${usd(best.savings)}.`;
+    if (t.status === "running") {
+      showRecommendation("running", "Finish current run", "Recheck when the run finishes; context is still changing.");
+    } else if (best.action === "unknown") {
+      showRecommendation("unknown", "More data needed", "Context, pricing, or the remaining window is insufficient to compare compaction points.");
+    } else if (best.action === "continue") {
+      showRecommendation("continue", "Continue for now", `Keep current context for the next ${best.horizonRequests} requests. Continuing costs ${usd(result.points.at(-1).keepCost)} in this model; compaction does not repay its upfront cost.`);
+    } else if (best.action === "now") {
+      showRecommendation("now", "Compact now", `Compact at ${tokens(best.atContextTokens)} context tokens for the lowest modeled API cost over ${best.horizonRequests} requests. Estimated savings versus continuing: ${usd(best.savings)}.`);
+    } else {
+      showRecommendation("later", "Compact later", `Compact around ${tokens(best.atContextTokens)} context tokens, after ${tokens(best.afterAddedTokens)} new input tokens (${best.afterRequests} requests). Estimated API savings versus continuing: ${usd(best.savings)}.`);
+    }
     void allocation.refresh();
     measure.options[0].disabled = !result.priced;
     if (!result.priced) measure.value = "tokens";

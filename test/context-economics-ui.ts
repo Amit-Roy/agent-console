@@ -82,7 +82,20 @@ try {
     assert.equal(await page.locator(".context-allocation-legend li").count(), 6);
     assert.match(await page.locator(".context-allocation-legend").innerText(), /System instructions[\s\S]*est\./);
     await change("Future requests", "1");
-    assert.match(await page.locator(".context-recommendation").innerText(), /Keep the current context/);
+    const recommendation = page.locator(".context-recommendation");
+    assert.equal(await recommendation.locator(".context-recommendation-label").innerText(), "Recommendation");
+    assert.equal(await recommendation.locator(".context-recommendation-title").innerText(), "Continue for now");
+    assert.equal(await recommendation.getAttribute("data-action"), "continue");
+    assert.ok((await recommendation.locator(".context-recommendation-detail").innerText()).trim().length > 0);
+    assert.equal(await recommendation.getAttribute("aria-live"), "polite");
+    assert.equal(await recommendation.getAttribute("aria-atomic"), "true");
+    assert.equal(await recommendation.evaluate(el => document.getElementById(el.getAttribute("aria-labelledby") || "")?.textContent), "Continue for now");
+    assert.equal(await recommendation.evaluate(el => {
+      const style = getComputedStyle(el), title = el.querySelector(".context-recommendation-title")!;
+      const card = el.getBoundingClientRect(), dialog = el.closest("dialog, [role=dialog]")!.getBoundingClientRect();
+      return parseFloat(style.borderLeftWidth) > 0 && parseInt(getComputedStyle(title).fontWeight, 10) >= 600
+        && card.top - dialog.top < 180 && card.left >= dialog.left && card.right <= dialog.right;
+    }), true, "accented recommendation with bold title stays near dialog top");
     await change("Future requests", "40");
     await dialog.evaluate(e => { e.scrollTop = 0; });
     fs.mkdirSync(path.join(root, "test-output"), { recursive: true });
@@ -94,7 +107,9 @@ try {
     await change("Resume in (minutes)", "10");
     assert.match(await dialog.innerText(), /Cache estimated stale at resume/);
     assert.notEqual(await page.locator(".context-forecast-summary").innerText(), warm);
-    assert.match(await page.locator(".context-recommendation").innerText(), /Compact now/);
+    assert.equal(await recommendation.locator(".context-recommendation-title").innerText(), "Compact now");
+    assert.equal(await recommendation.getAttribute("data-action"), "now");
+    assert.match(await recommendation.locator(".context-recommendation-detail").innerText(), /\$/);
     await change("Gap per request (minutes)", "10");
     await change("Cache lifetime estimate (minutes)", "0");
     assert.match(await dialog.innerText(), /No cache assumed/);
@@ -123,7 +138,8 @@ try {
     client.send(JSON.stringify({ t: "thread", thread: current }));
     await open();
     assert.match(await page.locator(".context-forecast-summary").innerText(), /showing tokens only/);
-    assert.match(await page.locator(".context-recommendation").innerText(), /Recommendation:/);
+    assert.equal(await page.locator(".context-recommendation-label").innerText(), "Recommendation");
+    assert.equal(await page.locator(".context-recommendation-title").innerText(), "More data needed");
     await page.keyboard.press("Escape");
     current = { ...current, context: null };
     client.send(JSON.stringify({ t: "thread", thread: current }));
