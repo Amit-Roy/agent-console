@@ -7,7 +7,10 @@ export PATH="$HOME/.local/bin:$PATH"
 # the pid file survives a workspace restart, when its pid may belong to an unrelated process: check it is our server
 running() { [ -f "$RUN/pid" ] && grep -qa "server/index.ts" "/proc/$(cat "$RUN/pid")/cmdline" 2>/dev/null; }
 case "${1:-status}" in
-  start) running && { echo "already running"; exit 0; }
+  start) if [ "$RUN" = "$HOME/.cache/agent-console" ] && [ "${AGENT_CONSOLE_MOCK:-0}" != "1" ]; then
+           "$DIR/bin/github-triage" start || echo "GitHub triage could not start; see its private log."
+         fi
+         running && { echo "already running"; exit 0; }
          # a server we lost track of (pid file gone) still holds the port: adopt it instead of crashing on EADDRINUSE
          pid=$(ss -ltnpH "sport = :$PORT" 2>/dev/null | grep -o 'pid=[0-9]*' | head -1 | cut -d= -f2)
          [ -n "$pid" ] && grep -qa "server/index.ts" "/proc/$pid/cmdline" 2>/dev/null && { echo "$pid" >"$RUN/pid"; echo "already running (pid $pid)"; exit 0; }
