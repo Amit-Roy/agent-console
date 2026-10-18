@@ -4,6 +4,7 @@ import { toolName, toolSummary } from "/tool-display.js";
 import { createLatencyReporter } from "/telemetry.js";
 import { createQuestions } from "/questions.js";
 import { openContextEconomics } from "/context-economics.js";
+import { openBreakdown, closeBreakdown } from "/turn-breakdown.js";
 
 const MODE_META = {
   plan: { label: "Plan", desc: "Read-only. Plans without editing.", icon: "eye" },
@@ -465,6 +466,7 @@ async function runThreadAction(id, action) {
   } else if (action === "details") {
     setNav(false);
     if (state.current !== id) openThread(id);
+    closeBreakdown(false);
     $("run-details").showModal();
     void loadLatencySummary();
   } else if (action === "archive" || action === "unarchive") {
@@ -1119,8 +1121,16 @@ function renderTurnTiming(x, phoneMs) {
     kids.push(el("h5", "", "Slowest tools"), list);
   }
   if (x.retries) kids.push(el("p", "tt-retry", `${x.retries} API retr${x.retries === 1 ? "y" : "ies"} or rate-limit warning${x.retries === 1 ? "" : "s"} slowed this turn`));
+  const full = el("button", "btn block tb-open");
+  full.type = "button";
+  full.append(el("span", "", "Full breakdown"), icon("chev-right"));
+  full.onclick = () => state.current && openBreakdown(state.current, full);
+  kids.push(full);
   $("turn-timing-body").replaceChildren(...kids);
 }
+// Escape in the breakdown goes back to the summary; closing the sheet always resets it.
+$("run-details").addEventListener("cancel", (e) => { if ($("run-details").dataset.view === "breakdown") { e.preventDefault(); closeBreakdown(); } });
+$("run-details").addEventListener("close", () => closeBreakdown(false));
 function showLoad(main, detail) {
   $("diagnostics").replaceChildren(el("p", "lead", main), ...(detail ? [el("p", "note", detail)] : []));
 }
