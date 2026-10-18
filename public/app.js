@@ -1208,6 +1208,8 @@ const fmtDur = (ms) => {
 // A ring that fills with the model's context window, as in other chat UIs. Amber (never red: red means destructive) as it gets full.
 function renderCtx() {
   const b = $("ctx");
+  const threadId = state.current;
+  b.onclick = () => openContextEconomics({ getThread: () => state.threads.get(threadId), send, trigger: b });
   const c = cur()?.context;
   if (c?.used == null && cur()?.lastCompactedAt) {
     b.hidden = false;
