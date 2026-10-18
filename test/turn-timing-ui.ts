@@ -15,6 +15,26 @@ fs.mkdirSync(path.join(data, "logs"));
 fs.writeFileSync(path.join(data, "threads.json"), JSON.stringify([{ id: "mock-timing", provider: "mock", model: "echo", title: "Timing", cwd: process.cwd(), mode: "acceptEdits", effort: "default", status: "idle", cost: 0, createdAt: now, updatedAt: now }]));
 process.env.AGENT_CONSOLE_DATA = data;
 const { makeToken } = await import("../server/auth.ts");
+// An earlier long turn (45 steps, 18 min, 130 tools, a failure, a retry) seeded straight into the store, for the breakdown picker.
+{
+  const { TurnTimingStore } = await import("../server/turn-timing.ts");
+  const seg: any[] = [{ k: "startup", a: 0, d: 900 }];
+  let t = 900, tools: any[] = [];
+  for (let i = 1; i <= 45; i++) {
+    const md = 4000 + (i % 7) * 2500;
+    seg.push({ k: "model", i, a: t, d: md, f: 600 + (i % 5) * 300 }); t += md;
+    if (i === 12) seg.push({ k: "retry", i, a: t - 1000, d: 8000, s: 529, c: "overloaded" });
+    if (i === 45) break;
+    const names = i % 3 ? ["Read", "Read", "Grep"] : ["Bash"];
+    for (const [j, n] of names.entries()) { const d = n === "Bash" ? 30_000 + i * 400 : 1200 + j * 300; const e = i === 21 && n === "Bash" ? 1 : undefined; seg.push({ k: "tool", i, n, a: t + j * 50, d, ...(e ? { e } : {}) }); tools.push({ n, ms: d, ...(e ? { e } : {}) }); }
+    t += Math.max(...seg.filter((x) => x.k === "tool" && x.i === i).map((x) => x.d)) + 100;
+  }
+  seg.sort((x, y) => x.a - y.a);
+  const st = new TurnTimingStore(path.join(data, "latency.sqlite"));
+  st.recordTurn("mock-timing", { turn_ts: now - 3_600_000, provider: "mock", model: "echo", alias: "echo", cold: 0, spawn_ms: null, queue_ms: 1200, first_ms: 1500, total_ms: t,
+    model_ms: Math.round(t * 0.55), tool_ms: Math.round(t * 0.43), startup_ms: 900, wait_ms: 0, steps: 45, tools: tools.slice(0, 100), retries: 1, retry_detail: [{ s: 529, c: "overloaded" }], rate_limits: 0, outcome: "ok", timeline: { seg } }, now - 3_600_000);
+  st.close();
+}
 const env = { ...process.env, PORT, AGENT_CONSOLE_DATA: data, AGENT_CONSOLE_RUN: path.join(data, "run"), AGENT_CONSOLE_MOCK: "1", AGENT_CONSOLE_HEADROOM: "0", AGENT_CONSOLE_LABELS: "0", AGENT_CONSOLE_BRAIN: path.join(data, "no-brain") };
 delete env.AGENT_CONSOLE_PID_FILE;
 const server = spawn(process.execPath, ["server/index.ts"], { env, stdio: process.env.DEBUG ? "inherit" : "ignore" });
@@ -69,7 +89,54 @@ try {
   await page.mouse.move(0, 0); await page.waitForTimeout(400); // let color transitions settle
   await page.screenshot({ path: `${OUT}/obs-run-details-after-light.png` });
   await page.emulateMedia({ colorScheme: "dark" });
+  // Full breakdown: a pushed sub-view in the same sheet, from a 44px button under the Last turn summary
+  const open = page.locator("#turn-timing .tb-open");
+  const ob = await open.boundingBox();
+  check("breakdown: button is a 44px touch target", (ob?.height || 0) >= 43.9, JSON.stringify(ob));
+  await open.click();
+  await page.locator("#turn-breakdown .tb-fall").waitFor({ timeout: 5000 }).catch(async (e) => { console.log("breakdown:", (await page.locator("#turn-breakdown").textContent())?.slice(0, 200), errors.join(" | ").slice(0, 400)); throw e; });
+  const bd = (await page.locator("#turn-breakdown").textContent()) || "";
+  check("breakdown: replaces the summary in the same sheet", await page.locator("#turn-timing").isHidden() && await page.locator("#run-details[data-view=breakdown]").count() === 1);
+  check("breakdown: totals, timeline, tools table, steps", ["whole turn", "First token", "Timeline", "Tools", "Model steps", "Step 1"].every((x) => bd.includes(x)) && /Bash\s*1\s*\d+ ms\s*\d+ ms/.test(bd), bd.slice(0, 200));
+  check("breakdown: waterfall rows carry durations as text", (await page.locator("#turn-breakdown .tb-row").count()) >= 3 && (await page.locator("#turn-breakdown .tb-row .tb-ms").allTextContents()).every((x) => /\d|—/.test(x)));
+  const fits = () => page.evaluate(() => { const d = document.getElementById("run-details")!; return d.scrollWidth <= d.clientWidth + 1 && document.documentElement.scrollWidth <= innerWidth && [...d.querySelectorAll("#turn-breakdown *")].every((e) => e.getBoundingClientRect().right <= d.getBoundingClientRect().right + 0.5); });
+  check("breakdown: fits 390px, no horizontal overflow", await fits());
+  const back = page.locator("#turn-breakdown .tb-back");
+  check("breakdown: back is a 44px touch target", ((await back.boundingBox())?.height || 0) >= 43.9);
+  await page.screenshot({ path: `${OUT}/breakdown-short-dark.png` });
+  // earlier long turn: picker, capped rows with Show all, failure marked in words
+  await page.locator("#turn-breakdown .tb-pick select").selectOption("2");
+  await page.locator("#turn-breakdown .tb-more").waitFor();
+  const long = (await page.locator("#turn-breakdown").textContent()) || "";
+  check("breakdown: earlier turns selectable (last 10)", (await page.locator("#turn-breakdown .tb-pick option").count()) === 3 && /\d+ min/.test(long), long.slice(0, 120));
+  const capped = await page.locator("#turn-breakdown .tb-row").count();
+  check("breakdown: long turn capped with Show all", capped === 40 && /Show all \d+ rows/.test(long), String(capped));
+  check("breakdown: failure and retry marked in text", long.includes("failed") && /Retry 529 overloaded/.test(long), long.match(/.{40}(Retry|failed).{40}/g)?.join(" / "));
+  check("breakdown: steps list capped", /Show all 45 steps/.test(long));
+  check("breakdown: long turn fits 390px", await fits());
+  await page.screenshot({ path: `${OUT}/breakdown-long-dark.png` });
+  await page.locator("#turn-breakdown .tb-fall").scrollIntoViewIfNeeded();
+  await page.locator("#turn-breakdown .tb-fall").evaluate((n) => n.scrollIntoView({ block: "start" }));
+  await page.screenshot({ path: `${OUT}/breakdown-waterfall-dark.png` });
+  await page.locator("#turn-breakdown .tb-more").click();
+  check("breakdown: show all expands rows", (await page.locator("#turn-breakdown .tb-row").count()) > 40 && await fits());
+  await page.emulateMedia({ colorScheme: "light" });
+  await page.mouse.move(0, 0); await page.waitForTimeout(400);
+  await page.locator("#turn-breakdown .tb-fall").evaluate((n) => n.scrollIntoView({ block: "start" }));
+  await page.screenshot({ path: `${OUT}/breakdown-waterfall-light.png` });
+  await page.locator("#run-details").evaluate((d) => (d.scrollTop = 0));
+  await page.screenshot({ path: `${OUT}/breakdown-long-light.png` });
+  await page.locator("#turn-breakdown .tb-pick select").selectOption("0");
+  await page.locator("#turn-breakdown .tb-fall").waitFor();
+  await page.screenshot({ path: `${OUT}/breakdown-short-light.png` });
+  await page.emulateMedia({ colorScheme: "dark" });
+  await page.keyboard.press("Escape");
+  await page.locator("#turn-timing").waitFor();
+  check("breakdown: Escape goes back, focus returns to the button", await page.locator("#run-details[open]").count() === 1 && await page.evaluate(() => document.activeElement?.classList.contains("tb-open")));
   const cookie = { headers: { cookie: `ac_session=${makeToken()}` } };
+  const detail = await (await fetch(`${base}/api/turn-latency?thread=mock-timing&detail=10`, cookie)).json();
+  check("api: detail returns recent turns with timelines", detail.available && detail.turns.length === 3 && detail.turns[0].timeline.seg.some((x: any) => x.k === "tool" && x.n === "Bash") && detail.turns[2].timeline.seg.length > 100);
+  check("api: detail has no prompt text", !JSON.stringify(detail).includes("tool first"));
   let groups: any = {};
   for (let i = 0; i < 30 && !groups.first_token; i++) { groups = (await (await fetch(`${base}/api/latency`, cookie)).json()).groups || {}; if (!groups.first_token) await page.waitForTimeout(100); }
   check("phone first_token samples stored", groups.first_token?.count === 2, JSON.stringify(groups.first_token || {}).slice(0, 80));
