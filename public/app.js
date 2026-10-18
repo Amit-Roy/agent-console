@@ -349,11 +349,11 @@ const threadActions = (id) => {
   const action = (value) => items.find((item) => item.value === value);
   return [
     action("rename"),
-    { value: "compaction-menu", label: "Compaction", icon: "sparkle", children: [action("compact"), action("idle-compaction")] },
+    { value: "compaction-menu", label: "Compaction", desc: "Reduce context or manage automatic compaction", icon: "sparkle", children: [action("compact"), action("idle-compaction")] },
     action("economy"),
-    { value: "fork-menu", label: "Fork", icon: "fork", children: [action("fork"), ...forks, action("fork-recent")] },
+    { value: "fork-menu", label: "Fork", desc: "Continue in a new thread or another agent", icon: "fork", children: [action("fork"), ...forks, action("fork-recent")] },
     action("download"), action("share"), action("details"),
-    { value: "archive-menu", label: "Archive", icon: "archive", children: [action(filed ? "unarchive" : "archive"), action("delete")] },
+    { value: "archive-menu", label: "Archive", desc: filed ? "Restore or permanently delete this thread" : "Archive or permanently delete this thread", icon: "archive", children: [action(filed ? "unarchive" : "archive"), action("delete")] },
   ];
 };
 const THREAD_ACTIONS = [
