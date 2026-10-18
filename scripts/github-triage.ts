@@ -15,6 +15,8 @@ const ROOT = path.resolve(path.dirname(SCRIPT), "..");
 const CONFIG = process.env.AGENT_CONSOLE_TRIAGE_CONFIG || path.join(os.homedir(), ".config/agent-console/github-triage.json");
 const RUN = process.env.AGENT_CONSOLE_TRIAGE_RUN || path.join(os.homedir(), ".cache/agent-console/github-triage");
 const PID = path.join(RUN, "pid");
+const LAST_RECONCILE = path.join(RUN, "last-reconcile");
+const RECONCILE_INTERVAL_MS = 5 * 60_000;
 type Config = { repos: string[]; secret: string; url: string; port: number; host: string };
 
 function config(): Config {
@@ -53,6 +55,40 @@ async function health(c: Config) {
   return r.json();
 }
 
+function start() {
+  if (process.env.AGENT_CONSOLE_MOCK === "1" || !fs.existsSync(CONFIG)) return;
+  config();
+  if (pid()) { console.log("GitHub triage already running."); return; }
+  fs.mkdirSync(RUN, { recursive: true, mode: 0o700 });
+  const out = fs.openSync(path.join(RUN, "log"), "a", 0o600);
+  try {
+    const p = spawn(process.execPath, [SCRIPT, "serve"], { cwd: ROOT, env: childEnv(), detached: true, stdio: ["ignore", out, out] });
+    p.unref();
+  } finally { fs.closeSync(out); }
+  console.log("GitHub triage starting.");
+}
+
+async function reconcile(c: Config) {
+  let scanned = 0;
+  let queued = 0;
+  for (const repo of c.repos) {
+    const body = JSON.stringify({ repository: { full_name: repo } });
+    const response = await fetch(`http://127.0.0.1:${c.port}/reconcile`, { method: "POST", headers: {
+      "Content-Type": "application/json", "X-Hub-Signature-256": await sign(c.secret, body),
+    }, body, signal: AbortSignal.timeout(90_000) });
+    if (!response.ok) throw Error(`Reconciliation failed: HTTP ${response.status}.`);
+    const result = await response.json() as { scanned: number; queued: number };
+    if (!Number.isSafeInteger(result.scanned) || !Number.isSafeInteger(result.queued)) throw Error("Invalid reconciliation response.");
+    scanned += result.scanned;
+    queued += result.queued;
+  }
+  fs.mkdirSync(RUN, { recursive: true, mode: 0o700 });
+  const temporary = `${LAST_RECONCILE}.${process.pid}`;
+  fs.writeFileSync(temporary, String(Date.now()), { mode: 0o600 });
+  fs.renameSync(temporary, LAST_RECONCILE);
+  console.log(`Reconciled ${scanned} open items; queued ${queued} repairs.`);
+}
+
 async function main() {
   const command = process.argv[2] || "status";
   if (command === "configure") {
@@ -69,16 +105,27 @@ async function main() {
     return;
   }
   if (command === "start") {
+    start();
+    return;
+  }
+  if (command === "watchdog") {
     if (process.env.AGENT_CONSOLE_MOCK === "1" || !fs.existsSync(CONFIG)) return;
-    config();
-    if (pid()) { console.log("GitHub triage already running."); return; }
-    fs.mkdirSync(RUN, { recursive: true, mode: 0o700 });
-    const out = fs.openSync(path.join(RUN, "log"), "a", 0o600);
-    try {
-      const p = spawn(process.execPath, [SCRIPT, "serve"], { cwd: ROOT, env: childEnv(), detached: true, stdio: ["ignore", out, out] });
-      p.unref();
-    } finally { fs.closeSync(out); }
-    console.log("GitHub triage starting.");
+    const c = config();
+    let restarted = false;
+    try { await health(c); }
+    catch {
+      start();
+      await new Promise<void>((resolve, reject) => {
+        execFile("waitfor", ["-t", "15", "url", `http://127.0.0.1:${c.port}/health`], { env: childEnv(), timeout: 20_000 }, err => {
+          if (err) reject(Error("Triage did not become healthy within 15 seconds.")); else resolve();
+        });
+      });
+      await health(c);
+      restarted = true;
+    }
+    let last = 0;
+    try { last = Number(fs.readFileSync(LAST_RECONCILE, "utf8")); } catch {}
+    if (restarted || !Number.isFinite(last) || last > Date.now() || Date.now() - last >= RECONCILE_INTERVAL_MS) await reconcile(c);
     return;
   }
   if (command === "stop" || command === "restart") {
@@ -136,6 +183,11 @@ async function main() {
     console.log(JSON.stringify(await health(c), null, 2));
     return;
   }
+  if (command === "reconcile") {
+    await health(c);
+    await reconcile(c);
+    return;
+  }
   if (command === "register") {
     await health(c);
     for (const repo of c.repos) {
@@ -168,7 +220,7 @@ async function main() {
     console.log(`Queued ${count} open issues and pull requests for model triage.`);
     return;
   }
-  throw Error("Usage: bin/github-triage configure|start|stop|restart|status|register|backfill");
+  throw Error("Usage: bin/github-triage configure|start|stop|restart|status|watchdog|register|backfill|reconcile");
 }
 
 main().catch(err => { console.error(err instanceof Error ? err.message : "GitHub triage failed."); process.exitCode = 1; });
