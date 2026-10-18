@@ -185,7 +185,7 @@ check("codex: plain commands untouched", unwrapShell("ls -la") === "ls -la");
 check("codex: escaped single quotes restored", unwrapShell("/bin/bash -lc 'echo '\\''q'\\'''") === "echo 'q'", unwrapShell("/bin/bash -lc 'echo '\\''q'\\'''"));
 
 // ---- shared brain: context handed to pi/codex at start
-const ctx = brainContext();
+const ctx = await brainContext();
 check("brain: context has the protocol and index (or brain is absent)", ctx === "" || (ctx.includes("# Brain index") && ctx.includes("Automatic context loads only this index.")));
 check("brain: full index retained without arbitrary truncation", ctx === "" || ctx.includes("wiki/agent-console-context.md"));
 
