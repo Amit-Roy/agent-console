@@ -909,7 +909,7 @@ body.login{display:grid;place-items:center;overflow:auto;padding:var(--sp-4)}
 .side-actions .btn:hover:not(:disabled){color:var(--t1)}
 #queued .steer{flex:none;min-height:1.75rem;padding:0 var(--sp-3);background:var(--accent-tint);color:var(--accent)}
 #queued .steer:hover:not(:disabled){background:var(--sel)}
-@media (pointer:coarse){#queued .steer{min-height:2.25rem}}
+@media (pointer:coarse){#queued .steer{min-height:2.75rem}}   /* 44px touch target, same as the row's edit/remove */
 
 
 /* An agent's question stays in the conversation, with a deliberate hand-off back to the user. */

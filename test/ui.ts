@@ -1,6 +1,7 @@
 // Real-Chromium UI check: themes, viewports, type system, menus, code blocks, contrast, touch targets, slash menu, installability.
 // Needs the server running. Spends no model quota: nothing is ever sent to the agent. The one thread it creates (empty, never run)
 // is deleted through the app's own delete flow at the end.
+// Scratch server: AGENT_CONSOLE_MOCK=1 AGENT_CONSOLE_MOCK_COMPACT_MS=1500 (two messages must queue while the mock compacts).
 import { chromium } from "playwright";
 import { makeToken } from "../server/auth.ts";
 
@@ -240,7 +241,7 @@ for (const scheme of ["dark", "light"] as const) {
     await page.click("#d-model");
     const piModels = await page.locator(".menu [role=option]").count();
     const firstDesc = await page.locator(".menu [role=option] .m-desc").first().innerText();
-    check("dialog: Pi model menu is populated and labels source", piModels > 0 && /free|openrouter|openai/.test(firstDesc), `${piModels} ${firstDesc}`);
+    check("dialog: Pi model menu is populated and labels source", piModels > 0 && /^[a-z0-9-]+ · \S/i.test(firstDesc), `${piModels} ${firstDesc}`);
     await page.screenshot({ path: `${OUT}/ui-pi-models.png` });
     await page.keyboard.press("Escape");
   } else console.log("SKIP  Pi checks (Pi not configured on this machine)");
@@ -494,7 +495,8 @@ for (const scheme of ["dark", "light"] as const) {
     // send (no text), see everything in the log, then reload and see it again from /uploads
     await page.click("#send");
     await page.waitForSelector(".msg.user .imgs img");
-    await page.waitForSelector(".msg.asst");
+    // the reply element appears before its streamed text: wait for the text itself
+    await page.waitForFunction(() => /mock reply/.test([...document.querySelectorAll(".msg.asst")].pop()?.textContent || ""), null, { timeout: 8000 });
     check("send: composer clears", (await items()) === 0 && (await page.getAttribute("#attach", "data-count")) === null);
     check("send: log shows 1 image and 7 file chips", (await page.locator(".msg.user .imgs img").count()) === 1 && (await page.locator(".msg.user .chip").count()) === 7);
     check("image label: [Image #1] in the sent message is a link to that image", (await page.locator(".msg.user .bubble .imgref").count()) === 1 && (await page.locator(".msg.user .bubble").innerText()).trim() === "Image 1" && ((await page.locator(".msg.user .bubble .imgref").getAttribute("href")) ?? "").includes("/uploads/"));

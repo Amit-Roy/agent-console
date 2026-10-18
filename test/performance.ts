@@ -17,7 +17,8 @@ const browser = await chromium.launch();
 let created: string | undefined;
 try {
   const p = hello.providers.find((p: any) => p.id === "codex");
-  const model = p.models.find((m: string) => p.modelDetails?.[m]?.efforts.includes("high"));
+  // a pinned model: switching it to "CLI default" must reset effort (default itself also lists shared efforts)
+  const model = p.models.find((m: string) => m !== "default" && p.modelDetails?.[m]?.efforts.includes("high"));
   if (model && p.ok) {
     ws.send(JSON.stringify({ t: "create", provider: "codex", cwd: hello.dirs[0], model, effort: "high", title: "Settings verification" }));
     const result = await wait(m => m.t === "created");
