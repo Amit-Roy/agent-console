@@ -76,7 +76,7 @@ export function codexTranslator(emit: (ev: any) => void) {
         }
         else if (it.type === "reasoning" && done && it.text) emit(asst({ type: "thinking", thinking: String(it.text) }));
         else if (it.type === "command_execution") {
-          tool(it.id, "Bash", { command: unwrapShell(it.command) });
+          tool(it.id, "Bash", { command: unwrapShell(it.command), ...(typeof it.cwd === "string" ? { cwd: it.cwd } : {}) });
           if (done) emit(result(it.id, String(it.aggregated_output ?? ""), it.status === "failed" || (it.exit_code ?? 0) !== 0));
         } else if (it.type === "file_change") {
           const changes = it.changes ?? [];
