@@ -102,6 +102,16 @@ check("pi tool: bash -> Bash{command}", normTool("bash", { command: "ls" }).name
 check("pi tool: read path -> file_path", normTool("read", { path: "/a" }).input.file_path === "/a");
 const e1 = normTool("edit", { path: "/a", edits: [{ oldText: "x", newText: "y" }] });
 check("pi tool: edit gets old_string/new_string for the diff card", e1.input.old_string === "x" && e1.input.new_string === "y");
+const taskFlow = run((emit) => piTranslator(emit), [
+  { type: "task_started", task_id: "p1", tool_use_id: "agent-1", description: "Survey the repo", subagent_type: "explore" },
+  { type: "task_progress", task_id: "p1", tool_use_id: "agent-1", description: "Listing files", usage: { tool_uses: 2, total_tokens: 4200, duration_ms: 3000 } },
+  { type: "task_notification", task_id: "p1", tool_use_id: "agent-1", status: "completed", summary: "Survey the repo" },
+]);
+check("pi: task lifecycle becomes canonical background events", taskFlow.some((e) => e.type === "system" && e.subtype === "task_started" && e.tool_use_id === "agent-1" && e.task_id === "p1")
+  && taskFlow.some((e) => e.type === "system" && e.subtype === "task_progress" && e.description === "Listing files")
+  && taskFlow.some((e) => e.type === "system" && e.subtype === "background_tasks_changed" && Array.isArray(e.tasks) && e.tasks.length === 1 && e.tasks[0].task_id === "p1")
+  && taskFlow.some((e) => e.type === "system" && e.subtype === "task_notification" && e.status === "completed" && e.summary === "Survey the repo")
+  && taskFlow.some((e) => e.type === "system" && e.subtype === "background_tasks_changed" && Array.isArray(e.tasks) && e.tasks.length === 0), JSON.stringify(taskFlow));
 
 // ---- pi session: text turn with a tool call
 const toolTurn = [
