@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { lstat, open, opendir, readlink, realpath, stat as statPath } from "node:fs/promises";
+import { access, lstat, open, readdir, opendir, readlink, realpath, stat as statPath } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import { performance } from "node:perf_hooks";
 import os from "node:os";
@@ -34,10 +34,24 @@ function sensitive(file: string): boolean {
   return [".config", ".local/share/keyrings"].some(dir => inside(path.join(home, dir), file));
 }
 
+// Agents often cite paths relative to a subproject they cd'd into (public/render.js while the thread cwd is ~/repos).
+// When a relative path is missing under cwd, accept it if exactly one immediate subfolder holds it.
+async function resolveRelative(cwd: string, requested: string) {
+  const direct = path.resolve(cwd, requested);
+  if (await access(direct).then(() => true, () => false)) return direct;
+  const hits: string[] = [];
+  for (const entry of await readdir(cwd, { withFileTypes: true }).catch(() => [])) {
+    if (!entry.isDirectory() || entry.name.startsWith(".") || entry.name === "node_modules") continue;
+    const child = path.join(cwd, entry.name, requested);
+    if (!sensitive(child) && await access(child).then(() => true, () => false)) hits.push(child);
+  }
+  return hits.length === 1 ? hits[0] : direct;
+}
+
 async function scopedPath(cwd: string, requested: string) {
   const root = await realpath(cwd);
   const expanded = requested.startsWith("~/") ? path.join(os.homedir(), requested.slice(2)) : requested;
-  const candidate = path.resolve(cwd, expanded);
+  const candidate = path.isAbsolute(expanded) || expanded.split("/").includes("..") ? path.resolve(cwd, expanded) : await resolveRelative(cwd, expanded);
   if (sensitive(candidate)) throw new ViewError(403, "This file is outside the thread folder or contains private credentials.");
   // A lexically outside link (~/.claude/CLAUDE.md) is fine when its real target is inside the root.
   const lexicalInside = inside(path.resolve(cwd), candidate) || inside(root, candidate);
