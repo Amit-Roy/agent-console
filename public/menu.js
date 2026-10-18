@@ -1,7 +1,7 @@
 // Accessible popover menu button, replacing native <select> (listbox, value picker) and serving as an actions menu (menu).
-//   const m = createMenu({ trigger, items:[{value,label,desc?,icon?,tone?,disabled?,keep?,checked?}], value, onSelect, onOpen?, onClose?, kind:"listbox"|"menu", side:"top"|"bottom", align:"start"|"end" })
+//   const m = createMenu({ trigger, items:[{value,label,desc?,icon?,tone?,disabled?,keep?,checked?,children?}], value, onSelect, onOpen?, onClose?, kind:"listbox"|"menu", side:"top"|"bottom", align:"start"|"end" })
 // Keyboard: trigger opens with Enter / Space / ArrowDown / ArrowUp. In the popover: ArrowUp/Down, Home/End, typeahead, Enter/Space select,
-// Esc closes and returns focus to the trigger, Tab closes. Click or tap outside closes. Items are >=44px on coarse pointers (see .menu in style.css).
+// Right opens a submenu; Left, Back, or Esc returns to its parent. Esc at the root returns focus to the trigger; Tab closes. Click or tap outside closes. Items are >=44px on coarse pointers (see .menu in style.css).
 import { el, icon } from "/render.js";
 
 let uid = 0;
@@ -18,6 +18,8 @@ export function createMenu(opts) {
   let active = -1;
   let typed = "";
   let typedAt = 0;
+  let parents = [];
+  let rootItems = items;
 
   trigger.setAttribute("aria-haspopup", o.kind === "menu" ? "menu" : "listbox");
   trigger.setAttribute("aria-expanded", "false");
@@ -75,9 +77,14 @@ export function createMenu(opts) {
     pop.dataset.side = side;
   }
 
-  function open(start = "selected") {
-    if (o.getItems && !pop) items = o.getItems(); // items that depend on state at the moment of opening
-    if (pop || trigger.disabled || !items.length) return;
+  function open(start = "selected", nested = false) {
+    if (pop || trigger.disabled) return;
+    if (!nested) {
+      parents = [];
+      items = o.getItems ? o.getItems() : rootItems;
+      rootItems = items;
+    }
+    if (!items.length) return;
     for (const m of openMenus) m.close(false);
     pop = el("div", "menu");
     pop.id = id;
@@ -98,7 +105,8 @@ export function createMenu(opts) {
       const txt = el("span", "m-txt");
       txt.append(el("span", "m-label", it.label));
       if (it.desc) txt.append(el("span", "m-desc", it.desc));
-      n.append(txt, icon("check", "m-check"));
+      n.append(txt, icon(it.children ? "chev-right" : "check", it.children ? "m-ico" : "m-check"));
+      if (it.children) n.setAttribute("aria-haspopup", "menu");
       n.addEventListener("pointermove", () => active !== i && enabled(i) && setActive(i, false));
       n.addEventListener("click", () => enabled(i) && choose(i));
       pop.append(n);
@@ -117,10 +125,10 @@ export function createMenu(opts) {
     window.addEventListener("resize", onDismiss);
     window.addEventListener("scroll", onScroll, true);
     openMenus.add(api);
-    o.onOpen();
+    if (!nested) o.onOpen();
   }
 
-  function close(returnFocus = true) {
+  function close(returnFocus = true, notify = true) {
     if (!pop) return;
     const p = pop;
     pop = null;
@@ -132,11 +140,29 @@ export function createMenu(opts) {
     trigger.removeAttribute("aria-controls");
     p.remove();
     if (returnFocus) trigger.focus({ preventScroll: true });
-    o.onClose();
+    if (notify) o.onClose();
+  }
+
+  function showItems(next, selected) {
+    close(false, false);
+    items = next;
+    typed = "";
+    open("first", true);
+    if (selected != null) setActive(selected);
+  }
+
+  function back() {
+    const parent = parents.pop();
+    if (parent) showItems(parent.items, parent.active);
   }
 
   function choose(i) {
     const it = items[i];
+    if (it.back) return back();
+    if (it.children) {
+      parents.push({ items, active: i });
+      return showItems([{ value: "menu-back", label: "Back", back: true }, ...it.children]);
+    }
     close(true);
     if (it.keep) { o.onSelect(it.value, it); return; } // an action row (e.g. "Advisor · Opus"): acts without becoming the menu's value
     if (o.kind === "listbox") {
@@ -150,6 +176,12 @@ export function createMenu(opts) {
   function onKey(e) {
     if (e.altKey || e.ctrlKey || e.metaKey) return;
     switch (e.key) {
+      case "ArrowRight":
+        if (items[active]?.children) { e.preventDefault(); choose(active); }
+        return;
+      case "ArrowLeft":
+        if (parents.length) { e.preventDefault(); back(); }
+        return;
       case "ArrowDown": e.preventDefault(); return move(1);
       case "ArrowUp": e.preventDefault(); return move(-1);
       case "Home": e.preventDefault(); return move(1, -1);
@@ -159,7 +191,7 @@ export function createMenu(opts) {
         e.preventDefault();
         if (typed && e.key === " ") break; // space inside a typeahead word
         return enabled(active) && choose(active);
-      case "Escape": e.preventDefault(); e.stopPropagation(); return close(true);
+      case "Escape": e.preventDefault(); e.stopPropagation(); return parents.length ? back() : close(true);
       case "Tab": return close(true); // focus is back on the trigger, so Tab moves on from there
     }
     if (e.key.length === 1 && /\S/.test(e.key) || (e.key === " " && typed)) {
@@ -194,7 +226,7 @@ export function createMenu(opts) {
     get value() { return value; },
     get isOpen() { return !!pop; },
     setValue(v) { value = v; paintTrigger(); },
-    setItems(next, v = value) { items = next; value = v; paintTrigger(); },
+    setItems(next, v = value) { rootItems = items = next; value = v; paintTrigger(); },
     setDisabled(b) { trigger.disabled = b; if (b) close(false); },
     items: () => items,
   };

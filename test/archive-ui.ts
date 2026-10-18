@@ -17,7 +17,8 @@ try {
   const act = async (list: string, label: string) => {
     await row(list).first().hover();
     await row(list).first().locator(".row-more").click();
-    await page.locator(".menu [role=menuitem]", { hasText: label }).first().click();
+    await page.getByRole("menuitem", { name: /^Archive/ }).click();
+    await page.getByRole("menuitem", { name: new RegExp(`^${label}\\b`) }).click();
   };
   const before = await page.locator("#threads li").count();
   await act("threads", "Archive");
