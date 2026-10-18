@@ -94,6 +94,12 @@ try {
   const hinted = await file("pub/uniq.js");
   assert.equal(hinted.status, 200, "cd in tool calls disambiguates relative path");
   assert.equal((await hinted.json()).path, path.join(cwd, "projy", "pub", "uniq.js"));
+  // A reply named /tmp/.../shots/pic.png; a later bare `pic.png` finds it outside cwd.
+  fs.mkdirSync(path.join(temp, "shots")); fs.writeFileSync(path.join(temp, "shots", "pic.txt"), "shot");
+  fs.appendFileSync(path.join(data, "logs", `${id}.jsonl`), JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: `See \`${path.join(temp, "shots", "pic.txt")}\`.` }] } }) + "\n");
+  const named = await file("pic.txt");
+  assert.equal(named.status, 200, "path quoted in a reply resolves a bare name");
+  assert.equal((await named.json()).path, path.join(temp, "shots", "pic.txt"));
   fs.mkdirSync(path.join(temp, "home"));
   fs.symlinkSync(path.join(cwd, "hello.ts"), path.join(temp, "home", "link.ts"));
   assert.equal((await file(path.join(temp, "home", "link.ts"))).status, 200, "outside-path link resolving inside cwd is viewable");
