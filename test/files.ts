@@ -82,6 +82,10 @@ try {
   assert.equal((await file("escape")).status, 403, "symlink cannot escape cwd");
   fs.symlinkSync(path.join(cwd, "hello.ts"), path.join(cwd, "inside"));
   assert.equal((await file("inside")).status, 200, "in-project symlink is safe");
+  fs.mkdirSync(path.join(cwd, "projx", "pub"), { recursive: true }); fs.writeFileSync(path.join(cwd, "projx", "pub", "uniq.js"), "1");
+  assert.equal((await file("pub/uniq.js")).status, 200, "relative path found in the single subfolder holding it");
+  fs.mkdirSync(path.join(cwd, "projy", "pub"), { recursive: true }); fs.writeFileSync(path.join(cwd, "projy", "pub", "uniq.js"), "2");
+  assert.equal((await file("pub/uniq.js")).status, 404, "ambiguous relative path stays missing");
   fs.mkdirSync(path.join(temp, "home"));
   fs.symlinkSync(path.join(cwd, "hello.ts"), path.join(temp, "home", "link.ts"));
   assert.equal((await file(path.join(temp, "home", "link.ts"))).status, 200, "outside-path link resolving inside cwd is viewable");
