@@ -104,8 +104,10 @@ try {
   assert.equal((await file("friendly.txt")).status, 403, "credential symlink is refused");
   fs.mkdirSync(path.join(cwd, ".git")); put(".git/config", "private remote");
   assert.equal((await file(".git/config")).status, 403);
-  put("innocent.txt", "-----BEGIN OPENSSH PRIVATE KEY-----\nfixture");
+  put("innocent.txt", `-----BEGIN OPENSSH PRIVATE KEY-----\n${"b3BlbnNzaC1rZXktdjEAAAAA".repeat(3)}\n`);
   assert.equal((await file("innocent.txt")).status, 403, "private-key bytes are refused");
+  put("mentions.ts", 'const fixture = "-----BEGIN OPENSSH PRIVATE KEY-----\\nfixture";');
+  assert.equal((await file("mentions.ts")).status, 200, "code naming the key header is viewable");
   put("binary", Buffer.from([65, 0, 66])); assert.equal((await file("binary")).status, 415);
   put("invalid-utf8", Buffer.from([0xff, 0xfe])); assert.equal((await file("invalid-utf8")).status, 415);
   put("limit.txt", Buffer.alloc(MAX_VIEW_BYTES, 65)); assert.equal((await file("limit.txt")).status, 200);

@@ -141,7 +141,8 @@ async function readProjectFile(cwd: string, requested: string, binary = false, t
     try { content = new TextDecoder("utf-8", { fatal: true }).decode(buffer.subarray(0, size)); }
     catch { throw new ViewError(415, "Only UTF-8 text files can be viewed."); }
     if (/[\u0000-\u0008\u000b\u000e-\u001f\u007f]/.test(content)) throw new ViewError(415, "Only text files can be viewed.");
-    if (/-----BEGIN (?:[A-Z]+ )*PRIVATE KEY-----/.test(content)) throw new ViewError(403, "Private keys cannot be previewed.");
+    // Needs key body on the next line, so code that only mentions the header (tests, docs) stays viewable.
+    if (/-----BEGIN (?:[A-Z]+ )*PRIVATE KEY-----\r?\n[A-Za-z0-9+/=]{40}/.test(content)) throw new ViewError(403, "Private keys cannot be previewed.");
     return { kind: "text" as const, root, path: target, name: path.basename(target), content, bytes: size, meta };
   } finally { await handle.close(); }
 }
