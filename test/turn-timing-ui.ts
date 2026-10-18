@@ -114,6 +114,13 @@ try {
   check("breakdown: failure and retry marked in text", long.includes("failed") && /Retry 529 overloaded/.test(long), long.match(/.{40}(Retry|failed).{40}/g)?.join(" / "));
   check("breakdown: steps list capped", /Show all 45 steps/.test(long));
   check("breakdown: long turn fits 390px", await fits());
+  // bars encode duration, not position: short tools stay visible beside the longest segment, and lengths differ visibly
+  const widths = await page.evaluate(() => [...document.querySelectorAll("#turn-breakdown .tb-row")].map((li) => ({ n: li.querySelector(".tb-name")!.textContent, k: li.className, w: (li.querySelector(".tb-bar") as HTMLElement).getBoundingClientRect().width, at: li.querySelector(".tb-at")!.textContent })));
+  const w = (re: RegExp) => widths.filter((x) => re.test(x.n || "")).map((x) => x.w);
+  const reads = w(/^Read/), bashes = w(/^Bash/);
+  check("breakdown: short tool bars clearly visible (>= 8px)", Math.min(...reads) >= 8, JSON.stringify(reads.slice(0, 3)));
+  check("breakdown: long bars clearly longer than short ones (>= 3x)", Math.max(...bashes) >= 3 * Math.max(...reads), JSON.stringify({ bash: Math.max(...bashes), read: Math.max(...reads) }));
+  check("breakdown: start offsets as text", widths.every((x) => /^[+−]\d/.test(x.at || "")) && widths.some((x) => /^\+\d+:\d\d$/.test(x.at || "")), widths.slice(-2).map((x) => x.at).join(","));
   await page.screenshot({ path: `${OUT}/breakdown-long-dark.png` });
   await page.locator("#turn-breakdown .tb-fall").scrollIntoViewIfNeeded();
   await page.locator("#turn-breakdown .tb-fall").evaluate((n) => n.scrollIntoView({ block: "start" }));

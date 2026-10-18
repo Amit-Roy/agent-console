@@ -10,8 +10,14 @@ export const fmtDur = (ms) => {
   const secs = Math.round(ms / 1000), m = Math.floor(secs / 60), s = secs % 60;
   return s ? `${m} min ${s} s` : `${m} min`;
 };
-// Axis ticks: short enough that three fit over a phone-width track.
-const fmtTick = (ms) => (ms < 60_000 ? fmtDur(ms) : `${Math.round(ms / 60_000)} min`);
+// Start offset, compact: "+340ms", "+4.2s", "+4:12", "+1:04:12". Turns under a minute keep sub-second detail.
+export const fmtAt = (ms, total = ms) => {
+  const sign = ms < 0 ? "−" : "+", a = Math.abs(ms);
+  if (total < 60_000 && a < 1000) return `${sign}${Math.round(a)}ms`;
+  if (total < 60_000) return `${sign}${(a / 1000).toFixed(1)}s`;
+  const secs = Math.round(a / 1000), h = Math.floor(secs / 3600), m = Math.floor((secs % 3600) / 60), ss = String(secs % 60).padStart(2, "0");
+  return h ? `${sign}${h}:${String(m).padStart(2, "0")}:${ss}` : `${sign}${m}:${ss}`;
+};
 const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 const RETRY = { rate_limit: "rate limited", overloaded: "overloaded", server_overloaded: "overloaded", timeout: "timed out", network: "network error", server_error: "server error", auth: "sign-in error", bad_request: "bad request" };
 const retryWord = (s) => [s.s, RETRY[s.c] || (s.c && s.c !== "unknown" ? s.c.replace(/_/g, " ") : "")].filter(Boolean).join(" ") || "retry";
@@ -134,17 +140,16 @@ const rowLabel = (r) => r.k === "model" ? `Step ${r.i}` : r.k === "tool" ? `${r.
 
 function waterfall(t, seg, more) {
   const all = rows(seg);
-  const origin = Math.min(0, ...seg.map((s) => s.a));
-  const end = Math.max(t.total_ms || 0, ...all.map((r) => r.end));
-  const span = Math.max(1, end - origin);
+  // Bar length encodes duration on a square-root scale against the turn's longest row, so a 1.6 s Read stays visible next to
+  // a 5 min Bash. When it happened is text: the start offset column.
+  const longest = Math.max(1, ...all.map((r) => r.end - r.a));
+  const len = (ms) => Math.sqrt(Math.max(0, ms) / longest) * 100;
   const shown = state.showAllRows ? all : all.slice(0, ROWS);
   const list = el("ol", "tb-fall");
   list.setAttribute("aria-label", "Timeline, in order");
   const axis = el("li", "tb-axis");
   axis.setAttribute("aria-hidden", "true");
-  const ticks = el("span", "tb-ticks");
-  ticks.append(el("span", "", origin < 0 ? `−${fmtTick(-origin)}` : "0"), el("span", "", fmtTick(origin + span / 2)), el("span", "", fmtTick(end)));
-  axis.append(el("span", "tb-lab"), ticks, el("span", "tb-ms"));
+  axis.append(el("span", "tb-lab", "Segment"), el("span", "tb-at", "Start"), el("span", "tb-track"), el("span", "tb-ms", "Duration"));
   list.append(axis);
   for (const r of shown) {
     const li = el("li", `tb-row ${r.k}${r.errors ? " err" : ""}`);
@@ -153,17 +158,16 @@ function waterfall(t, seg, more) {
     if (r.errors) lab.append(el("span", "tb-fail", r.count > 1 ? `${r.errors} failed` : "failed"));
     const track = el("span", "tb-track");
     track.setAttribute("aria-hidden", "true");
+    const wall = r.end - r.a;
     const bar = el("i", "tb-bar");
-    bar.style.left = `${((r.a - origin) / span) * 100}%`;
-    bar.style.width = `${(Math.max(0, r.end - r.a) / span) * 100}%`;
+    bar.style.width = `${len(wall)}%`;
     if (r.k === "model" && r.f != null && r.d > 0) { const f = el("i", "tb-ttft"); f.style.width = `${Math.min(100, (r.f / r.d) * 100)}%`; bar.append(f); }
     track.append(bar);
-    const wall = r.end - r.a;
-    li.append(lab, track, el("span", "tb-ms", r.k === "retry" && !wall ? "—" : fmtDur(wall)));
+    li.append(lab, el("span", "tb-at", fmtAt(r.a, t.total_ms)), track, el("span", "tb-ms", r.k === "retry" && !wall ? "—" : fmtDur(wall)));
     li.title = `${rowLabel(r)}: starts at ${fmtDur(r.a)}, ${fmtDur(wall)}${r.k === "model" && r.f != null ? `, first output after ${fmtDur(r.f)}` : ""}${r.count > 1 ? `, ${r.count} calls` : ""}`;
     list.append(li);
   }
-  const kids = [el("h5", "", "Timeline"), el("p", "note", "Bars share one time axis. Steps are model requests; the lighter start of a step is its wait for first output."), list];
+  const kids = [el("h5", "", "Timeline"), el("p", "note", "In order. Start is time since the turn began. Bar length is duration (square-root scale, longest = full). Steps are model requests; a step's lighter start is its wait for first output."), list];
   if (all.length > ROWS) {
     const btn = el("button", "btn block tb-more", state.showAllRows ? `Show first ${ROWS} rows` : `Show all ${all.length} rows`);
     btn.type = "button";
