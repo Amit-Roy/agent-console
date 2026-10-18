@@ -10,6 +10,8 @@ type Event = { preventDefault(): void; respondWith?(value: Promise<boolean>): vo
 const opened: MockFile[] = [];
 class MockFile {
   filename: string;
+  id?: string;
+  rendered = false;
   uri?: string;
   text: string;
   docVersion = 0;
@@ -22,21 +24,29 @@ class MockFile {
     setValue: (text: string) => { this.text = text; this.docVersion++; this.isUnsaved = true; },
     doc: {},
   };
-  constructor(filename: string, options: { text: string; uri?: string }) {
+  constructor(filename: string, options: { text: string; uri?: string; id?: string }) {
+    this.id = options.id;
+    // Released Acode returns a partial instance when an existing tab matches.
+    const duplicate = liveFiles.find((file) => options.id ? file.id === options.id : options.uri && file.uri === options.uri);
+    if (duplicate) { duplicate.makeActive(); return; }
     this.filename = filename;
     this.uri = options.uri;
     this.text = options.text;
+    this.rendered = true;
     opened.push(this);
+    liveFiles.push(this);
     newFile?.(this);
   }
   on(event: string, callback: (event: Event) => void) { this.events[event] = callback; }
-  makeActive() {}
+  off(event: string, callback: (event: Event) => void) { if (this.events[event] === callback) delete this.events[event]; }
+  makeActive() { if (!this.rendered) throw new Error("Cannot read properties of undefined (reading 'classList')"); }
   markSaved({ savedVersion = this.docVersion } = {}) {
     this.savedVersion = savedVersion;
     this.isUnsaved = this.docVersion !== savedVersion;
   }
   edit(text: string) { this.session.setValue(text); }
 }
+const liveFiles: MockFile[] = [];
 
 let init: () => void;
 let unmount: () => void;
@@ -85,7 +95,7 @@ vm.runInNewContext(source, {
     setPluginInit: (_id: string, callback: () => void) => { init = callback; },
     setPluginUnmount: (_id: string, callback: () => void) => { unmount = callback; },
   },
-  editorManager: { on: (_event: string, cb: typeof newFile) => { newFile = cb; }, off: () => { newFile = undefined; }, editor: { gotoLine: (...position: number[]) => positions.push(position) } },
+  editorManager: { files: liveFiles, on: (_event: string, cb: typeof newFile) => { newFile = cb; }, off: () => { newFile = undefined; }, editor: { gotoLine: (...position: number[]) => positions.push(position) } },
 });
 init!();
 const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
@@ -128,6 +138,9 @@ assert.equal(opened.length, 1);
 assert.equal(file.text, "external change");
 assert.equal(file.isUnsaved, false);
 file.edit("my unsaved edit");
+remote = { ...remote, token: "token-renewed", revision: "renewed-r" };
+await launch();
+assert.equal(file.text, "my unsaved edit");
 remote = { ...remote, token: "token-3", content: "another external change", revision: "another-r" };
 await launch();
 assert.equal(file.text, "my unsaved edit");
@@ -139,7 +152,7 @@ assert.equal(file.isUnsaved, true);
 assert.match(alerts.at(-1)!, /changed on the server/);
 const conflictWrite = calls.at(-1)!;
 assert.equal(conflictWrite.options.headers.Authorization, "Bearer token-3");
-assert.equal(JSON.parse(conflictWrite.options.body).revision, "external-r");
+assert.equal(JSON.parse(conflictWrite.options.body).revision, "renewed-r", "unchanged server content refreshes the revision without discarding edits");
 
 conflict = false;
 gate = new Promise<void>((resolve) => { releaseWrite = resolve; });
@@ -154,6 +167,7 @@ assert.equal(await save1, true);
 assert.equal(file.isUnsaved, true);
 gate = undefined;
 file.events.close({ preventDefault() {} });
+liveFiles.splice(liveFiles.indexOf(file), 1);
 await launch();
 assert.equal(opened.length, 2);
 assert.equal(opened[1].text, remote.content);
@@ -204,4 +218,30 @@ unmount!();
 assert.equal(folders.length, 0);
 assert.equal(provider, undefined);
 await assert.rejects(staleProvider(entries[1].url).stat(), /Project access expired/);
+// Plugin reload leaves Acode tabs alive; never call the duplicate constructor.
+const retained = opened[1];
+retained.edit("unsaved across plugin reload");
+const openedBeforeReload = opened.length;
+init!();
+remote = { ...remote, revision: "reconnected-r" };
+await launch();
+assert.equal(opened.length, openedBeforeReload);
+assert.equal(retained.text, "unsaved across plugin reload");
+assert.equal(await save(retained), true);
+assert.equal(JSON.parse(calls.at(-1)!.options.body).revision, "reconnected-r");
+assert.ok(!alerts.some((message) => message.includes("classList")));
+// An older dirty tab without baseline metadata must not overwrite fresh content.
+unmount!();
+delete (retained as any)[Symbol.for("app.agentconsole.files.baseline")];
+retained.id = "agent-console:https://console.example\n/tmp/file with spaces.js";
+retained.edit("older unsaved edits");
+remote = { ...remote, content: "new server content", revision: "new-server-r" };
+init!();
+await launch();
+const beforeUnknownSave = calls.length;
+assert.equal(await save(retained), false);
+assert.equal(calls.length, beforeUnknownSave);
+assert.match(alerts.at(-1)!, /Copy your edits/);
+assert.equal(retained.text, "older unsaved edits");
+unmount!();
 console.log("Acode plugin passed: launch, save, conflict, single flight, refresh, navigation, reopen, native tree, pagination, tree file saves, expiration, unload.");
