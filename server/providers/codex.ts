@@ -47,7 +47,7 @@ export function codexTranslator(emit: (ev: any) => void) {
   return (r: any) => {
     switch (r?.type) {
       case "thread.started":
-        emit({ type: "system", subtype: "init", session_id: r.thread_id });
+        emit({ type: "system", subtype: "init", session_id: r.thread_id, ...(r.model ? { model: r.model } : {}) }); // resolved model id for turn timing
         break;
       case "turn.started":
         started ||= Date.now();

@@ -16,6 +16,7 @@ import { recentPreamble, replayPreamble } from "./export.ts";
 import { backfill, restoreAccounting, recordTurn, readTurns, type Turn } from "./analytics.ts";
 import { repairAccounting } from "./accounting-repair.ts";
 import { SessionAccounting, codexAccounting, piAccounting, type ModelUsage } from "./accounting.ts";
+import { TurnClock, TurnTimingStore, fromProcess, runFacts } from "./turn-timing.ts";
 import { MAX_ATTACHMENTS, removeUploads, resolveAttachments, threadDir, withFileList } from "./uploads.ts";
 import { clip, DEFAULT_PROVIDER, PROVIDERS, type Agent, type AgentCtx, type Command, type Mode } from "./providers/index.ts";
 
@@ -37,7 +38,7 @@ export interface Thread {
   lastUserActivityAt?: number;
   lastProviderActivityAt?: number;
   idleCompactionConsumedAt?: number;
-  lastRun?: { model?: string; effort?: string; source?: string; duration_ms?: number; input_tokens?: number; output_tokens?: number; cached_input_tokens?: number };
+  lastRun?: { model?: string; effort?: string; source?: string; duration_ms?: number; input_tokens?: number; output_tokens?: number; cached_input_tokens?: number; timing?: ReturnType<typeof runFacts> };
   sessionId?: string;
   forkFrom?: string; // forked from a Claude session: the first run continues a copy of it (cleared once the fork has its own session id)
   context?: { used?: number; max?: number; source?: string }; // tokens in the agent's context now, and the model's window when the harness reports it
@@ -65,6 +66,12 @@ fs.mkdirSync(LOG_DIR, { recursive: true, mode: 0o700 });
 
 const IDLE_KILL_MS = 30 * 60 * 1000;
 
+// First-party turn timing (metadata only, never sent anywhere). Unavailable storage must never affect a turn.
+let timing: TurnTimingStore | undefined;
+try { timing = new TurnTimingStore(path.join(DATA_DIR, "latency.sqlite")); } catch { console.warn("Turn timing storage is unavailable."); }
+export const turnTiming = () => timing;
+const timed = (fn: () => void) => { try { fn(); } catch {} };
+
 // Chatter the UI never shows. Dropped before it is logged or sent (and filtered from older logs): a long Claude thread was 15% of it.
 const NOISE = new Set(["system/thinking_tokens", "system/status", "system/hook_started", "system/hook_response", "system/task_updated", "system/background_tasks_changed", "tool_progress"]);
 const kindOf = (e: any) => `${e?.type}${e?.subtype ? "/" + e.subtype : ""}`;
@@ -80,6 +87,7 @@ interface Queued {
   revision: number;
   editing?: boolean;
   questionAnswer?: true;
+  at?: number; // when it was queued: queue wait in turn timing
 }
 const attachList = (q: Queued): any[] => (Array.isArray(q.attachments) ? q.attachments : []);
 // One prompt from several queued messages. "[Image #n]" is numbered per message, so renumber to keep the references unambiguous.
@@ -100,13 +108,17 @@ function mergeQueued(items: Queued[]): { text: string; attachments: unknown; que
 const queuePreview = ({ id, text, revision, editing }: Queued) => ({ id, text: text.slice(0, 200), revision, editing: !!editing });
 
 // what the usage dashboard needs to know about the turn in flight
-interface TurnState { start: number; tools: Record<string, number>; usage?: any; models?: ModelUsage[] }
+interface TurnState { start: number; tools: Record<string, number>; usage?: any; models?: ModelUsage[]; clock?: TurnClock }
 
 interface Live {
   agent: Agent;
   aborted: boolean;
   compactConfirmed?: boolean;
   compactWait?: NodeJS.Timeout;
+  spawnAt?: number; // process lifecycle for turn timing: spawn -> first process output, and why it ended
+  readyAt?: number;
+  exitReason?: string;
+  model?: string; // resolved model id the process announced
 }
 
 export class Threads {
@@ -344,7 +356,7 @@ export class Threads {
       t.title = patch.title.slice(0, 80);
       t.autoTitle = false;
     }
-    if (patch.mode || patch.model || patch.effort || patch.advisor) this.kill(id); // respawn with new flags on next send (history kept via the harness's session)
+    if (patch.mode || patch.model || patch.effort || patch.advisor) this.kill(id, "settings"); // respawn with new flags on next send (history kept via the harness's session)
     this.touch(t);
   }
 
@@ -400,7 +412,7 @@ export class Threads {
 
   remove(id: string) {
     this.cancelQuestions(id, true);
-    this.kill(id);
+    this.kill(id, "remove");
     this.queues.delete(id);
     this.emitQueue(id);
     this.idleCompactionTimers.cancel(id);
@@ -457,6 +469,7 @@ export class Threads {
 
   private publish(id: string, ev: any, persistIt = true) {
     if (!persistIt) return void this.emit({ t: "event", thread: id, event: ev });
+    if (ev && typeof ev === "object" && ev.ts == null) ev.ts = Date.now(); // server receive time: logs stay analyzable whatever the harness stamps
     this.log(id, ev);
     this.emit({ t: "event", thread: id, event: ev, seq: this.historyIndex.count(path.join(LOG_DIR, `${id}.jsonl`)) });
   }
@@ -471,17 +484,25 @@ export class Threads {
   private start(t: Thread): Live {
     const prov = PROVIDERS.get(t.provider);
     if (!prov) throw new Error(`Unknown provider "${t.provider}".`);
-    const live: Live = { agent: undefined as unknown as Agent, aborted: false };
+    const live: Live = { agent: undefined as unknown as Agent, aborted: false, spawnAt: Date.now() };
+    const ready = () => {
+      if (live.readyAt != null) return;
+      live.readyAt = Date.now();
+      timed(() => timing?.recordProcess({ thread: t.id, provider: t.provider, kind: "ready", ms: live.readyAt! - live.spawnAt! }));
+    };
+    timed(() => timing?.recordProcess({ thread: t.id, provider: t.provider, kind: "spawn" }));
     let starting = true;
     const earlyEvents: any[] = [];
     const ctx: AgentCtx = {
       event: (ev) => {
+        if (fromProcess(ev)) ready();
         if (live.aborted) return;
         if (starting) earlyEvents.push(ev);
         else if (this.live.get(t.id) === live) this.onEvent(t, ev);
       },
-      commands: (list) => this.setCommands(t.provider, list),
+      commands: (list) => { ready(); this.setCommands(t.provider, list); },
       exited: (info) => {
+        timed(() => timing?.recordProcess({ thread: t.id, provider: t.provider, kind: "exit", ms: Date.now() - live.spawnAt!, code: info.code, signal: info.signal, reason: live.exitReason ?? (info.aborted || live.aborted ? "stop" : "crash") }));
         const current = this.live.get(t.id) === live;
         if (current) this.live.delete(t.id);
         if (!current || t.status !== "running") return; // a replaced or aborted agent's exit says nothing about the new turn
@@ -491,6 +512,7 @@ export class Threads {
         if (!info.aborted && !live.aborted) {
           this.publish(t.id, { type: "console_error", text: `${prov.label} exited (${info.signal ?? info.code}). ${info.stderr.trim().slice(-500)}` });
         }
+        this.endTiming(t, { subtype: "exited", is_error: true });
         this.touch(t);
         if (parseCommand(this.queues.get(t.id)?.[0]?.text || "")?.name === "compact") this.drain(t.id);
       },
@@ -506,6 +528,8 @@ export class Threads {
   private onEvent(t: Thread, ev: any) {
     const compacting = t.operation === "compact";
     if (NOISE.has(kindOf(ev))) return;
+    const clock = this.turns.get(t.id)?.clock;
+    if (clock) timed(() => { clock.event(ev); const live = this.live.get(t.id); if (live && clock.resolvedModel) live.model = clock.resolvedModel; });
     if (ev.type === "question") {
       try { ev = this.questions.add(t.id, ev); }
       catch { this.publish(t.id, { type: "console_error", text: "The agent sent an invalid question request." }); return; }
@@ -600,6 +624,7 @@ export class Threads {
     if (measured?.duplicate) return;
     const turn = this.turns.get(t.id);
     if (!turn) return;
+    this.endTiming(t, ev);
     this.turns.delete(t.id);
     const row: Turn = { ts: turn.start, thread: t.id, provider: t.provider, model: t.lastRun?.model || t.model, effort: t.effort, ms: ev.duration_ms, accounting: 2 };
     if (Object.keys(turn.tools).length) row.tools = turn.tools;
@@ -609,6 +634,19 @@ export class Threads {
     else if (ev.usageModels) Object.assign(row, piAccounting(ev.usageModels));
     if (row.cost != null) { t.cost += row.cost; t.costMeasured = true; }
     try { recordTurn(row); } catch {}
+  }
+
+  // Close the turn's clock: one timing row, and the compact facts the Run details panel shows for the last run.
+  private endTiming(t: Thread, ev: any) {
+    const turn = this.turns.get(t.id), clock = turn?.clock;
+    if (!clock) return;
+    turn.clock = undefined;
+    timed(() => {
+      const live = this.live.get(t.id);
+      const row = clock.finish(ev, Date.now(), live?.readyAt != null && live.spawnAt != null ? live.readyAt - live.spawnAt : null);
+      t.lastRun = { ...t.lastRun, timing: runFacts(row) };
+      timing?.recordTurn(t.id, row);
+    });
   }
 
   private command(t: Thread, text: string, attachments?: unknown): boolean {
@@ -643,7 +681,7 @@ export class Threads {
     t.idleCompactionConsumedAt = t.lastUserActivityAt;
     this.idleCompactionTimers.cancel(id);
     delete t.idleCompactionDueAt;
-    this.kill(id); // native sessions resume from disk; never share a mutable session with an idle subprocess
+    this.kill(id, "compact"); // native sessions resume from disk; never share a mutable session with an idle subprocess
     const live = this.start(t);
     if (!live.agent.compact) { this.kill(id); throw new Error("This agent does not support context compaction."); }
     live.compactConfirmed = false;
@@ -651,7 +689,7 @@ export class Threads {
     t.status = "running";
     this.publish(id, { type: "user_input", text: `/compact${instructions ? " " + instructions : ""}`, command: true, ts: Date.now() });
     this.publish(id, { type: "command_status", command: "compact", status: "running", text: "Compacting context…" });
-    this.turns.set(id, { start: Date.now(), tools: {} });
+    this.turns.set(id, { start: Date.now(), tools: {}, clock: new TurnClock({ provider: t.provider, alias: t.model, start: Date.now(), cold: true }) });
     this.touch(t);
     try { live.agent.compact(instructions); }
     catch (error) { this.kill(id); delete t.operation; t.status = "idle"; this.touch(t); throw error; }
@@ -660,7 +698,7 @@ export class Threads {
   // `attachments` is untrusted browser input: [{id}] naming files already uploaded to this thread
   // While a turn is running a message either steers it (delivered to the agent now, picked up after its current tool call) or waits in
   // a queue for the turn to end. `mode: "queue"` forces the queue; so does an agent that cannot take input mid-turn.
-  send(id: string, text: string, opts: { auto?: "brain"; attachments?: unknown; mode?: "steer" | "queue"; delivery?: "queued"; questionAnswer?: true } = {}) {
+  send(id: string, text: string, opts: { auto?: "brain"; attachments?: unknown; mode?: "steer" | "queue"; delivery?: "queued"; questionAnswer?: true; queuedAt?: number } = {}) {
     const t = this.threads.get(id);
     if (!t) throw new Error("Unknown thread");
     if (!opts.auto && !opts.questionAnswer && this.command(t, text, opts.attachments)) return;
@@ -691,10 +729,13 @@ export class Threads {
     }
     if (!opts.auto) delete t.archived; // writing to an archived thread puts it back to work (touch below persists it)
     let live = this.live.get(id);
-    if (!live || !live.agent.alive) live = this.start(t);
+    const cold = !live || !live.agent.alive;
+    const start = Date.now();
+    if (cold) live = this.start(t);
+    live = live!;
     live.aborted = false;
     t.status = "running";
-    this.turns.set(id, { start: Date.now(), tools: {} });
+    this.turns.set(id, { start, tools: {}, clock: new TurnClock({ provider: t.provider, alias: t.model, start, cold, model: live.model, queueMs: opts.queuedAt != null ? Math.max(0, start - opts.queuedAt) : undefined }) });
     this.publish(id, {
       type: "user_input",
       text,
@@ -747,7 +788,7 @@ export class Threads {
     }
     const q = this.queues.get(t.id) ?? [];
     if (q.length >= MAX_QUEUE) throw new Error("Too many queued messages.");
-    q.push({ id: crypto.randomUUID(), text, attachments: opts.attachments, revision: 0, ...(opts.questionAnswer ? { questionAnswer: true } : {}) });
+    q.push({ id: crypto.randomUUID(), text, attachments: opts.attachments, revision: 0, at: Date.now(), ...(opts.questionAnswer ? { questionAnswer: true } : {}) });
     this.queues.set(t.id, q);
     this.emitQueue(t.id);
   }
@@ -821,10 +862,12 @@ export class Threads {
       if (!parseCommand(q[0].text)) {
         while (n < q.length && !q[n].editing && !parseCommand(q[n].text) && files + attachList(q[n]).length <= MAX_ATTACHMENTS) files += attachList(q[n++]).length;
       }
-      const { text, attachments, questionAnswer } = mergeQueued(q.splice(0, n));
+      const items = q.splice(0, n);
+      const { text, attachments, questionAnswer } = mergeQueued(items);
+      const queuedAt = Math.min(...items.map((x) => x.at ?? Infinity));
       this.emitQueue(id);
       try {
-        this.send(id, text, { attachments, delivery: "queued", ...(questionAnswer ? { questionAnswer: true } : {}) });
+        this.send(id, text, { attachments, delivery: "queued", ...(questionAnswer ? { questionAnswer: true } : {}), ...(Number.isFinite(queuedAt) ? { queuedAt } : {}) });
       } catch (e: any) {
         this.publish(id, { type: "console_error", text: `A queued message could not be sent: ${e?.message ?? e}` });
       }
@@ -851,7 +894,9 @@ export class Threads {
     this.persist();
     if (this.queues.delete(id)) this.emitQueue(id); // Stop means stop: nothing queued behind it runs
     if (!live) { this.touch(t); return; }
+    this.endTiming(t, { subtype: "aborted", is_error: true });
     live.aborted = true;
+    live.exitReason = "stop";
     this.live.delete(id); // next send starts a fresh agent and resumes the session
     live.agent.abort();
     t.status = "idle";
@@ -860,10 +905,11 @@ export class Threads {
     this.touch(t);
   }
 
-  private kill(id: string) {
+  private kill(id: string, reason = "kill") {
     this.cancelQuestions(id);
     const live = this.live.get(id);
     if (live) {
+      live.exitReason ??= reason;
       live.aborted = true;
       this.live.delete(id);
       live.agent.kill();
@@ -874,13 +920,13 @@ export class Threads {
   sweep() {
     for (const [id] of this.live) {
       const t = this.threads.get(id);
-      if (t && t.status === "idle" && Date.now() - t.updatedAt > IDLE_KILL_MS) this.kill(id);
+      if (t && t.status === "idle" && Date.now() - t.updatedAt > IDLE_KILL_MS) this.kill(id, "idle");
     }
   }
 
   shutdown() {
     this.closed = true;
     this.idleCompactionTimers.shutdown();
-    for (const id of [...this.live.keys()]) this.kill(id);
+    for (const id of [...this.live.keys()]) this.kill(id, "shutdown");
   }
 }

@@ -8,6 +8,7 @@ import { harnessInstructions } from "./brain.ts";
 import { childEnv } from "./env.ts";
 import { parseJson, spawnLines } from "./proc.ts";
 import { piQuestions } from "./pi-questions.ts";
+import { retryEvent } from "../turn-timing.ts";
 import { clip, IMAGE_ONLY_PROMPT, type Agent, type AgentCtx, type Attachment, type Command, type Provider, type ThreadSpec } from "./types.ts";
 
 // pi (github.com/earendil-works/pi) in RPC mode: one long-lived process per thread, any model pi knows about
@@ -149,6 +150,9 @@ export function piTranslator(emit: (ev: any) => void, onCommands?: (list: Comman
       }
       case "tool_execution_end":
         emit({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: r.toolCallId, content: clip(textOf(r.result?.content)), is_error: !!r.isError }] } });
+        break;
+      case "auto_retry_start": // turn timing only: status + error class, never the message
+        emit(retryEvent({ attempt: r.attempt, message: String(r.errorMessage ?? ""), delay: r.delayMs }));
         break;
       case "auto_retry_end":
         if (r.success === false) failure = friendlyError(String(r.finalError ?? "request failed"));

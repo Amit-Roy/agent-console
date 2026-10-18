@@ -12,7 +12,7 @@ import { WebSocketServer, type WebSocket } from "ws";
 import { authed, CODER_HOSTS, cookieFrom, limited, makeToken, passwordOk, PASSWORD, recordFail, setCookie, tokenValid } from "./auth.ts";
 import { providerInfo, refreshPiModels } from "./providers/index.ts";
 import { threadToMarkdown } from "./export.ts";
-import { Threads } from "./threads.ts";
+import { Threads, turnTiming } from "./threads.ts";
 import { dashboard } from "./analytics.ts";
 import { headroom } from "./headroom.ts";
 import { LatencyStore } from "./latency.ts";
@@ -127,6 +127,23 @@ app.get("/api/latency", (_req, res) => {
   try { res.json(latency ? { available: true, ...latency.summary() } : { available: false }); }
   catch { res.status(503).json({ available: false }); }
 });
+// Turn timing stats for agents and the dashboard: metadata only (durations, tool names, counts, error classes).
+const turnLatency = (from: number, to: number, thread?: string) => {
+  const store = turnTiming();
+  if (!store) return { available: false };
+  let phone: { provider: string; total_ms: number }[] = [];
+  try { if (!thread) phone = latency?.samples("first_token", from, to) ?? []; } catch {} // device samples are per provider, not per thread
+  return { available: true, ...store.summary(from, to, { thread, phone }) };
+};
+app.get("/api/turn-latency", (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  const to = Number(req.query.to) || Date.now();
+  const from = Number(req.query.from) || to - 7 * 86_400_000;
+  const thread = typeof req.query.thread === "string" && isId(req.query.thread) ? req.query.thread : undefined;
+  if (!(from < to) || to - from > 400 * 86_400_000) return void res.status(400).json({ error: "Choose a range of up to 400 days." });
+  try { res.json(turnLatency(from, to, thread)); }
+  catch { res.status(503).json({ available: false }); }
+});
 app.get("/api/file", fileViewer(id => threads.get(id)));
 app.get("/api/file-image", fileViewer(id => threads.get(id), true));
 app.get("/api/file-media", fileMedia(id => threads.get(id)));
@@ -140,7 +157,9 @@ app.get("/api/dashboard", async (req, res) => {
     const d = await dashboard(from, to);
     const titles: Record<string, string> = {};
     for (const t of d.turns) titles[t.thread] ??= threads.get(t.thread)?.title ?? "Deleted thread";
-    res.json({ ...d, titles });
+    let turnLatencyStats: any = { available: false };
+    try { turnLatencyStats = turnLatency(from, to); } catch {}
+    res.json({ ...d, titles, latency: turnLatencyStats });
   }
   catch { res.status(503).json({ error: "Dashboard data is unavailable." }); }
 });
