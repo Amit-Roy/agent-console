@@ -8,6 +8,10 @@ import { DatabaseSync } from "node:sqlite";
 
 export const RETENTION_DAYS = 30;
 const MAX_TOOLS = 100, MAX_RETRIES = 20;
+// Timeline: ordered segments of one turn for the Run details "Full breakdown". Bounded: the first MAX_SEGMENTS in time order,
+// everything later folded into one tail summary. Tool spans are tracked up to MAX_TIMED_TOOLS (the tools column keeps MAX_TOOLS).
+export const MAX_SEGMENTS = 300;
+const MAX_TIMED_TOOLS = 400;
 
 const toolName = (s: unknown) => (typeof s === "string" && s.replace(/[^\w.:\-]/g, "").slice(0, 64)) || "tool";
 const shortWord = (s: unknown) => (typeof s === "string" && /^[a-z][a-z0-9_]{0,39}$/.test(s) ? s : undefined);
@@ -62,10 +66,18 @@ const SYNTHETIC = new Set(["run_settings", "console_error"]);
 export const fromProcess = (ev: any) => !SYNTHETIC.has(ev?.type);
 
 export interface ToolTime { n: string; ms: number; e?: 1 }
+// a/d: start offset and duration in ms from the turn start (queue sits before 0). i: model step number.
+// model f: that step's time to first output. retry s/c: HTTP status and short error class. tool e: failed.
+export type Segment =
+  | { k: "queue" | "startup" | "wait"; a: number; d: number }
+  | { k: "model"; i: number; a: number; d: number; f: number | null }
+  | { k: "tool"; i: number; n: string; a: number; d: number; e?: 1 }
+  | { k: "retry"; i: number; a: number; d: number; s: number | null; c: string };
+export interface Timeline { seg: Segment[]; more?: { n: number; from: number; model_ms: number; tool_ms: number; other_ms: number; tools: number; errors: number } }
 export interface TurnTiming {
   turn_ts: number; provider: string; model: string; alias: string; cold: 0 | 1; spawn_ms: number | null; queue_ms: number | null;
   first_ms: number | null; total_ms: number; model_ms: number; tool_ms: number; startup_ms: number; wait_ms: number; steps: number;
-  tools: ToolTime[]; retries: number; retry_detail: { s: number | null; c: string }[]; rate_limits: number; outcome: string;
+  tools: ToolTime[]; retries: number; retry_detail: { s: number | null; c: string }[]; rate_limits: number; outcome: string; timeline?: Timeline;
 }
 
 // One turn, as the server sees it: send -> first process event (startup) -> first model output (TTFT) -> tools <-> model steps -> result.
@@ -74,7 +86,10 @@ export interface TurnTiming {
 export class TurnClock {
   private firstEvent?: number;
   private firstOutput?: number;
-  private tools = new Map<string, Span & { n: string; e?: 1 }>();
+  private tools = new Map<string, Span & { n: string; e?: 1; i: number }>();
+  private stepSpans: { a: number; first?: number; last?: number }[] = [];
+  private retrySegs: { a: number; d: number; s: number | null; c: string; i: number }[] = [];
+  private lastResult?: number;
   private waits = new Map<string, Span>();
   private steps = 0;
   private inModel = false;
@@ -89,14 +104,23 @@ export class TurnClock {
   get resolvedModel() { return this.model; }
   private output(now: number) {
     this.firstOutput ??= now;
-    if (!this.inModel) { this.steps++; this.inModel = true; }
+    if (!this.inModel) {
+      this.steps++; this.inModel = true;
+      // A step's request goes out when the last tool result lands (or, for the first step, when the process first speaks).
+      const a = this.steps === 1 ? (this.firstEvent ?? this.o.start) : (this.lastResult ?? now);
+      this.stepSpans.push({ a: Math.min(a, now), first: now });
+    }
+    this.stepSpans[this.stepSpans.length - 1].last = now;
   }
   event(ev: any, now = Date.now()) {
     if (!ev || typeof ev !== "object") return;
     if (fromProcess(ev)) this.firstEvent ??= now;
     if (ev.type === "system" && ev.subtype === "api_retry") {
       this.retryCount++;
-      if (this.retries.length < MAX_RETRIES) this.retries.push({ s: httpStatus(ev.error_status), c: errorClass(ev.error) });
+      const s = httpStatus(ev.error_status), c = errorClass(ev.error);
+      if (this.retries.length < MAX_RETRIES) this.retries.push({ s, c });
+      const delay = Number(ev.retry_delay_ms);
+      this.retrySegs.push({ a: now, d: Number.isFinite(delay) && delay > 0 ? Math.min(delay, 3_600_000) : 0, s, c, i: this.inModel ? this.steps : this.steps + 1 });
       return;
     }
     if (ev.type === "rate_limit_event") {
@@ -114,7 +138,7 @@ export class TurnClock {
         if (b?.type === "text" || b?.type === "thinking" || b?.type === "redacted_thinking") this.output(now);
         else if (b?.type === "tool_use") {
           this.output(now);
-          if (typeof b.id === "string" && !this.tools.has(b.id) && this.tools.size < MAX_TOOLS) this.tools.set(b.id, { n: toolName(b.name), a: now });
+          if (typeof b.id === "string" && !this.tools.has(b.id) && this.tools.size < MAX_TIMED_TOOLS) this.tools.set(b.id, { n: toolName(b.name), a: now, i: this.steps });
         }
       }
     } else if (ev.type === "user") {
@@ -123,6 +147,7 @@ export class TurnClock {
         const tool = this.tools.get(b.tool_use_id);
         if (tool && tool.b == null) { tool.b = now; if (b.is_error) tool.e = 1; }
         this.inModel = false; // the next output is a new model request
+        this.lastResult = now;
       }
     } else if (ev.type === "question" && typeof ev.id === "string") this.waits.set(ev.id, { a: now });
     else if (ev.type === "question_answer") { const w = this.waits.get(ev.id); if (w && w.b == null) w.b = now; }
@@ -139,10 +164,40 @@ export class TurnClock {
       spawn_ms: this.o.cold && spawnMs != null && spawnMs >= 0 ? spawnMs : null, queue_ms: this.o.queueMs ?? null,
       first_ms: this.firstOutput != null ? this.firstOutput - start : null, total_ms: total,
       model_ms: Math.max(0, total - tool - wait - startup), tool_ms: tool, startup_ms: startup, wait_ms: wait, steps: this.steps,
-      tools: tools.map((t) => ({ n: t.n, ms: Math.max(0, (t.b ?? now) - t.a), ...(t.e ? { e: 1 as const } : {}) })),
+      tools: tools.slice(0, MAX_TOOLS).map((t) => ({ n: t.n, ms: Math.max(0, (t.b ?? now) - t.a), ...(t.e ? { e: 1 as const } : {}) })),
       retries: this.retryCount, retry_detail: this.retries, rate_limits: this.rateLimits, outcome,
+      timeline: this.timeline(now, startup),
     };
   }
+  // Ordered segments, offsets from the turn start. Metadata only, like the rest of the row.
+  private timeline(now: number, startup: number): Timeline {
+    const start = this.o.start, off = (t: number) => Math.max(0, t - start), dur = (a: number, b: number) => Math.max(0, b - a);
+    const seg: Segment[] = [];
+    if (this.o.queueMs) seg.push({ k: "queue", a: -this.o.queueMs, d: this.o.queueMs });
+    if (startup > 0) seg.push({ k: "startup", a: 0, d: startup });
+    this.stepSpans.forEach((s, n) => {
+      const last = n === this.stepSpans.length - 1;
+      // A step ends at its last output; the final step runs on to the result unless it left a tool open.
+      const end = last && ![...this.tools.values()].some((t) => t.i === n + 1 && t.b == null) ? now : (s.last ?? s.a);
+      seg.push({ k: "model", i: n + 1, a: off(s.a), d: dur(s.a, end), f: s.first != null ? dur(s.a, s.first) : null });
+    });
+    for (const t of this.tools.values()) seg.push({ k: "tool", i: t.i, n: t.n, a: off(t.a), d: dur(t.a, t.b ?? now), ...(t.e ? { e: 1 as const } : {}) });
+    for (const r of this.retrySegs) seg.push({ k: "retry", i: r.i, a: off(r.a), d: r.d, s: r.s, c: r.c });
+    for (const w of this.waits.values()) seg.push({ k: "wait", a: off(w.a), d: dur(w.a, w.b ?? now) });
+    const rank: Record<string, number> = { queue: 0, startup: 1, model: 2, retry: 3, tool: 4, wait: 5 };
+    seg.sort((x, y) => x.a - y.a || rank[x.k] - rank[y.k]);
+    return capTimeline(seg);
+  }
+}
+export function capTimeline(seg: Segment[], max = MAX_SEGMENTS): Timeline {
+  if (seg.length <= max) return { seg };
+  const rest = seg.slice(max), more = { n: rest.length, from: rest[0].a, model_ms: 0, tool_ms: 0, other_ms: 0, tools: 0, errors: 0 };
+  for (const s of rest) {
+    if (s.k === "model") more.model_ms += s.d;
+    else if (s.k === "tool") { more.tool_ms += s.d; more.tools++; if (s.e) more.errors++; }
+    else more.other_ms += s.d;
+  }
+  return { seg: seg.slice(0, max), more };
 }
 
 // What the Run details panel shows for the last run; small, it rides on every thread update.
@@ -177,16 +232,24 @@ export class TurnTimingStore {
         id INTEGER PRIMARY KEY, at INTEGER NOT NULL, turn_ts INTEGER NOT NULL, thread TEXT NOT NULL, provider TEXT NOT NULL, model TEXT, alias TEXT,
         cold INTEGER NOT NULL, spawn_ms REAL, queue_ms REAL, first_ms REAL, total_ms REAL NOT NULL, model_ms REAL, tool_ms REAL, startup_ms REAL,
         wait_ms REAL, steps INTEGER, tools TEXT, retries INTEGER NOT NULL DEFAULT 0, retry_detail TEXT, rate_limits INTEGER NOT NULL DEFAULT 0, outcome TEXT NOT NULL
-      ); CREATE INDEX IF NOT EXISTS turn_timing_ts ON turn_timing(turn_ts);
+        , timeline TEXT
+      ); CREATE INDEX IF NOT EXISTS turn_timing_ts ON turn_timing(turn_ts); CREATE INDEX IF NOT EXISTS turn_timing_thread ON turn_timing(thread, turn_ts);
       CREATE TABLE IF NOT EXISTS agent_process (
         id INTEGER PRIMARY KEY, at INTEGER NOT NULL, thread TEXT NOT NULL, provider TEXT NOT NULL, kind TEXT NOT NULL, ms REAL, code INTEGER, signal TEXT, reason TEXT
       ); CREATE INDEX IF NOT EXISTS agent_process_at ON agent_process(at);`);
+    this.migrate();
     this.prune();
   }
+  // Databases from before the timeline column gain it in place; their old rows simply have no timeline.
+  private migrate() {
+    const cols = (this.db.prepare("PRAGMA table_info(turn_timing)").all() as any[]).map((c) => c.name);
+    if (!cols.includes("timeline")) this.db.exec("ALTER TABLE turn_timing ADD COLUMN timeline TEXT");
+  }
   recordTurn(thread: string, t: TurnTiming, now = Date.now()) {
-    this.db.prepare(`INSERT INTO turn_timing(at,turn_ts,thread,provider,model,alias,cold,spawn_ms,queue_ms,first_ms,total_ms,model_ms,tool_ms,startup_ms,wait_ms,steps,tools,retries,retry_detail,rate_limits,outcome)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(now, t.turn_ts, thread, t.provider, t.model.slice(0, 80), t.alias.slice(0, 80), t.cold, t.spawn_ms, t.queue_ms, t.first_ms,
-      t.total_ms, t.model_ms, t.tool_ms, t.startup_ms, t.wait_ms, t.steps, JSON.stringify(t.tools.slice(0, MAX_TOOLS)), t.retries, JSON.stringify(t.retry_detail.slice(0, MAX_RETRIES)), t.rate_limits, t.outcome);
+    const timeline = t.timeline ? JSON.stringify(t.timeline.seg.length > MAX_SEGMENTS ? capTimeline(t.timeline.seg) : t.timeline) : null;
+    this.db.prepare(`INSERT INTO turn_timing(at,turn_ts,thread,provider,model,alias,cold,spawn_ms,queue_ms,first_ms,total_ms,model_ms,tool_ms,startup_ms,wait_ms,steps,tools,retries,retry_detail,rate_limits,outcome,timeline)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(now, t.turn_ts, thread, t.provider, t.model.slice(0, 80), t.alias.slice(0, 80), t.cold, t.spawn_ms, t.queue_ms, t.first_ms,
+      t.total_ms, t.model_ms, t.tool_ms, t.startup_ms, t.wait_ms, t.steps, JSON.stringify(t.tools.slice(0, MAX_TOOLS)), t.retries, JSON.stringify(t.retry_detail.slice(0, MAX_RETRIES)), t.rate_limits, t.outcome, timeline);
     this.wrote(now);
   }
   // kind: spawn | ready (ms = spawn -> first process output) | exit (ms = process lifetime; reason idle/settings/stop/compact/remove/shutdown/crash)
@@ -202,11 +265,19 @@ export class TurnTimingStore {
       this.db.prepare(`DELETE FROM ${table} WHERE id <= (SELECT id FROM ${table} ORDER BY id DESC LIMIT 1 OFFSET ?)`).run(this.maxRows);
     }
   }
+  private static COLS = "id,at,turn_ts,thread,provider,model,alias,cold,spawn_ms,queue_ms,first_ms,total_ms,model_ms,tool_ms,startup_ms,wait_ms,steps,tools,retries,retry_detail,rate_limits,outcome";
   turns(from: number, to: number, thread?: string): any[] {
+    const cols = TurnTimingStore.COLS; // aggregates never need the timelines
     const rows = (thread
-      ? this.db.prepare("SELECT * FROM turn_timing WHERE turn_ts BETWEEN ? AND ? AND thread = ? ORDER BY turn_ts").all(from, to, thread)
-      : this.db.prepare("SELECT * FROM turn_timing WHERE turn_ts BETWEEN ? AND ? ORDER BY turn_ts").all(from, to)) as any[];
+      ? this.db.prepare(`SELECT ${cols} FROM turn_timing WHERE turn_ts BETWEEN ? AND ? AND thread = ? ORDER BY turn_ts`).all(from, to, thread)
+      : this.db.prepare(`SELECT ${cols} FROM turn_timing WHERE turn_ts BETWEEN ? AND ? ORDER BY turn_ts`).all(from, to)) as any[];
     return rows.map((r) => ({ ...r, tools: JSON.parse(r.tools || "[]"), retry_detail: JSON.parse(r.retry_detail || "[]") }));
+  }
+  // The thread's last `limit` turns, newest first, each with its timeline (null for rows recorded before timelines existed).
+  recent(thread: string, limit = 10): any[] {
+    const rows = this.db.prepare(`SELECT ${TurnTimingStore.COLS},timeline FROM turn_timing WHERE thread = ? ORDER BY turn_ts DESC LIMIT ?`).all(thread, Math.max(1, Math.min(20, limit))) as any[];
+    const parse = (s: any, d: any) => { try { return s ? JSON.parse(s) : d; } catch { return d; } };
+    return rows.map(({ id, at, thread: _t, ...r }) => ({ ...r, tools: parse(r.tools, []), retry_detail: parse(r.retry_detail, []), timeline: parse(r.timeline, null) }));
   }
   // `phone`: browser-measured send -> first token painted samples (latency kind first_token), same window.
   summary(from: number, to: number, opts: { thread?: string; phone?: { provider: string; total_ms: number }[] } = {}) {

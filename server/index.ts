@@ -142,6 +142,12 @@ app.get("/api/turn-latency", (req, res) => {
   const to = Number(req.query.to) || Date.now();
   const from = Number(req.query.from) || to - 7 * 86_400_000;
   const thread = typeof req.query.thread === "string" && isId(req.query.thread) ? req.query.thread : undefined;
+  // ?thread=&detail=N: that thread's last N turns (max 20) with their full timelines, for Run details' Full breakdown.
+  if (thread && req.query.detail != null) {
+    const store = turnTiming();
+    try { return void res.json(store ? { available: true, turns: store.recent(thread, Number(req.query.detail) || 10) } : { available: false }); }
+    catch { return void res.status(503).json({ available: false }); }
+  }
   if (!(from < to) || to - from > 400 * 86_400_000) return void res.status(400).json({ error: "Choose a range of up to 400 days." });
   try { res.json(turnLatency(from, to, thread)); }
   catch { res.status(503).json({ available: false }); }

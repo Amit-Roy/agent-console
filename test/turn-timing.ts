@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 const dir=fs.mkdtempSync(path.join(os.tmpdir(),'ac-turn-timing-'));
 process.env.AGENT_CONSOLE_DATA=dir;process.env.AGENT_CONSOLE_BRAIN=path.join(dir,'no-brain');process.env.AGENT_CONSOLE_LABELS='0';
-const {TurnClock,TurnTimingStore,errorClass,retryEvent,runFacts,nearestRank}=await import('../server/turn-timing.ts');
+const {TurnClock,TurnTimingStore,errorClass,retryEvent,runFacts,nearestRank,capTimeline,MAX_SEGMENTS}=await import('../server/turn-timing.ts');
 const SECRET='NEVER_STORE_THIS_PROMPT rm -rf /secret';
 const asst=(content:any[],extra:any={})=>({type:'assistant',message:{role:'assistant',content},...extra});
 const result=(id:string,is_error=false)=>({type:'user',message:{role:'user',content:[{type:'tool_result',tool_use_id:id,content:SECRET,is_error}]}});
@@ -54,6 +54,33 @@ assert.equal(row.outcome,'ok');
 const facts=runFacts(row);
 assert.deepEqual(facts.slowest,{name:'AskUserQuestion',ms:2100});assert.equal(facts.other_ms,2400);assert.equal(facts.cold,true);assert.equal(facts.retries,2);
 assert.ok(!JSON.stringify(row).includes('NEVER_STORE'));
+// timeline: ordered segments, offsets from the turn start (queue before 0), per-step TTFT, tools tied to the step that called them
+assert.deepEqual(row.timeline,{seg:[
+ {k:'queue',a:-250,d:250},{k:'startup',a:0,d:400},
+ {k:'model',i:1,a:400,d:700,f:200},{k:'retry',i:1,a:500,d:0,s:null,c:'unknown'},
+ {k:'tool',i:1,n:'Bash',a:1000,d:1000,e:1},{k:'tool',i:1,n:'Read',a:1100,d:500},
+ {k:'model',i:2,a:2000,d:200,f:100},{k:'tool',i:2,n:'AskUserQuestion',a:2200,d:2100},{k:'wait',a:2250,d:2000},
+ {k:'model',i:3,a:4300,d:700,f:100}]});
+assert.equal(runFacts(row).timeline,undefined,'the timeline stays out of the per-update Run details facts');
+// caps: a 200-step turn keeps the first MAX_SEGMENTS segments in time order and folds the rest into one tail summary
+{
+ const L=new TurnClock({provider:'claude',alias:'opus',start:0,cold:false});
+ L.event({type:'system',subtype:'init'},10);
+ let t=10;
+ for(let i=0;i<200;i++){t+=50;L.event(asst([{type:'tool_use',id:'L'+i,name:'Bash',input:{command:SECRET}}]),t);t+=100;L.event(result('L'+i,i%10===0),t);}
+ L.event({type:'system',subtype:'api_retry',attempt:1,error_status:529,error:'overloaded',retry_delay_ms:4000},t+1);
+ L.event(asst([{type:'text',text:SECRET}]),t+5000);
+ const lr=L.finish({type:'result'},t+6000);
+ assert.equal(lr.steps,201);assert.equal(lr.tools.length,100,'tools column stays capped');
+ assert.equal(lr.timeline.seg.length,MAX_SEGMENTS);
+ const all=1+201+200+1;assert.equal(lr.timeline.more.n,all-MAX_SEGMENTS);
+ assert.ok(lr.timeline.seg.every((x,i,a)=>!i||a[i-1].a<=x.a),'ordered by start');
+ assert.equal(lr.timeline.more.tools,200-lr.timeline.seg.filter(x=>x.k==='tool').length,'every tool is accounted for');
+ assert.ok(lr.timeline.more.model_ms>0&&lr.timeline.more.other_ms===4000,'tail keeps the retry backoff');
+ const capped=capTimeline(Array.from({length:5},(_,i)=>({k:'tool',i:1,n:'X',a:i,d:10,...(i===4?{e:1}:{})})),3);
+ assert.deepEqual(capped.more,{n:2,from:3,model_ms:0,tool_ms:20,other_ms:0,tools:2,errors:1});
+ assert.ok(!JSON.stringify(lr).includes('NEVER_STORE'));
+}
 
 // warm turn, no output (e.g. aborted early): no TTFT, no spawn time even if one is offered, open tools close at the end
 const w=new TurnClock({provider:'codex',alias:'default',start:0,cold:false});
@@ -91,6 +118,30 @@ try{
  assert.equal(store.summary(0,now+1).turns,0,'retention window prunes');
  assert.ok(!fs.readFileSync(file).includes('NEVER_STORE'));
 }finally{store.close();}
+// recent(): newest first with timelines; migration adds the column to a database from before timelines
+{
+ const {DatabaseSync}=await import('node:sqlite');
+ const old=path.join(dir,'old.sqlite');
+ const db=new DatabaseSync(old);
+ db.exec(`CREATE TABLE turn_timing (id INTEGER PRIMARY KEY, at INTEGER NOT NULL, turn_ts INTEGER NOT NULL, thread TEXT NOT NULL, provider TEXT NOT NULL, model TEXT, alias TEXT,
+  cold INTEGER NOT NULL, spawn_ms REAL, queue_ms REAL, first_ms REAL, total_ms REAL NOT NULL, model_ms REAL, tool_ms REAL, startup_ms REAL,
+  wait_ms REAL, steps INTEGER, tools TEXT, retries INTEGER NOT NULL DEFAULT 0, retry_detail TEXT, rate_limits INTEGER NOT NULL DEFAULT 0, outcome TEXT NOT NULL)`);
+ const now=Date.now();
+ db.prepare("INSERT INTO turn_timing(at,turn_ts,thread,provider,cold,total_ms,tools,retry_detail,outcome) VALUES(?,?,?,?,?,?,?,?,?)").run(now,now-5000,'old','claude',0,100,'[]','[]','ok');
+ db.close();
+ const ms=new TurnTimingStore(old);
+ try{
+  for(let i=0;i<12;i++) ms.recordTurn('old',{...row,turn_ts:now-4000+i});
+  ms.recordTurn('other',{...row,turn_ts:now});
+  const rec=ms.recent('old',10);
+  assert.equal(rec.length,10);assert.equal(rec[0].turn_ts,now-4000+11,'newest first');
+  assert.deepEqual(rec[0].timeline,row.timeline);assert.equal(rec[0].thread,undefined);
+  assert.equal(ms.recent('old',50).length,13,'limit capped at 20, includes the pre-migration row');
+  assert.equal(ms.recent('old',50).at(-1).timeline,null,'old rows have no timeline');
+  assert.equal(ms.summary(0,now+1,{thread:'old'}).turns,13);
+ }finally{ms.close();}
+ const again=new TurnTimingStore(old);again.close(); // reopening after migration is a no-op
+}
 
 // browser first-token samples ride the existing validated latency endpoint as a new kind
 {
@@ -127,6 +178,8 @@ try{
  const s=turnTiming()!.summary(0,Date.now()+1);
  assert.equal(s.turns,2);assert.equal(s.cold.cold,1);assert.equal(s.models['fixture/fixture-model-1'],2);assert.equal(s.retries.by_status['529'],1);
  assert.equal(s.exits.settings,1);
+ const rec=turnTiming()!.recent(t.id,10);
+ assert.equal(rec.length,2);assert.deepEqual(rec[1].timeline.seg.filter((x:any)=>x.k!=='startup').map((x:any)=>x.k),['model','tool','retry'],'live turns store their timeline');
  assert.ok(!fs.readdirSync(dir).filter(f=>f.startsWith('latency.sqlite')).some(f=>fs.readFileSync(path.join(dir,f)).includes('NEVER_STORE')),'no prompt or command text in the timing store');
 }finally{threads.shutdown();fs.rmSync(dir,{recursive:true,force:true});}
 console.log('turn timing ok');
