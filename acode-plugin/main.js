@@ -2,6 +2,7 @@
 (() => {
   const pluginId = "app.agentconsole.files";
   const files = new Map();
+  const baselineKey = Symbol.for("app.agentconsole.files.baseline");
   const projects = new Map();
   const projectKeys = new Map();
   let nextProject = 0;
@@ -190,15 +191,24 @@
       if (!existing.file.isUnsaved && !existing.saving) {
         existing.file.session.setValue(remote.content);
         existing.revision = remote.revision;
+        existing.baseline = remote.content;
+        existing.file[baselineKey] = { key, content: remote.content, revision: remote.revision };
         if (typeof existing.file.markSaved === "function") existing.file.markSaved();
         else existing.file.isUnsaved = false;
+      } else if (!existing.saving && remote.content === existing.baseline) {
+        existing.revision = remote.revision;
+        existing.file[baselineKey] = { key, content: existing.baseline, revision: remote.revision };
       }
       return;
     }
     const EditorFile = acode.require("editorFile");
+    const id = "agent-console:" + key;
+    // Acode's constructor returns a partial object when this tab already exists.
+    const retained = openedFile || editorManager.files?.find((file) =>
+      file[baselineKey]?.key === key || file.id === id || (remote.uri && file.uri === remote.uri));
     constructingFile = true;
-    const file = openedFile || new EditorFile(remote.name || path.split("/").pop(), {
-      id: "agent-console:" + key,
+    const file = retained || new EditorFile(remote.name || path.split("/").pop(), {
+      id,
       uri: remote.uri,
       text: remote.content,
       render: true,
@@ -208,10 +218,25 @@
     constructingFile = false;
     // Do not persist short-lived access credentials in Acode's restored sessions.
     file.persistInSession = false;
-    const state = { file, token, revision: remote.revision, saving: null };
+    const prior = file[baselineKey];
+    const unknownDirty = retained && file.isUnsaved && !prior && textOf(file) !== remote.content;
+    const state = { file, token,
+      revision: unknownDirty ? null : (file.isUnsaved && prior && prior.content !== remote.content ? prior.revision : remote.revision),
+      baseline: unknownDirty ? undefined : (file.isUnsaved && prior ? prior.content : remote.content), saving: null };
+    if (!unknownDirty) file[baselineKey] = { key, content: state.baseline, revision: state.revision };
     files.set(key, state);
+    if (retained) {
+      if (remote.uri && file.uri !== remote.uri) file.uri = remote.uri;
+      file.makeActive();
+      if (!file.isUnsaved) {
+        file.session.setValue(remote.content);
+        if (typeof file.markSaved === "function") file.markSaved();
+        else file.isUnsaved = false;
+      }
+    }
 
     const save = async () => {
+      if (!state.revision) throw new Error("This open tab has unsaved edits from an older plugin session. Copy your edits before closing it, then tap Edit again to compare changes.");
       const content = textOf(file);
       const savedVersion = file.docVersion;
       const savedDoc = file.session.doc;
@@ -223,6 +248,8 @@
       const updated = result.file || result;
       if (typeof updated.revision !== "string") throw new Error("Save returned no file revision.");
       state.revision = updated.revision;
+      state.baseline = content;
+      file[baselineKey] = { key, content, revision: updated.revision };
       if (typeof file.markSaved === "function") {
         file.markSaved({ savedVersion, savedDoc });
       } else if (textOf(file) === content) {
@@ -230,7 +257,7 @@
       }
       return true;
     };
-    file.on("save", (event) => {
+    state.onSave = (event) => {
       event.preventDefault();
       if (!state.saving) {
         state.saving = save().catch((error) => {
@@ -239,14 +266,16 @@
         }).finally(() => { state.saving = null; });
       }
       if (typeof event.respondWith === "function") event.respondWith(state.saving);
-    });
-    file.on("close", () => {
+    };
+    state.onClose = () => {
       files.delete(key);
       if (accepts(file.uri) && projects.size) {
         const { project, path: relative } = resolveUri(file.uri);
         project.loaded.delete(relative);
       }
-    });
+    };
+    file.on("save", state.onSave);
+    file.on("close", state.onClose);
   }
 
   function handler(event) {
@@ -267,6 +296,10 @@
     intent?.removeHandler(handler);
     editorManager.off("new-file", onNewFile);
     fs?.remove(accepts);
+    for (const state of files.values()) {
+      state.file.off?.("save", state.onSave);
+      state.file.off?.("close", state.onClose);
+    }
     for (const folder of [...acode.require("addedfolder")]) {
       if (accepts(folder.url)) folder.remove();
     }

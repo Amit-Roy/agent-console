@@ -21,7 +21,7 @@ Validate the public route with `ACODE_PUBLIC_TEST_URL=https://YOUR-BRIDGE-HOST r
 
 Open `/acode-setup`, download the plugin ZIP, then use **Acode 1.13.5 or newer → Plugins → + → Local** to install it. Return to Console and tap **Edit**. Android may ask whether to open Acode. The private ZIP cannot be installed automatically through Acode's registry-only plugin installation intent.
 
-Version 1.1.0 adds the remote project tree. Update the existing Agent Console plugin using the new ZIP. After tapping Edit, use Acode's Files sidebar to expand the mounted project and select another file. The existing MEMORY folder is the phone's own storage.
+Version 1.1.1 fixes reopening existing tabs after plugin updates and retains the remote project tree. Update the existing Agent Console plugin using the new ZIP. After tapping Edit, use Acode's Files sidebar to expand the mounted project and select another file. The existing MEMORY folder is the phone's own storage.
 
 ## Access and saves
 

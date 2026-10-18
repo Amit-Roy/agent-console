@@ -3,7 +3,7 @@
   "id": "app.agentconsole.files",
   "name": "Agent Console",
   "main": "main.js",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "readme": "readme.md",
   "minVersionCode": 1011,
   "license": "MIT",
