@@ -17,7 +17,7 @@ const EFFORT_LABEL = { xhigh: "Extra high", ultracode: "Ultra" };
 const EFFORT_DESC = { ultracode: "Claude Code's Ultracode: starts a multi-agent workflow on every task. Slow and costly; keep it for big jobs.", max: "Deepest reasoning the model offers.", xhigh: "More reasoning than High, less than Max." };
 const effortLabel = (v) => EFFORT_LABEL[v] || cap(v);
 const state = {
-  commands: {}, providers: new Map(), threads: new Map(), current: null, ready: false, dirs: [], live: null, cards: new Map(), usage: {}, usageTab: "claude", archiveOpen: !!localStorage.getItem("ac_archive_open"),
+  commands: {}, providers: new Map(), threads: new Map(), current: null, ready: false, dirs: [], live: null, cards: new Map(), usage: {}, usageTab: "claude", archiveOpen: !!localStorage.getItem("ac_archive_open"), usageOpen: !!localStorage.getItem("ac_usage_open"),
   stick: true, // the reader is at the bottom of the chat (kept from scroll events, since layout growth fires none)
   subs: new Map(), // tool_use id of a subagent (or nested subagent) -> the <ol> its activity is listed in
   subTools: new Map(), // tool_use id of a call made inside a subagent -> its row
@@ -1993,6 +1993,7 @@ function usageMeter(label, used, limit, unit = "%", resetsAt) {
   row.append(el("span", "", label), bar, value);
   return row;
 }
+const usageName = (p) => p?.id === "claude" ? "Claude" : p?.id === "pi" ? "OpenRouter" : p?.label || "";
 function renderUsage() {
   const providers = [...state.providers.values()].filter(p => p.id !== "mock");
   if (!providers.length) return;
@@ -2005,7 +2006,7 @@ function renderUsage() {
   if (rebuildTabs) { tabs = el("div", "usage-tabs"); tabs.dataset.providers = tabKey; tabs.setAttribute("role", "tablist"); tabs.setAttribute("aria-label", "Provider usage"); }
   const pane = el("div", "usage-pane"); pane.id = "usage-panel"; pane.setAttribute("role", "tabpanel"); pane.setAttribute("aria-labelledby", `usage-tab-${state.usageTab}`);
   if (rebuildTabs) providers.forEach((p, i) => {
-    const btn = el("button", "usage-tab", p.id === "claude" ? "Claude" : p.id === "pi" ? "OpenRouter" : p.label);
+    const btn = el("button", "usage-tab", usageName(p));
     btn.id = `usage-tab-${p.id}`; btn.type = "button"; btn.setAttribute("role", "tab"); btn.setAttribute("aria-selected", String(p.id === state.usageTab)); btn.setAttribute("aria-controls", pane.id); btn.tabIndex = p.id === state.usageTab ? 0 : -1;
     btn.onclick = () => { state.usageTab = p.id; renderUsage(); $(btn.id)?.focus(); };
     btn.onkeydown = e => { if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) return; e.preventDefault(); const n = e.key === "Home" ? 0 : e.key === "End" ? providers.length - 1 : (i + (e.key === "ArrowRight" ? 1 : -1) + providers.length) % providers.length; state.usageTab = providers[n].id; renderUsage(); $(`usage-tab-${state.usageTab}`).focus(); };
@@ -2057,8 +2058,26 @@ function renderUsage() {
     }
     pane.append(note);
   }
-  if (rebuildTabs) root.replaceChildren(tabs, pane);
-  else root.querySelector(".usage-pane").replaceWith(pane);
+  // collapsed by default: one summary line; the tabs and full meters open on tap
+  let sum = root.querySelector(".usage-sum");
+  if (!sum) {
+    sum = el("button", "usage-sum"); sum.id = "usage-sum"; sum.type = "button"; sum.setAttribute("aria-controls", "usage-body");
+    sum.onclick = () => { state.usageOpen = !state.usageOpen; localStorage.setItem("ac_usage_open", state.usageOpen ? "1" : ""); renderUsage(); };
+  }
+  const summary = [el("b", "", usageName(providers.find(p => p.id === state.usageTab)))];
+  for (const w of (sample?.windows || []).slice(0, 2)) {
+    const pct = Math.max(0, Math.min(100, w.used / w.limit * 100));
+    const m = el("span", "usage-sum-m", `${w.label.replace(/-hour$/, "h").replace(/-day$/, "d")} ${Math.round(pct)}%`);
+    m.style.color = meterColor(pct); summary.push(m);
+  }
+  if (summary.length === 1) summary.push(el("span", "usage-sum-m", "Usage"));
+  sum.replaceChildren(...summary, icon("chev-right"));
+  sum.setAttribute("aria-expanded", String(!!state.usageOpen));
+  sum.setAttribute("aria-label", `Usage: ${sum.textContent}. ${state.usageOpen ? "Hide" : "Show"} details`);
+  let body = root.querySelector(".usage-body");
+  if (!body || rebuildTabs) { body = el("div", "usage-body"); body.id = "usage-body"; body.append(tabs, pane); root.replaceChildren(sum, body); }
+  else body.querySelector(".usage-pane").replaceWith(pane);
+  body.hidden = !state.usageOpen;
   if (focusedTab) $(focusedTab)?.focus({ preventScroll: true });
 }
 
@@ -2486,6 +2505,21 @@ $("archive-toggle").onclick = () => {
   renderThreads();
 };
 $("reload").onclick = () => location.reload();
+// sidebar More: rare console actions behind one button; each item drives the element that owns its behaviour
+createMenu({
+  trigger: $("side-more"), kind: "menu", label: "Console", align: "end",
+  getItems: () => [
+    { value: "new", label: "New thread", icon: "plus" },
+    { value: "notifications", label: "Notifications", desc: /: on$/.test($("notifications").getAttribute("aria-label") || "") ? "On for this device" : "Off", icon: "bell" },
+    { value: "dashboard", label: "Usage dashboard", icon: "chart" },
+    { value: "reload", label: "Reload page", icon: "refresh" },
+    { value: "restart", label: "Restart server…", desc: "Once every thread is idle", icon: "power" },
+  ],
+  onSelect: (v) => {
+    if (v === "dashboard") location.href = $("dash-link").href;
+    else (v === "new" ? $("new") : $(v)).click();
+  },
+});
 $("restart").onclick = async () => {
   const r = await apiFetch("/restart", { method: "POST" }).catch(() => null);
   toast(r?.ok ? "Restart scheduled. It happens once every thread is idle, then this page reloads." : "Could not schedule a restart.");
