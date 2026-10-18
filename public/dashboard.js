@@ -272,7 +272,7 @@ function pctBars(rows) {
   const box = el("div", "pbars");
   const max = Math.max(...rows.map((r) => r.p95_ms || 0), 1);
   for (const r of rows) {
-    const [name, color] = r.provider === "all" ? ["All agents", css("--c-other")] : provMeta(r.provider);
+    const [name, color] = r.provider === "all" ? ["All agents", css("--c-other")] : [provMeta(r.provider)[0], css(provMeta(r.provider)[1])];
     const row = el("div", "pb"), track = el("div", "t");
     const p95 = el("i", "p95"), p50 = el("i", "p50");
     p95.style.cssText = `width:${Math.max(1, ((r.p95_ms || 0) / max) * 100)}%;background:color-mix(in srgb,${color} 35%,transparent)`;
@@ -298,15 +298,16 @@ function latencyPanel(lat) {
   const share = (n) => (total ? pct((n / total) * 100) : "—");
   kp.append(
     kpi("First token p50", ms(all?.p50_ms), `p95 ${ms(all?.p95_ms)} · ${lat.turns} turns`),
-    kpi("Model / tools", `${share(split.model)} / ${share(split.tool)}`, `other ${share(split.other)}: startup and waiting for you`),
+    kpi("Model time", share(split.model), `tools ${share(split.tool)} · other ${share(split.other)} (startup, waiting for you)`),
     kpi("Cold starts", lat.cold.share == null ? "—" : pct(lat.cold.share * 100), `${lat.cold.cold}/${lat.cold.turns} turns · spawn p50 ${ms(lat.cold.spawn.p50_ms)}`),
     kpi("Retries", fmt(lat.retries.retries + lat.retries.rate_limits), `${lat.retries.retries} API retries · ${lat.retries.rate_limits} rate-limit warnings`),
   );
   const ttft = el("div", "lat-block");
-  ttft.append(el("h3", "", "Time to first token by agent"), pctBars(lat.ttft), legend([["p50", css("--c-used")], ["p95", "color-mix(in srgb,var(--c-used) 35%,transparent)"]]));
+  ttft.append(el("h3", "", "Time to first token by agent"), pctBars(lat.ttft), legend([["p50 (solid)", css("--c-used")], ["p95 (light)", "color-mix(in srgb,var(--c-used) 35%,transparent)"]]));
   if (lat.phone_ttft?.length) ttft.append(el("h3", "", "Until shown on your device"), pctBars(lat.phone_ttft));
   const tools = el("div", "lat-block");
-  tools.append(el("h3", "", "Tool time, top 5"), hbars(lat.tools.map((t) => ({ name: t.name, value: t.total_ms, color: css("--c-used"), extra: `${t.count} calls · p95 ${ms(t.p95_ms)}${t.errors ? ` · ${t.errors} failed` : ""}` })), ms));
+  tools.append(el("h3", "", "Tool time, top 5"), hbars(lat.tools.map((t) => ({ name: t.name, value: t.total_ms, color: css("--c-used"), extra: `${t.count}×${t.errors ? ` · ${t.errors} failed` : ""}` })), ms));
+  tools.append(el("p", "note", `Typical (p50) call: ${lat.tools.map((t) => `${t.name} ${ms(t.p50_ms)}`).join(" · ")}`));
   const classes = Object.entries(lat.retries.by_class || {}).sort((a, b) => b[1] - a[1]);
   if (classes.length) tools.append(el("p", "note", `Retry causes: ${classes.map(([c, n]) => `${c.replace(/_/g, " ")} ${n}`).join(" · ")}`));
   const g = el("div", "grid2"); g.append(ttft, tools);

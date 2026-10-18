@@ -9,7 +9,7 @@ import { once } from "node:events";
 import { chromium } from "playwright";
 
 const data = fs.mkdtempSync(path.join(os.tmpdir(), "ac-turn-timing-ui-"));
-const PORT = process.env.TIMING_UI_PORT || "7075", base = `http://127.0.0.1:${PORT}`, OUT = process.env.OUT || "/tmp";
+const PORT = process.env.TIMING_UI_PORT || "17875", base = `http://127.0.0.1:${PORT}`, OUT = process.env.OUT || "/tmp";
 const now = Date.now();
 fs.mkdirSync(path.join(data, "logs"));
 fs.writeFileSync(path.join(data, "threads.json"), JSON.stringify([{ id: "mock-timing", provider: "mock", model: "echo", title: "Timing", cwd: process.cwd(), mode: "acceptEdits", effort: "default", status: "idle", cost: 0, createdAt: now, updatedAt: now }]));
@@ -86,7 +86,7 @@ try {
     await dash.goto(`${base}/dashboard#7`);
     await dash.locator(".panel h2", { hasText: "Turn latency" }).waitFor();
     const panelText = (await dash.locator(".panel", { has: dash.locator("h2", { hasText: "Turn latency" }) }).textContent()) || "";
-    check(`${name} dashboard: TTFT, tools, cold share, retries`, ["First token p50", "Model / tools", "Cold starts", "Retries", "Time to first token by agent", "Tool time, top 5", "Bash", "Until shown on your device"].every((s) => panelText.includes(s)), panelText.slice(0, 120));
+    check(`${name} dashboard: TTFT, tools, cold share, retries`, ["First token p50", "Model time", "Cold starts", "Retries", "Time to first token by agent", "Tool time, top 5", "Bash", "Until shown on your device"].every((s) => panelText.includes(s)), panelText.slice(0, 120));
     check(`${name} dashboard: no horizontal overflow`, await dash.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
     const panel = dash.locator(".panel", { has: dash.locator("h2", { hasText: "Turn latency" }) });
     await panel.screenshot({ path: `${OUT}/obs-dashboard-${name}.png` });
