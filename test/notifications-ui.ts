@@ -3,10 +3,10 @@ import fs from "node:fs";
 import vm from "node:vm";
 import { setupNotifications } from "../public/notifications.js";
 
-function browser(permission = "default") {
+function browser(permission = "default", preferences = new Map<string, string>()) {
   const elements = new Map<string, any>();
-  for (const id of ["notifications", "notifications-dialog", "notifications-toggle", "notifications-status"]) {
-    elements.set(id, { textContent: "", disabled: false, setAttribute() {}, showModal() {} });
+  for (const id of ["notifications", "notifications-dialog", "notifications-toggle", "notifications-status", "notifications-silent"]) {
+    elements.set(id, { textContent: "", disabled: false, checked: false, setAttribute() {}, showModal() {} });
   }
   const requests: any[] = [];
   let subscription: any = null;
@@ -21,7 +21,7 @@ function browser(permission = "default") {
     async subscribe(options: any) {
       assert.equal(options.userVisibleOnly, true);
       assert.deepEqual([...options.applicationServerKey], [1, 2, 3]);
-      subscription = { endpoint: "https://push.example/sub", async unsubscribe() { subscription = null; return true; } };
+      subscription = { endpoint: "https://push.example/sub", toJSON() { return { endpoint: this.endpoint, keys: { p256dh: "fixture", auth: "fixture" } }; }, async unsubscribe() { subscription = null; return true; } };
       return subscription;
     },
   } };
@@ -29,6 +29,7 @@ function browser(permission = "default") {
     document: { getElementById: id => elements.get(id) },
     navigator: { serviceWorker: { async register() {}, ready: Promise.resolve(registration) } },
     window: { isSecureContext: true, PushManager: class {} }, Notification,
+    storage: { getItem: key => preferences.get(key) ?? null, setItem: (key, value) => preferences.set(key, value) },
     async apiFetch(url, options) {
       requests.push({ url, options });
       return { ok: !failed, status: failed ? 503 : 200, async json() { return { enabled: true, publicKey: "AQID" }; } };
@@ -38,6 +39,7 @@ function browser(permission = "default") {
 }
 
 const enabled = browser();
+assert.equal(enabled.elements.get("notifications-silent").checked, false);
 await enabled.elements.get("notifications").onclick();
 await enabled.elements.get("notifications-toggle").onclick();
 assert.match(enabled.elements.get("notifications-status").textContent, /On for this device/);
@@ -58,6 +60,36 @@ const failed = browser();
 failed.fail();
 await failed.elements.get("notifications-toggle").onclick();
 assert.match(failed.elements.get("notifications-status").textContent, /503/);
+
+const preferences = new Map<string, string>();
+const silent = browser("default", preferences);
+silent.elements.get("notifications-silent").checked = true;
+await silent.elements.get("notifications-silent").onchange();
+assert.equal(preferences.get("ac_notifications_silent"), "1");
+assert.equal(silent.requests.length, 0, "Unsubscribed preferences save locally without a request");
+const restored = browser("default", preferences);
+assert.equal(restored.elements.get("notifications-silent").checked, true);
+await restored.elements.get("notifications-toggle").onclick();
+assert.deepEqual(JSON.parse(restored.requests.at(-1).options.body), { endpoint: "https://push.example/sub", keys: { p256dh: "fixture", auth: "fixture" }, silent: true });
+await restored.elements.get("notifications").onclick();
+assert.equal(JSON.parse(restored.requests.at(-1).options.body).silent, true, "Refreshing preserves the preference");
+restored.elements.get("notifications-silent").checked = false;
+await restored.elements.get("notifications-silent").onchange();
+assert.equal(JSON.parse(restored.requests.at(-1).options.body).silent, false);
+assert.equal(preferences.get("ac_notifications_silent"), "0");
+preferences.set("ac_notifications_silent", "1");
+await restored.elements.get("notifications").onclick();
+assert.equal(JSON.parse(restored.requests.at(-1).options.body).silent, true, "Dialog refresh rereads another tab's saved preference");
+assert.equal(restored.elements.get("notifications-silent").checked, true);
+restored.elements.get("notifications-silent").checked = false;
+await restored.elements.get("notifications-silent").onchange();
+restored.fail();
+restored.elements.get("notifications-silent").checked = true;
+await restored.elements.get("notifications-silent").onchange();
+assert.equal(JSON.parse(restored.requests.at(-1).options.body).silent, true);
+assert.equal(preferences.get("ac_notifications_silent"), "0", "A rejected request must not persist the new preference");
+assert.equal(restored.elements.get("notifications-silent").checked, false, "A rejected request restores the checkbox");
+assert.match(restored.elements.get("notifications-status").textContent, /503.*not saved/);
 
 const events = new Map<string, Function>();
 const shown: any[] = [];
@@ -83,8 +115,15 @@ for (const kind of ["finished", "failed", "needs_input"]) {
   await dispatch("push", { data: { json: () => ({ title: kind, kind, url: "/#thread=target", thread: "target" }) } });
 }
 assert.equal(shown.length, 3);
+assert.equal(shown[0].options.silent, false, "Default notifications allow sound and vibration");
+assert.equal("vibrate" in shown[0].options, false);
+await dispatch("push", { data: { json: () => ({ kind: "finished", url: "/#thread=target", silent: true }) } });
+assert.equal(shown.at(-1).options.silent, true);
+assert.equal("vibrate" in shown.at(-1).options, false);
+await dispatch("push", { data: { json: () => ({ kind: "finished", url: "/#thread=target", silent: "true" }) } });
+assert.equal(shown.at(-1).options.silent, false, "Only a boolean true enables silent notifications");
 await dispatch("push", { data: { json: () => ({ kind: "finished", url: "https://evil.example/" }) } });
-assert.equal(shown.length, 3);
+assert.equal(shown.length, 5);
 await dispatch("notificationclick", { notification: { close() {}, data: shown[0].options.data } });
 assert.equal(messages[0].url, "https://console.example/#thread=target");
 assert.equal(focused, 1);

@@ -27,6 +27,7 @@ try {
     assert.equal(validSubscription({ ...subscription, endpoint }), false, endpoint);
   }
   assert.equal(validSubscription({ ...subscription, keys: { ...subscription.keys, auth: "bad" } }), false);
+  assert.equal(validSubscription({ ...subscription, silent: "true" }), false);
   assert.throws(() => channel.subscribe(subscription, "https://console.test/path"));
   channel.subscribe(subscription, "https://console.test");
   channel.subscribe(subscription, "https://console.test");
@@ -39,6 +40,7 @@ try {
   assert.deepEqual(sent.map(s => s.payload.kind), ["finished", "failed", "needs_input"]);
   assert.equal(sent[0].payload.url, "https://console.test/#thread=thread%2Fwith%20space");
   assert.equal(sent[0].payload.body, "Test thread");
+  assert.equal(sent[0].payload.silent, false, "existing subscriptions respect device sound defaults");
   assert.equal(sent[0].payload.tag, sent[2].payload.tag, "one notification per thread");
   assert.equal(sent[0].options.vapidDetails.publicKey, publicKey);
   restored.unsubscribe(subscription.endpoint, "https://other.test");
@@ -62,6 +64,17 @@ try {
   });
   assert.ok(request.headers.Authorization);
   assert.ok(request.body.length > 0);
+  const quietDirectory = path.join(directory, "quiet-devices");
+  const quiet = new Notifications(quietDirectory, send);
+  quiet.subscribe({ ...subscription, silent: true }, "https://console.test");
+  quiet.subscribe({ ...subscription, endpoint: subscription.endpoint + "-second", silent: false }, "https://console.test");
+  // Older clients that omit the new field must not erase an existing preference.
+  quiet.subscribe(subscription, "https://console.test");
+  await new Notifications(quietDirectory, send).notify({ kind: "needs_input", thread: "t", title: "Silent question" });
+  assert.deepEqual(sent.slice(-2).map(s => s.payload.silent).sort(), [false, true], "sound preferences are per device and survive restarts");
+  quiet.subscribe({ ...subscription, silent: false }, "https://console.test");
+  await quiet.notify({ kind: "finished", thread: "t", title: "Sound restored" });
+  assert.deepEqual(sent.slice(-2).map(s => s.payload.silent), [false, false], "silent mode can be disabled");
   console.log("notifications: storage, delivery, links, endpoint validation and expiry passed");
 } finally {
   fs.rmSync(directory, { recursive: true, force: true });

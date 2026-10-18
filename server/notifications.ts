@@ -3,8 +3,8 @@ import path from "node:path";
 import webpush from "web-push";
 
 export type ThreadNotice = { kind: "finished" | "failed" | "needs_input"; thread: string; title: string };
-type Subscription = { endpoint: string; keys: { p256dh: string; auth: string } };
-type Device = { subscription: Subscription; origin: string };
+type Subscription = { endpoint: string; keys: { p256dh: string; auth: string }; silent?: boolean };
+type Device = { subscription: Subscription; origin: string; silent?: boolean };
 type State = { publicKey: string; privateKey: string; devices: Device[] };
 type Sender = typeof webpush.sendNotification;
 
@@ -17,7 +17,8 @@ export function validSubscription(value: any): value is Subscription {
       || !(host === "fcm.googleapis.com" || host === "web.push.apple.com"
         || host.endsWith(".push.services.mozilla.com") || host.endsWith(".notify.windows.com"))) return false;
     const key = value.keys?.p256dh, auth = value.keys?.auth;
-    return typeof key === "string" && typeof auth === "string"
+    return (value.silent === undefined || typeof value.silent === "boolean")
+      && typeof key === "string" && typeof auth === "string"
       && /^[A-Za-z0-9_-]+$/.test(key) && /^[A-Za-z0-9_-]+$/.test(auth)
       && Buffer.from(key, "base64url").length === 65 && Buffer.from(key, "base64url")[0] === 4
       && Buffer.from(auth, "base64url").length === 16 && value.endpoint.length <= 4096;
@@ -58,7 +59,10 @@ export class Notifications {
     if (!["https:", "http:"].includes(parsed.protocol) || parsed.origin !== origin) throw new Error("Invalid origin.");
     const previous = this.state.devices.find(d => d.subscription.endpoint === value.endpoint);
     if (!previous && this.state.devices.length >= 32) throw new Error("Too many notification devices.");
-    const device = { subscription: { endpoint: value.endpoint, keys: { p256dh: value.keys.p256dh, auth: value.keys.auth } }, origin };
+    const device = {
+      subscription: { endpoint: value.endpoint, keys: { p256dh: value.keys.p256dh, auth: value.keys.auth } },
+      origin, silent: value.silent ?? previous?.silent ?? false,
+    };
     this.state.devices = this.state.devices.filter(d => d.subscription.endpoint !== value.endpoint);
     this.state.devices.push(device);
     this.save();
@@ -75,7 +79,7 @@ export class Notifications {
       const payload = JSON.stringify({
         ...notice, title: `${labels[notice.kind]} · Agent Console`, body: notice.title.slice(0, 160),
         url: `${device.origin}/#thread=${encodeURIComponent(notice.thread)}`,
-        tag: `thread-${notice.thread}`,
+        tag: `thread-${notice.thread}`, silent: device.silent === true,
       });
       try {
         await this.send(device.subscription, payload, {
