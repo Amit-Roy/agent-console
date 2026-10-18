@@ -44,6 +44,16 @@ try {
     });
     await page.goto(base, { waitUntil: "domcontentloaded", timeout: 15000 }); 
     await page.locator("#usage-ctx-info").waitFor({ state: "attached" });
+    await page.locator("#ctx").click();
+    await page.waitForFunction(() => !!document.querySelector(".context-forecast-summary")?.textContent);
+    assert.match(await page.getByRole("dialog").innerText(), /Forecast fixture/);
+    await page.keyboard.press("Escape");
+    await page.getByRole("dialog").waitFor({ state: "detached" });
+    assert.equal(await page.locator("#ctx").evaluate(e => e === document.activeElement), true);
+    await page.locator("#ctx").press("Enter");
+    await page.waitForFunction(() => !!document.querySelector(".context-forecast-summary")?.textContent);
+    await page.keyboard.press("Escape");
+    await page.getByRole("dialog").waitFor({ state: "detached" });
     if (width === 390) await page.locator("#menu").click();
     const open = async () => { await page.locator("#usage .u-ctx").click(); await page.waitForFunction(() => !!document.querySelector(".context-forecast-summary")?.textContent); };
     const change = async (label: string, value: string) => { await page.getByLabel(label, { exact: true }).fill(value); await page.getByLabel(label, { exact: true }).dispatchEvent("change"); };
