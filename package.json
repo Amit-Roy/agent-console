@@ -25,6 +25,7 @@
     "test:dashboard-cost": "node test/dashboard-cost-ui.ts",
     "test:startup": "node test/startup-ui.ts",
     "test:signin": "node test/signin-ui.ts",
+    "test:drafts-ui": "node test/drafts-ui.ts",
     "test:archive": "node test/archive-ui.ts",
     "test:rich": "node test/rich-render-ui.ts",
     "test:files": "node test/latency.ts && node test/files.ts && node test/file-viewer-ui.ts",
