@@ -38,33 +38,37 @@ try {
   await symlink(path.join(dir, "other"), path.join(dir, "repo/external"));
   await symlink("src", path.join(dir, "repo/internal"));
   const grant = await exchange(); const token = grant.project.token;
-  assert.equal(grant.project.root, path.join(dir, "repo"));
+  assert.equal(grant.project.root, dir, "a nested Git repository must not narrow the thread workspace");
   assert.equal((await request("/tree", "GET", undefined, grant.token)).status, 401);
   assert.equal((await request("/file", "GET", undefined, token)).status, 401);
   const root = await request("/tree", "GET", undefined, token);
   assert.equal(root.status, 200);
-  assert.deepEqual(root.body.entries.map((e: any) => e.name).sort(), ["image.bin", "src"]);
-  const tree = await request("/tree?path=src", "GET", undefined, token);
-  assert.equal(tree.body.entries[0].path, "src/note.txt");
-  const opened = await request("/open", "POST", { path: "src/note.txt" }, token);
+  assert.deepEqual(root.body.entries.map((e: any) => e.name).sort(), ["other", "repo"]);
+  const repoTree = await request("/tree?path=repo", "GET", undefined, token);
+  assert.deepEqual(repoTree.body.entries.map((e: any) => e.name).sort(), ["image.bin", "src"]);
+  const tree = await request("/tree?path=repo/src", "GET", undefined, token);
+  assert.equal(tree.body.entries[0].path, "repo/src/note.txt");
+  const sibling = await request("/open", "POST", { path: "other/secret.txt" }, token);
+  assert.equal(sibling.status, 200, "sibling repositories remain reachable within the workspace");
+  const opened = await request("/open", "POST", { path: "repo/src/note.txt" }, token);
   assert.equal(opened.status, 200); assert.equal(opened.body.content, "hello");
   const saved = await request("/file", "PUT", { content: "saved", revision: opened.body.revision }, opened.body.token);
   assert.equal(saved.status, 200); assert.equal(await readFile(path.join(dir, "repo/src/note.txt"), "utf8"), "saved");
-  for (const target of ["../other/secret.txt", "/etc/passwd", "external/secret.txt", "internal/note.txt", ".env", ".env.hidden/value", ".git/config", ".agent-console-edit-test"]) {
+  for (const target of ["../other/secret.txt", "/etc/passwd", "repo/external/secret.txt", "repo/internal/note.txt", "repo/.env", "repo/.env.hidden/value", "repo/.git/config", "repo/.agent-console-edit-test"]) {
     assert.ok((await request("/open", "POST", { path: target }, token)).status >= 400, target);
   }
-  assert.equal((await request("/open", "POST", { path: "image.bin" }, token)).status, 415);
+  assert.equal((await request("/open", "POST", { path: "repo/image.bin" }, token)).status, 415);
   assert.equal((await request("/tree?cursor=-1", "GET", undefined, token)).status, 400);
   await mkdir(path.join(dir, "repo/many"));
   await Promise.all(Array.from({ length: 205 }, (_, i) => writeFile(path.join(dir, `repo/many/file${i}`), "x")));
-  const first = await request("/tree?path=many", "GET", undefined, token);
+  const first = await request("/tree?path=repo/many", "GET", undefined, token);
   assert.equal(first.body.entries.length, 200); assert.equal(first.body.next, 200);
-  const second = await request("/tree?path=many&cursor=200", "GET", undefined, token);
+  const second = await request("/tree?path=repo/many&cursor=200", "GET", undefined, token);
   assert.equal(second.body.entries.length, 5); assert.equal(second.body.next, null);
   assert.equal(new Set([...first.body.entries, ...second.body.entries].map((e: any) => e.path)).size, 205);
   await mkdir(path.join(dir, "repo/nested/.git"), { recursive: true });
   await writeFile(path.join(dir, "repo/nested/note.txt"), "nested");
-  assert.equal((await exchange("repo/nested/note.txt")).project.root, path.join(dir, "repo/nested"));
+  assert.equal((await exchange("repo/nested/note.txt")).project.root, dir);
   await writeFile(path.join(dir, "root.txt"), "root");
   assert.equal((await exchange("root.txt")).project.root, dir);
   const outside = await mkdtemp(path.join(os.tmpdir(), "acode-outside-"));
@@ -75,8 +79,8 @@ try {
   now += 8 * 60 * 60_000;
   assert.equal((await request("/tree", "GET", undefined, token)).status, 401);
   const fresh = await exchange();
-  await rename(path.join(dir, "repo"), path.join(dir, "old-repo"));
-  await mkdir(path.join(dir, "repo"));
+  await rename(dir, dir + "-old");
+  await mkdir(dir);
   assert.equal((await request("/tree", "GET", undefined, fresh.project.token)).status, 409);
   console.log("Acode project tree: scoped root, listing, open/save, credential hiding, symlinks, pagination, expiry and inode replacement passed.");
-} finally { await new Promise<void>(resolve => server.close(() => resolve())); await rm(dir, { recursive: true, force: true }); }
+} finally { await new Promise<void>(resolve => server.close(() => resolve())); await rm(dir, { recursive: true, force: true }); await rm(dir + "-old", { recursive: true, force: true }); }
