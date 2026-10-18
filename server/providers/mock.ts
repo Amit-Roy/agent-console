@@ -17,7 +17,9 @@ export const mock: Provider = {
   start(t: ThreadSpec, ctx: AgentCtx): Agent {
     let timers: NodeJS.Timeout[] = [];
     let dead = false;
-    const at = (ms: number, fn: () => void) => void timers.push(setTimeout(fn, ms));
+    // AGENT_CONSOLE_MOCK_START_MS simulates a harness cold start: nothing streams before the "process" is ready
+    const readyAt = Date.now() + (Number(process.env.AGENT_CONSOLE_MOCK_START_MS) || 0);
+    const at = (ms: number, fn: () => void) => void timers.push(setTimeout(fn, ms + Math.max(0, readyAt - Date.now())));
     const stop = () => {
       timers.forEach(clearTimeout);
       timers = [];
@@ -102,6 +104,15 @@ export const mock: Provider = {
             done();
           });
         }
+      },
+      interrupt() {
+        stop();
+        questionId = undefined;
+        ctx.event({ type: "result", subtype: "error_during_execution", is_error: true, duration_ms: 0 });
+      },
+      configure(_from, to) {
+        Object.assign(t, to);
+        return true;
       },
       abort() {
         stop();

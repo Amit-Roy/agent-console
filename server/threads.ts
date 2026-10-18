@@ -65,6 +65,10 @@ const LOG_DIR = path.join(DATA_DIR, "logs");
 fs.mkdirSync(LOG_DIR, { recursive: true, mode: 0o700 });
 
 const IDLE_KILL_MS = 30 * 60 * 1000;
+// Pre-warm: opening/focusing a thread spawns its idle agent so the first send skips the harness cold start. Spawning sends no
+// prompt and makes no model request (verified per harness). At most WARM_MAX unused processes; unused ones are reaped sooner.
+const WARM_MAX = Number(process.env.AGENT_CONSOLE_WARM_MAX ?? 2);
+const WARM_IDLE_MS = 10 * 60 * 1000;
 
 // First-party turn timing (metadata only, never sent anywhere). Unavailable storage must never affect a turn.
 let timing: TurnTimingStore | undefined;
@@ -113,6 +117,10 @@ interface TurnState { start: number; tools: Record<string, number>; usage?: any;
 interface Live {
   agent: Agent;
   aborted: boolean;
+  warm?: boolean; // spawned ahead of a send and not used yet
+  held?: any[]; // events from a starting or warm agent, replayed once a send uses it
+  interrupting?: NodeJS.Timeout; // Stop asked the harness to end the turn; swallow events until its result
+  rewarm?: boolean; // start a warm replacement once this process has exited
   compactConfirmed?: boolean;
   compactWait?: NodeJS.Timeout;
   spawnAt?: number; // process lifecycle for turn timing: spawn -> first process output, and why it ended
@@ -332,6 +340,7 @@ export class Threads {
     if (!t || !!t.archived === archived) return;
     if (archived) t.archived = Date.now();
     else delete t.archived;
+    if (archived && this.live.get(id)?.warm) this.kill(id, "archive");
     this.refreshIdleCompaction(t);
     this.persist();
     this.emit({ t: "thread", thread: t });
@@ -346,6 +355,7 @@ export class Threads {
     if (patch.advisor && patch.advisor !== "default" && !prov?.advisors?.includes(patch.advisor)) patch.advisor = undefined;
     const effort = patch.model || patch.effort ? this.validEffort(prov, patch.model || t.model, patch.effort || "default") : t.effort;
     if (t.status === "running" && (patch.mode || patch.model || patch.effort || patch.advisor)) throw new Error("Stop the running turn before changing mode, model or effort.");
+    const before = { mode: t.mode, model: t.model, effort: t.effort, advisor: t.advisor };
     if (patch.mode) t.mode = patch.mode;
     if (patch.model && patch.model !== t.model) delete t.context; // the old model's window is no longer authoritative
     if (patch.model) t.model = patch.model;
@@ -356,7 +366,11 @@ export class Threads {
       t.title = patch.title.slice(0, 80);
       t.autoTitle = false;
     }
-    if (patch.mode || patch.model || patch.effort || patch.advisor) this.kill(id, "settings"); // respawn with new flags on next send (history kept via the harness's session)
+    if (patch.mode || patch.model || patch.effort || patch.advisor) {
+      const live = this.live.get(id), after = { mode: t.mode, model: t.model, effort: t.effort, advisor: t.advisor };
+      // the idle process takes the new settings in place, or restarts with new flags (history kept via the harness's session)
+      if (!live?.agent.alive || live.interrupting || !live.agent.configure?.(before, after)) this.kill(id, "settings", true);
+    }
     this.touch(t);
   }
 
@@ -481,23 +495,22 @@ export class Threads {
     this.emit({ t: "commands", provider, commands: commandList(list) });
   }
 
-  private start(t: Thread): Live {
+  private start(t: Thread, warm = false): Live {
     const prov = PROVIDERS.get(t.provider);
     if (!prov) throw new Error(`Unknown provider "${t.provider}".`);
-    const live: Live = { agent: undefined as unknown as Agent, aborted: false, spawnAt: Date.now() };
+    const live: Live = { agent: undefined as unknown as Agent, aborted: false, spawnAt: Date.now(), warm, held: [] };
     const ready = () => {
       if (live.readyAt != null) return;
       live.readyAt = Date.now();
       timed(() => timing?.recordProcess({ thread: t.id, provider: t.provider, kind: "ready", ms: live.readyAt! - live.spawnAt! }));
     };
     timed(() => timing?.recordProcess({ thread: t.id, provider: t.provider, kind: "spawn" }));
-    let starting = true;
-    const earlyEvents: any[] = [];
     const ctx: AgentCtx = {
       event: (ev) => {
         if (fromProcess(ev)) ready();
         if (live.aborted) return;
-        if (starting) earlyEvents.push(ev);
+        if (live.interrupting) { if (ev.type === "result") { clearTimeout(live.interrupting); live.interrupting = undefined; } return; }
+        if (live.held) { if (live.held.length < 500) live.held.push(ev); }
         else if (this.live.get(t.id) === live) this.onEvent(t, ev);
       },
       commands: (list) => { ready(); this.setCommands(t.provider, list); },
@@ -505,6 +518,7 @@ export class Threads {
         timed(() => timing?.recordProcess({ thread: t.id, provider: t.provider, kind: "exit", ms: Date.now() - live.spawnAt!, code: info.code, signal: info.signal, reason: live.exitReason ?? (info.aborted || live.aborted ? "stop" : "crash") }));
         const current = this.live.get(t.id) === live;
         if (current) this.live.delete(t.id);
+        if (live.rewarm) { live.rewarm = false; setImmediate(() => this.warm(t.id)); } // the old process no longer holds the session
         if (!current || t.status !== "running") return; // a replaced or aborted agent's exit says nothing about the new turn
         this.cancelQuestions(t.id);
         t.status = "idle";
@@ -519,9 +533,26 @@ export class Threads {
     };
     live.agent = prov.start({ id: t.id, cwd: t.cwd, mode: t.mode, model: t.model, effort: t.effort, advisor: t.advisor, sessionId: t.sessionId, forkFrom: t.sessionId ? undefined : t.forkFrom }, ctx);
     this.live.set(t.id, live);
-    starting = false;
-    for (const event of earlyEvents) if (!live.aborted && this.live.get(t.id) === live) this.onEvent(t, event);
+    if (!warm) this.release(t, live);
     return live;
+  }
+
+  private release(t: Thread, live: Live) {
+    const held = live.held ?? [];
+    live.held = undefined;
+    live.warm = false;
+    for (const event of held) if (!live.aborted && this.live.get(t.id) === live) this.onEvent(t, event);
+  }
+
+  // Spawn the thread's agent ahead of the first send. No prompt is written, so no tokens are spent.
+  warm(id: string): boolean {
+    const t = this.threads.get(id);
+    if (WARM_MAX < 1 || this.closed || !t || t.archived || t.status !== "idle" || t.operation || this.live.get(id)?.agent.alive) return false;
+    if (!PROVIDERS.get(t.provider)?.status().ok) return false;
+    const unused = [...this.live].filter(([, l]) => l.warm).map(([other]) => other); // oldest first
+    for (const other of unused.slice(0, Math.max(0, unused.length - WARM_MAX + 1))) this.kill(other, "warm-cap");
+    try { this.start(t, true); return true; }
+    catch { return false; }
   }
 
   // Canonical events from any harness. We only interpret the two that change thread state.
@@ -729,7 +760,8 @@ export class Threads {
     }
     if (!opts.auto) delete t.archived; // writing to an archived thread puts it back to work (touch below persists it)
     let live = this.live.get(id);
-    const cold = !live || !live.agent.alive;
+    if (live?.interrupting) { this.kill(id, "stop"); live = undefined; } // its interrupted turn has not ended yet
+    const cold = !live || !live.agent.alive; // a pre-warmed agent counts as warm
     const start = Date.now();
     if (cold) live = this.start(t);
     live = live!;
@@ -746,6 +778,7 @@ export class Threads {
       ...(attachments.length ? { attachments: attachments.map(({ id, name, kind, media_type, size, n }) => ({ id, name, kind, media_type, size, ...(n ? { n } : {}) })) } : {}),
     });
     this.touch(t);
+    if (live.held) this.release(t, live); // a warm agent's start-up events, after the message as on a cold start
     live.agent.send(prompt, attachments.filter((a) => a.kind === "image"));
     // "ok" / "hi" say nothing about the topic: wait for a first message with substance
     if (t.autoTitle && !opts.auto && (attachments.length || text.trim().split(/\s+/).length >= 3)) {
@@ -895,21 +928,31 @@ export class Threads {
     if (this.queues.delete(id)) this.emitQueue(id); // Stop means stop: nothing queued behind it runs
     if (!live) { this.touch(t); return; }
     this.endTiming(t, { subtype: "aborted", is_error: true });
-    live.aborted = true;
-    live.exitReason = "stop";
-    this.live.delete(id); // next send starts a fresh agent and resumes the session
-    live.agent.abort();
+    if (!t.operation && live.agent.interrupt && live.agent.alive && !live.held) {
+      // keep the process: the harness ends the turn itself; restart only if it does not within 3 s
+      live.interrupting = setTimeout(() => { if (this.live.get(id) === live && live.interrupting) this.kill(id, "stop", true); }, 3000);
+      live.interrupting.unref();
+      live.agent.interrupt();
+    } else {
+      live.aborted = true;
+      live.exitReason = "stop";
+      live.rewarm = !t.archived;
+      this.live.delete(id); // next send uses a fresh agent that resumes the session
+      live.agent.abort();
+    }
     t.status = "idle";
     delete t.operation;
     this.publish(id, { type: "aborted", ts: Date.now() });
     this.touch(t);
   }
 
-  private kill(id: string, reason = "kill") {
+  private kill(id: string, reason = "kill", rewarm = false) {
     this.cancelQuestions(id);
     const live = this.live.get(id);
     if (live) {
       live.exitReason ??= reason;
+      clearTimeout(live.interrupting);
+      live.rewarm = rewarm && live.agent.alive;
       live.aborted = true;
       this.live.delete(id);
       live.agent.kill();
@@ -918,9 +961,9 @@ export class Threads {
 
   // free memory from idle agent processes; sessions resume on the next message
   sweep() {
-    for (const [id] of this.live) {
+    for (const [id, live] of this.live) {
       const t = this.threads.get(id);
-      if (t && t.status === "idle" && Date.now() - t.updatedAt > IDLE_KILL_MS) this.kill(id, "idle");
+      if (t && t.status === "idle" && Date.now() - Math.max(t.updatedAt, live.spawnAt!) > (live.warm ? WARM_IDLE_MS : IDLE_KILL_MS)) this.kill(id, "idle");
     }
   }
 

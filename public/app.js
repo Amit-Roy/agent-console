@@ -592,6 +592,7 @@ function openThread(id) {
   renderThreads();
   renderHead();
   clearChat();
+  warmSoon();
   const cached = views.get(id);
   if (cached) {
     if (state.features.selectiveEvents) send({ t: "subscribe", thread: id });
@@ -1972,6 +1973,20 @@ async function submit(mode) {
   }
 }
 $("send").onclick = () => submit();
+// Pre-warm: ask the server to start the open thread's agent before the first send (no prompt, no tokens). Debounced so flicking
+// through threads starts nothing; repeated for the same thread at most once a minute (the server ignores live agents anyway).
+let warmTimer = 0, lastWarm = { id: null, at: 0 };
+function warmSoon(delay = 600) {
+  clearTimeout(warmTimer);
+  warmTimer = setTimeout(() => {
+    const t = cur();
+    if (!t || t.archived || t.status !== "idle" || document.hidden) return;
+    if (lastWarm.id === t.id && performance.now() - lastWarm.at < 60_000) return;
+    if (send({ t: "warm", thread: t.id })) lastWarm = { id: t.id, at: performance.now() };
+  }, delay);
+}
+$("input").addEventListener("focus", () => warmSoon(0));
+$("input").addEventListener("input", () => warmSoon(0));
 $("stop").onclick = () => send({ t: "abort", thread: state.current });
 
 // ---------- attachments (paste, drop, or the attach button) ----------
