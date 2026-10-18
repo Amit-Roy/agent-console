@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { DATA_DIR } from "../auth.ts";
 import { harnessInstructions } from "./brain.ts";
 import { childEnv } from "./env.ts";
-import { parseJson, spawnLines } from "./proc.ts";
+import { parseJson, spawnLines, type Proc } from "./proc.ts";
 import { piQuestions } from "./pi-questions.ts";
 import { retryEvent } from "../turn-timing.ts";
 import { clip, IMAGE_ONLY_PROMPT, type Agent, type AgentCtx, type Attachment, type Command, type Provider, type ThreadSpec } from "./types.ts";
@@ -207,19 +207,33 @@ export const pi: Provider = {
     const args = ["--mode", "rpc", "--model", t.model, "--session-dir", dir, "--extension", QUESTIONS_EXTENSION];
     if (fs.readdirSync(dir).length) args.push("--continue");
     if (t.mode === "plan") args.push("--tools", READ_ONLY_TOOLS);
-    const brain = harnessInstructions();
-    if (brain) args.push("--append-system-prompt", brain); // style preamble + shared memory index
     const translate = piTranslator((ev) => ctx.event(ev), (list) => ctx.commands(list), () => contexts.get(t.model));
-    const questions = piQuestions(msg => p.write(JSON.stringify(msg)), ctx.event);
-    const p = spawnLines("pi", "pi", args, { cwd: t.cwd, env: childEnv() }, {
-      ...ctx,
-      exited(info) { questions.cancelAll(); ctx.exited(info); },
-    }, (line) => {
-      const r = parseJson(line);
-      if (r && !questions.handle(r)) translate(r);
+    // The instructions (brain index) resolve asynchronously; writes made before pi is spawned wait in `queued`.
+    let p: Proc | undefined, dead = false;
+    const queued: string[] = [];
+    const write = (line: string) => (p ? p.write(line) : void queued.push(line));
+    const questions = piQuestions(msg => write(JSON.stringify(msg)), ctx.event);
+    void harnessInstructions().then((brain) => {
+      if (dead) return;
+      if (brain) args.push("--append-system-prompt", brain); // style preamble + shared memory index
+      p = spawnLines("pi", "pi", args, { cwd: t.cwd, env: childEnv() }, {
+        ...ctx,
+        exited(info) { questions.cancelAll(); ctx.exited(info); },
+      }, (line) => {
+        const r = parseJson(line);
+        if (r && !questions.handle(r)) translate(r);
+      });
+      for (const line of queued.splice(0)) p.write(line);
     });
-    if (t.effort && t.effort !== "default") p.write(JSON.stringify({ id: "effort", type: "set_thinking_level", level: t.effort }));
-    p.write(JSON.stringify({ id: "cmds", type: "get_commands" }));
+    const stop = (how: "abort" | "kill") => {
+      questions.cancelAll();
+      if (p) return p[how]();
+      if (dead) return;
+      dead = true;
+      ctx.exited({ code: null, signal: how === "abort" ? "SIGINT" : "SIGTERM", stderr: "", aborted: true });
+    };
+    if (t.effort && t.effort !== "default") write(JSON.stringify({ id: "effort", type: "set_thinking_level", level: t.effort }));
+    write(JSON.stringify({ id: "cmds", type: "get_commands" }));
     let n = 0;
     const body = (text: string, images: Attachment[]) => ({
       message: text.trim() ? text : IMAGE_ONLY_PROMPT,
@@ -227,15 +241,15 @@ export const pi: Provider = {
     });
     return {
       get alive() {
-        return p.alive();
+        return !dead && (!p || p.alive());
       },
-      compact: (instructions = "") => p.write(JSON.stringify({ id: `compact${++n}`, type: "compact", ...(instructions ? { customInstructions: instructions } : {}) })),
-      send: (text, images = []) => p.write(JSON.stringify({ id: `p${++n}`, type: "prompt", ...body(text, images) })),
+      compact: (instructions = "") => write(JSON.stringify({ id: `compact${++n}`, type: "compact", ...(instructions ? { customInstructions: instructions } : {}) })),
+      send: (text, images = []) => write(JSON.stringify({ id: `p${++n}`, type: "prompt", ...body(text, images) })),
       // Pi's `steer` is delivered after the current assistant turn finishes its tool calls, before the next model call
-      steer: (text, images = []) => p.write(JSON.stringify({ id: `p${++n}`, type: "steer", ...body(text, images) })),
+      steer: (text, images = []) => write(JSON.stringify({ id: `p${++n}`, type: "steer", ...body(text, images) })),
       answer: (id, reply) => questions.answer(id, reply),
-      abort: () => { questions.cancelAll(); p.abort(); },
-      kill: () => { questions.cancelAll(); p.kill(); },
+      abort: () => stop("abort"),
+      kill: () => stop("kill"),
     };
   },
 };

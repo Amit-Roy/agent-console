@@ -182,7 +182,7 @@ export function startCodexApp(t: ThreadSpec, ctx: AgentCtx, translate: (row: any
   const ready = (async () => {
     await request("initialize", { clientInfo: { name: "agent_console", title: "Agent Console", version: "1.0.0" }, capabilities: { experimentalApi: ask.length > 0 } });
     p.write(JSON.stringify({ method: "initialized", params: {} }));
-    const brain = harnessInstructions();
+    const brain = await harnessInstructions();
     const result = await request(session ? "thread/resume" : "thread/start", {
       ...(session ? { threadId: session, excludeTurns: true } : {}), cwd: t.cwd, approvalPolicy: "never",
       sandbox: t.mode === "bypassPermissions" ? "danger-full-access" : t.mode === "plan" ? "read-only" : "workspace-write",
