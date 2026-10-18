@@ -1,5 +1,6 @@
 import { el, iconButton } from "/render.js";
-import { forecastContext, forecastModel } from "/context-forecast.js";
+import { forecastContext, forecastModel, recommendCompaction } from "/context-forecast.js";
+import { createContextAllocation } from "/context-allocation.js";
 
 const tokens = n => new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 }).format(n);
 const usd = n => n == null ? "Unknown" : `$${n.toFixed(n > 1 ? 2 : 4)}`;
@@ -21,9 +22,9 @@ export async function openContextEconomics({ getThread, send, trigger }) {
   const body = el("div", "context-economics-body");
   body.append(el("p", "sub", "Loading forecast…"));
   dialog.append(head, body); document.body.append(dialog); dialog.showModal(); activeDialog = dialog;
-  let chart, timer, Chart;
+  let chart, timer, Chart, allocation;
   dialog.addEventListener("close", () => {
-    clearInterval(timer); chart?.destroy(); dialog.remove();
+    clearInterval(timer); chart?.destroy(); allocation?.destroy(); dialog.remove();
     if (activeDialog === dialog) activeDialog = null;
     if (trigger?.isConnected) trigger.focus({ preventScroll: true });
   }, { once: true });
@@ -48,6 +49,8 @@ export async function openContextEconomics({ getThread, send, trigger }) {
   const threadTitle = el("p", "sub", initial.title);
   const status = el("p", "context-cache-state");
   const basis = el("p", "sub");
+  const recommendation = el("p", "context-recommendation"); recommendation.setAttribute("aria-live", "polite");
+  allocation = createContextAllocation(getThread);
   const controls = el("div", "context-assumptions");
   const input = (label, value, min, max, step = 1) => {
     const wrap = el("label", "context-control");
@@ -61,6 +64,7 @@ export async function openContextEconomics({ getThread, send, trigger }) {
   const gap = input("Gap per request (minutes)", 1, 0, 1440);
   const retained = input("Context kept (%)", 20, 1, 100);
   const growth = input("New input tokens per request", 2000, 100, 20000, 100);
+  const requests = input("Future requests", 40, 1, 50);
   const ttl = input("Cache lifetime estimate (minutes)", (initial.idleCompactionTtlMs || 0) / 60000, 0, 1440, 0.5);
   const measureWrap = el("label", "context-control");
   const measure = el("select");
@@ -85,7 +89,7 @@ export async function openContextEconomics({ getThread, send, trigger }) {
   const data = el("details", "context-forecast-data");
   data.append(el("summary", "", "Forecast data and assumptions"));
   const notes = el("p", "sub");
-  notes.textContent = "Scenario, not a subscription charge. Includes reading context, generating a summary, and rebuilding its cache. Future response tokens, tools, extra compaction requests, and long-context price tiers are excluded. Assumes an unchanged prefix and a cache hit before estimated expiry; routing can still miss. Age is measured since the response ended; actual cache reuse may be earlier, especially after long generations. Retained context is also the assumed summary output; actual compaction size and cost may differ. Each point is one model request; tool loops can make many requests per turn. Graph stops at the reported context window. Cache lifetime 0 models no caching. These controls do not change automatic compaction settings.";
+  notes.textContent = "Scenario, not a subscription charge. Includes reading context, generating a summary, and rebuilding its cache. Future response tokens, tools, extra compaction requests, and long-context price tiers are excluded. Assumes an unchanged prefix and a cache hit before estimated expiry; routing can still miss. Age is measured since the response ended; actual cache reuse may be earlier, especially after long generations. Retained context is also the assumed summary output; actual compaction size and cost may differ. Each point is one model request; tool loops can make many requests per turn. Graph stops at the reported context window. Cache lifetime 0 models no caching. Recommendation compares no compaction with one compaction now or immediately after each future request over the same workload. No further compaction is assumed. These controls do not change automatic compaction settings.";
   const sources = el("p", "sub");
   sources.append(document.createTextNode(`Public list prices checked ${pricing.verifiedAt || "unknown"}. `));
   for (const source of [...(pricing.sources || []), { name: "OpenAI cache lifetime", url: "https://developers.openai.com/api/docs/guides/prompt-caching" },
@@ -95,7 +99,8 @@ export async function openContextEconomics({ getThread, send, trigger }) {
   }
   const table = el("table");
   data.append(notes, sources, table);
-  body.replaceChildren(threadTitle, status, basis, controls, stage, chartError, summary, automatic, actions, data);
+  body.replaceChildren(threadTitle, status, recommendation, allocation.root, basis, stage, chartError, summary, controls, automatic, actions, data);
+  void allocation.refresh();
   try { Chart = await loadChart(); }
   catch { chartError.hidden = false; chartError.textContent = "Graph could not load. Forecast values remain available below."; stage.hidden = true; }
   if (!dialog.open) return;
@@ -111,10 +116,23 @@ export async function openContextEconomics({ getThread, send, trigger }) {
     if (rate && t.provider === "claude" && ttlMs > 300000) rate[2] = rate[0] * 2;
     // With caching disabled, fresh input has no cache-write premium.
     if (rate && !ttlMs) rate[2] = rate[0];
-    const result = forecastContext({ context: t.context?.used, maxContext: t.context?.max || Infinity,
-      retained: number(retained, 20) / 100, added: number(growth, 2000), requests: 40, ttlMs, ageMs,
-      resumeMs: number(resume, 0) * 60000, gapMs: number(gap, 1) * 60000, rate });
-    if (!result) { summary.textContent = "Context changed. Reopen after token usage is reported."; return; }
+    const scenario = { context: t.context?.used, maxContext: t.context?.max || Infinity,
+      retained: number(retained, 20) / 100, added: number(growth, 2000), requests: number(requests, 40), ttlMs, ageMs,
+      resumeMs: number(resume, 0) * 60000, gapMs: number(gap, 1) * 60000, rate };
+    const result = forecastContext(scenario);
+    if (!result) {
+      summary.textContent = "Context changed. Reopen after token usage is reported.";
+      recommendation.textContent = "Recommendation: Wait for fresh context usage before comparing compaction points.";
+      compact.disabled = true; stage.hidden = true; void allocation.refresh(); return;
+    }
+    if (Chart) stage.hidden = false;
+    const best = recommendCompaction(scenario);
+    recommendation.textContent = t.status === "running" ? "Recommendation: Recheck when the current run finishes; context is still changing."
+      : best.action === "unknown" ? "Recommendation: Not enough context, pricing, or remaining window to compare compaction points."
+      : best.action === "continue" ? `Recommendation: Keep the current context for the next ${best.horizonRequests} requests. Compaction does not repay its cost in this scenario.`
+      : best.action === "now" ? `Recommendation: Compact now at ${tokens(best.atContextTokens)} context tokens for the lowest modeled cost over ${best.horizonRequests} requests. Estimated savings: ${usd(best.savings)}.`
+      : `Recommendation: Compact around ${tokens(best.atContextTokens)} context tokens, after ${tokens(best.afterAddedTokens)} new input tokens (${best.afterRequests} requests). Estimated savings: ${usd(best.savings)}.`;
+    void allocation.refresh();
     measure.options[0].disabled = !result.priced;
     if (!result.priced) measure.value = "tokens";
     const cost = measure.value === "cost";

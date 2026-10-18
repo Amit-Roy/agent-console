@@ -99,6 +99,8 @@ Anthropic's terms restrict third-party products that offer claude.ai login, so d
   language header, Copy and line-wrap toggle; Copy under every message; line-level +/- tints for Edit diffs. All output goes through DOMPurify.
 
 ## Context and usage efficiency
+- The context panel recommends the cheapest modeled compaction point over the selected number of future requests, comparing no compaction, compacting now, and compacting after each future request. It is a scenario recommendation, not a universal token threshold.
+- Token allocation uses a Claude-style grid and category legend. Claude request snapshots and Codex retained session history provide local category estimates; provider telemetry supplies total usage and free space. Opaque, missing, or oversized native sessions remain unobserved rather than counting old compacted transcripts. No provider request is made, and the endpoint returns counts only.
 - Click the sidebar Context meter or its info button to compare continuing with compacting. The graph shows cumulative API-equivalent cost against new input tokens, includes summary and cache rebuild costs, and models delayed resumption and gaps between requests. Adjust retained context, growth, and estimated cache lifetime; these scenario controls do not change automation. Unknown model prices show a token graph instead. The forecast data table and assumptions are available below the graph.
 - Shared memory injects only the brain index; topic pages load when relevant. Memory upkeep never creates an automatic model follow-up.
 - Thread actions include Economy settings (medium effort where supported, advisor off, selected model kept) and Fork with recent context (a local handoff capped at 6,000 characters; full transcript retained).

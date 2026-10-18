@@ -15,6 +15,7 @@ import { threadToMarkdown } from "./export.ts";
 import { Threads, turnTiming } from "./threads.ts";
 import { dashboard } from "./analytics.ts";
 import { pricing, rates } from "./api-pricing.ts";
+import { contextAllocation } from "./context-allocation.ts";
 import { headroom } from "./headroom.ts";
 import { LatencyStore } from "./latency.ts";
 import { fileMedia, fileTree, fileViewer } from "./files.ts";
@@ -152,6 +153,12 @@ app.get("/api/files", fileTree(id => threads.get(id)));
 app.get("/api/context-pricing", (_req, res) => {
   res.setHeader("Cache-Control", "no-store");
   res.json({ ...pricing, rates });
+});
+app.get("/api/context-allocation/:thread", async (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  const thread = threads.get(req.params.thread);
+  if (!thread) return void res.status(404).json({ error: "Unknown thread." });
+  res.json(await contextAllocation(thread));
 });
 app.get("/api/dashboard", async (req, res) => {
   res.setHeader("Cache-Control", "no-store");
