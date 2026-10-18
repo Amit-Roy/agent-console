@@ -566,7 +566,8 @@ function renderThreads() {
     li.title = `${t.title}\n${t.cwd}\n${provLabel(t.provider)} · ${modelMeta(t.model).label}${t.mode === "bypassPermissions" ? " · Bypass" : ""} · ${t.costMeasured ? `$${t.cost.toFixed(3)} recorded API-equivalent` : "cost not measured"}`;
     if (t.id === state.current) li.setAttribute("aria-current", "true");
     const waiting = questions.count(t.id) || t.waiting;
-    const dot = el("span", `dot ${waiting ? "waiting" : t.status}`);
+    // background subagents keep working after the turn ends: show the thread as busy until they finish
+    const dot = el("span", `dot ${waiting ? "waiting" : t.background ? "running" : t.status}`);
     dot.setAttribute("aria-hidden", "true");
     const meta = el("div", "meta");
     if (base(t.cwd) !== usualDir) meta.append(el("span", "dir", base(t.cwd)));
@@ -597,6 +598,7 @@ function renderThreads() {
     li.append(dot, el("div", "t", t.title), meta, more);
     if (waiting) li.append(el("span", "sr-only", "Needs your input"));
     else if (t.status === "running") li.append(el("span", "sr-only", "Running"));
+    else if (t.background) li.append(el("span", "sr-only", "Subagents working"));
     const pick = () => {
       setNav(false);
       openThread(t.id);
@@ -956,7 +958,7 @@ function renderHead() {
   menus.model.setDisabled(!t || running);
   menus.mode.setDisabled(!t || running);
   $("more").disabled = !t;
-  $("state").hidden = !running && !questions.count(state.current);
+  $("state").hidden = !running && !t?.background && !questions.count(state.current);
   $("input").disabled = !t;
   $("attach").disabled = !t;
   // While the agent works the composer stays live: Enter steers it (or queues, for agents that cannot take input mid-turn)
@@ -1239,7 +1241,7 @@ function renderCtx() {
 // "Working" in the header, plus how many subagents are still going
 function updateWorking() {
   $("state").classList.toggle("waiting", !!(questions.count(state.current) || cur()?.waiting));
-  const n = [...state.cards.values()].filter((c) => c.classList.contains("agent") && (c.classList.contains("pending") || c.querySelector(".task-chip.running"))).length;
+  const n = Math.max(cur()?.background || 0, [...state.cards.values()].filter((c) => c.classList.contains("agent") && (c.classList.contains("pending") || c.querySelector(".task-chip.running"))).length);
   $("state-t").textContent = questions.count(state.current) || cur()?.waiting ? "Needs your input" : cur()?.operation === "compact" ? "Compacting context" : n ? `Working · ${n} agent${n > 1 ? "s" : ""}` : "Working";
 }
 
