@@ -1,5 +1,6 @@
 import { spawnLines, parseJson } from "./proc.ts";
 import { childEnv } from "./env.ts";
+import { codexRouting } from "./codex-routing.ts";
 import type { AgentCtx, ThreadSpec } from "./types.ts";
 
 // exec treats /compact as a prompt. Use the native app-server operation against the same persisted thread instead.
@@ -15,7 +16,8 @@ export function compactCodex(t: ThreadSpec, ctx: AgentCtx) {
     proc.kill();
   };
   const rpc = (id: number | undefined, method: string, params: object) => proc.write(JSON.stringify({ ...(id != null ? { id } : {}), method, params }));
-  const proc = spawnLines("codex compaction", "codex", ["app-server"], { cwd: t.cwd, env: childEnv() }, {
+  const routing = codexRouting(childEnv());
+  const proc = spawnLines("codex compaction", "codex", ["app-server", ...routing.args], { cwd: t.cwd, env: routing.env }, {
     ...ctx,
     event: ev => { if (ev.type === "console_error") finish(ev.text); else ctx.event(ev); },
     exited: info => { if (!finished) finish(info.aborted ? "Compaction stopped." : `Codex compaction exited before completion (${info.code ?? info.signal}). ${info.stderr.trim().slice(-300)}`); },
