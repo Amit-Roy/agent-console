@@ -54,5 +54,32 @@ try {
   const overdue = ready(); threads.shutdown(); mock.timers.tick(100000); threads = new Threads(() => {});
   assert.equal(threads.get(overdue.id)!.idleCompactionDueAt, undefined, "startup never catches up overdue paid work"); mock.timers.tick(100000); assert.equal(calls, 5);
   const final = ready(); threads.shutdown(); mock.timers.tick(100000); assert.equal(calls, 5, "shutdown clears every timer");
+  // Exercise the Codex provider dispatch using its resolved CLI-default model.
+  const originalCodex = PROVIDERS.get("codex");
+  PROVIDERS.set("codex", { ...PROVIDERS.get("fixture")!, id: "codex", models: () => ["default", "gpt-6.1-sol"], defaultModel: () => "default" });
+  try {
+    threads = new Threads(() => {});
+    const native = threads.create({ provider: "codex", cwd: dir });
+    assert.equal(native.idleCompactionTtlMs, undefined, "unresolved CLI default never schedules paid work");
+    threads.send(native.id, "Codex activity");
+    latest(native.id).event({ type: "system", subtype: "init", session_id: native.id, model: "gpt-6.1-sol" });
+    complete(native.id);
+    assert.equal(native.resolvedModel, "gpt-6.1-sol");
+    assert.equal(native.idleCompactionTtlMs, 1800000);
+    assert.equal(native.idleCompactionSource, "openai-default-estimate");
+    assert.equal(native.idleCompactionLeadMs, 30000);
+    assert.equal(native.idleCompactionMinTokens, 50000);
+    assert.equal(native.idleCompactionDueAt, Date.now() + 1770000);
+    const before = calls;
+    mock.timers.tick(1770000);
+    assert.equal(calls, before + 1, "Codex timer invokes native Agent.compact through the normal manager");
+    assert.equal(native.lastCompactedAt, Date.now());
+    mock.timers.tick(1800000);
+    assert.equal(calls, before + 1, "Codex compaction does not schedule itself repeatedly");
+    threads.update(native.id, { model: "gpt-6.1-sol" });
+    threads.update(native.id, { model: "default" });
+    assert.equal(native.resolvedModel, undefined);
+    assert.equal(native.idleCompactionTtlMs, undefined, "changing back to CLI default clears old model assumptions");
+  } finally { if (originalCodex) PROVIDERS.set("codex", originalCodex); }
   console.log("PASS automatic idle compaction: once per cycle, accounting, optout, queue/busy/archive/delete/abort guards, stale-agent isolation, failures and restart/shutdown");
 } finally { threads.shutdown(); mock.timers.reset(); fs.rmSync(dir, { recursive: true, force: true }); }

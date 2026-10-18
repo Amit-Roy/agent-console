@@ -3,6 +3,7 @@ import { createMenu } from "/menu.js";
 import { toolName, toolSummary } from "/tool-display.js";
 import { createLatencyReporter } from "/telemetry.js";
 import { createQuestions } from "/questions.js";
+import { openContextEconomics } from "/context-economics.js";
 
 const MODE_META = {
   plan: { label: "Plan", desc: "Read-only. Plans without editing.", icon: "eye" },
@@ -14,7 +15,7 @@ const EFFORT_LABEL = { xhigh: "Extra high", ultracode: "Ultra" };
 const EFFORT_DESC = { ultracode: "Claude Code's Ultracode: starts a multi-agent workflow on every task. Slow and costly; keep it for big jobs.", max: "Deepest reasoning the model offers.", xhigh: "More reasoning than High, less than Max." };
 const effortLabel = (v) => EFFORT_LABEL[v] || cap(v);
 const state = {
-  commands: {}, providers: new Map(), threads: new Map(), current: null, ready: false, dirs: [], live: null, cards: new Map(), usage: {}, usageTab: "claude", ctxOpen: false, archiveOpen: !!localStorage.getItem("ac_archive_open"),
+  commands: {}, providers: new Map(), threads: new Map(), current: null, ready: false, dirs: [], live: null, cards: new Map(), usage: {}, usageTab: "claude", archiveOpen: !!localStorage.getItem("ac_archive_open"),
   stick: true, // the reader is at the bottom of the chat (kept from scroll events, since layout growth fires none)
   subs: new Map(), // tool_use id of a subagent (or nested subagent) -> the <ol> its activity is listed in
   subTools: new Map(), // tool_use id of a call made inside a subagent -> its row
@@ -401,10 +402,11 @@ const threadActions = (id) => {
   const thread = state.threads.get(id);
   const items = THREAD_ACTIONS.map((a) => {
     if (a.value === "idle-compaction") {
-      const supported = Number.isFinite(thread?.idleCompactionTtlMs) && thread.idleCompactionTtlMs > 30_000;
+      const lead = thread?.idleCompactionLeadMs ?? 30_000;
+      const supported = Number.isFinite(thread?.idleCompactionTtlMs) && thread.idleCompactionTtlMs > lead;
       return { ...a, disabled: !supported,
         label: !supported ? "Automatic compaction unavailable" : thread.idleCompaction === false ? "Enable automatic compaction" : "Disable automatic compaction",
-        desc: supported ? "Substantial idle contexts; 30s before estimated cache expiry" : "Cache lifetime is unknown for this provider" };
+        desc: supported ? `Substantial idle contexts; ${lead / 1000}s before estimated cache expiry` : "Cache lifetime is unknown for this provider" };
     }
     return a.value === "archive" && filed ? { value: "unarchive", label: "Unarchive", desc: "Back to the working list", icon: "archive" } : a;
   });
@@ -1975,15 +1977,17 @@ function renderUsage() {
   ctxRow.classList.add("u-ctx");
   if (!hasCtx) ctxRow.append(el("span", "", "Context"), el("span", "bar"), el("span", "pct", "\u2013"));
   const info = iconButton("info", "Context details", "btn icon sm ghost usage-info");
-  info.id = "usage-ctx-info"; info.setAttribute("aria-controls", "usage-ctx-detail"); info.setAttribute("aria-expanded", String(state.ctxOpen));
-  info.title = "Context details";
-  const box = el("div", "usage-ctx-detail"); box.id = "usage-ctx-detail"; box.hidden = !state.ctxOpen;
-  box.append(el("div", "", detail));
-  if (t) { const title = el("div", "usage-thread", t.title); title.title = t.title; box.append(title); }
-  info.onclick = () => { state.ctxOpen = !state.ctxOpen; info.setAttribute("aria-expanded", String(state.ctxOpen)); box.hidden = !state.ctxOpen; };
+  info.id = "usage-ctx-info"; info.setAttribute("aria-haspopup", "dialog");
+  info.title = "Compare continuing versus compacting";
+  const openForecast = trigger => openContextEconomics({ getThread: () => state.threads.get(t?.id), send, trigger });
+  info.onclick = () => openForecast(info);
+  ctxRow.setAttribute("role", "button"); ctxRow.tabIndex = 0;
+  ctxRow.setAttribute("aria-label", `Context forecast: ${detail}`); ctxRow.setAttribute("aria-haspopup", "dialog");
+  ctxRow.onclick = () => openForecast(ctxRow);
+  ctxRow.onkeydown = event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); openForecast(ctxRow); } };
   const ctxWrap = el("div", "usage-ctx"); ctxWrap.setAttribute("role", "group"); ctxWrap.setAttribute("aria-label", "Thread context");
   const line = el("div", "usage-ctx-line"); line.append(ctxRow, info);
-  ctxWrap.append(line, box); pane.append(ctxWrap);
+  ctxWrap.append(line); pane.append(ctxWrap);
   if (hasCtx && t.context.used / t.context.max >= 0.7) {
     const note = el("div", "usage-note", "Long context increases repeated input. Compact this task, or start a fresh thread for unrelated work.");
     if (t.status === "idle") {

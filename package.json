@@ -18,6 +18,8 @@
     "test:dashboard": "node test/dashboard-ui.ts",
     "turn-latency": "node scripts/turn-latency.ts",
     "test:efficiency-ui": "node test/efficiency-ui.ts",
+    "test:context": "node test/context-forecast.ts && node test/idle-compaction.ts && node test/idle-compaction-threads.ts && node test/api-pricing.ts",
+    "test:context-ui": "node test/context-economics-ui.ts",
     "test:efficiency": "node test/accounting.ts && node test/api-pricing.ts && node test/accounting-repair.ts && node test/accounting-threads.ts && node test/idle-compaction.ts && node test/idle-compaction-threads.ts && node test/handoff.ts && node test/handoff-integration.ts && node test/headroom.ts && node test/headroom-safety.ts && node test/codex-headroom.ts && node test/providers.ts",
     "test:idle-compaction-ui": "node test/idle-compaction-ui.ts",
     "test:dashboard-cost": "node test/dashboard-cost-ui.ts",

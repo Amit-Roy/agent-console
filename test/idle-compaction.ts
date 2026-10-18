@@ -29,6 +29,26 @@ try {
   fs.writeFileSync(path.join(cwd, ".claude/settings.local.json"), JSON.stringify({ promptCacheTtl: "1h" }));
   assert.equal(idleCompactionPolicy({ ...t, provider: "codex" }, {}, home).ttlMs, undefined);
   assert.equal(idleCompactionPolicy({ ...t, provider: "pi" }, {}, home).ttlMs, undefined);
+  const codex = { ...t, provider: "codex", model: "gpt-6.1-sol" };
+  for (const model of ["gpt-6-astra", "gpt-6-luna", "gpt-6.1-sol-2026-10-17", "gpt-6-astra-20261017"]) {
+    assert.equal(idleCompactionPolicy({ ...codex, model }, {}, home).ttlMs, 1800000);
+  }
+  assert.equal(idleCompactionPolicy(codex, {}, home).ttlMs, 1800000);
+  assert.equal(idleCompactionPolicy(codex, {}, home).source, "openai-default-estimate");
+  assert.equal(idleCompactionPolicy({ ...codex, model: "gpt-5.6" }, {}, home).ttlMs, 1800000);
+  assert.equal(idleCompactionPolicy({ ...codex, model: "gpt-5.5" }, {}, home).ttlMs, 1800000);
+  assert.equal(idleCompactionPolicy({ ...codex, model: "gpt-5.5" }, {}, home).source, "openai-extended-estimate");
+  assert.equal(idleCompactionPolicy({ ...codex, model: "gpt-5.3-codex" }, {}, home).ttlMs, 300000);
+  assert.equal(idleCompactionPolicy({ ...codex, model: "gpt-5.3-codex" }, {}, home).source, "openai-in-memory-estimate");
+  assert.equal(idleCompactionPolicy({ ...codex, model: "default" }, {}, home).ttlMs, undefined);
+  assert.equal(idleCompactionPolicy({ ...codex, model: "default", resolvedModel: "gpt-6.1-astra" }, {}, home).ttlMs, 1800000);
+  for (const model of ["custom", "gpt-7", "gpt-6.99", "gpt-6.1-custom"]) {
+    assert.equal(idleCompactionPolicy({ ...codex, model }, {}, home).ttlMs, undefined);
+  }
+  assert.equal(idleCompactionPolicy(codex, { AGENT_CONSOLE_IDLE_COMPACT: "0" }, home).ttlMs, undefined);
+  assert.equal(idleCompactionPolicy(codex, { AGENT_CONSOLE_IDLE_COMPACT_CODEX_TTL_MS: "900000" }, home).ttlMs, 900000);
+  assert.equal(idleCompactionPolicy(codex, { AGENT_CONSOLE_IDLE_COMPACT_CODEX_TTL_MS: "invalid" }, home).ttlMs, undefined);
+
   assert.equal(idleCompactionPolicy({ ...t, provider: "codex" }, { AGENT_CONSOLE_IDLE_COMPACT_CODEX_TTL_MS: "900000" }, home).ttlMs, 900000);
   assert.equal(idleCompactionPolicy(t, { CLAUDE_CONFIG_DIR: home }, home).ttlMs, 3600000, "project local still overrides global directory");
   fs.writeFileSync(path.join(cwd, ".claude/settings.local.json"), "malformed");

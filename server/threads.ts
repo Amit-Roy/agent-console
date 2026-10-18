@@ -34,6 +34,10 @@ export interface Thread {
   advisor?: string;
   idleCompaction?: boolean;
   idleCompactionTtlMs?: number;
+  idleCompactionSource?: string;
+  idleCompactionLeadMs?: number;
+  idleCompactionMinTokens?: number;
+  resolvedModel?: string;
   idleCompactionDueAt?: number;
   lastUserActivityAt?: number;
   lastProviderActivityAt?: number;
@@ -214,6 +218,9 @@ export class Threads {
     this.idleCompactionTimers.cancel(t.id);
     const policy = idleCompactionPolicy(t);
     t.idleCompactionTtlMs = policy.ttlMs;
+    t.idleCompactionSource = policy.source;
+    t.idleCompactionLeadMs = policy.leadMs;
+    t.idleCompactionMinTokens = policy.minTokens;
     delete t.idleCompactionDueAt;
     const deadline = idleCompactionDeadline(t, policy, !!this.queues.get(t.id)?.length);
     if (this.closed || deadline == null || deadline <= Date.now()) return;
@@ -357,7 +364,7 @@ export class Threads {
     if (t.status === "running" && (patch.mode || patch.model || patch.effort || patch.advisor)) throw new Error("Stop the running turn before changing mode, model or effort.");
     const before = { mode: t.mode, model: t.model, effort: t.effort, advisor: t.advisor };
     if (patch.mode) t.mode = patch.mode;
-    if (patch.model && patch.model !== t.model) delete t.context; // the old model's window is no longer authoritative
+    if (patch.model && patch.model !== t.model) { delete t.context; delete t.resolvedModel; } // the old model's window is no longer authoritative
     if (patch.model) t.model = patch.model;
     t.effort = effort;
     if (patch.advisor) t.advisor = patch.advisor;
@@ -561,6 +568,9 @@ export class Threads {
     if (NOISE.has(kindOf(ev))) return;
     const clock = this.turns.get(t.id)?.clock;
     if (clock) timed(() => { clock.event(ev); const live = this.live.get(t.id); if (live && clock.resolvedModel) live.model = clock.resolvedModel; });
+    if (t.provider === "codex" && ev.type === "system" && ev.subtype === "init" && typeof ev.model === "string") {
+      t.resolvedModel = ev.model;
+    }
     if (ev.type === "question") {
       try { ev = this.questions.add(t.id, ev); }
       catch { this.publish(t.id, { type: "console_error", text: "The agent sent an invalid question request." }); return; }

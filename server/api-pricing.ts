@@ -20,7 +20,7 @@ export const pricing = {
 };
 
 // USD per million tokens: fresh input, cache read, cache write, output.
-const rates: Record<string, readonly [number, number, number, number]> = {
+export const rates: Record<string, readonly [number, number, number, number]> = {
   "gpt-6.1-sol": [2, 0.10, 2.50, 10],
   "gpt-6-astra": [10, 1, 12.50, 50],
   "gpt-6-luna": [0.10, 0.01, 0.125, 0.50],
