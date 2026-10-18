@@ -69,6 +69,28 @@ try {
   assert.equal(first.payload.line, 4);
   assert.equal(first.payload.column, 3);
   assert.ok(!first.href.includes('first.ts'), 'launch URL carries no workspace path');
+  const treeTicket = await (await fetch(`${base}/api/acode/edit?thread=${thread.id}&path=first.ts`, {
+    method: 'POST', headers: {Cookie: `ac_session=${session}`, Origin: base},
+  })).json();
+  const exchanged = await fetch(`${bridge}/api/acode/exchange`, {
+    method: 'POST', headers: {'Content-Type': 'application/json', Origin: 'https://localhost'},
+    body: JSON.stringify({ticket: treeTicket.ticket}),
+  });
+  assert.equal(exchanged.status, 200);
+  const projectGrant = await exchanged.json();
+  assert.equal(projectGrant.project.root, cwd);
+  const projectAuth = {Authorization: `Bearer ${projectGrant.project.token}`, Origin: 'https://localhost'};
+  const listing = await fetch(`${bridge}/api/acode/tree`, {headers: projectAuth});
+  assert.equal(listing.status, 200);
+  assert.deepEqual((await listing.json()).entries.map((entry: any) => entry.name).sort(), ['first.ts', 'image.png', 'second.md']);
+  assert.equal((await fetch(`${bridge}/api/acode/tree`, {headers: {Authorization: `Bearer ${projectGrant.token}`}})).status, 401);
+  const sibling = await fetch(`${bridge}/api/acode/open`, {method: 'POST', headers: {...projectAuth, 'Content-Type': 'application/json'}, body: JSON.stringify({path: 'second.md'})});
+  assert.equal(sibling.status, 200);
+  const siblingGrant = await sibling.json();
+  assert.equal(siblingGrant.content, '# Second file\n');
+  const siblingSave = await fetch(`${bridge}/api/acode/file`, {method: 'PUT', headers: {Authorization: `Bearer ${siblingGrant.token}`, 'Content-Type': 'application/json'}, body: JSON.stringify({content: '# Saved from project tree\n', revision: siblingGrant.revision})});
+  assert.equal(siblingSave.status, 200);
+  assert.equal(fs.readFileSync(path.join(cwd, 'second.md'), 'utf8'), '# Saved from project tree\n');
   await page.evaluate(() => document.addEventListener('click', event => {
     const target = (event.target as Element).closest('#file-viewer-edit');
     if (target) {event.preventDefault(); (window as any).__acodeLaunch = target.getAttribute('href');}
@@ -98,7 +120,7 @@ try {
   const preflight = await fetch(`${bridge}/api/acode/file`, {method: 'OPTIONS', headers: {Origin: 'null', 'Access-Control-Request-Method': 'PUT'}});
   assert.equal(preflight.status, 204);
   assert.equal(preflight.headers.get('access-control-allow-origin'), 'null');
-  console.log('PASS Acode UI: Edit launch payload, fresh grants, image exclusion, setup, isolated authenticated bridge');
+  console.log('PASS Acode UI: Edit launch, project tree and sibling save through public routes, fresh grants, image exclusion, setup, authenticated bridge');
 } finally {
   await browser?.close();
   server.kill('SIGTERM');

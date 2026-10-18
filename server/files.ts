@@ -25,7 +25,7 @@ function inside(root: string, file: string): boolean {
 
 // This endpoint displays project text, not credential stores. Check both the requested
 // name and the real target so a friendly symlink cannot expose a hidden secret.
-function sensitive(file: string): boolean {
+export function sensitive(file: string): boolean {
   const parts = file.split(path.sep).map(part => part.toLowerCase());
   if (parts.some(part => [".git", ".ssh", ".gnupg", ".aws", ".azure", ".kube", ".docker"].includes(part))) return true;
   const name = parts.at(-1) || "";
