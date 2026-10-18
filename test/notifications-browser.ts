@@ -51,7 +51,18 @@ try {
     const blocked = await page.evaluate(() => Notification.permission === "denied");
     assert.match(await page.locator("#notifications-status").innerText(), blocked ? /blocked/ : /Off for this device/);
     assert.equal(await page.getByRole("button", { name: "Enable notifications", exact: true }).isEnabled(), !blocked);
+    const silentToggle = page.getByRole("checkbox", { name: "Silent notifications", exact: true });
+    assert.equal(await silentToggle.isChecked(), false);
+    await silentToggle.check();
+    await page.waitForFunction(() => localStorage.getItem("ac_notifications_silent") === "1");
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+    await dialog.getByRole("button", { name: "Done", exact: true }).click();
+    await page.reload();
+    await page.getByRole("heading", { name: "Notification target", exact: true }).waitFor();
+    if (width === 390) await page.getByRole("button", { name: "Threads", exact: true }).click();
+    await page.getByRole("button", { name: /^Notifications:/ }).click();
+    await page.waitForFunction(() => !document.getElementById("notifications-status")!.textContent!.includes("Checking"));
+    assert.equal(await silentToggle.isChecked(), true, "Silent notifications survive a page reload");
     await dialog.getByRole("button", { name: "Done", exact: true }).click();
     const cdp = await context.newCDPSession(page);
     await cdp.send("Browser.setPermission", { permission: { name: "notifications" }, setting: "denied", origin: base });
@@ -68,7 +79,7 @@ try {
     await cdp.send("Browser.resetPermissions");
     await context.close();
   }
-  console.log("Desktop/mobile notification dialog, service worker, denied permission, and thread links passed.");
+  console.log("Desktop/mobile notification dialog, silent preference, service worker, denied permission, and thread links passed.");
 } finally {
   for (const thread of ids) socket.send(JSON.stringify({ t: "delete", thread }));
   socket.close();

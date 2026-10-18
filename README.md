@@ -209,7 +209,7 @@ Claude threads start with about 19k tokens of fixed context. Measured (haiku, tr
 
 ## Notifications
 
-Open **Notifications** in the sidebar and choose **Enable notifications**. Allow the browser permission prompt. This device receives browser push alerts when a thread finishes, fails, or needs input, even when the app is closed. Clicking an alert opens its thread. Use **Disable notifications** on each device to stop its alerts.
+Open **Notifications** in the sidebar and choose **Enable notifications**. Allow the browser permission prompt. This device receives browser push alerts when a thread finishes, fails, or needs input, even when the app is closed. Clicking an alert opens its thread. Use **Disable notifications** on each device to stop its alerts. Turn on **Silent notifications** to keep alerts visible without sound or vibration. This setting applies to this device and is saved for alerts delivered while the app is closed.
 
 Push requires HTTPS or localhost and a browser with Push API support. On iPhone and iPad, use the installed Home Screen app. Delivery depends on browser and operating system notification settings. Reset alerts are deferred.
 

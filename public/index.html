@@ -165,6 +165,8 @@
 <dialog id="notifications-dialog" aria-labelledby="notifications-title">
   <h3 id="notifications-title">Notifications</h3>
   <p id="notifications-status" class="sub" role="status" aria-live="polite"></p>
+  <label class="fld"><input id="notifications-silent" type="checkbox" aria-describedby="notifications-silent-help"> Silent notifications</label>
+  <p id="notifications-silent-help" class="sub">No sound or vibration. Applies to this device.</p>
   <form method="dialog"><div class="row"><button id="notifications-toggle" class="btn primary" type="button">Enable notifications</button><button class="btn">Done</button></div></form>
 </dialog>
 <script type="module" src="/app.js"></script>
