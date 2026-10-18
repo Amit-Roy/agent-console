@@ -880,11 +880,12 @@ function renderHead() {
       ["Effort", effortLabel(run.effort || t.effort || "default"), run.source && run.source !== "thread settings" ? `from ${run.source}` : ""],
       ["Last run", run.duration_ms == null ? "Still running" : fmtMs(run.duration_ms)],
       ...(tok ? [["Tokens", `${run.input_tokens ?? 0} in · ${run.cached_input_tokens ?? 0} from cache · ${run.output_tokens ?? 0} out`, "whole turn, not the context size"]] : []),
-      ...timingFacts(run.timing, firstTokenMs.get(t.id)),
     ] : [["Last run", "None yet"]]),
       ["Automatic compaction", !t.idleCompactionTtlMs ? "Unavailable: cache lifetime unknown" : t.idleCompaction === false ? "Off" : "On for substantial idle contexts",
         t.idleCompactionDueAt ? `Scheduled around ${new Date(t.idleCompactionDueAt).toLocaleTimeString()}; cache expiry is estimated.` : "Compaction uses tokens and may shorten details. Full transcript is kept."],
     ]);
+    renderThreadId(t.id);
+    renderTurnTiming(run?.timing, firstTokenMs.get(t.id));
     $("diagnostics").title = run ? `Last run: ${run.model || t.model} · effort ${run.effort || t.effort || "default"} (${run.source || "thread settings"})\n${run.duration_ms ?? "?"} ms · input ${run.input_tokens ?? "?"} · cached ${run.cached_input_tokens ?? "?"} · output ${run.output_tokens ?? "?"} tokens` : "No run metrics yet.";
     menus.mode.setValue(t.mode);
   }
@@ -1005,16 +1006,55 @@ function facts(rows) {
   const dl = $("run-metrics");
   dl.replaceChildren(...rows.flatMap(([k, v, note]) => { const dd = el("dd", "", v); if (note) dd.append(el("span", "note", note)); return [el("dt", "", k), dd]; }));
 }
-// Where the last run's time went, measured by the server from the agent's own events (first token, model vs tools, process start).
-function timingFacts(x, phoneMs) {
-  if (!x) return [];
-  const start = x.cold ? `new agent process${x.spawn_ms != null ? `, ready in ${fmtMs(x.spawn_ms)}` : ""}` : "agent process was already running";
-  return [
-    ["First token", x.first_ms == null ? "No output" : fmtMs(x.first_ms), `${start}${phoneMs != null ? ` · ${fmtMs(phoneMs)} until shown here` : ""}`],
-    ["Time split", `model ${fmtMs(x.model_ms)} · tools ${fmtMs(x.tool_ms)} · other ${fmtMs(x.other_ms)}`,
-      `${x.steps} model step${x.steps === 1 ? "" : "s"}${x.retries ? ` · ${x.retries} retr${x.retries === 1 ? "y" : "ies"} or rate limits` : ""} · other = startup and waiting for you`],
-    ...(x.slowest ? [["Slowest tool", `${x.slowest.name} · ${fmtMs(x.slowest.ms)}`, `of ${x.tool_calls} tool call${x.tool_calls === 1 ? "" : "s"}`]] : []),
-  ];
+// The thread's id, so the user can name it to an agent ("thread c3c67b96") instead of pasting content. Copy takes the full id.
+function renderThreadId(id) {
+  const box = $("run-thread");
+  if (box.dataset.id === id) return;
+  box.dataset.id = id;
+  const label = el("span", "tid-label", "Thread");
+  const code = el("code", "tid");
+  code.append(el("b", "", id.slice(0, 8)), el("span", "tid-rest", id.slice(8)));
+  code.title = id;
+  const copy = el("button", "btn sm tid-copy");
+  copy.type = "button";
+  copy.append(icon("copy"), el("span", "lab", "Copy id"));
+  copy.setAttribute("aria-label", `Copy thread id ${id.slice(0, 8)}`);
+  wireCopy(copy, () => id, "Copy id");
+  box.replaceChildren(label, code, copy);
+}
+// Where the last turn's time went, measured by the server from the agent's own events: one headline number (first token),
+// one stacked bar (model / tools / other) with its values in words, then the slowest tools. Nothing is said by color alone.
+function renderTurnTiming(x, phoneMs) {
+  const section = $("turn-timing");
+  section.hidden = !x;
+  if (!x) return;
+  const head = el("div", "tt-head");
+  const big = el("span", "tt-big", x.first_ms == null ? "No output" : fmtMs(x.first_ms));
+  head.append(big, el("span", "tt-cap", x.first_ms == null ? "" : "to first token"), el("span", `tt-tag${x.cold ? " cold" : ""}`, x.cold ? "Cold start" : "Warm"));
+  const start = x.cold ? `New agent process${x.spawn_ms != null ? `, ready in ${fmtMs(x.spawn_ms)}` : ""}` : "Agent process was already running";
+  const parts = [["model", "Model", x.model_ms], ["tools", "Tools", x.tool_ms], ["other", "Other", x.other_ms]];
+  const total = parts.reduce((n, p) => n + p[2], 0);
+  const bar = el("div", "tt-bar");
+  bar.setAttribute("role", "img");
+  bar.setAttribute("aria-label", `Of ${fmtMs(total)}: ${parts.map(([, name, ms]) => `${name.toLowerCase()} ${fmtMs(ms)}`).join(", ")}`);
+  const legend = el("ul", "tt-legend");
+  for (const [key, name, ms] of parts) {
+    if (total && ms > 0) { const seg = el("i", key); seg.style.flexGrow = String(ms); bar.append(seg); }
+    const li = el("li");
+    li.append(el("i", `sw ${key}`), el("span", "", name), el("b", "", fmtMs(ms)), el("span", "pct", total ? `${Math.round((ms / total) * 100)}%` : ""));
+    legend.append(li);
+  }
+  legend.setAttribute("aria-hidden", "true"); // the bar's label already reads the same numbers
+  const kids = [head, el("p", "note", `${start}${phoneMs != null ? ` · ${fmtMs(phoneMs)} until shown here` : ""}`), bar, legend,
+    el("p", "note", `${x.steps} model step${x.steps === 1 ? "" : "s"} · ${x.tool_calls} tool call${x.tool_calls === 1 ? "" : "s"} · Other is startup and waiting for you`)];
+  if (x.slow?.length) {
+    const list = el("ol", "tt-tools");
+    list.setAttribute("aria-label", "Slowest tools");
+    for (const tool of x.slow) { const li = el("li"); li.append(el("span", "n", tool.name), el("span", "ms", `${fmtMs(tool.ms)}${tool.error ? " · failed" : ""}`)); list.append(li); }
+    kids.push(el("h5", "", "Slowest tools"), list);
+  }
+  if (x.retries) kids.push(el("p", "tt-retry", `${x.retries} API retr${x.retries === 1 ? "y" : "ies"} or rate-limit warning${x.retries === 1 ? "" : "s"} slowed this turn`));
+  $("turn-timing-body").replaceChildren(...kids);
 }
 function showLoad(main, detail) {
   $("diagnostics").replaceChildren(el("p", "lead", main), ...(detail ? [el("p", "note", detail)] : []));

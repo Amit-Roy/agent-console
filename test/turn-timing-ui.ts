@@ -48,13 +48,27 @@ try {
   await page.locator("#more").click();
   await page.getByRole("menuitem", { name: /^Run details/ }).click();
   await page.waitForSelector("#run-details[open]");
-  const metrics = (await page.locator("#run-metrics").textContent()) || "";
-  check("run details: first token, already-running process", /First token\s*\d+ ms/.test(metrics) && metrics.includes("agent process was already running"), metrics.slice(0, 160));
-  check("run details: model vs tools split", /Time split\s*model \d+ ms · tools \d+ ms · other \d+ ms/.test(metrics));
-  check("run details: slowest tool", /Slowest tool\s*Bash · \d+ ms/.test(metrics));
-  check("run details: phone first-token shown", metrics.includes("until shown here"));
+  const timing = (await page.locator("#turn-timing").textContent()) || "";
+  check("run details: first token, warm process", /\d+ ms\s*to first token\s*Warm/.test(timing) && timing.includes("Agent process was already running"), timing.slice(0, 160));
+  check("run details: model vs tools split bar", (await page.locator("#turn-timing .tt-bar i").count()) >= 2 && /Model\s*\d+ ms/.test(timing) && /Tools\s*\d+ ms/.test(timing) && /^Of \d+ ms: model \d+ ms, tools \d+ ms, other \d+ ms$/.test((await page.locator("#turn-timing .tt-bar").getAttribute("aria-label")) || ""));
+  check("run details: slowest tools", /Slowest tools\s*Bash\s*\d+ ms/.test(timing));
+  check("run details: phone first-token shown", timing.includes("until shown here"));
+  check("run details: thread id prefix prominent", (await page.locator("#run-thread .tid b").textContent()) === "mock-tim");
+  const copy = page.locator("#run-thread .tid-copy");
+  const box = await copy.boundingBox();
+  check("run details: copy button is a 44px touch target", (box?.height || 0) >= 43.9, JSON.stringify(box));
+  await context.grantPermissions(["clipboard-read", "clipboard-write"], { origin: base });
+  await copy.click();
+  await page.locator("#run-thread .tid-copy", { hasText: "Copied" }).waitFor();
+  check("run details: copy takes the full id", (await page.evaluate(() => navigator.clipboard.readText())) === "mock-timing");
   check("run details: fits 390px", await page.evaluate(() => { const d = document.getElementById("run-details")!; return d.scrollWidth <= d.clientWidth + 1 && document.documentElement.scrollWidth <= innerWidth; }));
-  await page.screenshot({ path: `${OUT}/obs-run-details.png` });
+  await page.locator("#run-thread .tid-copy", { hasText: "Copy id" }).waitFor();
+  await page.locator("#turn-timing").scrollIntoViewIfNeeded();
+  await page.screenshot({ path: `${OUT}/obs-run-details-after-dark.png` });
+  await page.emulateMedia({ colorScheme: "light" });
+  await page.mouse.move(0, 0); await page.waitForTimeout(400); // let color transitions settle
+  await page.screenshot({ path: `${OUT}/obs-run-details-after-light.png` });
+  await page.emulateMedia({ colorScheme: "dark" });
   const cookie = { headers: { cookie: `ac_session=${makeToken()}` } };
   let groups: any = {};
   for (let i = 0; i < 30 && !groups.first_token; i++) { groups = (await (await fetch(`${base}/api/latency`, cookie)).json()).groups || {}; if (!groups.first_token) await page.waitForTimeout(100); }

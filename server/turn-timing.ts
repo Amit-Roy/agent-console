@@ -147,11 +147,12 @@ export class TurnClock {
 
 // What the Run details panel shows for the last run; small, it rides on every thread update.
 export function runFacts(t: TurnTiming) {
-  const slowest = t.tools.reduce<ToolTime | undefined>((m, x) => (!m || x.ms > m.ms ? x : m), undefined);
+  const slow = [...t.tools].sort((a, b) => b.ms - a.ms).slice(0, 3);
+  const slowest = slow[0];
   return {
     first_ms: t.first_ms, total_ms: t.total_ms, model_ms: t.model_ms, tool_ms: t.tool_ms, other_ms: t.startup_ms + t.wait_ms,
     steps: t.steps, tool_calls: t.tools.length, cold: !!t.cold, spawn_ms: t.spawn_ms, retries: t.retries + t.rate_limits,
-    ...(slowest ? { slowest: { name: slowest.n, ms: slowest.ms } } : {}), model: t.model,
+    ...(slowest ? { slowest: { name: slowest.n, ms: slowest.ms }, slow: slow.map((x) => ({ name: x.n, ms: x.ms, ...(x.e ? { error: true } : {}) })) } : {}), model: t.model,
   };
 }
 
