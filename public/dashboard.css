@@ -92,3 +92,12 @@ details.table th{color:var(--t2);font-weight:var(--fw-med)}
 .pricing-details summary{cursor:pointer;min-height:2rem}
 .pricing-details .note{margin-top:var(--sp-2)}
 .pricing-details a{color:var(--accent);text-underline-offset:2px}
+.pbars{display:grid;gap:var(--sp-2)}
+.pb{display:grid;grid-template-columns:minmax(5rem,9rem) 1fr auto;align-items:center;gap:var(--sp-3);font:var(--fw-reg) var(--f-sm)}
+.pb .n{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--t1)}
+.pb .t{position:relative;height:.625rem;border-radius:var(--r-full);background:var(--s3);overflow:hidden}
+.pb .t i{position:absolute;left:0;top:0;bottom:0;border-radius:var(--r-full);min-width:2px}
+.pb .x{color:var(--t2);font-variant-numeric:tabular-nums;text-align:right}
+.lat-kpis{margin-bottom:var(--sp-4)}.lat-kpis .kpi{background:var(--s3);box-shadow:none;padding:var(--sp-3)}.lat-kpis .kpi .v{font-size:1.5rem}
+.lat-block h3{margin:0 0 var(--sp-2);font:var(--fw-med) var(--f-sm);color:var(--t2)}.lat-block h3:not(:first-child){margin-top:var(--sp-4)}
+@media (max-width:560px){.pb{grid-template-columns:5.5rem 1fr auto}}

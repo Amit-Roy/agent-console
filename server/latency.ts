@@ -1,7 +1,8 @@
 import fs from 'node:fs';
 import {DatabaseSync} from 'node:sqlite';
 
-const KINDS = new Set(['open', 'page', 'cached', 'refresh', 'cancelled', 'viewer_open', 'viewer_tree', 'viewer_module']);
+// first_token: send tap -> first reply token painted on this device (wait_ms = attachment uploads still in flight at the tap)
+const KINDS = new Set(['open', 'page', 'cached', 'refresh', 'cancelled', 'viewer_open', 'viewer_tree', 'viewer_module', 'first_token']);
 const STAGES = ['server_ms', 'render_ms', 'wait_ms', 'prepare_ms', 'roundtrip_ms', 'decode_ms', 'module_ms'];
 const duration = (n: unknown) => typeof n === 'number' && Number.isFinite(n) && n >= 0 && n <= 300_000;
 const size = (n: unknown, max: number) => typeof n === 'number' && Number.isInteger(n) && n >= 0 && n <= max;
@@ -81,6 +82,10 @@ export class LatencyStore {
     // The Run details table picks its own percentiles, so its two windows carry every sorted time (whole ms keep it small).
     const shown = (key: string) => /^[^/]+\/visible(\/recent)?$/.test(key);
     return { retention_days: 14, max_samples: this.maxSamples, count: rows.length, groups: Object.fromEntries([...groups].map(([key, values])=>[key, { ...stats(values), ...(key.startsWith('viewer_') ? viewerStats(values) : {}), ...(shown(key) ? { samples_ms: values.map(r => Math.round(r.total_ms)) } : {}) }])), slowest: rows.slice(-10).reverse(), recent: this.db.prepare('SELECT * FROM latency ORDER BY id DESC LIMIT 20').all() };
+  }
+  // Foreground samples of one kind in a window, for the dashboard's per-provider percentiles.
+  samples(kind: string, from: number, to: number) {
+    return this.db.prepare('SELECT provider, total_ms FROM latency WHERE kind = ? AND hidden = 0 AND at BETWEEN ? AND ? ORDER BY total_ms').all(kind, from, to) as { provider: string; total_ms: number }[];
   }
   close() { this.db.close(); }
 }

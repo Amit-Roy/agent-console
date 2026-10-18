@@ -264,6 +264,56 @@ function heatmap(turns) {
   return box;
 }
 
+// ---------- turn latency ----------
+const ms = (n) => (n == null ? "—" : n < 1000 ? `${Math.round(n)} ms` : `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)} s`);
+// Per-provider p50 (solid) and p95 (lighter, same hue) on one shared time scale. Nearest-rank, like Run details.
+function pctBars(rows) {
+  if (!rows.length) return el("div", "empty-c", "No turns with output in this range.");
+  const box = el("div", "pbars");
+  const max = Math.max(...rows.map((r) => r.p95_ms || 0), 1);
+  for (const r of rows) {
+    const [name, color] = r.provider === "all" ? ["All agents", css("--c-other")] : provMeta(r.provider);
+    const row = el("div", "pb"), track = el("div", "t");
+    const p95 = el("i", "p95"), p50 = el("i", "p50");
+    p95.style.cssText = `width:${Math.max(1, ((r.p95_ms || 0) / max) * 100)}%;background:color-mix(in srgb,${color} 35%,transparent)`;
+    p50.style.cssText = `width:${Math.max(1, ((r.p50_ms || 0) / max) * 100)}%;background:${color}`;
+    track.append(p95, p50);
+    const label = el("div", "n", name); label.title = `${name} · ${r.count} turns`;
+    row.append(label, track, el("div", "x", `${ms(r.p50_ms)} · ${ms(r.p95_ms)}`));
+    row.setAttribute("aria-label", `${name}: p50 ${ms(r.p50_ms)}, p95 ${ms(r.p95_ms)}, ${r.count} turns`);
+    row.addEventListener("pointermove", (e) => showTip(e, name, [["Typical (p50)", ms(r.p50_ms), color], ["Slow (p95)", ms(r.p95_ms)], ["Turns", String(r.count)]]));
+    row.addEventListener("pointerleave", hideTip);
+    box.append(row);
+  }
+  return box;
+}
+function latencyPanel(lat) {
+  const p = panel("Turn latency", "Measured by this server from agent events; metadata only, never sent anywhere");
+  if (!lat?.available) { p.append(el("div", "empty-c", "Turn timing is unavailable on this server.")); return p; }
+  if (!lat.turns) { p.append(el("div", "empty-c", "No timed turns in this range yet.")); return p; }
+  const kp = el("div", "kpis lat-kpis");
+  const all = lat.ttft.find((r) => r.provider === "all") || lat.ttft[0];
+  const split = lat.split.reduce((m, r) => ({ model: m.model + r.model_ms, tool: m.tool + r.tool_ms, other: m.other + r.other_ms }), { model: 0, tool: 0, other: 0 });
+  const total = split.model + split.tool + split.other;
+  const share = (n) => (total ? pct((n / total) * 100) : "—");
+  kp.append(
+    kpi("First token p50", ms(all?.p50_ms), `p95 ${ms(all?.p95_ms)} · ${lat.turns} turns`),
+    kpi("Model / tools", `${share(split.model)} / ${share(split.tool)}`, `other ${share(split.other)}: startup and waiting for you`),
+    kpi("Cold starts", lat.cold.share == null ? "—" : pct(lat.cold.share * 100), `${lat.cold.cold}/${lat.cold.turns} turns · spawn p50 ${ms(lat.cold.spawn.p50_ms)}`),
+    kpi("Retries", fmt(lat.retries.retries + lat.retries.rate_limits), `${lat.retries.retries} API retries · ${lat.retries.rate_limits} rate-limit warnings`),
+  );
+  const ttft = el("div", "lat-block");
+  ttft.append(el("h3", "", "Time to first token by agent"), pctBars(lat.ttft), legend([["p50", css("--c-used")], ["p95", "color-mix(in srgb,var(--c-used) 35%,transparent)"]]));
+  if (lat.phone_ttft?.length) ttft.append(el("h3", "", "Until shown on your device"), pctBars(lat.phone_ttft));
+  const tools = el("div", "lat-block");
+  tools.append(el("h3", "", "Tool time, top 5"), hbars(lat.tools.map((t) => ({ name: t.name, value: t.total_ms, color: css("--c-used"), extra: `${t.count} calls · p95 ${ms(t.p95_ms)}${t.errors ? ` · ${t.errors} failed` : ""}` })), ms));
+  const classes = Object.entries(lat.retries.by_class || {}).sort((a, b) => b[1] - a[1]);
+  if (classes.length) tools.append(el("p", "note", `Retry causes: ${classes.map(([c, n]) => `${c.replace(/_/g, " ")} ${n}`).join(" · ")}`));
+  const g = el("div", "grid2"); g.append(ttft, tools);
+  p.append(kp, g);
+  return p;
+}
+
 // ---------- page ----------
 function dayList(from, to) {
   const out = [];
@@ -402,7 +452,7 @@ function render(cur, prev) {
   }
   if (sourceList.childNodes.length) pricingDetails.append(sourceList);
   for (const assumption of cur.pricing?.assumptions || []) pricingDetails.append(el("p", "note", assumption));
-  root.replaceChildren(kpis, priceNote, ...(cur.pricing ? [pricingDetails] : []), subscriptionPanel(cur), g1, srcs, g2, g3, tbl);
+  root.replaceChildren(kpis, priceNote, ...(cur.pricing ? [pricingDetails] : []), subscriptionPanel(cur), g1, latencyPanel(cur.latency), srcs, g2, g3, tbl);
   if (cur.turns.some((x) => x.b)) root.append(el("p", "muted", "Historical rows were reconstructed from local logs. Missing usage and costs remain unknown; API-equivalent costs do not establish actual billing."));
 }
 

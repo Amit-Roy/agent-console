@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { spawnLines, parseJson } from "./proc.ts";
 import { childEnv } from "./env.ts";
 import { harnessInstructions } from "./brain.ts";
+import { retryEvent } from "../turn-timing.ts";
 import { cleanQuestions, IMAGE_ONLY_PROMPT, type Agent, type AgentCtx, type Attachment, type Question, type QuestionReply, type ThreadSpec } from "./types.ts";
 
 // Codex asks the user through app-server server requests (exec mode refuses: "request_user_input not supported in exec mode"):
@@ -169,6 +170,9 @@ export function startCodexApp(t: ThreadSpec, ctx: AgentCtx, translate: (row: any
     } else if (r.method === "account/rateLimits/updated") {
       const norm = (w: any) => w && ({ used_percent: w.usedPercent, window_minutes: w.windowDurationMins, resets_at: w.resetsAt });
       ctx.event({ type: "provider_usage", rateLimits: { primary: norm(v.rateLimits?.primary), secondary: norm(v.rateLimits?.secondary) } });
+    } else if (r.method === "error" && v.willRetry) {
+      const info = v.error?.codexErrorInfo, kind = info && typeof info === "object" ? Object.keys(info)[0] : info;
+      ctx.event(retryEvent({ status: kind && info?.[kind]?.httpStatusCode, error: typeof kind === "string" ? kind : undefined, message: String(v.error?.message ?? "") }));
     } else if (r.method === "error" && !v.willRetry) {
       ctx.event({ type: "console_error", text: v.error?.message || "Codex error." });
     }
@@ -185,7 +189,7 @@ export function startCodexApp(t: ThreadSpec, ctx: AgentCtx, translate: (row: any
       ...(brain ? { developerInstructions: brain } : {}),
     });
     session = result.thread.id;
-    translate({ type: "thread.started", thread_id: session });
+    translate({ type: "thread.started", thread_id: session, ...(typeof result.model === "string" ? { model: result.model } : {}) });
   })();
   void ready.catch(failed);
   const input = (text: string, images: Attachment[] = []) => [

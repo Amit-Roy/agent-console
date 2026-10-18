@@ -66,6 +66,8 @@ const latency = createLatencyReporter(samples => {
   ws.send(JSON.stringify({ t: "telemetry", samples }));
   return true;
 }, () => state.features.latency);
+let firstToken = null; // the turn this device just started, until its first token is painted
+const firstTokenMs = new Map(); // thread -> last send -> first token painted, shown in Run details
 function banner(t, action) {
   const b = $("banner");
   b.hidden = !t;
@@ -874,10 +876,11 @@ function renderHead() {
     const run = t.lastRun;
     const tok = run && [run.input_tokens, run.cached_input_tokens, run.output_tokens].some((n) => n != null);
     facts([...(run ? [
-      ["Model", run.model || t.model],
+      ["Model", run.timing?.model || run.model || t.model],
       ["Effort", effortLabel(run.effort || t.effort || "default"), run.source && run.source !== "thread settings" ? `from ${run.source}` : ""],
       ["Last run", run.duration_ms == null ? "Still running" : fmtMs(run.duration_ms)],
       ...(tok ? [["Tokens", `${run.input_tokens ?? 0} in · ${run.cached_input_tokens ?? 0} from cache · ${run.output_tokens ?? 0} out`, "whole turn, not the context size"]] : []),
+      ...timingFacts(run.timing, firstTokenMs.get(t.id)),
     ] : [["Last run", "None yet"]]),
       ["Automatic compaction", !t.idleCompactionTtlMs ? "Unavailable: cache lifetime unknown" : t.idleCompaction === false ? "Off" : "On for substantial idle contexts",
         t.idleCompactionDueAt ? `Scheduled around ${new Date(t.idleCompactionDueAt).toLocaleTimeString()}; cache expiry is estimated.` : "Compaction uses tokens and may shorten details. Full transcript is kept."],
@@ -1001,6 +1004,17 @@ const fmtMs = (ms) => (ms == null ? "—" : ms < 1000 ? `${Math.round(ms)} ms` :
 function facts(rows) {
   const dl = $("run-metrics");
   dl.replaceChildren(...rows.flatMap(([k, v, note]) => { const dd = el("dd", "", v); if (note) dd.append(el("span", "note", note)); return [el("dt", "", k), dd]; }));
+}
+// Where the last run's time went, measured by the server from the agent's own events (first token, model vs tools, process start).
+function timingFacts(x, phoneMs) {
+  if (!x) return [];
+  const start = x.cold ? `new agent process${x.spawn_ms != null ? `, ready in ${fmtMs(x.spawn_ms)}` : ""}` : "agent process was already running";
+  return [
+    ["First token", x.first_ms == null ? "No output" : fmtMs(x.first_ms), `${start}${phoneMs != null ? ` · ${fmtMs(phoneMs)} until shown here` : ""}`],
+    ["Time split", `model ${fmtMs(x.model_ms)} · tools ${fmtMs(x.tool_ms)} · other ${fmtMs(x.other_ms)}`,
+      `${x.steps} model step${x.steps === 1 ? "" : "s"}${x.retries ? ` · ${x.retries} retr${x.retries === 1 ? "y" : "ies"} or rate limits` : ""} · other = startup and waiting for you`],
+    ...(x.slowest ? [["Slowest tool", `${x.slowest.name} · ${fmtMs(x.slowest.ms)}`, `of ${x.tool_calls} tool call${x.tool_calls === 1 ? "" : "s"}`]] : []),
+  ];
 }
 function showLoad(main, detail) {
   $("diagnostics").replaceChildren(el("p", "lead", main), ...(detail ? [el("p", "note", detail)] : []));
@@ -1597,7 +1611,23 @@ function taskEvent(e) {
   updateWorking();
 }
 
+// Client-perceived latency: send tap -> first reply token painted, for the turn this device started (latency kind first_token).
+function watchFirstToken(e) {
+  if (firstToken.thread !== state.current || e.type === "result" || e.type === "aborted") { firstToken = null; return; }
+  if (e.parent_tool_use_id) return;
+  const output = e.type === "stream_event" ? e.event?.type === "content_block_delta" : e.type === "assistant" && e.message?.content?.some((b) => ["text", "thinking", "tool_use"].includes(b?.type));
+  if (!output) return;
+  const { thread, at, wait_ms } = firstToken, hidden = document.visibilityState !== "visible";
+  firstToken = null;
+  requestAnimationFrame(() => {
+    const total_ms = performance.now() - at;
+    firstTokenMs.set(thread, total_ms);
+    latency.record({ kind: "first_token", thread, total_ms, wait_ms, hidden });
+  });
+}
+
 function onEvent(e, live) {
+  if (live && firstToken) watchFirstToken(e);
   // what a subagent says and does arrives with the id of the call that spawned it: it belongs inside that card, not in the main thread
   if (e.parent_tool_use_id && (e.type === "assistant" || e.type === "user" || e.type === "stream_event")) return subEvent(e, live);
   switch (e.type) {
@@ -1874,6 +1904,7 @@ async function submit(mode) {
   if (submitting || !state.current) return;
   if (!box.value.trim() && !pending.length) return;
   submitting = true;
+  const tapAt = performance.now();
   try {
     await Promise.all(pending.map((p) => p.ready)); // uploads still in flight; failed ones remove themselves
     const text = box.value.trim();
@@ -1888,7 +1919,8 @@ async function submit(mode) {
     if (!text && !attachments.length) return;
     if (!mode && !attachments.length && (questions.count(state.current) || cur()?.waiting)) mode = "steer";
     // mid-turn a message queues until the turn ends; mode "steer" (Alt+Enter, or Steer on a queued card) hands it to the agent now
-    send({ t: "send", thread: state.current, text, attachments, ...(mode ? { mode } : {}) });
+    const startsTurn = !mode && cur()?.status !== "running";
+    if (send({ t: "send", thread: state.current, text, attachments, ...(mode ? { mode } : {}) }) && startsTurn) firstToken = { thread: state.current, at: tapAt, wait_ms: performance.now() - tapAt };
     box.value = "";
     box.style.height = "";
     pending.length = 0;

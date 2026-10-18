@@ -4,7 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "node test/codex-async-questions.ts && node test/async-questions.ts && node test/questions.ts && node test/provider-questions.ts && node test/latency.ts && node test/queue-edit.ts && node test/commands.ts && node test/usage.ts && node test/history.ts && node test/history-wire.ts && node test/codex-settings.ts && node test/codex-web.ts && node test/providers.ts && node test/e2e.ts",
+    "test": "node test/codex-async-questions.ts && node test/async-questions.ts && node test/questions.ts && node test/provider-questions.ts && node test/latency.ts && node test/turn-timing.ts && node test/queue-edit.ts && node test/commands.ts && node test/usage.ts && node test/history.ts && node test/history-wire.ts && node test/codex-settings.ts && node test/codex-web.ts && node test/providers.ts && node test/e2e.ts",
     "start": "node server/index.ts",
     "icons": "node scripts/make-icons.mjs",
     "test:questions": "node test/codex-async-questions.ts && node test/async-questions.ts && node test/questions.ts && node test/provider-questions.ts",
@@ -16,6 +16,7 @@
     "test:transport": "node test/transport.ts",
     "test:cache": "node test/cache-refresh-ui.ts",
     "test:dashboard": "node test/dashboard-ui.ts",
+    "turn-latency": "node scripts/turn-latency.ts",
     "test:efficiency-ui": "node test/efficiency-ui.ts",
     "test:efficiency": "node test/accounting.ts && node test/api-pricing.ts && node test/accounting-repair.ts && node test/accounting-threads.ts && node test/idle-compaction.ts && node test/idle-compaction-threads.ts && node test/handoff.ts && node test/handoff-integration.ts && node test/headroom.ts && node test/headroom-safety.ts && node test/providers.ts",
     "test:idle-compaction-ui": "node test/idle-compaction-ui.ts",
