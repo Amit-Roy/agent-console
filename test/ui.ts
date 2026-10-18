@@ -342,7 +342,7 @@ for (const scheme of ["dark", "light"] as const) {
 
   // overflow menu: rename, then delete (with the existing confirm)
   await page.click("#more");
-  check("overflow: menu with Rename + Delete", (await page.locator(".menu[role=menu] [role=menuitem]").allInnerTexts()).join().includes("Delete thread"));
+  check("overflow: menu with Rename + Archive", (await page.locator(".menu[role=menu] [role=menuitem] .m-label").allInnerTexts()).join().includes("Archive"));
   await page.locator(".menu [role=menuitem]", { hasText: "Rename" }).click();
   await page.waitForSelector("#ttl-edit");
   await page.fill("#ttl-edit", "ui-polish-test");
@@ -351,6 +351,7 @@ for (const scheme of ["dark", "light"] as const) {
   check("rename: title updates via websocket update", (await page.locator("#threads li.sel .t").innerText()) === "ui-polish-test");
   await page.screenshot({ path: `${OUT}/ui-desktop-test-thread.png` });
   await page.click("#more");
+  await page.getByRole("menuitem", { name: /^Archive/ }).click();
   await page.locator(".menu [role=menuitem]", { hasText: "Delete thread" }).click();
   await page.waitForFunction((n) => document.querySelectorAll("#threads li").length === n, before, { timeout: 5000 });
   check("delete: confirmed and removed", confirms.some((c) => /Delete "ui-polish-test"/.test(c)) && (await page.locator("#threads li").count()) === before);
@@ -551,6 +552,7 @@ for (const scheme of ["dark", "light"] as const) {
     await page.locator("#thumbs .rm").click();
     await page.setViewportSize({ width: 1280, height: 800 });
     await page.click("#more");
+    await page.getByRole("menuitem", { name: /^Archive/ }).click();
     await page.locator(".menu [role=menuitem]", { hasText: "Delete thread" }).click();
     await page.waitForFunction((n) => document.querySelectorAll("#threads li").length === n, before, { timeout: 5000 });
     check("image test: no page errors", errors.length === 0, errors.join(" | ").slice(0, 200));
@@ -594,6 +596,7 @@ for (const scheme of ["dark", "light"] as const) {
     check("tool card: label survives a reload (history replay)", (await page.locator(".card .sum.human").first().innerText()) === "Running echo");
     await page.screenshot({ path: `${OUT}/ui-tool-label.png` });
     await page.click("#more");
+    await page.getByRole("menuitem", { name: /^Archive/ }).click();
     await page.locator(".menu [role=menuitem]", { hasText: "Delete thread" }).click();
     await page.waitForFunction((n) => document.querySelectorAll("#threads li").length === n, before, { timeout: 5000 });
   } else {
@@ -646,9 +649,9 @@ for (const scheme of ["dark", "light"] as const) {
     await other.hover();
     await other.locator(".row-more").click();
     check("row menu: opens from any row without switching to it", (await page.locator(".menu[role=menu]").count()) === 1 && (await page.locator("#threads li.sel .t").innerText()).trim() === title);
-    const its = (await items()).filter((l) => !l.startsWith("Fork in ")); // one "Fork in <agent>" per other installed agent
-    check("row menu: Rename, Compact context, Fork, Download, Share, Run details, Archive, Delete thread", its.join("|") === "Rename|Compact context|Fork|Download|Share|Run details|Archive|Delete thread", (await items()).join("|"));
-    check("row menu: Delete is the only red item", (await page.locator(".menu [data-tone=danger]").count()) === 1);
+    const its = await items();
+    check("row menu: grouped thread actions", its.join("|") === "Rename|Compaction|Economy settings|Fork|Download|Share|Run details|Archive", (await items()).join("|"));
+    check("row menu: destructive actions stay inside Archive", (await page.locator(".menu [data-tone=danger]").count()) === 0);
     await page.screenshot({ path: `${OUT}/ui-row-menu.png` });
     await page.keyboard.press("Escape");
     check("row menu: Esc closes it and returns focus to its button", (await page.locator(".menu").count()) === 0 && (await other.locator(".row-more").evaluate((b) => b === document.activeElement)));
@@ -669,6 +672,7 @@ for (const scheme of ["dark", "light"] as const) {
     // fork
     const rows0 = await page.locator("#threads li").count();
     await rowMenu(".sel").click();
+    await page.getByRole("menuitem", { name: /^Fork/ }).click();
     await page.locator(".menu [role=menuitem]", { hasText: /^Fork/ }).first().click();
     await page.waitForFunction(() => /\(fork\)$/.test(document.querySelector("#threads li.sel .t")?.textContent || ""));
     await page.waitForSelector(".msg.user .bubble");
@@ -676,7 +680,7 @@ for (const scheme of ["dark", "light"] as const) {
 
     // download, from the header menu (the same actions live there too)
     await page.click("#more");
-    check("header menu: same thread actions", (await items()).filter((l) => !l.startsWith("Fork in ")).join("|") === "Rename|Compact context|Fork|Download|Share|Run details|Archive|Delete thread", (await items()).join("|"));
+    check("header menu: same thread actions", (await items()).join("|") === "Rename|Compaction|Economy settings|Fork|Download|Share|Run details|Archive", (await items()).join("|"));
     const dl = page.waitForEvent("download");
     await page.locator(".menu [role=menuitem]", { hasText: "Download" }).click();
     const file = await dl;
@@ -702,6 +706,7 @@ for (const scheme of ["dark", "light"] as const) {
     for (const name of ["Weekend trip (fork)", "Weekend trip"]) {
       await page.locator("#threads li", { hasText: name }).first().hover();
       await page.locator("#threads li", { hasText: name }).first().locator(".row-more").click();
+      await page.getByRole("menuitem", { name: /^Archive/ }).click();
       await page.locator(".menu [role=menuitem]", { hasText: "Delete thread" }).click();
       await page.waitForFunction((n) => ![...document.querySelectorAll("#threads li .t")].some((e) => e.textContent === n), name, { timeout: 5000 });
     }
@@ -929,6 +934,7 @@ for (const scheme of ["dark", "light"] as const) {
     await page.setViewportSize({ width: 1280, height: 800 });
     check("running agents: no console or page errors", errors.length === 0, errors.join(" | ").slice(0, 200));
     await page.click("#more");
+    await page.getByRole("menuitem", { name: /^Archive/ }).click();
     await page.locator(".menu [role=menuitem]", { hasText: "Delete thread" }).click();
     await page.waitForFunction((n) => document.querySelectorAll("#threads li").length === n, before, { timeout: 5000 });
   } else {

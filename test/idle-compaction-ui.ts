@@ -39,11 +39,13 @@ try {
     await page.goto(base);
     await page.locator("#more:not([disabled])").waitFor();
     await page.locator("#more").click();
+    await page.getByText("Compaction", { exact: true }).click();
     await page.getByText("Disable automatic compaction", { exact: true }).click();
     await page.getByText("Automatic compaction disabled for this thread.", { exact: true }).waitFor();
     await page.reload();
     await page.locator("#more:not([disabled])").waitFor();
     await page.locator("#more").click();
+    await page.getByText("Compaction", { exact: true }).click();
     await page.getByText("Enable automatic compaction", { exact: true }).click();
     await page.getByText("Automatic compaction enabled for this thread.", { exact: true }).waitFor();
     await page.locator("#more").click();
@@ -57,6 +59,7 @@ try {
     await unknown.goto(base);
     await unknown.locator("#more:not([disabled])").waitFor();
     await unknown.locator("#more").click();
+    await unknown.getByText("Compaction", { exact: true }).click();
     assert.equal(await unknown.getByRole("menuitem").filter({ hasText: "Automatic compaction unavailable" }).getAttribute("aria-disabled"), "true");
     assert.deepEqual(errors, []);
     await context.close();

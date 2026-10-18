@@ -335,7 +335,6 @@ const threadActions = (id) => {
   const cur = state.threads.get(id)?.provider;
   const others = [...state.providers.values()].filter((p) => p.id !== cur && p.id !== "mock" && p.ok !== false);
   const forks = others.map((p) => ({ value: `fork:${p.id}`, label: `Fork in ${p.label}`, desc: "Replay this conversation in another agent", icon: "fork" }));
-  const i = THREAD_ACTIONS.findIndex((a) => a.value === "fork") + 1;
   const filed = !!state.threads.get(id)?.archived;
   const thread = state.threads.get(id);
   const items = THREAD_ACTIONS.map((a) => {
@@ -347,7 +346,15 @@ const threadActions = (id) => {
     }
     return a.value === "archive" && filed ? { value: "unarchive", label: "Unarchive", desc: "Back to the working list", icon: "archive" } : a;
   });
-  return [...items.slice(0, i), ...forks, ...items.slice(i)];
+  const action = (value) => items.find((item) => item.value === value);
+  return [
+    action("rename"),
+    { value: "compaction-menu", label: "Compaction", icon: "sparkle", children: [action("compact"), action("idle-compaction")] },
+    action("economy"),
+    { value: "fork-menu", label: "Fork", icon: "fork", children: [action("fork"), ...forks, action("fork-recent")] },
+    action("download"), action("share"), action("details"),
+    { value: "archive-menu", label: "Archive", icon: "archive", children: [action(filed ? "unarchive" : "archive"), action("delete")] },
+  ];
 };
 const THREAD_ACTIONS = [
   { value: "rename", label: "Rename", icon: "pencil" },

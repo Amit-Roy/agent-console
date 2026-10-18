@@ -38,6 +38,7 @@ try {
   const economical = (await wait(m => m.t === "thread" && m.thread.id === original.id && m.thread.effort === "medium")).thread;
   assert.equal(economical.model, "sonnet"); assert.equal(economical.advisor, "off");
   await page.locator("#more").click();
+  await page.getByText("Fork", { exact: true }).click();
   await page.getByText("Fork with recent context", { exact: true }).click();
   const fork = (await wait(m => m.t === "thread" && m.thread.id !== original.id && m.thread.title === original.title + " (fork)")).thread;
   assert.equal(fork.provider, "claude"); assert.equal(fork.sessionId, undefined);
