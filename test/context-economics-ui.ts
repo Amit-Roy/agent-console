@@ -10,7 +10,7 @@ const root = process.env.APP_ROOT || process.cwd();
 const port = process.env.TEST_PORT || "7074", base = `http://127.0.0.1:${port}`;
 fs.mkdirSync(path.join(data, "uploads"));
 const now = Date.now();
-const fixture = { id: "forecast-codex", provider: "codex", model: "gpt-6.1-sol", title: "Forecast fixture", cwd: root, mode: "bypassPermissions", effort: "medium", status: "idle", cost: 0, createdAt: now, updatedAt: now, sessionId: "scratch-only" };
+const fixture = { id: "forecast-codex", provider: "codex", model: "gpt-6.1-sol", title: "Forecast fixture", cwd: root, mode: "bypassPermissions", effort: "medium", status: "idle", cost: 0, createdAt: now, updatedAt: now, sessionId: "scratch-only", context: { used: 100000, max: 272000, source: "codex/last_request" } };
 fs.writeFileSync(path.join(data, "threads.json"), JSON.stringify([fixture]));
 process.env.AGENT_CONSOLE_DATA = data;
 const { makeToken } = await import("../server/auth.ts");
@@ -36,7 +36,7 @@ try {
       upstream.onMessage(raw => {
         const m = JSON.parse(String(raw));
         if (m.t === "hello") {
-          current = { ...m.threads[0], ...fixture, context: { used: 100000, max: 272000, source: "test" }, lastProviderActivityAt: Date.now() - 60000, idleCompactionTtlMs: 300000, idleCompaction: true };
+          current = { ...m.threads[0], ...fixture, context: { used: 100000, max: 272000, source: "codex/last_request" }, lastProviderActivityAt: Date.now() - 60000, idleCompactionTtlMs: 300000, idleCompaction: true };
           m.threads = [current];
         }
         socket.send(JSON.stringify(m));
@@ -47,6 +47,24 @@ try {
     await page.locator("#ctx").click();
     await page.waitForFunction(() => !!document.querySelector(".context-forecast-summary")?.textContent);
     assert.match(await page.getByRole("dialog").innerText(), /Forecast fixture/);
+    await page.locator(".context-token-grid span").first().waitFor({state: "attached"});
+    assert.equal(await page.locator(".context-token-grid span").count(), 100);
+    assert.match(await page.locator(".context-allocation").innerText(), /Other \/ unobserved/i);
+    const allocationResponse = await page.request.get(`${base}/api/context-allocation/${fixture.id}`);
+    assert.equal(allocationResponse.ok(), true);
+    const allocation = await allocationResponse.json();
+    assert.equal(allocation.used, 100000);
+    assert.equal(allocation.categories.reduce((sum: number, c: any) => sum + c.tokens, 0), 272000);
+    await page.route("**/api/context-allocation/**", route => route.fulfill({ json: {
+      used: 100000, max: 272000, source: "codex/last_request", note: "Fixture category estimates.", categories: [
+        { id: "system", label: "System instructions", tokens: 10000, estimated: true },
+        { id: "tools", label: "Tool definitions", tokens: 10000, estimated: true },
+        { id: "messages", label: "Messages", tokens: 50000, estimated: true },
+        { id: "tool_results", label: "Tool results", tokens: 20000, estimated: true },
+        { id: "unknown", label: "Unattributed context", tokens: 10000, estimated: true },
+        { id: "free", label: "Free space", tokens: 172000, estimated: false },
+      ],
+    } }));
     await page.keyboard.press("Escape");
     await page.getByRole("dialog").waitFor({ state: "detached" });
     assert.equal(await page.locator("#ctx").evaluate(e => e === document.activeElement), true);
@@ -59,8 +77,16 @@ try {
     const change = async (label: string, value: string) => { await page.getByLabel(label, { exact: true }).fill(value); await page.getByLabel(label, { exact: true }).dispatchEvent("change"); };
     await open();
     const dialog = page.getByRole("dialog");
+    await page.getByText("Fixture category estimates.", { exact: true }).waitFor();
+    assert.equal(await page.locator(".context-token-grid span").count(), 100);
+    assert.equal(await page.locator(".context-allocation-legend li").count(), 6);
+    assert.match(await page.locator(".context-allocation-legend").innerText(), /System instructions[\s\S]*est\./);
+    await change("Future requests", "1");
+    assert.match(await page.locator(".context-recommendation").innerText(), /Keep the current context/);
+    await change("Future requests", "40");
+    await dialog.evaluate(e => { e.scrollTop = 0; });
     fs.mkdirSync(path.join(root, "test-output"), { recursive: true });
-    await page.screenshot({ timeout: 10000, animations: "disabled", path: path.join(root, `test-output/context-${width}.png`) });
+    await page.screenshot({ timeout: 10000, animations: "disabled", path: path.join(root, `test-output/guidance-${width}.png`) });
     assert.match(await dialog.innerText(), /Cache estimated warm at resume/);
     assert.match(await page.locator(".context-forecast-summary").innerText(), /continue \$/);
     assert.equal(await page.locator("canvas").evaluate((el: any) => (window as any).Chart.getChart(el).data.datasets.length), 2);
@@ -68,6 +94,7 @@ try {
     await change("Resume in (minutes)", "10");
     assert.match(await dialog.innerText(), /Cache estimated stale at resume/);
     assert.notEqual(await page.locator(".context-forecast-summary").innerText(), warm);
+    assert.match(await page.locator(".context-recommendation").innerText(), /Compact now/);
     await change("Gap per request (minutes)", "10");
     await change("Cache lifetime estimate (minutes)", "0");
     assert.match(await dialog.innerText(), /No cache assumed/);
@@ -96,6 +123,7 @@ try {
     client.send(JSON.stringify({ t: "thread", thread: current }));
     await open();
     assert.match(await page.locator(".context-forecast-summary").innerText(), /showing tokens only/);
+    assert.match(await page.locator(".context-recommendation").innerText(), /Recommendation:/);
     await page.keyboard.press("Escape");
     current = { ...current, context: null };
     client.send(JSON.stringify({ t: "thread", thread: current }));

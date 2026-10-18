@@ -37,6 +37,55 @@ export function forecastContext({ context, maxContext = Infinity, retained = 0.2
     windowLimited: points.length < requests + 1 };
 }
 
+// Compare one compaction now or immediately after each future request against no
+// compaction. Every candidate completes the same work within the original window.
+export function recommendCompaction(scenario) {
+  const forecast = forecastContext(scenario);
+  const horizonRequests = forecast ? forecast.points.length - 1 : 0;
+  const unknown = { action: "unknown", afterRequests: null, atContextTokens: null,
+    afterAddedTokens: null, cost: null, savings: null, baselineCost: null,
+    horizonRequests, reason: "unavailable" };
+  if (!forecast?.priced || !horizonRequests) return unknown;
+  const { context, ttlMs = 0, ageMs = Infinity, resumeMs = 0,
+    gapMs = 60000, rate } = scenario;
+  const added = Math.min(20000, Math.max(100, scenario.added ?? 2000));
+  const retained = Math.min(1, Math.max(0.01, scenario.retained ?? 0.2));
+  if (![added, retained].every(Number.isFinite)) return unknown;
+  const baselineCost = forecast.points.at(-1).keepCost;
+  const charge = (tokens, cached, output = 0) =>
+    (tokens * rate[cached ? 1 : 2] + output * rate[3]) / 1e6;
+  let best = { action: "continue", afterRequests: null, atContextTokens: null,
+    afterAddedTokens: null, cost: baselineCost, savings: 0, baselineCost,
+    horizonRequests, reason: "no-savings" };
+  for (let afterRequests = 0; afterRequests < horizonRequests; afterRequests++) {
+    let size = context, cost = 0;
+    let rewritten = false;
+    for (let i = 0; i <= horizonRequests; i++) {
+      if (i === afterRequests) {
+        const summary = Math.ceil(size * retained);
+        // After a request, its entire input has just been cached. Compacting now
+        // instead uses the existing prefix's age, before the modeled resume delay.
+        const warm = ttlMs > 0 && (i > 0 || ageMs < ttlMs);
+        cost += charge(size, warm, summary);
+        size = summary;
+        rewritten = true;
+      }
+      if (i === horizonRequests) break;
+      const warm = !rewritten && ttlMs > 0 &&
+        (i === 0 ? ageMs + resumeMs < ttlMs : gapMs < ttlMs);
+      cost += charge(size, warm) + charge(added, false);
+      size += added;
+      rewritten = false;
+    }
+    if (cost < best.cost - 1e-12) best = { action: afterRequests ? "wait" : "now",
+      afterRequests, atContextTokens: context + afterRequests * added,
+      afterAddedTokens: afterRequests * added, cost, savings: baselineCost - cost,
+      baselineCost, horizonRequests,
+      reason: afterRequests ? "after-request" : "before-resume" };
+  }
+  return best;
+}
+
 export function forecastModel(thread, rates = {}) {
   const selected = thread.model;
   const observed = thread.provider === "codex" ? thread.resolvedModel

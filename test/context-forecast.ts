@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { forecastContext, forecastModel } from "../public/context-forecast.js";
+import { forecastContext, forecastModel, recommendCompaction } from "../public/context-forecast.js";
 
 const scenario = { context: 100000, retained: 0.2, added: 2000, requests: 20,
   ttlMs: 1800000, ageMs: 60000, resumeMs: 0, gapMs: 60000, rate: [2, 0.1, 2.5, 10] };
@@ -41,3 +41,58 @@ assert.equal(forecastModel({ model: "gpt-6.1-sol-2026-10-17" }, rates).rate, sce
 assert.equal(forecastModel({ provider: "claude", model: "sonnet", lastRun: { model: "claude-sonnet-5-5" } }, rates).rate, scenario.rate);
 assert.equal(forecastModel({ provider: "claude", model: "opus", lastRun: { model: "claude-sonnet-5-5" } }, rates).rate, undefined);
 console.log("PASS context forecast: warm/stale cache, compaction overhead, delayed resume, gaps, break-even, unknown prices and window limits");
+
+// The horizon is future work, not extra work unlocked by a smaller context.
+const recommendation = recommendCompaction({ ...scenario, resumeMs: 3600000 });
+assert.equal(recommendation.action, "now");
+assert.equal(recommendation.afterRequests, 0);
+assert.equal(recommendation.atContextTokens, scenario.context);
+assert.equal(recommendation.horizonRequests, scenario.requests);
+assert.ok(recommendation.savings > 0);
+assert.equal(recommendation.baselineCost - recommendation.cost, recommendation.savings);
+assert.equal(recommendation.cost,
+  forecastContext({ ...scenario, resumeMs: 3600000 })!.points.at(-1)!.compactCost);
+assert.equal(recommendCompaction(scenario).action, "continue");
+assert.equal(recommendCompaction({ ...scenario, requests: 1 }).action, "continue");
+assert.equal(recommendCompaction({ ...scenario, retained: 1 }).action, "continue");
+assert.equal(recommendCompaction({ ...scenario, rate: undefined }).action, "unknown");
+assert.equal(recommendCompaction({ ...scenario, context: 0 }).action, "unknown");
+assert.equal(recommendCompaction({ ...scenario, maxContext: scenario.context }).action, "unknown");
+const limitedRecommendation = recommendCompaction({ ...scenario, maxContext: scenario.context + 4000 });
+assert.equal(limitedRecommendation.horizonRequests, 2);
+assert.equal(limitedRecommendation.action, "continue");
+// With no cache discount and no output charge, earlier reduction always saves more.
+const uncached = recommendCompaction({ ...scenario, rate: [2, 2.5, 2.5, 0] });
+assert.equal(uncached.action, "now");
+assert.equal(uncached.cost,
+  forecastContext({ ...scenario, rate: [2, 2.5, 2.5, 0] })!.points.at(-1)!.compactCost);
+// Cold prefixes and long request gaps must use fresh-input prices on both paths.
+const coldScenario = { ...scenario, ageMs: Infinity, gapMs: 3600000,
+  rate: [2, 0.1, 2.5, 2] };
+const coldRecommendation = recommendCompaction(coldScenario);
+assert.equal(coldRecommendation.action, "wait");
+assert.equal(coldRecommendation.afterRequests, 1);
+assert.equal(coldRecommendation.atContextTokens, 102000);
+const afterFirstRequest = forecastContext({ ...coldScenario, context: 102000,
+  requests: 19, ageMs: 0, resumeMs: coldScenario.gapMs })!;
+const expectedDeferred = 102000 * coldScenario.rate[2] / 1e6 +
+  afterFirstRequest.points.at(-1)!.compactCost!;
+assert.ok(Math.abs(coldRecommendation.cost! - expectedDeferred) < 1e-12);
+assert.ok(coldRecommendation.cost! < forecastContext(coldScenario)!.points.at(-1)!.compactCost!);
+console.log("PASS compaction recommendations: warm, stale, gaps, overhead, unknown prices and fixed horizon");
+
+// Independently compose existing forecast prefixes/suffixes for every candidate.
+for (const sample of [scenario, { ...scenario, resumeMs: 3600000 }, coldScenario,
+  { ...coldScenario, maxContext: 110000 }, { ...scenario, retained: 0.8 }]) {
+  const whole = forecastContext(sample)!;
+  const horizon = whole.points.length - 1;
+  const costs = [whole.points.at(-1)!.keepCost!];
+  for (let k = 0; k < horizon; k++) {
+    const suffix = forecastContext({ ...sample, context: sample.context + k * sample.added,
+      requests: horizon - k, maxContext: Infinity,
+      ageMs: k ? 0 : sample.ageMs,
+      resumeMs: k ? sample.gapMs : sample.resumeMs })!;
+    costs.push(whole.points[k].keepCost! + suffix.points.at(-1)!.compactCost!);
+  }
+  assert.ok(Math.abs(recommendCompaction(sample).cost! - Math.min(...costs)) < 1e-12);
+}
