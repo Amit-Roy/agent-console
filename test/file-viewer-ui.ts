@@ -167,9 +167,9 @@ try {
   await scriptFolder.click();
   await page.locator('.file-tree-entry').filter({hasText: 'nested.ts'}).waitFor();
   assert.equal(treeRequests.length, 2, 'directory fetched only when expanded');
-  await page.getByRole('button', {name: 'Performance', exact: true}).click();
+  await page.getByRole('button', {name: 'Info', exact: true}).click();
   assert.match(await page.locator('#file-viewer-performance').textContent() || '', /open.*ms total/);
-  await page.getByRole('button', {name: 'Performance', exact: true}).click();
+  await page.getByRole('button', {name: 'Info', exact: true}).click();
   await screenshot(page, 'file-viewer-desktop-dark.png');
   await page.emulateMedia({colorScheme: 'light'});
   await screenshot(page, 'file-viewer-desktop-light.png');

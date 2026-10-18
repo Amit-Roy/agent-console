@@ -61,10 +61,15 @@ export function createFileViewer(apiFetch, report = () => {}) {
   source.type = "button"; source.hidden = true; source.setAttribute("aria-pressed", "false"); source.title = "Show Markdown source";
   const files = el("button", "btn sm ghost", "Files");
   files.type = "button"; files.setAttribute("aria-label", "Show files"); files.setAttribute("aria-controls", "file-viewer-tree");
-  const timings = el("button", "btn sm ghost", "Performance");
+  const timings = el("button", "btn sm ghost", "Info");
   timings.type = "button"; timings.setAttribute("aria-expanded", "false"); timings.setAttribute("aria-controls", "file-viewer-performance");
   toolbar.append(files, source, wrap, copy, timings, position);
   const performanceDetails = el("div", "file-viewer-performance"); performanceDetails.id = "file-viewer-performance"; performanceDetails.hidden = true;
+  const infoList = el("dl", "file-viewer-info"), timingList = el("div", "file-viewer-timings");
+  performanceDetails.append(infoList, timingList);
+  const linkPill = el("span", "file-viewer-readonly", "Symlink"); linkPill.hidden = true;
+  const outsidePill = el("span", "file-viewer-readonly file-viewer-warn", "Outside repo"); outsidePill.hidden = true;
+  const extra = el("span"); meta.append(linkPill, outsidePill, extra);
   const workspace = el("div", "file-viewer-workspace");
   const sidebar = el("nav", "file-viewer-tree"); sidebar.id = "file-viewer-tree"; sidebar.setAttribute("aria-label", "Project files");
   const treeTitle = el("div", "file-tree-title", "Project files");
@@ -91,9 +96,21 @@ export function createFileViewer(apiFetch, report = () => {}) {
     metrics.push(safe); if (metrics.length > 30) metrics.shift();
     report(safe); updatePerformance();
   }
+  const sizeText = n => n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(1)} MB`;
+  const agoText = ms => { const s = Math.max(0, (Date.now() - ms) / 1000); return s < 60 ? "just now" : s < 3600 ? `${Math.floor(s / 60)} min ago` : s < 86400 ? `${Math.floor(s / 3600)} h ago` : `${Math.floor(s / 86400)} d ago`; };
+  function applyMeta(file) {
+    const m = file?.meta, chain = m?.symlink || [];
+    linkPill.hidden = !chain.length; outsidePill.hidden = !chain.some(hop => !hop.inside);
+    extra.textContent = m ? `· ${sizeText(m.size)} · ${agoText(m.mtime)}` : "";
+    const rows = [];
+    if (m) rows.push(["Modified", new Date(m.mtime).toLocaleString()], ["Size", `${m.size.toLocaleString()} bytes`], ["Mode", m.mode], ["Owner uid", String(m.uid)], ["Links", String(m.nlink)]);
+    if (chain.length) rows.push(["Opened as", chain[0].path], ["Target", chain.at(-1).to], ["Hops", String(chain.length)], ["Real path", file.path]);
+    if (file?.path) path.textContent = chain.length ? `${chain[0].path} → ${chain.at(-1).to}` : file.path;
+    infoList.replaceChildren(...rows.flatMap(([k, v]) => [el("dt", "", k), el("dd", "", v)]));
+  }
   function updatePerformance() {
     if (performanceDetails.hidden) return;
-    performanceDetails.replaceChildren(...metrics.slice(-3).map(m => el("div", "", `${m.kind.replace("viewer_", "")} · ${Math.round(m.total_ms || 0)} ms total · ${Math.round(m.roundtrip_ms || 0)} ms network · ${Math.round(m.server_ms || 0)} ms server · ${Math.round(m.decode_ms || 0)} ms decode · ${Math.round(m.module_ms || 0)} ms module · ${Math.round(m.render_ms || 0)} ms drawing · ${Math.round(m.bytes || 0).toLocaleString()} bytes`)));
+    timingList.replaceChildren(...metrics.slice(-3).map(m => el("div", "", `${m.kind.replace("viewer_", "")} · ${Math.round(m.total_ms || 0)} ms total · ${Math.round(m.roundtrip_ms || 0)} ms network · ${Math.round(m.server_ms || 0)} ms server · ${Math.round(m.decode_ms || 0)} ms decode · ${Math.round(m.module_ms || 0)} ms module · ${Math.round(m.render_ms || 0)} ms drawing · ${Math.round(m.bytes || 0).toLocaleString()} bytes`)));
   }
   timings.onclick = () => { performanceDetails.hidden = !performanceDetails.hidden; timings.setAttribute("aria-expanded", String(!performanceDetails.hidden)); updatePerformance(); };
   function showTree() {
@@ -240,7 +257,9 @@ export function createFileViewer(apiFetch, report = () => {}) {
         const item = el("div", "file-tree-item");
         const button = el("button", "file-tree-entry"); button.type = "button"; button.dataset.path = entry.path; button.title = entry.name;
         button.style.paddingLeft = `${12 + depth * 14}px`;
-        button.append(el("span", "file-tree-symbol", entry.kind === "directory" ? "▸" : "·"), el("span", "file-tree-name", entry.name));
+        if (entry.link) button.title = `${entry.name} → ${entry.link}`;
+        button.append(el("span", "file-tree-symbol", entry.kind === "directory" ? "▸" : entry.link ? "↪" : "·"), el("span", "file-tree-name", entry.name));
+        if (entry.link) button.append(el("span", "file-tree-link", `→ ${entry.link}`));
         item.append(button); fragment.append(item);
         if (entry.kind === "directory") {
           button.setAttribute("aria-expanded", "false");
@@ -301,7 +320,7 @@ export function createFileViewer(apiFetch, report = () => {}) {
     content = ""; currentTextFile = null; source.hidden = true; copy.disabled = true; wrap.disabled = true;
     title.textContent = request.ref.path.split("/").at(-1) || request.ref.path;
     path.textContent = request.ref.imageUrl ? "Attached image" : request.ref.path; path.title = path.textContent;
-    status.textContent = "Loading…"; position.textContent = "";
+    status.textContent = "Loading…"; position.textContent = ""; applyMeta(null);
     error.hidden = true; body.hidden = false; body.replaceChildren(); body.classList.remove("is-plain", "is-image", "is-markdown");
     body.scrollTop = 0; body.scrollLeft = 0;
     dialog.setAttribute("aria-busy", "true");
@@ -322,14 +341,14 @@ export function createFileViewer(apiFetch, report = () => {}) {
         if (typeof file.path !== "string") throw new Error("The server returned an invalid file.");
         current.ref.path = file.path;
         if (file.kind === "image") {
-          imageStats = await renderImage(file.url, file.name, token, controller.signal);
+          imageStats = await renderImage(file.url, file.name, token, controller.signal); applyMeta(file);
           receivedAt = imageStats.receivedAt || receivedAt; decodedAt = imageStats.readyAt || performance.now();
           roundtrip_ms += imageStats.imageNetwork || 0; decode_ms += imageStats.imageDecode || 0;
         }
         else {
           if (typeof file.content !== "string") throw new Error("The server returned an invalid file.");
           currentTextFile = { file, ref: request.ref }; markdownSource = !!request.ref.line;
-          renderFile(file, request.ref, token);
+          renderFile(file, request.ref, token); applyMeta(file);
         }
       }
       if (token !== generation || !dialog.open) return;
