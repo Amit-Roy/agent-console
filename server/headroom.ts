@@ -2,10 +2,10 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { privacyEnv } from "./privacy.ts";
 import { diagnostic, resource, ResourceGuard } from "./headroom-diagnostics.ts";
 
-// Headroom is opt-in: its CPU/RSS guard is a circuit breaker, not an OS quota.
+// Headroom defaults on: its CPU/RSS guard is a circuit breaker, not an OS quota.
 const PORT = Number(process.env.AGENT_CONSOLE_HEADROOM_PORT) || 8790;
 const URL_ = `http://127.0.0.1:${PORT}`;
-const enabled = () => process.env.AGENT_CONSOLE_HEADROOM === "1";
+const enabled = () => process.env.AGENT_CONSOLE_HEADROOM !== "0";
 let child: ChildProcess | undefined;
 let healthy = false;
 let attempts = 0;

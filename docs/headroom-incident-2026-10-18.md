@@ -1,6 +1,6 @@
 # Headroom resource incident — 2026-10-18
 
-Agent Console now leaves Headroom off unless explicitly enabled. The private local Console configuration also sets `AGENT_CONSOLE_HEADROOM=0`. Claude can use its normal direct provider connection without this optional proxy.
+Headroom defaults on at the user’s request, with the resource protections below. `AGENT_CONSOLE_HEADROOM=0` explicitly disables it. The temporary local disable override was removed. Claude can use its normal direct provider connection without this optional proxy.
 
 The live Console also inherited its local `ANTHROPIC_BASE_URL` from a parent process. Disabling startup alone would leave that stale route in child environments. Disabled/unhealthy managed-proxy URLs are now removed; explicitly configured external endpoints are preserved.
 
@@ -22,13 +22,13 @@ The running proxy was lowered to nice priority 15 during investigation. It was n
 
 ## Corrective policy
 
-Headroom remains an optional experiment. Explicit opt-in is required. Future opt-in starts use one server worker, one compression worker, bounded upstream concurrency, and capped numerical-library threads. Code-aware and Kompress compression, including the Kompress fallback, are disabled in this conservative configuration. Rate limiting remains enabled.
+Headroom defaults on with an explicit opt-out. Starts use one server worker, one compression worker, bounded upstream concurrency, and capped numerical-library threads. Code-aware and Kompress compression, including the Kompress fallback, are disabled in this conservative configuration. Rate limiting remains enabled.
 
 Diagnostics are private, bounded metadata logs. Process lifecycle and resource measurements are useful; request bodies, prompts, responses, authorization headers, and verbatim child output must not be recorded. Output pipes are drained without preserving their contents.
 
 The diagnostics file is `$AGENT_CONSOLE_RUN/headroom-diagnostics.jsonl`, or `~/.cache/agent-console/headroom-diagnostics.jsonl` by default. It rotates once, with each file capped at 256 KiB and mode 0600. The owned-process circuit breaker stops the proxy after RSS exceeds 1024 MiB, or CPU exceeds 80% of one core for 30 seconds. It remains disabled until the Console process restarts. Launch failures are limited to three attempts per Console process.
 
-Application resource monitoring is a circuit breaker, not an operating-system CPU or memory quota. Some scoped provider helpers can invoke SDK compression outside the proxy executor, so a worker flag alone cannot guarantee bounded CPU use. Keep Headroom disabled until its benefit and resource behavior are verified under representative load.
+Application resource monitoring is a circuit breaker, not an operating-system CPU or memory quota. Some scoped provider helpers can invoke SDK compression outside the proxy executor, so a worker flag alone cannot guarantee bounded CPU use. Representative-load benefit and resource behavior remain unverified; the safety circuit breaker stays enabled.
 
 Increasing `HEADROOM_WORKERS` is not the recommended mitigation: it increases server processes and can multiply memory and compression concurrency.
 

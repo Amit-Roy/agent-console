@@ -23,7 +23,7 @@ process.env.PATH = `${scratch}:${process.env.PATH}`;
 process.env.CAPTURE = path.join(scratch, "capture");
 process.env.AGENT_CONSOLE_RUN = path.join(scratch, "run");
 process.env.HEADROOM_LOG_MESSAGES = "1";
-delete process.env.AGENT_CONSOLE_HEADROOM;
+process.env.AGENT_CONSOLE_HEADROOM = "0";
 process.env.AGENT_CONSOLE_HEADROOM_PORT = String(port);
 const { headroom } = await import("../server/headroom.ts");
 try {
@@ -41,7 +41,8 @@ try {
   assert.equal(fs.existsSync(process.env.CAPTURE), false);
   headroom.stop();
   await new Promise<void>((resolve) => external.close(() => resolve()));
-  process.env.AGENT_CONSOLE_HEADROOM = "1";
+  delete process.env.AGENT_CONSOLE_HEADROOM;
+  assert.equal(headroom.state().enabled, true, "Headroom defaults on without an override");
   assert.equal(headroom.url(), undefined);
   const starting = headroom.start();
   await starting;
@@ -80,7 +81,7 @@ try {
   fs.writeFileSync(`${log}.1`, Buffer.alloc(300 * 1024));
   diagnostic("stop");
   for (const file of fs.readdirSync(process.env.AGENT_CONSOLE_RUN)) assert.ok(fs.statSync(path.join(process.env.AGENT_CONSOLE_RUN, file)).size <= 256 * 1024);
-  console.log("PASS Headroom default-off, delayed startup, bounded private diagnostics, priority/worker caps, and resource guard");
+  console.log("PASS Headroom default-on, explicit opt-out, delayed startup, bounded private diagnostics, priority/worker caps, and resource guard");
 } finally {
   await headroom.stop();
   fs.rmSync(scratch, { recursive: true, force: true });
