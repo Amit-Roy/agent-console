@@ -19,7 +19,7 @@ export function acodeConfig() {
   return { endpoint: url.origin, port };
 }
 
-export function acodePublicApp(bridge: { exchange: RequestHandler; read: RequestHandler; save: RequestHandler }, root: string) {
+export function acodePublicApp(bridge: { exchange: RequestHandler; read: RequestHandler; save: RequestHandler; tree: RequestHandler; openFile: RequestHandler }, root: string) {
   const app = express();
   app.disable("x-powered-by");
   app.use((req, res, next) => {
@@ -42,6 +42,8 @@ export function acodePublicApp(bridge: { exchange: RequestHandler; read: Request
   });
   app.get("/acode-plugin.zip", (_req, res) => res.download(path.join(root, "public", "acode-plugin.zip"), "agent-console-acode.zip"));
   app.post("/api/acode/exchange", express.json({ limit: "2kb" }), bridge.exchange);
+  app.get("/api/acode/tree", bridge.tree);
+  app.post("/api/acode/open", express.json({ limit: "12kb" }), bridge.openFile);
   app.get("/api/acode/file", bridge.read);
   app.put("/api/acode/file", express.json({ limit: "7mb" }), bridge.save);
   app.use((_req, res) => { res.status(404).json({ error: "Not found." }); });

@@ -5,6 +5,7 @@ fetch("/api/acode/setup", { cache: "no-store" }).then(async response => {
   if (!setup.available || !setup.plugin) throw new Error("Acode editing is not configured on this server.");
   const download = document.getElementById("download");
   download.href = setup.plugin;
+  download.textContent = `Download Agent Console ${setup.version || ""} plugin ZIP`;
   download.removeAttribute("aria-disabled");
-  status.textContent = "After installation, Edit opens files directly in Acode.";
+  status.textContent = "Version 1.1.0 adds the remote project tree. If already installed, update the plugin with this ZIP.";
 }).catch(error => { status.textContent = error.message; });

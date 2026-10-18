@@ -19,13 +19,13 @@ try {
   }, endpoint);
   assert.equal(result.status, 401, "Acode can read bridge errors after a real browser preflight.");
   assert.match(result.body.error, /ticket/i);
-  for (const origin of ["https://localhost", "null"]) {
-    const preflight = await fetch(endpoint + "/api/acode/file", { method: "OPTIONS", headers: { Origin: origin, "Access-Control-Request-Method": "PUT", "Access-Control-Request-Headers": "authorization,content-type" } });
+  for (const origin of ["https://localhost", "null"]) for (const route of ["file", "tree", "open"]) {
+    const preflight = await fetch(endpoint + "/api/acode/" + route, { method: "OPTIONS", headers: { Origin: origin, "Access-Control-Request-Method": route === "file" ? "PUT" : route === "open" ? "POST" : "GET", "Access-Control-Request-Headers": "authorization,content-type" } });
     assert.equal(preflight.headers.get("access-control-allow-origin"), origin);
     assert.match(preflight.headers.get("access-control-allow-headers") || "", /authorization/i);
     assert.match(preflight.headers.get("access-control-allow-methods") || "", /PUT/);
   }
   const denied = await fetch(endpoint + "/api/acode/exchange", { method: "OPTIONS", headers: { Origin: "https://evil.example", "Access-Control-Request-Method": "POST" } });
   assert.equal(denied.headers.get("access-control-allow-origin"), null);
-  console.log("PASS public Acode CORS: browser preflight and POST, null origin, bearer preflight, hostile origin denied.");
+  console.log("PASS public Acode CORS: browser preflight and POST, null origin, file/tree/open bearer preflights, hostile origin denied.");
 } finally { await browser.close(); }

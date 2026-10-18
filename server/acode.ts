@@ -1,16 +1,18 @@
 import { constants, fstatSync, lstatSync, realpathSync, readSync, renameSync, unlinkSync } from "node:fs";
-import { open, realpath, lstat } from "node:fs/promises";
+import { open, realpath, lstat, opendir } from "node:fs/promises";
 import { randomBytes, createHash } from "node:crypto";
 import path from "node:path";
 import type { RequestHandler } from "express";
-import { MAX_VIEW_BYTES, ViewError, reachable, scopedPath, viewerScope, type Lookup } from "./files.ts";
+import { MAX_VIEW_BYTES, ViewError, reachable, scopedPath, viewerScope, sensitive, type Lookup } from "./files.ts";
 
 const TICKET_MS = 60_000;
 const SESSION_MS = 8 * 60 * 60_000;
 const MAX_GRANTS = 1000;
 const token = () => randomBytes(32).toString("base64url");
 const revision = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
-type Grant = { cwd: string; requested: string; threadId?: string; target: string; candidate: string; dev: number; ino: number; expiresAt: number };
+type Project = { root: string; dev: number; ino: number; expiresAt: number };
+const inside = (root: string, target: string) => target === root || target.startsWith(root + path.sep);
+type Grant = { project?: Project; cwd: string; requested: string; threadId?: string; target: string; candidate: string; dev: number; ino: number; expiresAt: number };
 
 function textContent(bytes: Buffer) {
   if (bytes.length > MAX_VIEW_BYTES) throw new ViewError(413, "File exceeds the edit size limit.");
@@ -27,8 +29,9 @@ function textContent(bytes: Buffer) {
 export function createAcodeBridge(lookup: Lookup, now: () => number = Date.now) {
   const tickets = new Map<string, Grant>();
   const sessions = new Map<string, Grant>();
+  const projects = new Map<string, Project>();
   const locks = new Map<string, Promise<unknown>>();
-  function prune(map: Map<string, Grant>) {
+  function prune<T extends { expiresAt: number }>(map: Map<string, T>) {
     for (const [key, grant] of map) if (grant.expiresAt <= now()) map.delete(key);
     while (map.size >= MAX_GRANTS) map.delete(map.keys().next().value!);
   }
@@ -42,6 +45,7 @@ export function createAcodeBridge(lookup: Lookup, now: () => number = Date.now) 
     };
   }
   async function checked(grant: Grant, write = false) {
+    if (grant.project) await checkedProject(grant.project);
     const resolved = await scopedPath(grant.cwd, grant.requested, grant.threadId);
     if (resolved.target !== grant.target || resolved.candidate !== grant.candidate || (await lstat(resolved.candidate)).isSymbolicLink()) throw new ViewError(409, "File path has changed. Reopen the file.");
     const handle = await open(grant.target, (write ? constants.O_RDWR : constants.O_RDONLY) | constants.O_NOFOLLOW | constants.O_NONBLOCK);
@@ -68,6 +72,94 @@ export function createAcodeBridge(lookup: Lookup, now: () => number = Date.now) 
     if (!grant || grant.expiresAt <= now()) { if (match) sessions.delete(match[1]); throw new ViewError(401, "Edit session expired. Reopen the file."); }
     return grant;
   }
+  async function projectRoot(grant: Grant) {
+    const cwd = await realpath(grant.cwd);
+    let root = path.dirname(grant.target);
+    if (inside(cwd, grant.target)) {
+      while (true) {
+        if (await lstat(path.join(root, ".git")).then(() => true, () => false)) break;
+        if (root === cwd) break;
+        root = path.dirname(root);
+      }
+    }
+    const info = await lstat(root);
+    return { root, dev: info.dev, ino: info.ino, expiresAt: now() + SESSION_MS };
+  }
+  async function project(req: Parameters<RequestHandler>[0]) {
+    const match = /^Bearer ([A-Za-z0-9_-]{43})$/.exec(req.get("Authorization") || "");
+    const grant = match ? projects.get(match[1]) : undefined;
+    if (!grant || grant.expiresAt <= now()) {
+      if (match) projects.delete(match[1]);
+      throw new ViewError(401, "Project session expired. Reopen the file.");
+    }
+    await checkedProject(grant);
+    return grant;
+  }
+  async function checkedProject(grant: Project) {
+    const info = await lstat(grant.root);
+    if (!info.isDirectory() || info.isSymbolicLink() || info.dev !== grant.dev || info.ino !== grant.ino || await realpath(grant.root) !== grant.root) throw new ViewError(409, "Project folder changed. Reopen the file.");
+    return grant;
+  }
+  async function projectPath(grant: Project, requested: unknown, directory = false) {
+    if (typeof requested !== "string" || requested.length > 8192 || requested.includes("\0") || path.isAbsolute(requested) || requested.split(/[\\/]/).includes("..") || (!directory && !requested)) throw new ViewError(400, "Choose a valid project path.");
+    const candidate = path.resolve(grant.root, requested);
+    if (!inside(grant.root, candidate) || sensitive(candidate) || candidate.split(path.sep).some(part => part.startsWith(".agent-console-edit-"))) throw new ViewError(403, "This path cannot be opened.");
+    // Reject every symlink component, including links that stay within the project.
+    let current = grant.root;
+    for (const part of path.relative(grant.root, candidate).split(path.sep).filter(Boolean)) {
+      current = path.join(current, part);
+      if (sensitive(current) || path.basename(current).startsWith(".agent-console-edit-")) throw new ViewError(403, "This path cannot be opened.");
+      if ((await lstat(current)).isSymbolicLink()) throw new ViewError(403, "Symbolic links cannot be opened.");
+    }
+    if (await realpath(candidate) !== candidate) throw new ViewError(403, "This path cannot be opened.");
+    return candidate;
+  }
+  const tree = handler(async (req, res) => {
+    const grant = await project(req);
+    const requested = req.query.path ?? "";
+    const target = await projectPath(grant, requested, true);
+    const rawCursor = req.query.cursor ?? "0";
+    if (typeof rawCursor !== "string" || !/^\d+$/.test(rawCursor) || Number(rawCursor) > 100000) throw new ViewError(400, "Invalid folder cursor.");
+    const cursor = Number(rawCursor);
+    const handle = await open(target, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+    try {
+      const opened = await realpath(`/proc/self/fd/${handle.fd}`);
+      if (opened !== target || !inside(grant.root, opened)) throw new ViewError(409, "Folder changed. Reopen the file.");
+      await project(req);
+      const directory = await opendir(`/proc/self/fd/${handle.fd}`);
+      const entries: { name: string; path: string; type: "file" | "directory" }[] = [];
+      let offset = 0; let scanned = 0; let next: number | null = null;
+      try {
+        while (offset < cursor) { if (!await directory.read()) break; offset++; }
+        while (scanned < 1000 && entries.length < 200 && offset < 100000) {
+          const entry = await directory.read();
+          if (!entry) break;
+          offset++; scanned++;
+          if (entry.isSymbolicLink() || (!entry.isFile() && !entry.isDirectory())) continue;
+          const absolute = path.join(target, entry.name);
+          if (sensitive(absolute) || entry.name.startsWith(".agent-console-edit-")) continue;
+          entries.push({ name: entry.name, path: path.relative(grant.root, absolute), type: entry.isDirectory() ? "directory" : "file" });
+        }
+        if (offset < 100000 && (scanned === 1000 || entries.length === 200)) next = offset;
+      } finally { await directory.close(); }
+      if (await realpath(`/proc/self/fd/${handle.fd}`) !== target) throw new ViewError(409, "Folder changed. Reopen the file.");
+      res.json({ path: path.relative(grant.root, target), entries, next });
+    } finally { await handle.close(); }
+  });
+  const openFile = handler(async (req, res) => {
+    const projectGrant = await project(req);
+    const target = await projectPath(projectGrant, req.body?.path);
+    const info = await lstat(target);
+    if (!info.isFile()) throw new ViewError(415, "Only regular text files can be edited.");
+    const grant: Grant = { project: projectGrant, cwd: projectGrant.root, requested: target, target, candidate: target, dev: info.dev, ino: info.ino, expiresAt: now() + SESSION_MS };
+    const file = await checked(grant);
+    try {
+      await project(req);
+      if (!inside(projectGrant.root, await realpath(`/proc/self/fd/${file.handle.fd}`))) throw new ViewError(403, "This file is outside the project.");
+      prune(sessions); const session = token(); sessions.set(session, grant);
+      res.json({ token: session, expiresAt: grant.expiresAt, name: path.basename(target), path: target, content: file.content, revision: file.revision });
+    } finally { await file.handle.close(); }
+  });
   const create = handler(async (req, res) => {
     const scope = viewerScope(req.query, lookup);
     if (typeof req.query.path !== "string" || !req.query.path || req.query.path.includes("\0")) throw new ViewError(400, "Choose a valid file path.");
@@ -86,7 +178,8 @@ export function createAcodeBridge(lookup: Lookup, now: () => number = Date.now) 
     const file = await checked(grant); await file.handle.close();
     prune(sessions); const session = token(); const expiresAt = now() + SESSION_MS;
     sessions.set(session, { ...grant, expiresAt });
-    res.json({ token: session, expiresAt, name: path.basename(grant.target), path: grant.target, content: file.content, revision: file.revision });
+    prune(projects); const projectToken = token(); const projectGrant = await projectRoot(grant); projects.set(projectToken, projectGrant);
+    res.json({ project: { token: projectToken, root: projectGrant.root, name: path.basename(projectGrant.root) }, token: session, expiresAt, name: path.basename(grant.target), path: grant.target, content: file.content, revision: file.revision });
   });
   const read = handler(async (req, res) => {
     const grant = session(req); const file = await checked(grant);
@@ -145,5 +238,5 @@ export function createAcodeBridge(lookup: Lookup, now: () => number = Date.now) 
     locks.set(key, current);
     try { await current; } finally { if (locks.get(key) === current) locks.delete(key); }
   });
-  return { create, exchange, read, save };
+  return { create, exchange, read, save, tree, openFile };
 }

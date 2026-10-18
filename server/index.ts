@@ -168,7 +168,7 @@ app.post("/api/acode/edit", sameOrigin, (req, res, next) => {
 app.get("/acode-setup", (_req, res) => res.sendFile(path.join(ROOT, "public", "acode-setup.html")));
 app.get("/api/acode/setup", (_req, res) => {
   res.setHeader("Cache-Control", "no-store");
-  res.json({ available: !!acodeSettings, plugin: acodeSettings ? `${acodeSettings.endpoint}/acode-plugin.zip` : null });
+  res.json({ available: !!acodeSettings, version: "1.1.0", plugin: acodeSettings ? `${acodeSettings.endpoint}/acode-plugin.zip` : null });
 });
 app.get("/api/file-image", fileViewer(id => threads.get(id), true));
 app.get("/api/file-media", fileMedia(id => threads.get(id)));

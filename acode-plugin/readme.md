@@ -1,6 +1,6 @@
 # Agent Console for Acode
 
-Open a workspace file in Acode by tapping **Edit** in Agent Console. Save in Acode to write changes back to the workspace. No SSH or SFTP setup is required.
+Open a workspace file in Acode by tapping **Edit** in Agent Console. Save in Acode to write changes back to the workspace. The project folder appears in Acode’s built-in Files sidebar. Expand folders to browse, then tap a text file to edit it. No SSH or SFTP setup is required.
 
 ## Install once
 
@@ -13,9 +13,11 @@ Android may ask permission to open Acode. The bridge requires an Acode build wit
 
 ## Saving
 
-The plugin uses HTTPS with short-lived access scoped to the selected file. Access tokens stay in memory and are never stored in plugin settings. A server revision prevents saves from overwriting changes made elsewhere. If a save reports a conflict, keep the Acode tab open and compare your changes with the workspace version. If access expires, tap **Edit** again to refresh access without replacing the open tab's edits.
+The plugin uses HTTPS with short-lived access scoped to the project folder. Folder listings load only when expanded. Files receive their own revision-checked editing access when opened. Creating, deleting, moving, and renaming files are not supported. Access tokens stay in memory and are never stored in plugin settings. A server revision prevents saves from overwriting changes made elsewhere. If a save reports a conflict, keep the Acode tab open and compare your changes with the workspace version. If access expires, tap **Edit** again to refresh access without replacing the open tab's edits.
 
-Keep Acode open while editing. Bridge tabs are not restored after restarting Acode; save changes before closing the app.
+If you installed version 1.0.0, install the current ZIP once to enable project folders. Older Agent Console servers still open individual files.
+
+Keep Acode open while editing. Project mounts and bridge tabs are not restored after restarting Acode; save changes before closing the app.
 
 ## Build
 

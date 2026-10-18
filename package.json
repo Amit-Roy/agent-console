@@ -28,7 +28,7 @@
     "test:archive": "node test/archive-ui.ts",
     "test:rich": "node test/rich-render-ui.ts",
     "test:files": "node test/latency.ts && node test/files.ts && node test/file-viewer-ui.ts",
-    "test:acode": "node test/acode.ts && node test/acode-plugin.ts && node test/acode-ui.ts",
+    "test:acode": "node test/acode.ts && node test/acode-tree.ts && node test/acode-plugin.ts && node test/acode-ui.ts",
     "package:acode": "python3 scripts/package-acode.py",
     "vendor": "node scripts/vendor.mjs"
   },
