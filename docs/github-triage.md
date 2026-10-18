@@ -8,9 +8,9 @@ Each item receives one effort label and one priority label. Existing labels outs
 
 | Label | Meaning |
 | --- | --- |
-| `Eff: Trivial` | A small, isolated change with a clear solution and low risk. |
-| `Eff: BAU` | Standard implementation work with a clear direction, possibly across several files. |
-| `Eff: Deep` | Cross-cutting work, uncertain requirements, architecture, or substantial investigation. |
+| `Eff: Trivial` | Estimated generated tokens at or below the historical lower tercile. |
+| `Eff: BAU` | Estimated generated tokens between the historical tercile cutoffs. |
+| `Eff: Deep` | Estimated generated tokens at or above the historical upper tercile. |
 | `Pri: P0` | A confirmed current outage, data loss, or active security incident. |
 | `Pri: P1` | Work that unblocks delivery, improves essential reliability, or substantially reduces babysitting. |
 | `Pri: P2` | A useful workflow enhancement that does not block delivery. |
@@ -34,11 +34,21 @@ The comment records these metrics and their evidence:
 
 Unknown values use visible planning assumptions: breadth 1, complexity 1, uncertainty 2, risk 1, impact 1, urgency 0, frequency 0. These assumptions are never presented as evidence.
 
-Effort points are breadth + complexity + uncertainty + risk. Trivial requires at most 2 points. Deep requires at least 8 points, breadth 3, complexity 3, or risk 3. Other work is BAU. Priority is P0 only for urgency 2, impact 3, and risk at least 2; P1 for impact 3 or impact at least 2 with frequency 2; P3 for impact 0; otherwise P2.
+Effort comes from measured delivery history rather than the model's scope scores. Let `y` be the direct agent's generated output tokens in one verified completed delivery run. Estimate `y_hat = median(y in selected historical runs)`. Trivial means `y_hat <= Q1/3(all historical y)`; Deep means `y_hat >= Q2/3(all historical y)`; otherwise BAU. If cutoffs coincide, use BAU. These terciles are an explicit relative-label policy, not a claim about human complexity or hours. Input tokens include repeated cached context, so they never set effort.
+
+The selector compares SQLite FTS5/BM25 request matches (`k=3` or `k=5`, one run per thread group) with the all-history median. It selects lexical matching only when older chronological tuning cases improve multiplicative output-token error. The newest 20% of entire thread groups are held out after selection. Older groups must finish before a target starts; revisions and later requests never leak across groups. Sparse history uses the global median and explicitly makes no issue-specific differentiation claim.
+
+Priority remains an explicit business policy: P0 requires urgency 2, impact 3, and risk at least 2; P1 requires impact 3 or impact at least 2 with frequency 2; P3 requires impact 0; otherwise P2. Historical token consumption does not establish business priority.
 
 Design is detailed for breadth 3, complexity 3, uncertainty 3, or risk at least 2. No separate design is needed only for breadth 0, complexity 0, uncertainty at most 1, and risk at most 1. Other work needs a light design. The book of work contains one to five proposed steps, each with an observable acceptance check.
 
-Token ranges are an **uncalibrated implementation planning heuristic**, not measured usage or a promise. Work units = 1 + effort points + proposed work steps. Estimated input is units × 4,000–12,000 tokens; output is units × 800–2,400. Ranges allow context rereads, retries, and tests, exclude the triage call, and show low confidence when any metric is unknown. Actual usage should calibrate these coefficients later.
+Input and output budgets report separate observed medians and P10–P90 sample ranges from the selected runs. These descriptive ranges are not confidence intervals. They cover an observed completed **direct-agent delivery run**, not a whole issue, prior failed runs, human hours, or unmeasured child-agent usage. Cache-read input is counted once. The comment reports sample size, thread groups, dates, source commits, method selection, held-out output-token MAE, multiplicative error, and range hit rate.
+
+`bin/github-triage calibrate` rebuilds a private dataset from normalized provider accounting and successful Git/RTK commit outputs. Each run must have an exact accounting identity, an original self-contained request, and a verified commit created within the run. Commit timestamps only check provenance; commit gaps, realized file counts, and added lines are never predictors. Completion availability can use an observed result timestamp or a conservative next-input/idle-metadata upper bound; it never implies active runtime. Unfinished or ambiguous records are excluded and counted.
+
+Calibration is stored in `~/.config/agent-console/triage-history.json`, mode 0600. Original requests stay local and never enter GitHub comments or the repository. The default production watchdog refreshes calibration every 24 hours; scratch workers do not scan production history. Refresh validates a candidate before replacing the last usable dataset. Missing or invalid calibration fails before any model call, without inventing an effort label or token budget. `AGENT_CONSOLE_TRIAGE_HISTORY` overrides the private artifact path; `AGENT_CONSOLE_DATA` selects source history for explicit calibration.
+
+See [the calibration method and initial evidence](triage-calibration.md).
 
 The comment uses an ownership marker, scorecard version, and source fingerprint. Retries update the same account-owned comment instead of adding duplicates. User comments are preserved. Changed issue text, PR commits, or a new scorecard version makes the report stale.
 
@@ -49,6 +59,7 @@ The worker is a separate process on port 7077. The Console keeps its existing au
 ```sh
 npm ci
 bin/github-triage configure Amit-Roy/agent-console https://github-webhook.nefro-dev-coder.duckdns.org/api/github/webhook
+bin/github-triage calibrate
 bin/github-triage start
 waitfor -t 15 port 7077
 bin/github-triage status

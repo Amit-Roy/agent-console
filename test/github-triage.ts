@@ -7,15 +7,17 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { createTriageService, TRIAGE_COMMENT_MARKER, TRIAGE_COMMENT_VERSION_MARKER, triageSourceMarker, type GithubRequest } from "../server/github-triage.ts";
 
+import { fixtureHistory } from "./fixtures/triage-history.ts";
+
 const secret = "test-only-webhook-secret-never-used-live";
 const repo = "Amit-Roy/agent-console";
 const directory = fs.mkdtempSync(path.join(os.tmpdir(), "ac-github-triage-"));
 let sequence = 0;
 const decision = { effort: "bau", priority: "p1", reason: "Fixture", model: "fixture/small", scorecard: {
-  version: 2, metrics: { breadth: { value: 1, evidence: "Fixture title" } }, unknowns: [],
+  version: 3, history: fixtureHistory, metrics: { breadth: { value: 1, evidence: "Fixture title" } }, unknowns: [],
   work: [{ step: "Implement fixture", check: "Fixture passes" }],
   design: { level: "light", reason: "One known surface" },
-  tokens: { input: [8000, 20000], output: [2000, 5000], workUnits: 2, formula: "fixed work units", confidence: "planning" },
+  tokens: { input: [8000, 20000], output: [2000, 5000], formula: fixtureHistory.formula, confidence: "low" },
 } } as const;
 const payload = (number = 1, kind = "issues", action = "opened") => ({
   action, repository: { full_name: repo }, [kind === "issues" ? "issue" : "pull_request"]: { number },
