@@ -28,7 +28,6 @@ export interface Thread {
   title: string;
   autoTitle?: boolean; // still carries the folder-name default: the first message renames it (cleared by a manual rename)
   titleLocked?: boolean; // the user chose this title (at creation or by renaming): the title helper never rewrites it. Threads from before this flag count as unlocked
-  prompts?: number; // user prompts sent so far (not auto nudges); every RETITLE_EVERY-th refreshes an auto-written title
   recent?: string[]; // text of the last user prompts, media-free and clipped: what the title helper reads
   cwd: string;
   mode: Mode;
@@ -73,7 +72,6 @@ const LOG_DIR = path.join(DATA_DIR, "logs");
 fs.mkdirSync(LOG_DIR, { recursive: true, mode: 0o700 });
 
 const IDLE_KILL_MS = 30 * 60 * 1000;
-const RETITLE_EVERY = 5; // keep an auto-written thread title fresh: rename after every 5th user prompt
 // Pre-warm: opening/focusing a thread spawns its idle agent so the first send skips the harness cold start. Spawning sends no
 // prompt and makes no model request (verified per harness). At most WARM_MAX unused processes; unused ones are reaped sooner.
 const WARM_MAX = Number(process.env.AGENT_CONSOLE_WARM_MAX ?? 2);
@@ -144,6 +142,7 @@ export class Threads {
   private idleCompactionTimers = new IdleCompactionTimers();
   private closed = false;
   private historyIndex = new HistoryIndex();
+  private titling = new Map<string, number>(); // per thread: the newest title request, so a slow older answer cannot overwrite it
   private threads = new Map<string, Thread>();
   private live = new Map<string, Live>();
   private turns = new Map<string, TurnState>(); // the turn in flight, per thread
@@ -448,6 +447,7 @@ export class Threads {
     this.emitQueue(id);
     this.idleCompactionTimers.cancel(id);
     this.threads.delete(id);
+    this.titling.delete(id);
     this.persist();
     fs.rmSync(path.join(LOG_DIR, `${id}.jsonl`), { force: true });
     fs.rmSync(path.join(DATA_DIR, "pi-sessions", id), { recursive: true, force: true });
@@ -835,17 +835,15 @@ export class Threads {
     if (!opts.auto) this.notePrompt(t, text);
   }
 
-  // Record a user prompt for naming. The first message with substance names the thread; after that every RETITLE_EVERY-th prompt
-  // refreshes any title the user did not choose. Media is not part of `text`, so an image-only message names nothing.
+  // Record a user prompt for naming. Every prompt with substance (re)names the thread unless the user chose its title. Media is not
+  // part of `text`, so an image-only message names nothing; "ok" / "hi" say nothing about the topic either.
   private notePrompt(t: Thread, text: string) {
     const clean = titleText(text);
-    if (clean) t.recent = [...(t.recent ?? []), clean].slice(-MAX_MESSAGES);
-    t.prompts = (t.prompts ?? 0) + 1;
-    // "ok" / "hi" say nothing about the topic: wait for a first message with substance
-    if (t.autoTitle && clean.split(" ").length >= 3) {
-      t.autoTitle = false; // one first-name attempt per thread, whatever the outcome
-      void this.retitle(t);
-    } else if (!t.autoTitle && !t.titleLocked && t.prompts % RETITLE_EVERY === 0) void this.retitle(t);
+    if (!clean) return;
+    t.recent = [...(t.recent ?? []), clean].slice(-MAX_MESSAGES);
+    if (clean.split(" ").length < 3) return;
+    if (t.autoTitle) t.autoTitle = false; // the folder-name default is gone, whatever the outcome
+    if (!t.titleLocked) void this.retitle(t);
   }
 
   private whileRunning(t: Thread, text: string, opts: { attachments?: unknown; mode?: "steer" | "queue"; questionAnswer?: true }) {
@@ -970,9 +968,10 @@ export class Threads {
 
   // Name the thread after its last two user messages. Never blocks the turn; on any failure the current title stays.
   private async retitle(t: Thread) {
-    const original = t.title;
+    const n = (this.titling.get(t.id) ?? 0) + 1;
+    this.titling.set(t.id, n);
     const title = await suggestTitle(t.recent ?? []).catch(() => undefined);
-    if (!title || !this.threads.has(t.id) || t.title !== original) return; // deleted, or the user renamed it meanwhile
+    if (!title || !this.threads.has(t.id) || t.titleLocked || this.titling.get(t.id) !== n) return; // deleted, renamed by the user, or a newer prompt is already being named
     t.title = title;
     this.touch(t);
   }
