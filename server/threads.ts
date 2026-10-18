@@ -44,7 +44,7 @@ export interface Thread {
   replay?: boolean; // forked from an agent with no native fork: the first message carries the earlier conversation as text
   replayLimit?: number; // explicit short handoff instead of native session or full text replay
   status: "idle" | "running";
-  waiting?: number; // number of live requests that need a user answer
+  waiting?: number; // unanswered blocking requests or persistent async questions
   operation?: "compact";
   lastCompactedAt?: number;
   archived?: number; // when it was archived: it leaves the working list until unarchived or sent to again
@@ -59,6 +59,7 @@ type Emit = (msg: unknown) => void;
 const THREADS_FILE = path.join(DATA_DIR, "threads.json");
 const COMMANDS_FILE = path.join(DATA_DIR, "commands.json");
 const QUEUES_FILE = path.join(DATA_DIR, "queues.json");
+const QUESTIONS_FILE = path.join(DATA_DIR, "questions.json");
 const LOG_DIR = path.join(DATA_DIR, "logs");
 fs.mkdirSync(LOG_DIR, { recursive: true, mode: 0o700 });
 
@@ -78,11 +79,12 @@ interface Queued {
   attachments: unknown; // [{id,n}] as sent by the browser; resolved when the message is actually sent
   revision: number;
   editing?: boolean;
+  questionAnswer?: true;
 }
 const attachList = (q: Queued): any[] => (Array.isArray(q.attachments) ? q.attachments : []);
 // One prompt from several queued messages. "[Image #n]" is numbered per message, so renumber to keep the references unambiguous.
-function mergeQueued(items: Queued[]): { text: string; attachments: unknown } {
-  if (items.length === 1) return { text: items[0].text, attachments: items[0].attachments };
+function mergeQueued(items: Queued[]): { text: string; attachments: unknown; questionAnswer?: true } {
+  if (items.length === 1) return { text: items[0].text, attachments: items[0].attachments, ...(items[0].questionAnswer ? { questionAnswer: true } : {}) };
   let next = 0;
   const attachments: any[] = [];
   const parts = items.map((item) => {
@@ -93,7 +95,7 @@ function mergeQueued(items: Queued[]): { text: string; attachments: unknown } {
     }
     return renumber.size ? item.text.replace(/\[Image #(\d+)\]/g, (m, k) => (renumber.has(+k) ? `[Image #${renumber.get(+k)}]` : m)) : item.text;
   });
-  return { text: parts.filter((x) => x.trim()).join("\n\n"), attachments };
+  return { text: parts.filter((x) => x.trim()).join("\n\n"), attachments, ...(items.every(item => item.questionAnswer) ? { questionAnswer: true } : {}) };
 }
 const queuePreview = ({ id, text, revision, editing }: Queued) => ({ id, text: text.slice(0, 200), revision, editing: !!editing });
 
@@ -153,6 +155,18 @@ export class Threads {
           }
         } catch {} // unavailable telemetry must never hide the thread
         this.threads.set(t.id, t);
+      }
+    } catch {}
+    try {
+      const saved = JSON.parse(fs.readFileSync(QUESTIONS_FILE, "utf8"));
+      for (const [id, requests] of Object.entries(saved)) {
+        if (!this.threads.has(id) || !Array.isArray(requests)) continue;
+        for (const request of requests) {
+          if (request?.async !== true) continue;
+          try { this.questions.add(id, request); } catch {}
+        }
+        const count = this.questions.list(id).length;
+        if (count) this.threads.get(id)!.waiting = count;
       }
     } catch {}
     this.accounting = restoreAccounting([...this.threads.values()]);
@@ -215,7 +229,15 @@ export class Threads {
   getQuestions(id?: string) { return id === undefined ? this.questions.all() : this.questions.list(id); }
 
   answer(thread: string, id: string, answers: unknown, skip = false) {
-    const result = this.questions.answer(thread, id, answers, this.live.get(thread)?.agent, skip);
+    const request = this.questions.list(thread).find(q => q.id === id);
+    const result = this.questions.answer(thread, id, answers, this.live.get(thread)?.agent, skip, undefined,
+      request?.async ? reply => {
+        if (!reply.skip) {
+          const text = request.questions.map(q => `${q.question}\n${reply.answers[q.id].join(", ")}`).join("\n\n");
+          this.send(thread, text, { mode: "steer", questionAnswer: true });
+        }
+        return true;
+      } : undefined);
     this.publish(thread, result.event);
     this.updateWaiting(thread);
   }
@@ -226,13 +248,20 @@ export class Threads {
     const count = this.questions.list(id).length;
     if (count) t.waiting = count;
     else delete t.waiting;
+    const durable: Record<string, PendingQuestion[]> = {};
+    for (const [key, requests] of Object.entries(this.questions.all())) {
+      const asyncRequests = requests.filter(q => q.async);
+      if (asyncRequests.length) durable[key] = asyncRequests;
+    }
+    fs.writeFileSync(QUESTIONS_FILE + ".tmp", JSON.stringify(durable), { mode: 0o600 });
+    fs.renameSync(QUESTIONS_FILE + ".tmp", QUESTIONS_FILE);
     this.refreshIdleCompaction(t);
     this.persist();
     this.emit({ t: "thread", thread: t });
   }
 
-  private cancelQuestions(id: string) {
-    const pending = this.questions.list(id);
+  private cancelQuestions(id: string, includeAsync = false) {
+    const pending = this.questions.list(id).filter(q => includeAsync || !q.async);
     for (const request of pending) {
       this.questions.remove(id, request.id);
       this.publish(id, { type: "question_answer", id: request.id, cancelled: true, ts: Date.now() });
@@ -370,6 +399,7 @@ export class Threads {
   }
 
   remove(id: string) {
+    this.cancelQuestions(id, true);
     this.kill(id);
     this.queues.delete(id);
     this.emitQueue(id);
@@ -630,10 +660,19 @@ export class Threads {
   // `attachments` is untrusted browser input: [{id}] naming files already uploaded to this thread
   // While a turn is running a message either steers it (delivered to the agent now, picked up after its current tool call) or waits in
   // a queue for the turn to end. `mode: "queue"` forces the queue; so does an agent that cannot take input mid-turn.
-  send(id: string, text: string, opts: { auto?: "brain"; attachments?: unknown; mode?: "steer" | "queue"; delivery?: "queued" } = {}) {
+  send(id: string, text: string, opts: { auto?: "brain"; attachments?: unknown; mode?: "steer" | "queue"; delivery?: "queued"; questionAnswer?: true } = {}) {
     const t = this.threads.get(id);
     if (!t) throw new Error("Unknown thread");
-    if (!opts.auto && this.command(t, text, opts.attachments)) return;
+    if (!opts.auto && !opts.questionAnswer && this.command(t, text, opts.attachments)) return;
+    const incomingAttachments = resolveAttachments(id, opts.attachments);
+    if (!opts.auto && !opts.delivery && !opts.questionAnswer && text.trim() &&
+        !incomingAttachments.length && (t.status !== "running" || opts.mode !== "queue")) {
+      for (const question of this.questions.list(id).filter(q => q.async)) {
+        const result = this.questions.answer(id, question.id, {}, undefined, false, text, () => false);
+        this.publish(id, result.event);
+        this.updateWaiting(id);
+      }
+    }
     if (!opts.auto) {
       t.lastUserActivityAt = Math.max(Date.now(), (t.lastUserActivityAt ?? 0) + 1);
       this.idleCompactionTimers.cancel(id);
@@ -643,7 +682,7 @@ export class Threads {
       if (opts.auto) throw new Error("A turn is already running.");
       return this.whileRunning(t, text, opts);
     }
-    const attachments = resolveAttachments(id, opts.attachments);
+    const attachments = incomingAttachments;
     let prompt = withFileList(text, attachments);
     if (t.replay && !opts.auto) {
       prompt = (t.replayLimit === 6000 ? recentPreamble(this.history(id)) : replayPreamble(this.history(id))) + prompt; // exclude this new message
@@ -662,6 +701,7 @@ export class Threads {
       ts: Date.now(),
       ...(opts.auto ? { auto: opts.auto } : {}),
       ...(opts.delivery ? { delivery: opts.delivery } : {}),
+      ...(opts.questionAnswer ? { questionAnswer: true } : {}),
       ...(attachments.length ? { attachments: attachments.map(({ id, name, kind, media_type, size, n }) => ({ id, name, kind, media_type, size, ...(n ? { n } : {}) })) } : {}),
     });
     this.touch(t);
@@ -673,12 +713,12 @@ export class Threads {
     }
   }
 
-  private whileRunning(t: Thread, text: string, opts: { attachments?: unknown; mode?: "steer" | "queue" }) {
+  private whileRunning(t: Thread, text: string, opts: { attachments?: unknown; mode?: "steer" | "queue"; questionAnswer?: true }) {
     const attachments = resolveAttachments(t.id, opts.attachments); // reject bad ids now, not when the queue drains
     const agent = this.live.get(t.id)?.agent;
     // A normal chat reply also releases a waiting tool; otherwise steering can sit behind that tool forever.
     if (opts.mode !== "queue" && !attachments.length && text.trim()) {
-      for (const question of this.questions.list(t.id)) {
+      for (const question of this.questions.list(t.id).filter(q => !q.async)) {
         const result = this.questions.answer(t.id, question.id, {}, agent, false, text);
         this.publish(t.id, result.event);
         this.updateWaiting(t.id);
@@ -691,6 +731,7 @@ export class Threads {
         text,
         ts: Date.now(),
         delivery: "steer",
+        ...(opts.questionAnswer ? { questionAnswer: true } : {}),
         ...(attachments.length ? { attachments: attachments.map(({ id, name, kind, media_type, size, n }) => ({ id, name, kind, media_type, size, ...(n ? { n } : {}) })) } : {}),
       });
       const delivery = agent.steer(withFileList(text, attachments), attachments.filter((a) => a.kind === "image"));
@@ -706,7 +747,7 @@ export class Threads {
     }
     const q = this.queues.get(t.id) ?? [];
     if (q.length >= MAX_QUEUE) throw new Error("Too many queued messages.");
-    q.push({ id: crypto.randomUUID(), text, attachments: opts.attachments, revision: 0 });
+    q.push({ id: crypto.randomUUID(), text, attachments: opts.attachments, revision: 0, ...(opts.questionAnswer ? { questionAnswer: true } : {}) });
     this.queues.set(t.id, q);
     this.emitQueue(t.id);
   }
@@ -758,7 +799,7 @@ export class Threads {
     if (t.operation || !this.live.get(id)?.agent.steer) throw new Error("This agent cannot take a message mid-turn. It will be sent when the turn ends.");
     this.queues.set(id, q!.filter((x) => x !== item));
     this.emitQueue(id);
-    this.whileRunning(t, item.text, { attachments: item.attachments, mode: "steer" });
+    this.whileRunning(t, item.text, { attachments: item.attachments, mode: "steer", ...(item.questionAnswer ? { questionAnswer: true } : {}) });
   }
   unqueue(id: string, qid: string) {
     const q = this.queues.get(id);
@@ -780,10 +821,10 @@ export class Threads {
       if (!parseCommand(q[0].text)) {
         while (n < q.length && !q[n].editing && !parseCommand(q[n].text) && files + attachList(q[n]).length <= MAX_ATTACHMENTS) files += attachList(q[n++]).length;
       }
-      const { text, attachments } = mergeQueued(q.splice(0, n));
+      const { text, attachments, questionAnswer } = mergeQueued(q.splice(0, n));
       this.emitQueue(id);
       try {
-        this.send(id, text, { attachments, delivery: "queued" });
+        this.send(id, text, { attachments, delivery: "queued", ...(questionAnswer ? { questionAnswer: true } : {}) });
       } catch (e: any) {
         this.publish(id, { type: "console_error", text: `A queued message could not be sent: ${e?.message ?? e}` });
       }
@@ -803,7 +844,7 @@ export class Threads {
     const t = this.threads.get(id);
     const live = this.live.get(id);
     if (!t) return;
-    this.cancelQuestions(id);
+    this.cancelQuestions(id, true);
     t.idleCompactionConsumedAt = t.lastUserActivityAt;
     this.idleCompactionTimers.cancel(id);
     delete t.idleCompactionDueAt;

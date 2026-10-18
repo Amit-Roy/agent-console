@@ -1,8 +1,8 @@
 import { cleanQuestions, type Agent, type Question, type QuestionReply } from "./providers/types.ts";
 
-export interface PendingQuestion { type: "question"; id: string; questions: Question[]; ts?: number }
+export interface PendingQuestion { type: "question"; id: string; questions: Question[]; ts?: number; async?: true }
 
-// Requests belong to a live process. History records their outcome, but never revives a process's callback.
+// Blocking requests belong to a live process; async messages remain answerable after it exits.
 export class Questions {
   private threads = new Map<string, Map<string, PendingQuestion>>();
   list(thread: string): PendingQuestion[] { return [...(this.threads.get(thread)?.values() ?? [])]; }
@@ -11,6 +11,7 @@ export class Questions {
     if (typeof event.id !== "string" || !event.id || event.id.length > 500) throw new Error("Invalid question request.");
     const questions = cleanQuestions(event.questions);
     if (!questions.length || new Set(questions.map(q => q.id)).size !== questions.length) throw new Error("Invalid question request.");
+    if (event.async && questions.some(q => q.secret)) throw new Error("Secret fields require a blocking question.");
     const pending = this.threads.get(thread) ?? new Map();
     if (pending.has(event.id)) throw new Error("Duplicate question request.");
     const request = { ...event, type: "question" as const, questions };
@@ -25,9 +26,9 @@ export class Questions {
     if (!pending?.size) this.threads.delete(thread);
     return request;
   }
-  answer(thread: string, id: string, raw: unknown, agent?: Agent, skip = false, note?: string) {
+  answer(thread: string, id: string, raw: unknown, agent?: Agent, skip = false, note?: string, deliver?: (reply: QuestionReply) => boolean) {
     const request = this.threads.get(thread)?.get(id);
-    if (!request || !agent?.alive || !agent.answer) throw new Error("This question is no longer waiting for an answer.");
+    if (!request || (!deliver && (!agent?.alive || !agent.answer))) throw new Error("This question is no longer waiting for an answer.");
     if (!skip && note === undefined && (!raw || typeof raw !== "object" || Array.isArray(raw))) throw new Error("Invalid answers.");
     const answers: Record<string, string[]> = Object.create(null);
     if (!skip && note === undefined) {
@@ -45,7 +46,7 @@ export class Questions {
     // Remove first: an adapter may synchronously emit completion or a result while writing the response.
     this.remove(thread, id);
     let consumed: boolean;
-    try { consumed = agent.answer(id, reply); }
+    try { consumed = deliver ? deliver(reply) : agent!.answer!(id, reply); }
     catch (error) { this.add(thread, request); throw error; }
     const visible = Object.fromEntries(request.questions.filter(q => answers[q.id]).map(q => [q.id, q.secret ? ["••••••"] : answers[q.id]]));
     return { consumed, event: { type: "question_answer", id, answers: visible, ...(skip ? { skip: true } : {}), ...(note !== undefined ? { note: request.questions.some(q => q.secret) ? "••••••" : note } : {}), ts: Date.now() } };

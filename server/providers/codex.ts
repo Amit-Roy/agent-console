@@ -1,10 +1,11 @@
 import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { startCodexApp } from "./codex-app.ts";
 import { codexWebTool } from "./codex-web.ts";
-import { clip, type Agent, type AgentCtx, type Mode, type Provider, type ThreadSpec } from "./types.ts";
+import { cleanQuestions, clip, type Agent, type AgentCtx, type Mode, type Provider, type ThreadSpec } from "./types.ts";
 
 // Persistent Codex app-server owns each active session and accepts native mid-turn steering.
 // The pure exec translator is shared with the app-server item adapter and historical fixtures.
@@ -30,6 +31,7 @@ export function codexTranslator(emit: (ev: any) => void) {
   let started = 0;
   const begun = new Set<string>();
   const web = new Map<string, string>();
+  const asked = new Set<string>();
   const finish = (failure?: string) => {
     if (failure) emit({ type: "console_error", text: failure });
     emit({ type: "result", subtype: failure ? "error" : "success", is_error: !!failure, duration_ms: started ? Date.now() - started : 0 });
@@ -56,7 +58,22 @@ export function codexTranslator(emit: (ev: any) => void) {
       case "item.completed": {
         const it = r.item ?? {};
         const done = r.type === "item.completed";
-        if (it.type === "agent_message" && done) emit(asst({ type: "text", text: String(it.text ?? "") }));
+        if (it.type === "agent_message" && done) {
+          // request_user_input_async is an agentMessage with question metadata,
+          // not a blocking app-server request. Its text is only a fallback for text clients.
+          const questions = cleanQuestions(Array.isArray(it.questions) ? it.questions.map((q: any, i: number) => ({
+            id: String(i), question: q?.title,
+            options: Array.isArray(q?.options) ? q.options.map((label: string) => ({ label })) : [],
+            allowOther: true,
+          })).filter((q: any) => typeof q.question === "string" && q.question.trim()) : []);
+          if (questions.length) {
+            const id = `codex-async-${it.id || randomUUID()}`;
+            if (!asked.has(id)) {
+              asked.add(id);
+              emit({ type: "question", id, async: true, questions, ts: Date.now() });
+            }
+          } else emit(asst({ type: "text", text: String(it.text ?? "") }));
+        }
         else if (it.type === "reasoning" && done && it.text) emit(asst({ type: "thinking", thinking: String(it.text) }));
         else if (it.type === "command_execution") {
           tool(it.id, "Bash", { command: unwrapShell(it.command) });
