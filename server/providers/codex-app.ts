@@ -75,6 +75,14 @@ export function startCodexApp(t: ThreadSpec, ctx: AgentCtx, translate: (row: any
   let operation: "turn" | "compact" | undefined, compactConfirmed = false;
   let compactTimer: NodeJS.Timeout | undefined;
   let total: any, baseline: any;
+  // Subagents by thread id. Codex does not start a parent turn when one finishes after the parent's turn ended, so we do.
+  const children = new Map<string, { path: string; call: string; text: string; done?: boolean }>();
+  let unseen: string[] = []; // finished while the parent turn ran, before the parent model looked again
+  const backgroundChanged = () => ctx.event({ type: "system", subtype: "background_tasks_changed", tasks: [...children].filter(([, c]) => !c.done).map(([id, c]) => ({ task_id: id, description: c.path })) });
+  const subagentDone = (id: string) => {
+    const c = children.get(id)!;
+    return `[Background subagent ${c.path} finished. Its final message:]\n${c.text.trim() || "(no message)"}`;
+  };
   const pending = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void; timer: NodeJS.Timeout }>();
   const request = (method: string, params: object): Promise<any> => new Promise((resolve, reject) => {
     if (!alive) return reject(new Error("Codex connection closed."));
@@ -132,7 +140,11 @@ export function startCodexApp(t: ThreadSpec, ctx: AgentCtx, translate: (row: any
       return;
     }
     const v = r.params || {};
-    if (v.threadId && v.threadId !== session) return;
+    if (v.threadId && v.threadId !== session) {
+      const child = children.get(v.threadId);
+      if (child && r.method === "item/completed" && v.item?.type === "agentMessage" && typeof v.item.text === "string") child.text = v.item.text;
+      return;
+    }
     if (r.method === "serverRequest/resolved") {
       const id = `${questionPrefix}${v.requestId}`;
       if (asks.delete(id)) ctx.event({ type: "question_answer", id, cancelled: true });
@@ -146,10 +158,28 @@ export function startCodexApp(t: ThreadSpec, ctx: AgentCtx, translate: (row: any
       if (active && v.turn?.id && active !== v.turn.id) return;
       cancelQuestions();
       finish(v.turn?.status === "completed" ? undefined : v.turn?.error?.message || `Codex turn ${v.turn?.status || "failed"}.`);
+      for (const id of unseen.splice(0)) ctx.event({ type: "subagent_wake", text: subagentDone(id) });
     } else if (r.method === "item/started" || r.method === "item/completed") {
       const it = v.item || {}, done = r.method === "item/completed";
       const types: Record<string, string> = { agentMessage: "agent_message", commandExecution: "command_execution", fileChange: "file_change", mcpToolCall: "mcp_tool_call", webSearch: "web_search" };
-      if (it.type === "contextCompaction" && done) {
+      if (it.type !== "subAgentActivity" && unseen.length && ["agentMessage", "reasoning", "commandExecution", "mcpToolCall"].includes(it.type)) unseen = []; // the parent model ran after the result arrived
+      if (it.type === "subAgentActivity") {
+        if (!done || !it.agentThreadId) return;
+        if (it.kind === "started" && !children.has(it.agentThreadId)) {
+          children.set(it.agentThreadId, { path: it.agentPath || "subagent", call: it.id, text: "" });
+          ctx.event({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: it.id, name: "Agent", input: { description: it.agentPath || "Subagent" } }] } });
+          ctx.event({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: it.id, content: "Started in the background." }] } });
+          ctx.event({ type: "system", subtype: "task_started", task_id: it.agentThreadId, tool_use_id: it.id, task_type: "local_agent", is_backgrounded: true, description: it.agentPath });
+          backgroundChanged();
+        } else if (it.kind === "completed" && children.get(it.agentThreadId) && !children.get(it.agentThreadId)!.done) {
+          const c = children.get(it.agentThreadId)!;
+          c.done = true;
+          ctx.event({ type: "system", subtype: "task_notification", task_id: it.agentThreadId, tool_use_id: c.call, status: "completed", summary: c.text.slice(0, 300) });
+          backgroundChanged();
+          if (operation) unseen.push(it.agentThreadId);
+          else ctx.event({ type: "subagent_wake", text: subagentDone(it.agentThreadId) });
+        }
+      } else if (it.type === "contextCompaction" && done) {
         compactConfirmed = true; ctx.event({ type: "system", subtype: "compact_boundary" });
       } else if (it.type === "reasoning") {
         if (done) translate({ type: "item.completed", item: { ...it, text: [...(it.summary || []), ...(it.content || [])].join("\n") } });

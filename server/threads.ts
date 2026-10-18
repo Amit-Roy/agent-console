@@ -50,6 +50,7 @@ export interface Thread {
   replayLimit?: number; // explicit short handoff instead of native session or full text replay
   status: "idle" | "running";
   waiting?: number; // unanswered blocking requests or persistent async questions
+  background?: number; // background subagents still working after the turn ended; their completion wakes the agent
   operation?: "compact";
   lastCompactedAt?: number;
   archived?: number; // when it was archived: it leaves the working list until unarchived or sent to again
@@ -131,6 +132,7 @@ interface Live {
   readyAt?: number;
   exitReason?: string;
   model?: string; // resolved model id the process announced
+  wakes?: string[]; // subagent results waiting for the agent to be free (harnesses that do not wake themselves)
 }
 
 export class Threads {
@@ -160,6 +162,7 @@ export class Threads {
         t.status = "idle"; // nothing survives a server restart
         delete t.waiting;
         delete t.operation;
+        delete t.background;
         t.provider ||= DEFAULT_PROVIDER;
         if (t.provider === "codex" && t.context?.source !== "codex/last_request") delete t.context;
         try {
@@ -223,12 +226,13 @@ export class Threads {
     t.idleCompactionMinTokens = policy.minTokens;
     delete t.idleCompactionDueAt;
     const deadline = idleCompactionDeadline(t, policy, !!this.queues.get(t.id)?.length);
+    if (t.background) return; // compaction restarts the agent process, which would kill its background subagents
     if (this.closed || deadline == null || deadline <= Date.now()) return;
     t.idleCompactionDueAt = deadline;
     const cycle = t.lastUserActivityAt;
     this.idleCompactionTimers.schedule(t.id, deadline, () => {
       const current = this.threads.get(t.id);
-      if (this.closed || current !== t || t.lastUserActivityAt !== cycle) return;
+      if (this.closed || current !== t || t.lastUserActivityAt !== cycle || t.background) return;
       const currentPolicy = idleCompactionPolicy(t);
       if (idleCompactionDeadline(t, currentPolicy, !!this.queues.get(t.id)?.length) !== deadline) { this.refreshIdleCompaction(t); return; }
       // A stalled event loop must not buy compaction after the estimated cache expiry.
@@ -526,6 +530,7 @@ export class Threads {
         const current = this.live.get(t.id) === live;
         if (current) this.live.delete(t.id);
         if (live.rewarm) { live.rewarm = false; setImmediate(() => this.warm(t.id)); } // the old process no longer holds the session
+        if (current && t.background) { delete t.background; this.emit({ t: "thread", thread: t }); }
         if (!current || t.status !== "running") return; // a replaced or aborted agent's exit says nothing about the new turn
         this.cancelQuestions(t.id);
         t.status = "idle";
@@ -565,6 +570,22 @@ export class Threads {
   // Canonical events from any harness. We only interpret the two that change thread state.
   private onEvent(t: Thread, ev: any) {
     const compacting = t.operation === "compact";
+    if (ev.type === "system" && ev.subtype === "background_tasks_changed" && Array.isArray(ev.tasks)) {
+      const n = ev.tasks.length;
+      if ((t.background ?? 0) !== n) {
+        if (n) t.background = n; else delete t.background;
+        this.emit({ t: "thread", thread: t });
+        if (!n) this.refreshIdleCompaction(t);
+      }
+      return;
+    }
+    if (ev.type === "subagent_wake") return this.wake(t, String(ev.text || ""));
+    // Claude starts a turn by itself when a background subagent finishes after the turn ended: show it as running
+    if (ev.type === "system" && ev.subtype === "init" && t.status === "idle" && t.provider === "claude" && !compacting) {
+      t.status = "running";
+      this.turns.set(t.id, { start: Date.now(), tools: {} });
+      this.touch(t);
+    }
     if (NOISE.has(kindOf(ev))) return;
     const clock = this.turns.get(t.id)?.clock;
     if (clock) timed(() => { clock.event(ev); const live = this.live.get(t.id); if (live && clock.resolvedModel) live.model = clock.resolvedModel; });
@@ -651,6 +672,7 @@ export class Threads {
       this.touch(t);
       brainCommit(); // agents may have written wiki pages this turn; keep the shared brain's git history current
       if (t.status === "idle" && (!ev.is_error || parseCommand(this.queues.get(t.id)?.[0]?.text || "")?.name === "compact")) this.drain(t.id);
+      if (t.status === "idle" && !ev.is_error) this.wake(t);
     }
     this.publish(t.id, ev, ev.type !== "stream_event");
     if (ev.type === "assistant") {
@@ -658,6 +680,20 @@ export class Threads {
         if (b?.type === "tool_use" && needsLabel(b.name, b.input)) this.labeler.request({ thread: t.id, id: b.id, command: b.input.command, cwd: t.cwd });
       }
     }
+  }
+
+  // Give finished subagent results to an agent that does not wake itself (Codex). Waits behind a running turn or queued messages.
+  private wake(t: Thread, text?: string) {
+    const live = this.live.get(t.id);
+    if (!live) return;
+    if (text) (live.wakes ??= []).push(text);
+    if (!live.wakes?.length) return;
+    setTimeout(() => {
+      if (this.live.get(t.id) !== live || t.status !== "idle" || this.queues.get(t.id)?.length || !live.wakes?.length) return;
+      const msg = live.wakes.splice(0).join("\n\n");
+      try { this.send(t.id, msg, { auto: "subagent" }); }
+      catch (e: any) { this.publish(t.id, { type: "console_error", text: `Could not resume after the subagent finished: ${e.message}` }); }
+    }, 50);
   }
 
   private finishTurn(t: Thread, ev: any) {
@@ -739,7 +775,7 @@ export class Threads {
   // `attachments` is untrusted browser input: [{id}] naming files already uploaded to this thread
   // While a turn is running a message either steers it (delivered to the agent now, picked up after its current tool call) or waits in
   // a queue for the turn to end. `mode: "queue"` forces the queue; so does an agent that cannot take input mid-turn.
-  send(id: string, text: string, opts: { auto?: "brain"; attachments?: unknown; mode?: "steer" | "queue"; delivery?: "queued"; questionAnswer?: true; queuedAt?: number } = {}) {
+  send(id: string, text: string, opts: { auto?: "brain" | "subagent"; attachments?: unknown; mode?: "steer" | "queue"; delivery?: "queued"; questionAnswer?: true; queuedAt?: number } = {}) {
     const t = this.threads.get(id);
     if (!t) throw new Error("Unknown thread");
     if (!opts.auto && !opts.questionAnswer && this.command(t, text, opts.attachments)) return;
@@ -973,7 +1009,7 @@ export class Threads {
   sweep() {
     for (const [id, live] of this.live) {
       const t = this.threads.get(id);
-      if (t && t.status === "idle" && Date.now() - Math.max(t.updatedAt, live.spawnAt!) > (live.warm ? WARM_IDLE_MS : IDLE_KILL_MS)) this.kill(id, "idle");
+      if (t && t.status === "idle" && !t.background && Date.now() - Math.max(t.updatedAt, live.spawnAt!) > (live.warm ? WARM_IDLE_MS : IDLE_KILL_MS)) this.kill(id, "idle");
     }
   }
 
