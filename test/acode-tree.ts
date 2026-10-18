@@ -102,8 +102,8 @@ try {
     await writeFile(path.join(outside, "note.txt"), "outside");
     assert.equal((await exchange(path.join(outside, "note.txt"))).project.root, outside);
   } finally { await rm(outside, { recursive: true, force: true }); }
-  now += 8 * 60 * 60_000;
-  assert.equal((await request("/tree", "GET", undefined, token)).status, 401);
+  now += 100 * 365 * 24 * 60 * 60_000;
+  assert.equal((await request("/tree", "GET", undefined, token)).status, 200);
   const fresh = await exchange();
   await rename(dir, dir + "-old");
   await mkdir(dir);

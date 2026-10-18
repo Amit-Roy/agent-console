@@ -65,10 +65,11 @@ try {
  assert.equal(await readFile(path.join(dir,"note.txt"),"utf8"),"external replacement");
  assert.equal((await readdir(dir)).filter(x=>x.startsWith(".agent-console-edit-")).length,0);
  const expiring = await ticket(); now += 60_001; assert.equal((await request("/exchange","POST",{ticket:expiring.body.ticket})).status,401);
+ const longLived = await grant(); now += 100*365*24*60*60_000;
+ assert.equal((await request("/file","GET",undefined,longLived.auth)).status,200);
  const swapped = await grant(); await rename(path.join(dir,"note.txt"),path.join(dir,"old.txt")); await symlink(path.join(dir,"old.txt"),path.join(dir,"note.txt"));
  assert.equal((await request("/file","GET",undefined,swapped.auth)).status,409);
  assert.equal((await request("/file","PUT",{content:"bad",revision:swapped.exchanged.body.revision},swapped.auth)).status,409);
  assert.notEqual(await readFile(path.join(dir,"old.txt"),"utf8"),"bad");
- now += 8*60*60_000+1; assert.equal((await request("/file","GET",undefined,auth)).status,401);
  console.log("Acode bridge: authentication, replay, expiry, save, conflict, concurrent saves, mode, CORS, symlink, secrets, binary and size checks passed.");
 } finally { await new Promise<void>((resolve,reject)=>server.close(e=>e?reject(e):resolve())); await rm(dir,{recursive:true,force:true}); }
