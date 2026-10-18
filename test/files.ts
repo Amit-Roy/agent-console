@@ -5,6 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { spawn, execFileSync } from "node:child_process";
 import { MAX_VIEW_BYTES, MAX_PREVIEW_IMAGE_BYTES, TREE_PAGE_SIZE } from "../server/files.ts";
+import { codexTranslator } from "../server/providers/codex.ts";
+import { piTranslator } from "../server/providers/pi.ts";
 
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), "ac-files-"));
 const data = path.join(temp, "data"), cwd = path.join(temp, "project");
@@ -100,6 +102,53 @@ try {
   const named = await file("pic.txt");
   assert.equal(named.status, 200, "path quoted in a reply resolves a bare name");
   assert.equal((await named.json()).path, path.join(temp, "shots", "pic.txt"));
+  // Exercise the actual provider adapters before persisting their canonical events.
+  const log = path.join(data, "logs", `${id}.jsonl`);
+  const emit = (event: unknown) => fs.appendFileSync(log, JSON.stringify(event) + "\n");
+  const codex = codexTranslator(emit), pi = piTranslator(emit);
+  const fixture = (name: string) => {
+    const dir = path.join(temp, name);
+    fs.mkdirSync(dir);
+    fs.writeFileSync(path.join(dir, `${name}.txt`), name);
+    return path.join(dir, `${name}.txt`);
+  };
+  const expectPath = async (target: string, label: string) => {
+    const response = await file(path.basename(target));
+    assert.equal(response.status, 200, label);
+    assert.equal((await response.json()).path, target, label);
+  };
+  const codexText = fixture("codex-text");
+  // A small log must retain its first complete line, without a dummy prefix.
+  fs.writeFileSync(log, "");
+  codex({ type: "item.completed", item: { id: "text", type: "agent_message", text: `See [result](${codexText}).` } });
+  await expectPath(codexText, "Codex reply resolves a bare filename from the first log line");
+  const codexShell = fixture("codex-shell");
+  codex({ type: "item.started", item: { id: "shell", type: "command_execution", command: `/bin/zsh -lc 'cat ${codexShell}'` } });
+  await expectPath(codexShell, "Codex shell paths in /tmp resolve without a reply");
+  const codexCwd = fixture("codex-cwd");
+  codex({ type: "item.started", item: { id: "cwd", type: "command_execution", command: "pwd", cwd: path.dirname(codexCwd) } });
+  await expectPath(codexCwd, "Codex command cwd survives translation");
+  const codexMcp = fixture("codex-mcp");
+  codex({ type: "item.started", item: { id: "mcp", type: "mcp_tool_call", server: "functions", tool: "exec_command", arguments: { cmd: "pwd", workdir: path.dirname(codexMcp) } } });
+  await expectPath(codexMcp, "Codex MCP workdir resolves a bare filename");
+  const codexCmd = fixture("codex-cmd");
+  codex({ type: "item.started", item: { id: "cmd", type: "mcp_tool_call", server: "functions", tool: "exec_command", arguments: { cmd: `cat ${codexCmd}` } } });
+  await expectPath(codexCmd, "Codex MCP cmd paths resolve");
+  const edits = [fixture("codex-edit-one"), fixture("codex-edit-two")];
+  codex({ type: "item.started", item: { id: "edit", type: "file_change", changes: edits.map(target => ({ path: target, kind: "update" })) } });
+  await expectPath(edits[1], "Codex file changes include paths after the first entry");
+  const piText = fixture("pi-text"), piShell = fixture("pi-shell"), piWrite = fixture("pi-write");
+  pi({ type: "message_end", message: { role: "assistant", content: [
+    { type: "text", text: `See \`${piText}\`.` },
+    { type: "toolCall", id: "bash", name: "bash", arguments: { command: `cat ${piShell}` } },
+    { type: "toolCall", id: "write", name: "write", arguments: { path: piWrite, content: "result" } },
+  ] } });
+  await expectPath(piText, "Pi reply resolves a bare filename");
+  await expectPath(piShell, "Pi bash paths in /tmp resolve without a reply");
+  await expectPath(piWrite, "Pi native file paths resolve after normalization");
+  assert.equal((await file(path.basename(piText), aliasId)).status, 404, "context lookup stays within the selected conversation");
+  fs.writeFileSync(path.join(path.dirname(piText), ".env"), "private fixture");
+  assert.equal((await file(".env")).status, 403, "provider hints cannot bypass credential checks");
   fs.mkdirSync(path.join(temp, "home"));
   fs.symlinkSync(path.join(cwd, "hello.ts"), path.join(temp, "home", "link.ts"));
   assert.equal((await file(path.join(temp, "home", "link.ts"))).status, 200, "outside-path link resolving inside cwd is viewable");
