@@ -60,10 +60,12 @@ export async function openContextEconomics({ getThread, send, trigger }) {
   recommendation.append(recommendationLabel, recommendationTitle, recommendationDetail);
   const showRecommendation = (action, title, detail) => {
     recommendation.dataset.action = action;
+    compact.classList.toggle("primary", action === "now");
     recommendationTitle.textContent = title;
     recommendationDetail.textContent = detail;
   };
   allocation = createContextAllocation(getThread);
+  allocation.root.open = false;
   const controls = el("div", "context-assumptions");
   const input = (label, value, min, max, step = 1) => {
     const wrap = el("label", "context-control");
@@ -98,7 +100,8 @@ export async function openContextEconomics({ getThread, send, trigger }) {
   compact.onclick = () => { const t = getThread(); if (t?.status === "idle" && !t.waiting && !t.archived) { send({ t: "compact", thread: t.id }); dialog.close(); } };
   const auto = el("button", "btn ghost"); auto.type = "button";
   auto.onclick = () => { const t = getThread(); if (t?.idleCompactionTtlMs) { send({ t: "update", thread: t.id, idleCompaction: t.idleCompaction === false }); dialog.close(); } };
-  actions.append(compact, auto);
+  recommendation.append(compact);
+  actions.append(auto);
   const data = el("details", "context-forecast-data");
   data.append(el("summary", "", "Forecast data and assumptions"));
   const notes = el("p", "sub");
@@ -112,7 +115,7 @@ export async function openContextEconomics({ getThread, send, trigger }) {
   }
   const table = el("table");
   data.append(notes, sources, table);
-  body.replaceChildren(threadTitle, recommendation, status, allocation.root, basis, stage, chartError, summary, controls, automatic, actions, data);
+  body.replaceChildren(threadTitle, recommendation, status, basis, stage, chartError, summary, allocation.root, controls, automatic, actions, data);
   void allocation.refresh();
   try { Chart = await loadChart(); }
   catch { chartError.hidden = false; chartError.textContent = "Graph could not load. Forecast values remain available below."; stage.hidden = true; }
@@ -145,11 +148,11 @@ export async function openContextEconomics({ getThread, send, trigger }) {
     } else if (best.action === "unknown") {
       showRecommendation("unknown", "More data needed", "Context, pricing, or the remaining window is insufficient to compare compaction points.");
     } else if (best.action === "continue") {
-      showRecommendation("continue", "Continue for now", `Keep current context for the next ${best.horizonRequests} requests. Continuing costs ${usd(result.points.at(-1).keepCost)} in this model; compaction does not repay its upfront cost.`);
+      showRecommendation("continue", "Continue for now", `Continue for ${best.horizonRequests} requests: about ${usd(result.points.at(-1).keepCost)}. Compaction does not repay its cost in this scenario.`);
     } else if (best.action === "now") {
-      showRecommendation("now", "Compact now", `Compact at ${tokens(best.atContextTokens)} context tokens for the lowest modeled API cost over ${best.horizonRequests} requests. Estimated savings versus continuing: ${usd(best.savings)}.`);
+      showRecommendation("now", "Compact now", `Save about ${usd(best.savings)} over ${best.horizonRequests} requests. Estimated context: ${tokens(t.context.used)} → ${tokens(result.summary)} tokens.`);
     } else {
-      showRecommendation("later", "Compact later", `Compact around ${tokens(best.atContextTokens)} context tokens, after ${tokens(best.afterAddedTokens)} new input tokens (${best.afterRequests} requests). Estimated API savings versus continuing: ${usd(best.savings)}.`);
+      showRecommendation("later", "Compact later", `Compact after about ${best.afterRequests} requests, at ${tokens(best.atContextTokens)} context tokens. Estimated savings: ${usd(best.savings)} over ${best.horizonRequests} requests.`);
     }
     void allocation.refresh();
     measure.options[0].disabled = !result.priced;
