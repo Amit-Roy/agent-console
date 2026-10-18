@@ -144,7 +144,8 @@ try {
   assert.ok(listing.bytes > 0); assert.ok(listing.read_ms >= 0);
   assert.deepEqual(listing.entries.find((e: any) => e.name === "src"), { name: "src", path: path.join(cwd, "src"), kind: "directory" });
   assert.ok(listing.entries.some((e: any) => e.name === "hello.ts" && e.kind === "file"));
-  for (const excluded of [".git", ".env", ".env.local", "credentials.json", "escape", "friendly.txt", "inside", "pipe"]) assert.ok(!listing.entries.some((e: any) => e.name === excluded), `omit sensitive/symlink/special entry ${excluded}`);
+  for (const excluded of [".git", ".env", ".env.local", "credentials.json", "escape", "friendly.txt", "pipe"]) assert.ok(!listing.entries.some((e: any) => e.name === excluded), `omit sensitive/symlink/special entry ${excluded}`);
+  assert.ok(listing.entries.some((e: any) => e.name === "inside" && e.kind === "file"), "in-root symlink listed");
   const nested = await (await tree("src")).json(); assert.equal(nested.parent, cwd); assert.equal(nested.entries.length, 1);
   assert.equal((await tree("../")).status, 403); assert.equal((await tree(".git")).status, 403);
   assert.equal((await tree(".", "-1")).status, 400); assert.equal((await tree(".", "100001")).status, 400);

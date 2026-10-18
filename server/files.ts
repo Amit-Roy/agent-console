@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { open, opendir, realpath } from "node:fs/promises";
+import { open, opendir, realpath, stat as statPath } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import { performance } from "node:perf_hooks";
 import os from "node:os";
@@ -218,8 +218,8 @@ export function fileMedia(lookup: Lookup): RequestHandler {
   };
 }
 
-// One level only, using Dirent types instead of a stat per child. Symlinks and
-// special files are omitted; opening a direct link still enforces realpath scope.
+// One level only, using Dirent types (stat only for symlinks). Special files
+// are omitted; opening a symlink still enforces realpath scope.
 // The cursor counts raw directory entries so filtered entries cannot stall paging.
 export function fileTree(lookup: Lookup): RequestHandler {
   return async (req, res) => {
@@ -243,8 +243,17 @@ export function fileTree(lookup: Lookup): RequestHandler {
             if (!entry) { done = true; break; }
             index++;
             const child = path.join(target, entry.name);
-            if ((!entry.isDirectory() && !entry.isFile()) || sensitive(child)) continue;
-            entries.push({ name: entry.name, path: child, kind: entry.isDirectory() ? "directory" : "file" });
+            if (sensitive(child)) continue;
+            let kind: "directory" | "file" | undefined = entry.isDirectory() ? "directory" : entry.isFile() ? "file" : undefined;
+            // Symlinks (CLAUDE.md, AGENTS.md, .mcp.json in ~/repos) list as their target kind; opening still enforces realpath scope.
+            if (!kind && entry.isSymbolicLink()) {
+              const real = await realpath(child).catch(() => undefined);
+              if (real && inside(root, real) && !sensitive(real)) {
+                const target = await statPath(real).catch(() => undefined);
+                kind = target?.isDirectory() ? "directory" : target?.isFile() ? "file" : undefined;
+              }
+            }
+            if (kind) entries.push({ name: entry.name, path: child, kind });
           }
         } finally { await dir.close(); }
       } finally { await handle.close(); }
