@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import os from "node:os";
-import { createTriageClassifier, parsePiTriageOutput, parseTriageReply, piTriageArgs, piTriageModelConfig, runTriageCommand, triagePrompt, type TriageInput } from "../server/providers/triage-model.ts";
+import { createPiEventCollector, createTriageClassifier, parsePiTriageOutput, parseTriageReply, piTriageArgs, piTriageModelConfig, runTriageCommand, triagePrompt, type TriageInput } from "../server/providers/triage-model.ts";
 
 const input: TriageInput = { repo: "example/app", number: 1, kind: "issue", title: "Repair app preview", body: "The single preview component fails every build. Deployment is blocked. Investigate asynchronous recovery. No deadline. Production is currently down.", changedFiles: 2, additions: 40, deletions: 5 };
 const assessment = {
@@ -138,4 +138,32 @@ assert.equal(await runTriageCommand(process.execPath, ["-e", "process.stdin.pipe
 await assert.rejects(runTriageCommand(process.execPath, ["-e", "setTimeout(()=>{},10000)"], "", os.tmpdir(), process.env, 60), /timed out/);
 await assert.rejects(runTriageCommand(process.execPath, ["-e", "process.stdout.write('x'.repeat(1000))"], "", os.tmpdir(), process.env, 1000, 100), /output limit/);
 await assert.rejects(runTriageCommand(process.execPath, ["-e", "process.stderr.write('sensitive');process.exit(1)"], "", os.tmpdir(), process.env), /^Error: Triage model process failed$/);
-console.log("triage model: evidence, score boundaries, budget ranges, fallback, isolation, and process bounds passed");
+// Pi streams cumulative message snapshots; discard them without inflating retained output.
+const collector = createPiEventCollector(4_096, 2_000_000);
+const snapshot = JSON.stringify({ type: "message_update", message: { content: [{ type: "text", text: "x".repeat(2_000) }] } }) + "\n";
+for (let index = 0; index < 400; index++) collector.push(snapshot);
+const terminal = event({ role: "assistant", stopReason: "stop", content: [{ type: "text", text: "Final answer 🎉" }] });
+collector.push(terminal.slice(0, 30));
+collector.push(terminal.slice(30)); // No final newline is valid JSONL.
+assert.equal(parsePiTriageOutput(collector.finish()), "Final answer 🎉");
+assert.equal(collector.finish(), terminal + "\n");
+const retry = createPiEventCollector();
+retry.push('{"type":"auto_retry_end","success":false}\n');
+assert.throws(() => parsePiTriageOutput(retry.finish()), /Pi provider failed/);
+assert.throws(() => createPiEventCollector(100).push("x".repeat(101)), /output limit/);
+assert.throws(() => createPiEventCollector(1_000, 10).push('{"type":"message_update"}\n'), /stream traffic limit/);
+assert.throws(() => createPiEventCollector().push("not json\n"), /invalid events/);
+assert.throws(() => createPiEventCollector().push("null\n"), /invalid events/);
+const incomplete = createPiEventCollector();
+incomplete.push('{"type":');
+assert.throws(() => incomplete.finish(), /invalid events/);
+const retainedLimit = createPiEventCollector(Buffer.byteLength(terminal) + 1);
+retainedLimit.push(terminal + "\n");
+assert.throws(() => retainedLimit.push(terminal + "\n"), /output limit/);
+const streamed = await runTriageCommand(process.execPath, ["-e", `
+  for (let i = 0; i < 300; i++) process.stdout.write(JSON.stringify({type:'message_update', message:{text:'x'.repeat(2000)}})+'\\n');
+  process.stdout.write(JSON.stringify({type:'message_end',message:{role:'assistant',stopReason:'stop',content:[{type:'text',text:'Complete'}]}})+'\\n');
+`], "", os.tmpdir(), process.env, 2_000, 4_096, "pi-events");
+assert.equal(parsePiTriageOutput(streamed), "Complete");
+await assert.rejects(runTriageCommand(process.execPath, ["-e", "process.stdout.write('x'.repeat(5000))"], "", os.tmpdir(), process.env, 1_000, 4_096, "pi-events"), /output limit/);
+console.log("triage model: evidence, score boundaries, budget ranges, fallback, isolation, stream filtering, and process bounds passed");
