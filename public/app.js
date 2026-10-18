@@ -17,7 +17,7 @@ const EFFORT_LABEL = { xhigh: "Extra high", ultracode: "Ultra" };
 const EFFORT_DESC = { ultracode: "Claude Code's Ultracode: starts a multi-agent workflow on every task. Slow and costly; keep it for big jobs.", max: "Deepest reasoning the model offers.", xhigh: "More reasoning than High, less than Max." };
 const effortLabel = (v) => EFFORT_LABEL[v] || cap(v);
 const state = {
-  commands: {}, providers: new Map(), threads: new Map(), current: null, ready: false, dirs: [], live: null, cards: new Map(), usage: {}, usageTab: "claude", archiveOpen: !!localStorage.getItem("ac_archive_open"), usageOpen: !!localStorage.getItem("ac_usage_open"),
+  commands: {}, providers: new Map(), threads: new Map(), current: null, ready: false, dirs: [], live: null, cards: new Map(), usage: {}, usageTab: "claude", archiveOpen: !!localStorage.getItem("ac_archive_open"),
   stick: true, // the reader is at the bottom of the chat (kept from scroll events, since layout growth fires none)
   subs: new Map(), // tool_use id of a subagent (or nested subagent) -> the <ol> its activity is listed in
   subTools: new Map(), // tool_use id of a call made inside a subagent -> its row
@@ -1156,7 +1156,7 @@ function renderTurnTiming(x, phoneMs) {
     const list = el("ol", "tt-tools");
     list.setAttribute("aria-label", "Slowest tools");
     for (const tool of x.slow) { const li = el("li"); li.append(el("span", "n", tool.name), el("span", "ms", `${fmtMs(tool.ms)}${tool.error ? " · failed" : ""}`)); list.append(li); }
-    kids.push(el("h5", "", "Slowest tools"), list);
+    kids.push(el("h4", "", "Slowest tools"), list);
   }
   if (x.retries) kids.push(el("p", "tt-retry", `${x.retries} API retr${x.retries === 1 ? "y" : "ies"} or rate-limit warning${x.retries === 1 ? "" : "s"} slowed this turn`));
   const full = el("button", "btn block tb-open");
@@ -2058,26 +2058,8 @@ function renderUsage() {
     }
     pane.append(note);
   }
-  // collapsed by default: one summary line; the tabs and full meters open on tap
-  let sum = root.querySelector(".usage-sum");
-  if (!sum) {
-    sum = el("button", "usage-sum"); sum.id = "usage-sum"; sum.type = "button"; sum.setAttribute("aria-controls", "usage-body");
-    sum.onclick = () => { state.usageOpen = !state.usageOpen; localStorage.setItem("ac_usage_open", state.usageOpen ? "1" : ""); renderUsage(); };
-  }
-  const summary = [el("b", "", usageName(providers.find(p => p.id === state.usageTab)))];
-  for (const w of (sample?.windows || []).slice(0, 2)) {
-    const pct = Math.max(0, Math.min(100, w.used / w.limit * 100));
-    const m = el("span", "usage-sum-m", `${w.label.replace(/-hour$/, "h").replace(/-day$/, "d")} ${Math.round(pct)}%`);
-    m.style.color = meterColor(pct); summary.push(m);
-  }
-  if (summary.length === 1) summary.push(el("span", "usage-sum-m", "Usage"));
-  sum.replaceChildren(...summary, icon("chev-right"));
-  sum.setAttribute("aria-expanded", String(!!state.usageOpen));
-  sum.setAttribute("aria-label", `Usage: ${sum.textContent}. ${state.usageOpen ? "Hide" : "Show"} details`);
-  let body = root.querySelector(".usage-body");
-  if (!body || rebuildTabs) { body = el("div", "usage-body"); body.id = "usage-body"; body.append(tabs, pane); root.replaceChildren(sum, body); }
-  else body.querySelector(".usage-pane").replaceWith(pane);
-  body.hidden = !state.usageOpen;
+  if (rebuildTabs) root.replaceChildren(tabs, pane);
+  else root.querySelector(".usage-pane").replaceWith(pane);
   if (focusedTab) $(focusedTab)?.focus({ preventScroll: true });
 }
 

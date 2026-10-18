@@ -65,7 +65,7 @@ function header() {
   back.append(icon("chev-left"), el("span", "", "Run details"));
   back.setAttribute("aria-label", "Back to Run details");
   back.onclick = () => closeBreakdown();
-  const title = el("h4", "tb-title", "Turn breakdown");
+  const title = el("h3", "tb-title", "Turn breakdown");
   title.id = "tb-title";
   head.append(back, title);
   return head;
@@ -167,7 +167,7 @@ function waterfall(t, seg, more) {
     li.title = `${rowLabel(r)}: starts at ${fmtDur(r.a)}, ${fmtDur(wall)}${r.k === "model" && r.f != null ? `, first output after ${fmtDur(r.f)}` : ""}${r.count > 1 ? `, ${r.count} calls` : ""}`;
     list.append(li);
   }
-  const kids = [el("h5", "", "Timeline"), el("p", "note", "In order. Start is time since the turn began. Bar length is duration (square-root scale, longest = full). Steps are model requests; a step's lighter start is its wait for first output."), list];
+  const kids = [el("h4", "", "Timeline"), el("p", "note", "In order. Start is time since the turn began. Bar length is duration (square-root scale, longest = full). Steps are model requests; a step's lighter start is its wait for first output."), list];
   if (all.length > ROWS) {
     const btn = el("button", "btn block tb-more", state.showAllRows ? `Show first ${ROWS} rows` : `Show all ${all.length} rows`);
     btn.type = "button";
@@ -197,7 +197,7 @@ function toolTable(t, seg) {
     body.append(tr);
   }
   table.append(thead, body);
-  return [el("h5", "", "Tools"), table];
+  return [el("h4", "", "Tools"), table];
 }
 
 function stepList(seg) {
@@ -217,7 +217,7 @@ function stepList(seg) {
     li.append(top, el("p", "note", bits.join(" · ")));
     list.append(li);
   }
-  const kids = [el("h5", "", "Model steps"), list];
+  const kids = [el("h4", "", "Model steps"), list];
   if (steps.length > STEPS) {
     const btn = el("button", "btn block tb-more-steps", state.showAllSteps ? `Show first ${STEPS} steps` : `Show all ${steps.length} steps`);
     btn.type = "button";
