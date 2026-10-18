@@ -519,7 +519,7 @@ const menus = {
     },
   }),
   more: createMenu({
-    trigger: $("more"), kind: "menu", label: "Thread actions", align: "end",
+    trigger: $("more"), kind: "menu", label: "Thread actions", header: () => cur()?.title, align: "end",
     items: THREAD_ACTIONS, getItems: () => threadActions(state.current),
     onSelect: (v) => state.current && runThreadAction(state.current, v),
   }),
@@ -591,7 +591,7 @@ function renderThreads() {
     more.onclick = (e) => e.stopPropagation(); // the menu opens from its own listener; the row must not also open the thread
     more.addEventListener("keydown", (e) => (e.key === "Enter" || e.key === " ") && e.stopPropagation());
     createMenu({
-      trigger: more, kind: "menu", label: `Actions for ${t.title}`, align: "end", items: THREAD_ACTIONS, getItems: () => threadActions(t.id),
+      trigger: more, kind: "menu", label: `Actions for ${t.title}`, header: () => state.threads.get(t.id)?.title || t.title, align: "end", items: THREAD_ACTIONS, getItems: () => threadActions(t.id),
       onOpen: () => { rowMenuOpen = true; li.classList.add("menu-open"); },
       onClose: () => { rowMenuOpen = false; li.classList.remove("menu-open"); if (renderPending) renderThreads(); },
       onSelect: (v) => runThreadAction(t.id, v),

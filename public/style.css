@@ -633,6 +633,7 @@ body.dragging #dropzone{display:flex}
 .menu .m-txt{flex:1;min-width:0;display:flex;flex-direction:column}
 .menu .m-label{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .menu [aria-selected=true] .m-label{font-weight:var(--fw-med)}
+.menu .m-head{padding:var(--sp-2) var(--sp-3);color:var(--t2);font:var(--fw-reg) var(--f-xs);letter-spacing:var(--ls-xs);overflow-wrap:anywhere;border-bottom:1px solid var(--edge-strong);margin-bottom:var(--sp-1)}
 .menu .m-desc{font:var(--fw-reg) var(--f-xs);letter-spacing:var(--ls-xs);color:var(--t2)}
 .menu .m-check{color:var(--accent);visibility:hidden}
 .menu [aria-selected=true] .m-check{visibility:visible}

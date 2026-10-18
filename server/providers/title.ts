@@ -5,10 +5,11 @@ import { completeLabel } from "./small-model.ts";
 
 export const MAX_MESSAGES = 2;
 const MAX_MESSAGE = 100; // chars per message, so the model sees at most 200
-const MAX_WORDS = 6;
+const MAX_WORDS = 5;
+export const MAX_TITLE = 30; // chars: a sidebar row shows about this many before it truncates
 
 const PROMPT = (messages: string[]) =>
-  `Write a title of 2 to 5 words for a chat from its latest user messages below, oldest first. Reply with ONLY the title: no quotes, no trailing punctuation, no explanation.\n\nMessages:\n${messages.map((m) => `- ${m}`).join("\n")}`;
+  `Write a title of 2 to 4 words, at most ${MAX_TITLE} characters, for a chat from its latest user messages below, oldest first. Reply with ONLY the title: no quotes, no trailing punctuation, no explanation.\n\nMessages:\n${messages.map((m) => `- ${m}`).join("\n")}`;
 
 /** One user message as plain text for naming: media references dropped, whitespace collapsed, capped at 100 chars. */
 export function titleText(message: unknown): string {
@@ -28,8 +29,9 @@ export function cleanTitle(raw: unknown): string | undefined {
   t = t.replace(/^(?:title|name)\s*:\s*/i, "").replace(/^[#>*\-\s"'“”‘’`]+|[\s"'“”‘’`*.!:;,]+$/g, "").replace(/\s+/g, " ");
   const words = t.split(" ");
   if (!t || words.length > MAX_WORDS + 4) return undefined; // a sentence, not a title
-  t = words.slice(0, MAX_WORDS).join(" ");
-  return t.length > 48 ? t.slice(0, 47).trimEnd() + "…" : t;
+  let kept = words.slice(0, MAX_WORDS);
+  while (kept.length > 1 && kept.join(" ").length > MAX_TITLE) kept.pop(); // drop whole words rather than cut one
+  return kept.join(" ").slice(0, MAX_TITLE).trimEnd();
 }
 
 /** Deterministic stand-in for tests (AGENT_CONSOLE_MOCK=1): the first few words of the latest message. */

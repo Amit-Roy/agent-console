@@ -38,7 +38,7 @@ export function createMenu(opts) {
     if (!pop) return;
     active = i;
     pop.querySelectorAll("[data-active]").forEach((n) => n.removeAttribute("data-active"));
-    const node = pop.children[i];
+    const node = pop.children[i + (pop.firstChild?.classList.contains("m-head") ? 1 : 0)];
     if (!node) return pop.removeAttribute("aria-activedescendant");
     node.setAttribute("data-active", "");
     pop.setAttribute("aria-activedescendant", node.id);
@@ -91,6 +91,8 @@ export function createMenu(opts) {
     pop.tabIndex = -1;
     pop.setAttribute("role", o.kind);
     pop.setAttribute("aria-label", o.label || trigger.getAttribute("aria-label") || trigger.title || "Menu");
+    const head = !nested && (typeof o.header === "function" ? o.header() : o.header); // read-only context line, e.g. a thread's full title
+    if (head) pop.append(el("div", "m-head", head));
     items.forEach((it, i) => {
       const n = el("div");
       n.id = `${id}-${i}`;
