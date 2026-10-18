@@ -31,6 +31,8 @@ try {
     await page.goto(base);
     await page.waitForSelector("#usage [role=tab]", { state: "attached" });
     if (width === 390) await page.locator("#menu").click();
+    assert.equal(await page.locator("#usage-sum").getAttribute("aria-expanded"), "false", "usage starts collapsed to one line");
+    await page.locator("#usage-sum").click();
     assert.deepEqual(await page.locator("#usage [role=tab]").allTextContents(), ["Claude", "OpenRouter", "Codex"]);
     const color = async () => page.locator("#usage .bar i").first().evaluate(e => getComputedStyle(e).backgroundColor);
     await page.getByRole("tab", { name: "Claude", exact: true }).click(); const red = await color();
