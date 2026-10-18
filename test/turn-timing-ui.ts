@@ -9,7 +9,7 @@ import { once } from "node:events";
 import { chromium } from "playwright";
 
 const data = fs.mkdtempSync(path.join(os.tmpdir(), "ac-turn-timing-ui-"));
-const PORT = process.env.PORT || "7075", base = `http://127.0.0.1:${PORT}`, OUT = process.env.OUT || "/tmp";
+const PORT = process.env.TIMING_UI_PORT || "7075", base = `http://127.0.0.1:${PORT}`, OUT = process.env.OUT || "/tmp";
 const now = Date.now();
 fs.mkdirSync(path.join(data, "logs"));
 fs.writeFileSync(path.join(data, "threads.json"), JSON.stringify([{ id: "mock-timing", provider: "mock", model: "echo", title: "Timing", cwd: process.cwd(), mode: "acceptEdits", effort: "default", status: "idle", cost: 0, createdAt: now, updatedAt: now }]));
@@ -17,7 +17,7 @@ process.env.AGENT_CONSOLE_DATA = data;
 const { makeToken } = await import("../server/auth.ts");
 const env = { ...process.env, PORT, AGENT_CONSOLE_DATA: data, AGENT_CONSOLE_RUN: path.join(data, "run"), AGENT_CONSOLE_MOCK: "1", AGENT_CONSOLE_HEADROOM: "0", AGENT_CONSOLE_LABELS: "0", AGENT_CONSOLE_BRAIN: path.join(data, "no-brain") };
 delete env.AGENT_CONSOLE_PID_FILE;
-const server = spawn(process.execPath, ["server/index.ts"], { env, stdio: "ignore" });
+const server = spawn(process.execPath, ["server/index.ts"], { env, stdio: process.env.DEBUG ? "inherit" : "ignore" });
 let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
 let failed = 0;
 const check = (n: string, ok: boolean, x = "") => { console.log(`${ok ? "PASS" : "FAIL"}  ${n} ${x}`); if (!ok) failed++; };
