@@ -23,31 +23,24 @@ const state = {
 };
 setFileScope(() => state.current); // local image/video refs in markdown resolve against this thread's folder
 const views = new Map(); // five most recently visited threads; stale snapshots remain visible during revalidation
-let ws, retry = 0;
+let ws, retry = 0, reconnectTimer = 0, probeTimer = 0;
 
 // ---------- connection ----------
 function connect() {
-  ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
-  ws.onopen = () => {
+  clearTimeout(reconnectTimer);
+  if (ws && ws.readyState <= 1) return; // connecting or open already
+  const sock = ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
+  sock.onopen = () => {
+    if (sock !== ws) return;
     retry = 0;
     signedOut = false;
     questions.setConnected(true);
     banner("");
   };
-  ws.onclose = () => {
-    questions.setConnected(false);
-    if (queueEditor) {
-      queueEditor.pending = false;
-      $("queue-edit-error").textContent = "Disconnected. Reconnect to save, or reopen this editor after reconnecting.";
-      $("queue-cancel").disabled = false;
-      $("queue-save").disabled = queueEditor.revision == null;
-      $("queue-draft").disabled = queueEditor.revision == null;
-    }
-    if (!signedOut) banner("Disconnected. Reconnecting…");
-    if (retry >= 1) checkSignIn();
-    setTimeout(connect, Math.min(1000 * 2 ** retry++, 10000));
-  };
-  ws.onmessage = (m) => {
+  sock.onclose = () => { if (sock === ws) closed(); };
+  sock.onmessage = (m) => {
+    if (sock !== ws) return;
+    clearTimeout(probeTimer); probeTimer = 0; // anything from the server proves the socket alive
     const receivedAt = performance.now();
     const message = JSON.parse(m.data);
     if (message.t === "history") {
@@ -58,6 +51,66 @@ function connect() {
     }
     handle(message);
   };
+}
+function closed() {
+  clearTimeout(probeTimer); probeTimer = 0;
+  questions.setConnected(false);
+  if (queueEditor) {
+    queueEditor.pending = false;
+    $("queue-edit-error").textContent = "Disconnected. Reconnect to save, or reopen this editor after reconnecting.";
+    $("queue-cancel").disabled = false;
+    $("queue-save").disabled = queueEditor.revision == null;
+    $("queue-draft").disabled = queueEditor.revision == null;
+  }
+  if (!signedOut) banner("Disconnected. Reconnecting…");
+  if (retry >= 1) checkSignIn();
+  reconnectTimer = setTimeout(connect, Math.min(1000 * 2 ** retry++, 10000));
+}
+// After a phone wakes the socket can look open yet be dead. Ping; no reply within 1.5 s means drop it and reconnect now.
+function probe() {
+  if (ws?.readyState !== 1) return void reconnectNow();
+  if (probeTimer) return;
+  ws.send(JSON.stringify({ t: "ping" }));
+  probeTimer = setTimeout(() => {
+    probeTimer = 0;
+    const dead = ws;
+    ws = null; // its late close event is ignored
+    try { dead.close(); } catch {}
+    closed();
+    retry = 0;
+    connect();
+  }, 1500);
+}
+function reconnectNow() {
+  if (ws?.readyState === 1) return probe();
+  if (ws?.readyState === 0) return; // already connecting
+  retry = 0;
+  connect();
+}
+document.addEventListener("visibilitychange", () => { if (!document.hidden) { reconnectNow(); warmSoon(); } });
+addEventListener("online", reconnectNow);
+addEventListener("pageshow", (e) => e.persisted && reconnectNow());
+// Messages the user typed or Stop presses: kept until the server acknowledges them, resent after a reconnect (the server drops
+// repeats by id), so a dead socket neither loses nor duplicates them.
+const outbox = [];
+let cidSeq = 0;
+function sendReliable(msg) {
+  const item = { ...msg, cid: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}-${++cidSeq}` };
+  outbox.push(item);
+  if (!send(item)) { toast("Offline. Your message will send when the connection is back."); return false; }
+  if (!state.features.acks) outbox.splice(outbox.indexOf(item), 1); // an older server cannot acknowledge: never resend
+  else setTimeout(() => outbox.includes(item) && probe(), 2000);
+  return true;
+}
+function flushOutbox() {
+  for (const item of [...outbox]) {
+    if (!send(item)) return;
+    if (!state.features.acks) outbox.splice(outbox.indexOf(item), 1);
+  }
+}
+function acked(cid) {
+  const at = outbox.findIndex((x) => x.cid === cid);
+  if (at >= 0) outbox.splice(at, 1);
 }
 const send = (o) => { if (ws?.readyState !== 1) return false; ws.send(JSON.stringify(o)); return true; };
 const questions = createQuestions({ send, root: () => $("chat"), changed: () => { renderThreads(); updateWorking(); } });
@@ -165,12 +218,15 @@ function handle(m) {
     case "hello":
       // the server was swapped for a new build (restart-when-idle): reload to match, unless that would lose a draft
       if (state.build && m.build && m.build !== state.build) {
-        if (!$("input").value && !queueEditor) return void location.reload();
+        if (!$("input").value && !queueEditor && !outbox.length) return void location.reload();
+        state.features = m.features || {};
+        flushOutbox();
         banner("Updated. Send or clear your draft, then reload for the new version.");
         break;
       }
       state.build = m.build || state.build;
       state.features = m.features || {};
+      flushOutbox();
       latency.flush();
       for (const view of views.values()) view.stale = true;
       state.commands = m.commands || {};
@@ -264,7 +320,11 @@ function handle(m) {
     case "invalidate":
       if (views.has(m.thread)) views.get(m.thread).stale = true;
       break;
+    case "ack":
+      acked(m.cid);
+      break;
     case "error":
+      if (m.cid) acked(m.cid);
       addNote(m.message, "errtxt");
       break;
   }
@@ -1961,7 +2021,7 @@ async function submit(mode) {
     if (!mode && !attachments.length && (questions.count(state.current) || cur()?.waiting)) mode = "steer";
     // mid-turn a message queues until the turn ends; mode "steer" (Alt+Enter, or Steer on a queued card) hands it to the agent now
     const startsTurn = !mode && cur()?.status !== "running";
-    if (send({ t: "send", thread: state.current, text, attachments, ...(mode ? { mode } : {}) }) && startsTurn) firstToken = { thread: state.current, at: tapAt, wait_ms: performance.now() - tapAt };
+    if (sendReliable({ t: "send", thread: state.current, text, attachments, ...(mode ? { mode } : {}) }) && startsTurn) firstToken = { thread: state.current, at: tapAt, wait_ms: performance.now() - tapAt };
     box.value = "";
     box.style.height = "";
     pending.length = 0;
@@ -1987,7 +2047,7 @@ function warmSoon(delay = 600) {
 }
 $("input").addEventListener("focus", () => warmSoon(0));
 $("input").addEventListener("input", () => warmSoon(0));
-$("stop").onclick = () => send({ t: "abort", thread: state.current });
+$("stop").onclick = () => sendReliable({ t: "abort", thread: state.current });
 
 // ---------- attachments (paste, drop, or the attach button) ----------
 // Each file is uploaded as soon as it is attached (raw bytes over HTTP); a message then just names the uploads.

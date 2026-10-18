@@ -220,21 +220,40 @@ function dirs(): string[] {
   return out;
 }
 
+// Client message ids already handled: a message resent after a reconnect (its ack was lost) is acknowledged, not run twice.
+const seenCids = new Map<string, number>();
+const firstDelivery = (cid: string) => {
+  if (seenCids.has(cid)) return false;
+  seenCids.set(cid, Date.now());
+  if (seenCids.size > 2000) seenCids.delete(seenCids.keys().next().value!);
+  return true;
+};
+
 wss.on("connection", (ws) => {
   clients.add(ws);
   void refreshRouterUsage(); // quota refresh only on demand; no idle network polling
   const reply = (m: unknown) => ws.readyState === ws.OPEN && ws.send(JSON.stringify(m));
-  reply({ t: "hello", build: BUILD, features: { queueEditing: true, questions: true, latency: !!latency, selectiveEvents: true }, questions: threads.getQuestions(), usage: usage.all(), commands: threads.getCommands(), threads: threads.list(), queues: threads.getQueues(), dirs: dirs(), providers: providerInfo() });
+  reply({ t: "hello", build: BUILD, features: { acks: true, queueEditing: true, questions: true, latency: !!latency, selectiveEvents: true }, questions: threads.getQuestions(), usage: usage.all(), commands: threads.getCommands(), threads: threads.list(), queues: threads.getQueues(), dirs: dirs(), providers: providerInfo() });
   let metricsWindow = Date.now(), metricsCount = 0;
-  const ping = setInterval(() => ws.readyState === ws.OPEN && ws.ping(), 25_000);
+  // A socket that misses a whole ping interval is dead (phone slept, network changed): drop it so its client reconnects cleanly.
+  let isAlive = true;
+  ws.on("pong", () => (isAlive = true));
+  const ping = setInterval(() => {
+    if (!isAlive) return void ws.terminate();
+    isAlive = false;
+    if (ws.readyState === ws.OPEN) ws.ping();
+  }, Number(process.env.AGENT_CONSOLE_WS_PING_MS) || 25_000);
   ws.on("close", () => {
     clearInterval(ping);
     clients.delete(ws);
   });
   ws.on("message", (raw) => {
+    isAlive = true;
+    let m: any;
     try {
-      const m = JSON.parse(String(raw));
+      m = JSON.parse(String(raw));
       switch (m.t) {
+        case "ping": return reply({ t: "pong" });
         case "telemetry": {
           if (Date.now() - metricsWindow > 60_000) { metricsWindow = Date.now(); metricsCount = 0; }
           if (!Array.isArray(m.samples) || m.samples.length > 20 || (metricsCount += m.samples.length) > 200) return;
@@ -271,8 +290,11 @@ wss.on("connection", (ws) => {
           return reply({ t: "created", thread: t });
         }
         case "send":
-          if (typeof m.text !== "string" || (!m.text.trim() && !(Array.isArray(m.attachments) && m.attachments.length))) return;
-          return threads.send(m.thread, m.text.slice(0, 100_000), { attachments: m.attachments, mode: m.mode === "steer" ? "steer" : "queue" });
+          if (typeof m.cid === "string" && !firstDelivery(m.cid)) return reply({ t: "ack", cid: m.cid });
+          if (typeof m.text === "string" && (m.text.trim() || (Array.isArray(m.attachments) && m.attachments.length))) {
+            threads.send(m.thread, m.text.slice(0, 100_000), { attachments: m.attachments, mode: m.mode === "steer" ? "steer" : "queue" });
+          }
+          return typeof m.cid === "string" && reply({ t: "ack", cid: m.cid });
         case "steer_queued":
           return threads.steerQueued(m.thread, m.id);
         case "compact":
@@ -282,7 +304,9 @@ wss.on("connection", (ws) => {
         case "fork":
           return reply({ t: "created", thread: threads.fork(m.thread, typeof m.provider === "string" ? m.provider : undefined, m.context === "recent") });
         case "abort":
-          return threads.abort(m.thread);
+          if (typeof m.cid === "string" && !firstDelivery(m.cid)) return reply({ t: "ack", cid: m.cid });
+          threads.abort(m.thread);
+          return typeof m.cid === "string" && reply({ t: "ack", cid: m.cid });
         case "warm":
           if (typeof m.thread === "string") threads.warm(m.thread);
           return;
@@ -302,7 +326,7 @@ wss.on("connection", (ws) => {
           return threads.remove(m.thread);
       }
     } catch (e: any) {
-      reply({ t: "error", message: e?.message ?? String(e) });
+      reply({ t: "error", message: e?.message ?? String(e), ...(typeof m?.cid === "string" ? { cid: m.cid } : {}) });
     }
   });
 });
