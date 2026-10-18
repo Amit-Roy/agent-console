@@ -20,6 +20,8 @@ const original = read();
 const auth = { origin: `http://127.0.0.1:${PORT}`, cookie: `ac_session=${makeToken()}` };
 const ws = new WebSocket(`ws://127.0.0.1:${PORT}/ws`, { headers: auth });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// background subagents run inside the agent process: a restart kills them even though their thread looks idle
+const busy = (t) => t.status === "running" || t.background > 0;
 let threads, queues = new Map(), durableQueues = false, idleSince = 0, restarting = false;
 const give = (why, code) => { console.log(why); process.exit(code); };
 const deadline = setTimeout(() => give("Waited 30 minutes; server left running.", 1), 30 * 60_000);
@@ -30,7 +32,7 @@ ws.on("message", (raw) => {
     threads = new Map(m.threads.map((t) => [t.id, t]));
     queues = new Map(Object.entries(m.queues || {}));
     durableQueues = !!m.features?.queueEditing; // queues survive a restart on newer servers, so they need not drain first
-    console.log(`Waiting for ${m.threads.filter((t) => t.status === "running").length} running turn(s) before restarting pid ${original}.`);
+    console.log(`Waiting for ${m.threads.filter(busy).length} busy thread(s) (running turns or background subagents) before restarting pid ${original}.`);
   }
   if (m.t === "thread") threads?.set(m.thread.id, m.thread);
   if (m.t === "removed") { threads?.delete(m.thread); queues.delete(m.thread); }
@@ -39,7 +41,7 @@ ws.on("message", (raw) => {
 const check = setInterval(async () => {
   if (restarting) return;
   if (read() !== original) give("Server was already restarted; nothing to do.", 0);
-  if (!threads || [...threads.values()].some((t) => t.status === "running") || (!durableQueues && [...queues.values()].some((q) => q.length))) { idleSince = 0; return; }
+  if (!threads || [...threads.values()].some(busy) || (!durableQueues && [...queues.values()].some((q) => q.length))) { idleSince = 0; return; }
   idleSince ||= Date.now();
   if (Date.now() - idleSince < 1500) return; // a queued message may start the next turn right after one ends
   restarting = true;
