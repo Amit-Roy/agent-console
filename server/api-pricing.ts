@@ -21,6 +21,11 @@ export const pricing = {
 
 // USD per million tokens: fresh input, cache read, cache write, output.
 export const rates: Record<string, readonly [number, number, number, number]> = {
+  "gpt-5.5": [2, 0.10, 2.50, 10],
+  "gpt-5.6": [2, 0.10, 2.50, 10],
+  "gpt-6": [2, 0.10, 2.50, 10],
+  "gpt-6.0": [2, 0.10, 2.50, 10],
+  "gpt-6.1": [2, 0.10, 2.50, 10],
   "gpt-6.1-sol": [2, 0.10, 2.50, 10],
   "gpt-6-astra": [10, 1, 12.50, 50],
   "gpt-6-luna": [0.10, 0.01, 0.125, 0.50],
@@ -30,8 +35,26 @@ export const rates: Record<string, readonly [number, number, number, number]> = 
 };
 const measured = (n: unknown): n is number => typeof n === "number" && Number.isFinite(n) && n >= 0;
 function modelRate(model: string) {
-  // Only exact public IDs and their dated snapshots; no selected-model/default guessing.
-  return typeof model === "string" ? rates[model] || rates[model.replace(/-(?:\d{8}|\d{4}-\d{2}-\d{2})$/, "")] : undefined;
+  if (typeof model !== "string") return undefined;
+  const lower = model.trim().toLowerCase();
+  const candidates = new Set<string>();
+  const withDashes = lower.replace(/[:_\s]+/g, "-");
+  for (const key of [lower, withDashes, withDashes.replace(/\./g, "-"), withDashes.replace(/-(?:\d{8}|\d{4}-\d{2}-\d{2})$/, "")]) {
+    candidates.add(key);
+    if (key.startsWith("gpt-")) {
+      candidates.add(key.replace(/-(\d)(?=-)/g, ".$1"));
+      candidates.add(key.replace(/-(\d+)(?=-|$)/g, ".$1"));
+    }
+  }
+  for (const key of candidates) {
+    if (rates[key]) return rates[key];
+  }
+  const family = lower.match(/^gpt[-_.:]*([56])(?:[-_.:]*(\d+))?(?:[-_.:]*(?:codex|mini|nano|pro|sol|max))*$/);
+  if (family) {
+    const key = family[1] === "5" ? "gpt-5.5" : "gpt-6.1";
+    if (rates[key]) return rates[key];
+  }
+  return undefined;
 }
 
 type PricedModel = ModelUsage & { providerCost?: number };
