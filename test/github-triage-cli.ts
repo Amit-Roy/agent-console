@@ -25,6 +25,14 @@ const cli = (...args: string[]) => new Promise<string>((resolve, reject) => {
 });
 const workerPid = () => Number(fs.readFileSync(path.join(runtime, "pid"), "utf8"));
 try {
+  const retained = path.join(scratch, "history.json");
+  fs.writeFileSync(retained, "Existing private calibration must survive a failed refresh.", { mode: 0o600 });
+  await assert.rejects(new Promise<void>((resolve, reject) => {
+    execFile(process.execPath, [path.join(root, "scripts/github-triage.ts"), "calibrate"], {
+      cwd: root, env: { ...env, AGENT_CONSOLE_DATA: path.join(scratch, "missing-source"), AGENT_CONSOLE_TRIAGE_HISTORY: retained }, timeout: 25_000,
+    }, error => error ? reject(error) : resolve());
+  }));
+  assert.equal(fs.readFileSync(retained, "utf8"), "Existing private calibration must survive a failed refresh.");
   assert.match(await cli("watchdog"), /Reconciled 0 open items; queued 0 repairs/);
   const originalPid = workerPid();
   assert.equal(JSON.parse(await cli("status")).ok, true);

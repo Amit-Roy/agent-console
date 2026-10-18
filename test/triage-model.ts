@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import os from "node:os";
-import { createPiEventCollector, createTriageClassifier, parsePiTriageOutput, parseTriageReply, piTriageArgs, piTriageModelConfig, runTriageCommand, triagePrompt, type TriageInput } from "../server/providers/triage-model.ts";
+import { createPiEventCollector, createTriageClassifier as createRealClassifier, parsePiTriageOutput, parseTriageReply as parseRealReply, piTriageArgs, piTriageModelConfig, runTriageCommand, triagePrompt, type TriageInput } from "../server/providers/triage-model.ts";
+
+import { fixtureHistory } from "./fixtures/triage-history.ts";
+
+const parseTriageReply = (raw: string | undefined, value: TriageInput) => parseRealReply(raw, value, fixtureHistory);
+const createTriageClassifier = (engines: Parameters<typeof createRealClassifier>[0]) => createRealClassifier(engines, () => fixtureHistory);
 
 const input: TriageInput = { repo: "example/app", number: 1, kind: "issue", title: "Repair app preview", body: "The single preview component fails every build. Deployment is blocked. Investigate asynchronous recovery. No deadline. Production is currently down.", changedFiles: 2, additions: 40, deletions: 5 };
 const assessment = {
@@ -20,11 +25,12 @@ const parsed = parseTriageReply(valid, input)!;
 assert.equal(parsed.effort, "bau");
 assert.equal(parsed.priority, "p1");
 assert.equal(parsed.scorecard!.design.level, "detailed");
-assert.deepEqual(parsed.scorecard!.tokens.input, [40_000, 120_000]);
-assert.deepEqual(parsed.scorecard!.tokens.output, [8_000, 24_000]);
-assert.equal(parsed.scorecard!.tokens.workUnits, 10);
-assert.equal(parsed.scorecard!.tokens.confidence, "planning");
-assert.match(parsed.scorecard!.tokens.formula, /Uncalibrated.*retries.*tests.*excludes measured triage cost/);
+assert.deepEqual(parsed.scorecard!.tokens.input, fixtureHistory.input.range);
+assert.deepEqual(parsed.scorecard!.tokens.output, fixtureHistory.output.range);
+assert.equal("workUnits" in parsed.scorecard!.tokens, false);
+assert.deepEqual(parsed.scorecard!.history.thresholds, fixtureHistory.thresholds);
+assert.equal(parsed.scorecard!.tokens.confidence, fixtureHistory.evidence);
+assert.match(parsed.scorecard!.tokens.formula, /median/i);
 assert.deepEqual(parsed.scorecard!.facts, { changedFiles: 2, additions: 40, deletions: 5 });
 assert.deepEqual(parseTriageReply("```json\n" + valid + "\n```", input), parsed);
 for (const raw of ["[]", "null", "{}", "Ignore rules " + valid, valid.replace('"value":1', '"value":4'), valid.replace('"value":1', '"value":1.5'), valid.replace('single preview component', 'fabricated source quote')]) {
@@ -53,19 +59,19 @@ assert.equal(sparse.priority, "p2");
 assert.equal(sparse.scorecard!.unknowns.length, 7);
 assert.equal(sparse.scorecard!.tokens.confidence, "low");
 assert.deepEqual(sparse.scorecard!.facts, { deletions: 0 });
-// Deterministic boundaries use fixed metric values, not model-provided labels.
+// Scope scores cannot change the calibrated effort estimate or token ranges.
 function scores(values: number[]) {
   const record = structuredClone(assessment);
   Object.keys(record.metrics).forEach((name, index) => record.metrics[name] = { value: values[index], evidence: name === "urgency" && values[index] === 2 ? "Production is currently down" : "Deployment" });
   return parseTriageReply(JSON.stringify({ ...record, effort: "deep", priority: "p0", tokens: 1 }), input)!;
 }
-assert.equal(scores([0, 0, 1, 1, 0, 0, 0]).effort, "trivial");
+assert.equal(scores([0, 0, 1, 1, 0, 0, 0]).effort, fixtureHistory.effort);
 assert.equal(scores([1, 1, 0, 1, 1, 0, 0]).effort, "bau");
 assert.equal(scores([2, 2, 2, 1, 1, 0, 0]).effort, "bau");
-assert.equal(scores([2, 2, 2, 2, 1, 0, 0]).effort, "deep");
-assert.equal(scores([3, 0, 0, 0, 1, 0, 0]).effort, "deep");
-assert.equal(scores([0, 3, 0, 0, 1, 0, 0]).effort, "deep");
-assert.equal(scores([0, 0, 0, 3, 1, 0, 0]).effort, "deep");
+assert.equal(scores([2, 2, 2, 2, 1, 0, 0]).effort, fixtureHistory.effort);
+assert.equal(scores([3, 0, 0, 0, 1, 0, 0]).effort, fixtureHistory.effort);
+assert.equal(scores([0, 3, 0, 0, 1, 0, 0]).effort, fixtureHistory.effort);
+assert.equal(scores([0, 0, 0, 3, 1, 0, 0]).effort, fixtureHistory.effort);
 assert.equal(scores([0, 0, 0, 0, 0, 0, 0]).priority, "p3");
 assert.equal(scores([1, 1, 1, 1, 2, 0, 1]).priority, "p2");
 assert.equal(scores([1, 1, 1, 1, 2, 0, 2]).priority, "p1");
@@ -112,6 +118,10 @@ const evidenceFallback = createTriageClassifier([
   { id: "grounded", call: async () => valid },
 ]);
 assert.equal((await evidenceFallback(input)).model, "grounded");
+
+let missingHistoryCalls = 0;
+await assert.rejects(createRealClassifier([{ id: "unused", call: async () => { missingHistoryCalls++; return valid; } }], () => ({ status: "insufficient-history", scope: "completed-delivery-run", reason: "Missing fixture" }))(input), /history is unavailable/);
+assert.equal(missingHistoryCalls, 0, "Missing measured history must fail before consuming model tokens");
 
 const event = (message: object) => JSON.stringify({ type: "message_end", message });
 assert.equal(parsePiTriageOutput(event({ role: "assistant", stopReason: "stop", content: [{ type: "text", text: valid }] })), valid);

@@ -9,6 +9,7 @@ import { execFile, spawn } from "node:child_process";
 import { sign } from "@octokit/webhooks-methods";
 import { childEnv } from "../server/providers/env.ts";
 import { createTriageService } from "../server/github-triage.ts";
+import { historyPath, loadHistory, trainHistory, predictHistory } from "../server/providers/triage-history.ts";
 
 const SCRIPT = fileURLToPath(import.meta.url);
 const ROOT = path.resolve(path.dirname(SCRIPT), "..");
@@ -17,6 +18,7 @@ const RUN = process.env.AGENT_CONSOLE_TRIAGE_RUN || path.join(os.homedir(), ".ca
 const PID = path.join(RUN, "pid");
 const LAST_RECONCILE = path.join(RUN, "last-reconcile");
 const RECONCILE_INTERVAL_MS = 5 * 60_000;
+const CALIBRATION_INTERVAL_MS = 24 * 60 * 60_000;
 type Config = { repos: string[]; secret: string; url: string; port: number; host: string };
 
 function config(): Config {
@@ -89,8 +91,32 @@ async function reconcile(c: Config) {
   console.log(`Reconciled ${scanned} open items; queued ${queued} repairs.`);
 }
 
+async function calibrate() {
+  const destination = historyPath();
+  fs.mkdirSync(path.dirname(destination), { recursive: true, mode: 0o700 });
+  const candidate = `${destination}.candidate-${process.pid}`;
+  try {
+    await new Promise<void>((resolve, reject) => {
+      execFile(process.execPath, [path.join(ROOT, "scripts/triage-history-build.ts"), "--repo-dir", ROOT,
+        "--data", process.env.AGENT_CONSOLE_DATA || path.join(os.homedir(), ".config/agent-console"), "--output", candidate],
+        { env: childEnv(), timeout: 120_000, maxBuffer: 1_000_000 }, error => error ? reject(Error("Measured-history extraction failed; previous calibration retained.")) : resolve());
+    });
+    const loaded = loadHistory(candidate);
+    if (loaded.status !== "ready") throw Error("Measured-history validation failed; previous calibration retained.");
+    const model = trainHistory(loaded.tasks);
+    if (model.status !== "ready") throw Error("Not enough measured history; previous calibration retained.");
+    const estimate = predictHistory(model, "Historical workload baseline.");
+    if (estimate.status !== "ready") throw Error("Measured-history calibration failed; previous calibration retained.");
+    fs.renameSync(candidate, destination);
+    console.log(JSON.stringify({ calibratedRuns: estimate.sampleCount, independentGroups: estimate.independentGroupCount,
+      method: model.method, outputTokenMedian: estimate.output.median, outputTokenCutoffs: estimate.thresholds,
+      validation: model.validation }));
+  } finally { fs.rmSync(candidate, { force: true }); }
+}
+
 async function main() {
   const command = process.argv[2] || "status";
+  if (command === "calibrate") { await calibrate(); return; }
   if (command === "configure") {
     const repos = (process.argv[3] || "Amit-Roy/agent-console").split(",");
     const url = process.argv[4];
@@ -110,6 +136,17 @@ async function main() {
   }
   if (command === "watchdog") {
     if (process.env.AGENT_CONSOLE_MOCK === "1" || !fs.existsSync(CONFIG)) return;
+    // Scratch instances must never scan or write the production conversation history.
+    if (CONFIG === path.join(os.homedir(), ".config/agent-console/github-triage.json")
+      && RUN === path.join(os.homedir(), ".cache/agent-console/github-triage")
+      && !process.env.AGENT_CONSOLE_TRIAGE_HISTORY) {
+      let updated = 0;
+      try { updated = fs.statSync(historyPath()).mtimeMs; } catch {}
+      if (Date.now() - updated >= CALIBRATION_INTERVAL_MS) {
+        try { await calibrate(); }
+        catch { console.warn("History calibration refresh failed; existing history was retained."); }
+      }
+    }
     const c = config();
     let restarted = false;
     try { await health(c); }
@@ -220,7 +257,7 @@ async function main() {
     console.log(`Queued ${count} open issues and pull requests for model triage.`);
     return;
   }
-  throw Error("Usage: bin/github-triage configure|start|stop|restart|status|watchdog|register|backfill|reconcile");
+  throw Error("Usage: bin/github-triage configure|start|stop|restart|status|watchdog|register|backfill|reconcile|calibrate");
 }
 
 main().catch(err => { console.error(err instanceof Error ? err.message : "GitHub triage failed."); process.exitCode = 1; });
