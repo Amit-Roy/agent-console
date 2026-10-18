@@ -5,7 +5,7 @@ import { parseEnv } from "../server/providers/env.ts";
 import { replayPreamble, threadToMarkdown, turnsOf } from "../server/export.ts";
 import { excerpt, needsLabel, parseLabels } from "../server/providers/label.ts";
 import { claudeAdvisorArgs, claudeConsoleSettingsArgs, claudeRoutingEnv, leanMcpArgs } from "../server/providers/claude.ts";
-import { cleanTitle } from "../server/providers/title.ts";
+import { cleanTitle, titleText, titleInput } from "../server/providers/title.ts";
 import { normTool, parsePiModels, piTranslator } from "../server/providers/pi.ts";
 
 let failed = 0;
@@ -43,6 +43,9 @@ check("title: 'Title:' prefix and extra lines dropped", cleanTitle("Title: Dark 
 check("title: long titles are cut to 6 words", cleanTitle("one two three four five six seven eight") === "one two three four five six");
 check("title: a whole sentence is not a title", cleanTitle("I'm sorry, but I cannot determine a title for this particular message because it is empty.") === undefined);
 check("title: empty / junk is rejected", cleanTitle("") === undefined && cleanTitle(undefined) === undefined && cleanTitle('""') === undefined);
+check("title input: media references dropped", titleText("look ![a](/x/y.png) at [Image #2] this data:image/png;base64,AAAA bug") === "look at this bug");
+check("title input: capped at 100 chars", titleText("x".repeat(500)).length === 100);
+check("title input: only the last two non-empty messages", titleInput(["a", "b", "![i](x)", "c"]).join("|") === "b|c");
 
 // ---- tool labels
 check("labels: only a 100-char excerpt of a command is sent, with dots", excerpt("x".repeat(500)) === "x".repeat(100) + "..." && excerpt("ls  -la\n/tmp") === "ls -la /tmp");
