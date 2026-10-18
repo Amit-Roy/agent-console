@@ -11,6 +11,12 @@ The file viewer's **Edit** link opens the selected text file in Acode on Android
 
 If no bridge URL is configured, Edit reports that editing is unavailable. The main Console stays private. Acode makes native requests without a Coder browser cookie; its dedicated URL must reach the bridge without a Coder login redirect.
 
+### Coder proxy CORS
+
+Coder v2.38's default `simple` template CORS policy intercepts browser preflights and strips the bridge's response headers. Node HTTP probes can pass while Acode reports `Failed to fetch`. The deployed Caddy wildcard site applies [a bridge-only header exception](acode-caddy.caddy) to the two bridge API paths and known local WebView origins. It answers their preflights before Coder and restores response headers after proxying. This does not change Console authentication or the template-wide CORS policy.
+
+Validate the public route with `ACODE_PUBLIC_TEST_URL=https://YOUR-BRIDGE-HOST rtk test node test/acode-public-cors.ts`. This uses Chromium's actual preflight enforcement, not a Node-only fetch. If the bridge hostname changes, update the Caddy matcher too.
+
 ## Phone setup
 
 Open `/acode-setup`, download the plugin ZIP, then use **Acode 1.13.5 or newer → Plugins → + → Local** to install it. Return to Console and tap **Edit**. Android may ask whether to open Acode. The private ZIP cannot be installed automatically through Acode's registry-only plugin installation intent.
