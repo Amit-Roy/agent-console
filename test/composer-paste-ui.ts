@@ -48,6 +48,23 @@ try {
   await page.waitForFunction(() => document.querySelectorAll("#thumbs li").length === 0);
   assert.equal(await value(), "", "removing the image removes its label");
 
+  // Chrome on Android (keyboard media insertion) dispatches paste with a bare file built from bytes: no name, no type
+  await box.click();
+  const claimed = await page.evaluate(async () => {
+    const c = Object.assign(document.createElement("canvas"), { width: 60, height: 40 });
+    const blob: Blob = await new Promise((r) => c.toBlob((b) => r(b!), "image/png"));
+    const dt = new DataTransfer();
+    dt.items.add(new File([blob], "", { type: "" }));
+    const ev = new ClipboardEvent("paste", { clipboardData: dt, bubbles: true, cancelable: true });
+    document.getElementById("input")!.dispatchEvent(ev);
+    return ev.defaultPrevented;
+  });
+  assert.equal(claimed, true, "untyped keyboard image paste is claimed");
+  await page.waitForFunction(() => document.querySelectorAll("#thumbs li img").length === 1);
+  assert.equal(await value(), "[Image #1] ", "untyped keyboard image becomes an image attachment");
+  await page.locator("#thumbs .rm").click();
+  await page.waitForFunction(() => document.querySelectorAll("#thumbs li").length === 0);
+
   // rich HTML on the clipboard is flattened to its text
   await page.fill("#input", "");
   await box.click();
