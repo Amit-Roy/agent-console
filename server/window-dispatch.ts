@@ -5,6 +5,8 @@ import { execFileSync } from "node:child_process";
 import { DATA_DIR } from "./auth.ts";
 import { EFFORT_LABELS, PRIORITY_LABELS, githubRequest, type GithubRequest } from "./github-triage.ts";
 import type { ProviderUsage, UsageWindow } from "./usage.ts";
+import type { EventLog } from "./automation/events.ts";
+import { route as routeWork } from "./automation/router.ts";
 
 // Subscription quota resets every 5 hours whether or not it was used. Near the end of a window, hand open issues to
 // the provider whose quota would otherwise expire. This module only plans; `dryRun` (the default) never starts work.
@@ -18,12 +20,13 @@ export interface Config {
   maxUsedPct: number;    // skip a window that is already this full: nothing would be wasted
   perWindow: number;     // issues handed to one provider per window
   repos: string[];
+  routing: { mode: "shadow" | "live"; bauOnPi: boolean }; // shadow: the router only reports its choice; live: it decides. bauOnPi: BAU runs on Pi (turn on once BAU PRs are reviewed)
   authors: string[];     // only issues opened by these GitHub logins are dispatched: issue text steers an unattended agent
 }
 export interface Issue { repo: string; number: number; title: string; labels: string[] }
 export interface Decision { key: string; issue: Issue; effort: Effort; route: Route; window?: { provider: string; resetsAt: number; used: number }; reason: string }
 
-export const DEFAULTS: Config = { enabled: false, dryRun: true, leadMinutes: 90, maxUsedPct: 90, perWindow: 2, repos: ["Amit-Roy/agent-console"], authors: ["Amit-Roy"] };
+export const DEFAULTS: Config = { enabled: false, dryRun: true, leadMinutes: 90, maxUsedPct: 90, perWindow: 2, repos: ["Amit-Roy/agent-console"], authors: ["Amit-Roy"], routing: { mode: "shadow", bauOnPi: false } };
 
 // Issue #10: BAU = Sonnet medium or Sol low; Deep = Opus medium or Sol high; Trivial = any cheap Pi model, reviewed by a better one.
 export const ROUTES: Record<Effort, Route[]> = {
@@ -176,6 +179,7 @@ export function loadConfig(file = path.join(DATA_DIR, "window-dispatch.json")): 
     leadMinutes: num(raw.leadMinutes, DEFAULTS.leadMinutes, 5, 300),
     maxUsedPct: num(raw.maxUsedPct, DEFAULTS.maxUsedPct, 1, 100),
     perWindow: num(raw.perWindow, DEFAULTS.perWindow, 1, 10),
+    routing: { mode: raw.routing?.mode === "live" ? "live" : "shadow", bauOnPi: raw.routing?.bauOnPi === true },
     authors: Array.isArray(raw.authors) && raw.authors.length && raw.authors.every((a: unknown) => typeof a === "string" && /^[\w-]{1,39}$/.test(a)) ? raw.authors : DEFAULTS.authors,
     repos: Array.isArray(raw.repos) && raw.repos.every((r: unknown) => typeof r === "string" && /^[\w-]+\/(?!\.)[\w.-]+$/.test(r)) && raw.repos.length ? raw.repos : DEFAULTS.repos,
   };
@@ -195,30 +199,63 @@ export async function openIssues(repos: string[], github: GithubRequest = github
 }
 
 /** Append-only ledger: decisions and the keys they cover. Dry runs are logged but never block a later real run. */
-export function createDispatcher(opts: { usage: () => Record<string, ProviderUsage>; github?: GithubRequest; dir?: string; now?: () => number; start?: (d: Decision) => Promise<void> | void }) {
+export function createDispatcher(opts: {
+  usage: () => Record<string, ProviderUsage>; github?: GithubRequest; dir?: string; now?: () => number;
+  start?: (d: Decision) => Promise<{ thread?: string } | void> | { thread?: string } | void;
+  events?: EventLog; active?: () => { provider: string; role: string }[]; failures?: () => Record<string, number>;
+}) {
   const dir = opts.dir ?? DATA_DIR;
   const ledger = path.join(dir, "window-dispatch.jsonl");
   const now = opts.now ?? Date.now;
+  const ev = opts.events;
   const read = () => { try { return fs.readFileSync(ledger, "utf8").split("\n").filter(Boolean).map(l => JSON.parse(l)); } catch { return []; } };
+  const append = (row: object) => fs.appendFileSync(ledger, JSON.stringify(row) + "\n", { mode: 0o600 });
   async function tick() {
     const cfg = loadConfig(path.join(dir, "window-dispatch.json"));
     if (!cfg.enabled) return [];
-    const issues = await openIssues(cfg.repos, opts.github, cfg.authors);
-    const rows = read();
-    const done = new Set<string>(rows.filter(r => !r.dryRun).map(r => r.key));
-    const live = !cfg.dryRun && !!opts.start;
-    const seen = new Set<string>(rows.filter(r => r.dryRun && r.window?.resetsAt).map(r => `${r.key}@${r.window.resetsAt}`));
-    const decisions = plan({ now: now(), usage: opts.usage(), issues, done, cfg })
-      .filter(d => live || !seen.has(`${d.key}@${d.window?.resetsAt}`));
-    for (const d of decisions) {
-      // Logged before the start so a crash cannot start the same issue twice; a failed start stays in the ledger with its error and is not retried.
-      const row = { ts: now(), dryRun: !live, key: d.key, effort: d.effort, route: d.route, window: d.window, reason: d.reason };
-      fs.appendFileSync(ledger, JSON.stringify(row) + "\n", { mode: 0o600 });
-      if (!live) continue;
-      try { await opts.start!(d); }
-      catch (e: any) { fs.appendFileSync(ledger, JSON.stringify({ ...row, error: String(e?.message ?? e).slice(0, 300) }) + "\n", { mode: 0o600 }); }
+    const run = `tick:${now()}`;
+    ev?.record({ step: "dispatcher", kind: "start", run, msg: "tick" });
+    try {
+      const issues = await openIssues(cfg.repos, opts.github, cfg.authors);
+      const rows = read();
+      const done = new Set<string>(rows.filter(r => !r.dryRun).map(r => r.key));
+      const live = !cfg.dryRun && !!opts.start;
+      const seen = new Set<string>(rows.filter(r => r.dryRun && r.window?.resetsAt).map(r => `${r.key}@${r.window.resetsAt}`));
+      const planned = plan({ now: now(), usage: opts.usage(), issues, done, cfg })
+        .filter(d => live || !seen.has(`${d.key}@${d.window?.resetsAt}`));
+      const picked: Decision[] = [];
+      let deferred = 0;
+      for (let d of planned) {
+        const rr = routeWork({ role: "work", effort: d.effort, usage: opts.usage(), active: opts.active?.() ?? [], now: now(), flags: { bauOnPi: cfg.routing.bauOnPi }, failures: opts.failures?.() });
+        const shadow = { decision: rr.decision, route: rr.route, why: rr.why };
+        ev?.record({ step: "router", kind: rr.decision === "defer" ? "info" : "ok", ref: d.key, msg: `${cfg.routing.mode}: ${rr.decision}${rr.route ? ` ${rr.route.provider}/${rr.route.model}` : ""} — ${rr.why}`, data: { legacy: d.route, router: rr.route } });
+        if (cfg.routing.mode === "live") {
+          if (rr.decision === "defer") { deferred++; continue; } // not marked done: the next tick tries again
+          if (rr.decision === "route") d = { ...d, route: rr.route! };
+        }
+        picked.push(d);
+        // Logged before the start so a crash cannot start the same issue twice; a failed start stays in the ledger with its error and is not retried.
+        const row = { ts: now(), dryRun: !live, key: d.key, effort: d.effort, route: d.route, window: d.window, reason: d.reason, shadow };
+        append(row);
+        if (!live) continue;
+        const wt = `worktree:${d.key}`;
+        ev?.record({ step: "worktree", kind: "start", run: wt, ref: d.key });
+        try {
+          const started = await opts.start!(d);
+          ev?.record({ step: "worktree", kind: "ok", run: wt, ref: d.key });
+          ev?.record({ step: "worker", kind: "start", run: `work:${(started as any)?.thread ?? d.key}`, ref: d.key, msg: `${d.route.provider}/${d.route.model}`, data: { thread: (started as any)?.thread } });
+        } catch (e: any) {
+          const error = String(e?.message ?? e).slice(0, 300);
+          append({ ...row, error });
+          ev?.record({ step: "worktree", kind: "fail", run: wt, ref: d.key, msg: error });
+        }
+      }
+      ev?.record({ step: "dispatcher", kind: "ok", run, msg: `picked ${picked.length}${deferred ? `, deferred ${deferred}` : ""}${picked.length || deferred ? "" : " (nothing in a window's last " + cfg.leadMinutes + " min with room)"}` });
+      return picked;
+    } catch (e: any) {
+      ev?.record({ step: "dispatcher", kind: "fail", run, msg: String(e?.message ?? e) });
+      throw e;
     }
-    return decisions;
   }
   return { tick };
 }

@@ -7,7 +7,7 @@ import { execFileSync } from "node:child_process";
 import { plan, effortOf, expiring, loadConfig, createDispatcher, ROUTES, threadTitle, topicOf, issuePrompt, startIssue, type Issue } from "../server/window-dispatch.ts";
 
 const now = 1_800_000_000_000, min = 60_000;
-const win = (used: number, endsInMin: number) => ({ windows: [{ label: "5-hour", used, limit: 100, unit: "%", resetsAt: now + endsInMin * min }, { label: "7-day", used: 5, limit: 100 }], updatedAt: now });
+const win = (used: number, endsInMin: number, week = 5) => ({ windows: [{ label: "5-hour", used, limit: 100, unit: "%", resetsAt: now + endsInMin * min }, { label: "7-day", used: week, limit: 100 }], updatedAt: now });
 const issue = (number: number, effort: string, pri = "P2"): Issue => ({ repo: "o/r", number, title: `t${number}`, labels: [`Eff: ${effort}`, `Pri: ${pri}`] });
 
 // usage history only records changes
@@ -118,5 +118,40 @@ try {
   const rows = fs.readFileSync(path.join(dir, "window-dispatch.jsonl"), "utf8").trim().split("\n").map(l => JSON.parse(l));
   assert.equal(rows.at(-1).error, "no checkout");
   assert.equal((await bad.tick()).length, 0, "a failed start is not retried");
+
+  // --- router: shadow mode only reports; live mode decides; deferral keeps the issue for the next tick ------------------------
+  {
+    const { createEventLog } = await import("../server/automation/events.ts");
+    const ev = createEventLog({ file: path.join(dir, "ev.jsonl"), now: () => now });
+    const gh = async () => [
+      { number: 1, title: "deep one", user: { login: "Amit-Roy" }, labels: [{ name: "Eff: Deep" }, { name: "Pri: P1" }] },
+      { number: 2, title: "bau one", user: { login: "Amit-Roy" }, labels: [{ name: "Eff: BAU" }, { name: "Pri: P2" }] },
+    ];
+    const mk = (u: any, startedKeys: any[]) => createDispatcher({ usage: () => u, github: gh as any, dir, now: () => now, events: ev, active: () => [], start: d => { startedKeys.push([d.key, d.route.provider]); } });
+    const both = { claude: win(10, 60), codex: win(10, 60) };
+    const reset = () => { fs.rmSync(path.join(dir, "window-dispatch.jsonl"), { force: true }); };
+    const put = (routing: any) => fs.writeFileSync(path.join(dir, "window-dispatch.json"), JSON.stringify({ enabled: true, dryRun: false, repos: ["o/r"], routing }));
+
+    put({ mode: "shadow", bauOnPi: true }); reset();
+    let started: any[] = []; await mk(both, started).tick();
+    assert.deepEqual(started.map(s => s[0]), ["o/r#1", "o/r#2"]);
+    assert.ok(started.every(s => s[1] === "claude"), "shadow: legacy routing still decides");
+    const shadowRows = fs.readFileSync(path.join(dir, "window-dispatch.jsonl"), "utf8").trim().split("\n").map(l => JSON.parse(l));
+    assert.equal(shadowRows.find(r => r.key === "o/r#2").shadow.route.provider, "pi", "the router's choice is logged beside it");
+    assert.ok(ev.read({ step: "router" }).events.some(e => /shadow/.test(e.msg!) && e.ref === "o/r#2"));
+
+    put({ mode: "live", bauOnPi: true }); reset(); started = [];
+    await mk(both, started).tick();
+    assert.deepEqual(started, [["o/r#1", "claude"], ["o/r#2", "pi"]], "live: Deep on premium, BAU on Pi");
+
+    put({ mode: "live", bauOnPi: false }); reset(); started = [];
+    await mk({ claude: win(10, 60, 100), codex: win(10, 60, 100) }, started).tick();
+    assert.deepEqual(started, [], "live: weekly caps reached, Deep and BAU wait");
+    assert.ok(!fs.existsSync(path.join(dir, "window-dispatch.jsonl")) || !fs.readFileSync(path.join(dir, "window-dispatch.jsonl"), "utf8").includes('"key":"o/r#1"'), "a deferred issue is not marked done");
+    assert.ok(ev.read({ step: "router" }).events.some(e => /defer/.test(e.msg!)));
+    started = []; await mk(both, started).tick();
+    assert.equal(started.length, 2, "next tick picks it up once there is room");
+    assert.ok(ev.read({ step: "dispatcher" }).events.some(e => e.kind === "ok" && /picked 2/.test(e.msg!)), "each tick leaves a trace");
+  }
 } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 console.log("PASS usage history, 90-minute lead window, effort routing, priority order, config clamps, dry-run ledger");
