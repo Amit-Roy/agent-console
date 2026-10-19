@@ -78,11 +78,12 @@ export function startCodexApp(t: ThreadSpec, ctx: AgentCtx, translate: (row: any
   let compactTimer: NodeJS.Timeout | undefined;
   let total: any, baseline: any;
   // Subagents by thread id. Codex does not start a parent turn when one finishes after the parent's turn ended, so we do.
-  const children = new Map<string, { path: string; call: string; text: string; done?: boolean }>();
+  const children = new Map<string, { path: string; call: string; text: string; done?: boolean; failed?: string }>();
   let unseen: string[] = []; // finished while the parent turn ran, before the parent model looked again
   const backgroundChanged = () => ctx.event({ type: "system", subtype: "background_tasks_changed", tasks: [...children].filter(([, c]) => !c.done).map(([id, c]) => ({ task_id: id, description: c.path })) });
   const subagentDone = (id: string) => {
     const c = children.get(id)!;
+    if (c.failed) return `[Background subagent ${c.path} failed: ${c.failed}]`;
     return `[Background subagent ${c.path} finished. Its final message:]\n${c.text.trim() || "(no message)"}`;
   };
   const pending = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void; timer: NodeJS.Timeout }>();
@@ -146,6 +147,16 @@ export function startCodexApp(t: ThreadSpec, ctx: AgentCtx, translate: (row: any
     if (v.threadId && v.threadId !== session) {
       const child = children.get(v.threadId);
       if (child && r.method === "item/completed" && v.item?.type === "agentMessage" && typeof v.item.text === "string") child.text = v.item.text;
+      // A subagent that dies (usage exhausted, crash) never sends subAgentActivity "completed"; without this it counts as background work forever.
+      const failure = r.method === "turn/completed" && ["failed", "interrupted"].includes(v.turn?.status) ? v.turn?.error?.message || `turn ${v.turn.status}`
+        : r.method === "error" && !v.willRetry ? v.error?.message || "Codex error." : "";
+      if (child && !child.done && failure) {
+        child.done = true; child.failed = failure.slice(0, 300);
+        ctx.event({ type: "system", subtype: "task_notification", task_id: v.threadId, tool_use_id: child.call, status: "failed", summary: child.failed });
+        backgroundChanged();
+        if (operation) unseen.push(v.threadId);
+        else ctx.event({ type: "subagent_wake", text: subagentDone(v.threadId) });
+      }
       return;
     }
     if (r.method === "serverRequest/resolved") {
