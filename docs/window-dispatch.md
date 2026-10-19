@@ -17,7 +17,7 @@ Claude and Codex subscriptions reset every 5 hours whether or not the quota was 
 | `enabled` | `false` | Master switch. |
 | `dryRun` | `true` | Log decisions to `window-dispatch.jsonl`; start nothing. |
 | `leadMinutes` | `90` | Assign only in the last N minutes of a 5-hour window (5–300). |
-| `maxUsedPct` | `90` | Skip a window already this full; nothing would expire. |
+| `maxUsedPct` | `90` | Deep and BAU skip a window already this full; nothing would expire. Trivial work ignores this check. |
 | `perWindow` | `2` | Issues per provider per window. |
 | `repos` | `["Amit-Roy/agent-console"]` | Allowlist, `owner/name` only. |
 
