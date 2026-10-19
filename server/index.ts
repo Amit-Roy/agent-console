@@ -3,6 +3,10 @@ import { usage, refreshRouterUsage, refreshUsage, readCodexUsage } from "./usage
 import { createDispatcher, startIssue, REVIEWERS } from "./window-dispatch.ts";
 import { createOpener } from "./window-opener.ts";
 import { createReviewer } from "./issue-review.ts";
+import { createEventLog } from "./automation/events.ts";
+import { automationApi, scanHooks } from "./automation/snapshot.ts";
+import { loadConfig as loadDispatchConfig } from "./window-dispatch.ts";
+import { loadOpenerConfig } from "./window-opener.ts";
 import express from "express";
 import fs from "node:fs";
 import crypto from "node:crypto";
@@ -16,7 +20,7 @@ import { authed, CODER_HOSTS, cookieFrom, limited, makeToken, passwordOk, PASSWO
 import { providerInfo, refreshPiModels } from "./providers/index.ts";
 import { threadToMarkdown } from "./export.ts";
 import { Threads, turnTiming } from "./threads.ts";
-import { Schedules } from "./schedules.ts";
+import { Schedules, describe } from "./schedules.ts";
 import { Notifications } from "./notifications.ts";
 import { dashboard } from "./analytics.ts";
 import { pricing, rates } from "./api-pricing.ts";
@@ -64,6 +68,16 @@ try { latency = new LatencyStore(path.join(DATA_DIR, "latency.sqlite")); }
 catch { console.warn("Local latency storage is unavailable."); }
 usage.subscribe((provider, usage) => broadcast({ t: "usage", provider, usage }));
 setInterval(() => threads.sweep(), 60_000).unref();
+// Every automation stage writes here; the dashboard reads it. A previous process's unfinished runs are closed as abandoned.
+const automationLog = createEventLog({ file: path.join(DATA_DIR, "automation-events.jsonl") });
+automationLog.recoverOpenRuns();
+const automation = automationApi({
+  log: automationLog,
+  config: () => ({ dispatch: loadDispatchConfig(), opener: loadOpenerConfig() }),
+  hooks: () => scanHooks(path.join(os.homedir(), "worktrees")),
+  runs: () => threads.list().filter(t => t.issueRun && !t.archived).map(t => ({ thread: t.id, key: t.issueRun!.key, role: t.issueRun!.role, effort: t.issueRun!.effort, state: t.status, title: t.title })),
+  schedules: () => schedules.list().map(t => ({ id: t.id, title: t.title, schedule: describe(t), enabled: t.enabled })),
+});
 // Plan-only until ~/.config/agent-console/window-dispatch.json sets enabled (see docs/window-dispatch.md).
 if (process.env.AGENT_CONSOLE_MOCK !== "1") {
   const dispatcher = createDispatcher({ usage: () => usage.all(), start: d => { startIssue(d, { create: o => threads.create(o), send: (id, text) => threads.send(id, text) }); } });
@@ -245,6 +259,16 @@ app.get("/api/context-allocation/:thread", async (req, res) => {
   const thread = threads.get(req.params.thread);
   if (!thread) return void res.status(404).json({ error: "Unknown thread." });
   res.json(await contextAllocation(thread));
+});
+app.get("/api/automation", (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  try { res.json(automation.snapshot({ v: req.query.v ? Number(req.query.v) : undefined, limit: Number(req.query.limit) || undefined })); }
+  catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+app.get("/api/automation/log", (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  try { res.json(automation.log({ v: req.query.v ? Number(req.query.v) : undefined, step: String(req.query.step) as any, limit: Number(req.query.limit) || undefined, before: req.query.before ? Number(req.query.before) : undefined })); }
+  catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
 });
 app.get("/api/dashboard", async (req, res) => {
   res.setHeader("Cache-Control", "no-store");
