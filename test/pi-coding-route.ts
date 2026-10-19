@@ -1,0 +1,41 @@
+import assert from "node:assert/strict";
+import codingRoute, { DIRECT_CODING, ROUTER_CODING, routeCodingRequest } from "../server/providers/pi-coding-route.mjs";
+
+const direct = { provider: "nvidia", id: DIRECT_CODING };
+const router = { provider: "openrouter", id: ROUTER_CODING };
+const paid = { provider: "openrouter", id: "nvidia/nemotron-3-super-120b-a12b" };
+const vision = { provider: "nvidia", id: "meta/llama-3.2-11b-vision-instruct" };
+const context = (models = [direct, router, paid, vision]) => ({ modelRegistry: { getAvailable: () => models } });
+const request = { reason: "user", thinkingLevel: "low" };
+assert.equal(routeCodingRequest(request, context()).model, direct);
+assert.equal(routeCodingRequest(request, context([router])).model, router);
+assert.throws(() => routeCodingRequest(request, context([paid, vision])), /no approved coding provider/);
+
+// Pi owns transcript replay. Routing only returns a physical model; it cannot
+// submit prompts or execute any tool, and it preserves the transcript unchanged.
+const messages = Object.freeze([
+  Object.freeze({ role: "user", content: "Complete the task" }),
+  Object.freeze({ role: "assistant", content: Object.freeze([{ type: "toolCall", id: "done", name: "write" }]) }),
+  Object.freeze({ role: "toolResult", toolCallId: "done", content: "Already written" }),
+]);
+for (const errorMessage of ["429 Too Many Requests", 'HTTP 503 {"title":"Service Unavailable"}', "rate_limit_exceeded"]) {
+  const failed = { model: direct, message: { stopReason: "error", errorMessage } };
+  const retry = Object.freeze({ ...request, reason: "retry", failed, messages });
+  assert.equal(routeCodingRequest(retry, context()).model, router);
+  assert.equal(retry.messages, messages);
+}
+for (const errorMessage of ["401 Unauthorized", "403 Forbidden", "Invalid tool schema", "context length exceeded"]) {
+  assert.equal(routeCodingRequest({ ...request, reason: "retry", failed: { model: direct, message: { errorMessage } } }, context()).model, direct);
+}
+assert.equal(routeCodingRequest({ ...request, reason: "retry", failed: { model: direct, message: { errorMessage: "429" } } }, context([direct, paid])).model, direct);
+for (const reason of ["user", "continuation", "direct"]) {
+  assert.equal(routeCodingRequest({ ...request, reason, previous: { model: router }, messages }, context()).model, router);
+}
+assert.equal(routeCodingRequest({ ...request, reason: "retry", failed: { model: router, message: { errorMessage: "429" } } }, context()).model, router);
+
+let definition: any;
+codingRoute({ registerVirtualModel: (value: any) => { definition = value; } });
+assert.equal(`${definition.provider}/${definition.id}`, "agent-console/auto-coding");
+assert.equal(definition.route, routeCodingRequest);
+assert.deepEqual(definition.input, ["text"]);
+console.log("pi-coding-route: exact free-provider routing and transcript preservation passed");
