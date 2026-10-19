@@ -1,3 +1,4 @@
+import { claudeConfigDir, type ClaudeAccount } from "./providers/claude-accounts.ts";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -9,12 +10,12 @@ import path from "node:path";
  * Unknown TTLs remain disabled. Claude settings follow global, project, local precedence.
  */
 export interface IdleCompactionState {
-  provider: string; cwd: string; model?: string; resolvedModel?: string; status: string; sessionId?: string; archived?: number; operation?: string; waiting?: number;
+  claudeAccount?: ClaudeAccount; provider: string; cwd: string; model?: string; resolvedModel?: string; status: string; sessionId?: string; archived?: number; operation?: string; waiting?: number;
   context?: { used?: number }; idleCompaction?: boolean;
   lastUserActivityAt?: number; lastProviderActivityAt?: number; idleCompactionConsumedAt?: number;
 }
 const positive = (v: unknown) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? n : undefined; };
-export function idleCompactionPolicy(thread: Pick<IdleCompactionState, "provider" | "cwd" | "model" | "resolvedModel">, env = process.env, home = os.homedir()) {
+export function idleCompactionPolicy(thread: Pick<IdleCompactionState, "provider" | "cwd" | "model" | "resolvedModel" | "claudeAccount">, env = process.env, home = os.homedir()) {
   const leadMs = positive(env.AGENT_CONSOLE_IDLE_COMPACT_LEAD_MS) ?? 30000;
   const minTokens = positive(env.AGENT_CONSOLE_IDLE_COMPACT_MIN_TOKENS) ?? 50000;
   let ttlMs: number | undefined;
@@ -34,7 +35,7 @@ export function idleCompactionPolicy(thread: Pick<IdleCompactionState, "provider
   }
   else if (thread.provider === "claude") {
     let ttl: unknown, ambiguous = false;
-    const config = env.CLAUDE_CONFIG_DIR || path.join(home, ".claude");
+    const config = claudeConfigDir(thread.claudeAccount, env, home);
     let project = path.resolve(thread.cwd);
     while (!fs.existsSync(path.join(project, ".git")) && path.dirname(project) !== project) project = path.dirname(project);
     if (!fs.existsSync(path.join(project, ".git"))) project = thread.cwd;

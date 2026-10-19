@@ -155,6 +155,30 @@ process and translates its events into one canonical stream (Claude Code's strea
 | Codex | `codex app-server`, persistent process per active session, resumed by thread id | `codex login --device-auth` | plan (read-only sandbox) / accept edits (workspace-write) / bypass; only bypass where the sandbox cannot run |
 | Mock | scripted, offline (`AGENT_CONSOLE_MOCK=1` only) | none | all |
 
+### Two Claude accounts, one brain
+
+Choose **Sunny** or **Nefro** under **Claude account** when creating a Claude thread.
+Existing threads stay on Sunny. Each thread keeps its account for native resume and forks;
+create a new thread to use the other account. Usage tabs keep the two quotas separate.
+Scheduled tasks and automatic issue workers continue using the default Sunny account.
+
+Set up the second login from this checkout:
+
+```sh
+bin/claude-account nefro login
+```
+
+Complete the browser login with `nefro.amit.roy@gmail.com`, then reload the Console.
+Use `bin/claude-account sunny status` or `bin/claude-account nefro status` to check each login.
+The helper uses the existing default profile for Sunny and `~/.claude-nefro` for Nefro.
+It shares instructions, settings, skills, and agents through symlinks. It never copies
+credentials, account metadata, or native sessions. Inherited API and OAuth token overrides
+are removed before launching Claude, preserving the selected subscription login.
+
+Both profiles use the same brain hooks and `/home/coder/repos/brain`; Codex and Pi keep
+using that same wiki. Native Claude auto memory stays disabled in the shared settings.
+Cloud connectors and their account authorizations remain separate.
+
 Credentials for non-Claude agents are read from env files, never from the Claude child's environment, so the subscription login cannot be swapped for metered billing:
 `~/.config/agent-console/env`, then `~/openrouter/.env` (override the list with `AGENT_CONSOLE_ENV_FILES`, colon separated). `OPEN_ROUTER_TOKEN` is accepted as an alias of `OPENROUTER_API_KEY`.
 With an OpenRouter key, Pi offers its `:free` OpenRouter models only (`AGENT_CONSOLE_PI_ALL=1` for everything, `AGENT_CONSOLE_PI_MODELS=a,b` to pin a list; both are read from the env file too, and the list loads once at server start).

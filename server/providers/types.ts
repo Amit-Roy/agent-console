@@ -1,3 +1,5 @@
+import type { ClaudeAccount } from "./claude-accounts.ts";
+
 // A provider is a coding-agent harness (claude, pi, codex, ...) that we drive as a child process and translate into one
 // canonical event stream. The canonical shape is Claude Code's stream-json (system/init, stream_event, assistant, user
 // tool_result, result), because that is what the UI renders. Adapters for other harnesses emit that shape.
@@ -18,6 +20,7 @@ export interface ThreadSpec {
   model: string;
   effort?: string;
   advisor?: string;
+  claudeAccount?: ClaudeAccount;
   sessionId?: string;
   forkFrom?: string; // a forked thread's first run continues a copy of this session instead of starting fresh (adapters that can)
 }

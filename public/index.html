@@ -105,7 +105,7 @@
       </button>
       <div class="title">
         <h1 id="ttl"></h1>
-        <div id="cwd" class="path" hidden><svg class="ico" aria-hidden="true"><use href="#i-folder"/></svg><span id="cwd-t"></span></div>
+        <div id="cwd" class="path" hidden><svg class="ico" aria-hidden="true"><use href="#i-folder"/></svg><span id="thread-account" hidden></span><span id="cwd-t"></span></div>
       </div>
       <span id="state" class="state" role="status" hidden><i class="dot running"></i><span id="state-t">Working</span></span>
       <button id="chat-search-toggle" class="btn icon ghost" type="button" title="Search in chat (Ctrl+F)" aria-label="Search in chat" aria-expanded="false" aria-controls="chat-search" disabled>
@@ -194,6 +194,7 @@
     </div>
   </div>
   <div class="fld"><span class="lbl" id="l-prov">Agent</span><button type="button" id="d-prov" class="btn field" aria-labelledby="l-prov d-prov"><span></span></button></div>
+  <div class="fld" id="account-field" hidden><span class="lbl" id="l-account">Claude account</span><button type="button" id="d-account" class="btn field" aria-labelledby="l-account d-account" aria-describedby="d-account-note"><span></span></button><p id="d-account-note" class="hint"></p></div>
   <div class="fld"><span class="lbl" id="l-cwd">Folder</span><button type="button" id="d-cwd" class="btn field" aria-labelledby="l-cwd d-cwd"><span></span></button></div>
   <div class="fld" id="effort-field" hidden><span class="lbl" id="l-effort">Reasoning effort</span><button type="button" id="d-effort" class="btn field" aria-labelledby="l-effort d-effort"><span></span></button></div>
   <div class="fld"><span class="lbl" id="l-model">Model</span><button type="button" id="d-model" class="btn field" aria-labelledby="l-model d-model"><span></span></button></div>
