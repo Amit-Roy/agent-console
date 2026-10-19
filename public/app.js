@@ -395,6 +395,7 @@ function syncDialogAccount() {
   $("d-ok").disabled = visible ? !account.ready : !prov(menus.dProv.value)?.ok;
   $("d-signin").hidden = !visible || !!account.ready;
   if (signingIn !== account.id) $("d-signin-code").hidden = true;
+  if (dialogFork) syncForkContext();
 }
 const accountItems = () => claudeAccounts().map(a => ({ value: a.id, label: a.label, desc: a.email || (a.ready ? "Signed in" : "Sign-in required") }));
 // Claude sign-in from the dialog: the server runs `claude auth login`; Anthropic's page shows a code the user pastes back here.
@@ -477,9 +478,6 @@ function fieldTrigger(it, b) {
 }
 // ---------- thread actions: one list, used by the ⋯ on every row and by the header ⋯ ----------
 const threadActions = (id) => {
-  const cur = state.threads.get(id)?.provider;
-  const others = [...state.providers.values()].filter((p) => p.id !== cur && p.id !== "mock" && p.ok !== false);
-  const forks = others.map((p) => ({ value: `fork:${p.id}`, label: `Fork in ${p.label}`, desc: "Replay this conversation in another agent", icon: "fork" }));
   const filed = !!state.threads.get(id)?.archived;
   const thread = state.threads.get(id);
   const items = THREAD_ACTIONS.map((a) => {
@@ -498,7 +496,7 @@ const threadActions = (id) => {
     action("rename"),
     { value: "compaction-menu", label: "Compaction", desc: "Reduce context or manage automatic compaction", icon: "sparkle", children: [action("compact"), action("idle-compaction")] },
     action("economy"),
-    { value: "fork-menu", label: "Fork", desc: "Continue in a new thread or another agent", icon: "fork", children: [action("fork"), ...forks, action("fork-recent")] },
+    action("fork"),
     action("download"), action("share"), action("details"),
     { value: "archive-menu", label: "Archive", desc: filed ? "Restore or permanently delete this thread" : "Archive or permanently delete this thread", icon: "archive", children: [action(filed ? "unarchive" : "archive"), action("delete")] },
   ];
@@ -509,8 +507,7 @@ const THREAD_ACTIONS = [
   { value: "compact", label: "Compact context", desc: "Reduce context; keep the transcript", icon: "sparkle" },
   { value: "idle-compaction", label: "Automatic compaction", icon: "sparkle" },
   { value: "economy", label: "Economy settings", desc: "Use medium effort and turn the advisor off; keep the selected model", icon: "sparkle" },
-  { value: "fork", label: "Fork", desc: "Continue in a new thread", icon: "fork" },
-  { value: "fork-recent", label: "Fork with recent context", desc: "Carry a short recent handoff; keep the full transcript available", icon: "fork" },
+  { value: "fork", label: "Fork…", desc: "Continue in a new thread; pick agent, model and context", icon: "fork" },
   { value: "download", label: "Download", desc: "Save as a Markdown file", icon: "download" },
   { value: "share", label: "Share", desc: "Send the conversation as text", icon: "share" },
   { value: "details", label: "Run details", desc: "Model, effort, tokens and load timings", icon: "code" },
@@ -560,12 +557,8 @@ async function runThreadAction(id, action) {
     send({ t: "archive", thread: id, archived: action === "archive" });
   } else if (action === "delete") {
     if (confirm(`Delete "${t.title}" and its history?`)) send({ t: "delete", thread: id });
-  } else if (action === "fork-recent") {
-    send({ t: "fork", thread: id, context: "recent" });
-  } else if (action.startsWith("fork:")) {
-    send({ t: "fork", thread: id, provider: action.slice(5) });
   } else if (action === "fork") {
-    send({ t: "fork", thread: id }); // the server answers "created" and we open the new thread
+    openForkDialog(id);
   } else if (action === "download") {
     const a = el("a");
     a.href = `/export/${id}`;
@@ -612,6 +605,7 @@ const menus = {
   }),
   dProv: createMenu({ trigger: $("d-prov"), label: "Agent", renderTrigger: fieldTrigger, onSelect: (v) => { fillDialog(v); queueMicrotask(syncDialogAccount); } }),
   dAccount: createMenu({ trigger: $("d-account"), label: "Claude account", renderTrigger: fieldTrigger, value: "sunny", onSelect: () => queueMicrotask(syncDialogAccount) }),
+  dContext: createMenu({ trigger: $("d-context"), label: "Context", renderTrigger: fieldTrigger, value: "full" }),
   dCwd: createMenu({ trigger: $("d-cwd"), label: "Folder", renderTrigger: fieldTrigger }),
   dModel: createMenu({ trigger: $("d-model"), label: "Model", renderTrigger: fieldTrigger, onSelect: v => dialogEffort(v) }),
   dMode: createMenu({ trigger: $("d-mode"), label: "Permission mode", renderTrigger: fieldTrigger, onSelect: (v) => { $("d-warn").hidden = v !== "bypassPermissions"; } }),
@@ -2635,7 +2629,46 @@ function setDialogKind(task) {
     if (first) { menus.dProv.setValue(first); fillDialog(first); }
   }
   $("d-ok").textContent = editing ? "Save task" : isTask ? "Schedule task" : "Create thread";
+  dialogFork = null;
+  $("context-field").hidden = true;
+  $("cwd-field").hidden = false;
   syncDialogAccount();
+}
+// Fork reuses the dialog: prefilled from the source thread, folder fixed, plus how much of the conversation to carry.
+let dialogFork = null; // the thread being forked
+function syncForkContext() {
+  const t = state.threads.get(dialogFork);
+  const native = t && menus.dProv.value === t.provider && (t.provider !== "claude" || menus.dAccount.value === (t.claudeAccount || "sunny"));
+  menus.dContext.setItems([
+    { value: "full", label: "Full conversation", desc: native ? "Continue the same session; nothing is lost." : "Replay the whole conversation as text." },
+    { value: "recent", label: "Recent context only", desc: "Carry a short handoff; the full transcript stays available." },
+  ], menus.dContext.value || "full");
+}
+function openForkDialog(id) {
+  const t = state.threads.get(id);
+  if (!t) return;
+  if (t.status === "running") return void toast("Wait for the current turn to finish before forking.");
+  setNav(false);
+  setDialogKind(null);
+  dialogFork = id;
+  const pid = prov(t.provider)?.ok !== false ? t.provider : [...state.providers.values()].find((p) => p.ok)?.id;
+  menus.dProv.setValue(pid);
+  fillDialog(pid);
+  if (pid === t.provider) {
+    menus.dAccount.setValue(t.claudeAccount || "sunny");
+    if (menus.dModel.items().some((i) => i.value === t.model)) { menus.dModel.setValue(t.model); dialogEffort(t.model, pid); }
+    if (menus.dEffort.items().some((i) => i.value === t.effort)) menus.dEffort.setValue(t.effort);
+    if (menus.dMode.items().some((i) => i.value === t.mode)) menus.dMode.setValue(t.mode);
+    $("d-warn").hidden = menus.dMode.value !== "bypassPermissions";
+  }
+  $("dlg-title").textContent = "Fork thread";
+  $("dlg-sub").textContent = `Continue “${t.title}” in a new thread, in ${t.cwd.replace(/^.*\/repos\/?/, "~/repos/")}.`;
+  $("context-field").hidden = false;
+  $("cwd-field").hidden = true;
+  menus.dContext.setValue("full");
+  $("d-ok").textContent = "Fork thread";
+  syncDialogAccount();
+  $("dlg").showModal();
 }
 function syncWhen() {
   const r = menus.dRepeat.value;
@@ -2715,6 +2748,11 @@ $("restart").onclick = async () => {
 $("dform").addEventListener("submit", (e) => {
   if (e.submitter?.value !== "ok") return;
   const settings = { provider: menus.dProv.value, cwd: menus.dCwd.value, model: menus.dModel.value, effort: menus.dEffort.value, mode: menus.dMode.value };
+  const account = settings.provider === "claude" ? { claudeAccount: menus.dAccount.value || "sunny" } : {};
+  if (dialogFork) {
+    const { cwd, ...pick } = settings;
+    return void send({ t: "fork", thread: dialogFork, ...pick, ...account, context: menus.dContext.value });
+  }
   if (dialogTask === null) return void send({ t: "create", ...settings, ...(settings.provider === "claude" ? { claudeAccount: menus.dAccount.value || "sunny" } : {}) });
   send({
     t: "task_save", ...(dialogTask !== "new" ? { id: dialogTask.id } : {}), ...settings,
