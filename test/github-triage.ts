@@ -66,6 +66,7 @@ function fakeGithub() {
   const labels = new Set(["Eff: Deep", "Pri: P3"]);
   const calls: { method: string; endpoint: string; body?: any }[] = [];
   let deleteFailures = 0;
+  let product = "";
   let lostCommentResponse = false;
   const comments = new Map<number, any[]>();
   let commentSequence = 0;
@@ -111,6 +112,11 @@ function fakeGithub() {
         return null;
       }
     }
+    if (endpoint.endsWith("/contents/PRODUCT.md")) {
+      if (!product) throw Object.assign(new Error("Missing product"), { status: 404 });
+      return { encoding: "base64", content: Buffer.from(product).toString("base64") };
+    }
+    if (endpoint.endsWith("/contents/README.md")) throw Object.assign(new Error("Missing readme"), { status: 404 });
     if (endpoint.includes("/pulls/2/files?")) return [{ filename: "server/example.ts" }, { filename: "test/example.ts" }];
     if (endpoint.endsWith("/pulls/2")) return structuredClone(pullRequests.get(2));
     if (method === "GET" && labelMatch) {
@@ -121,7 +127,7 @@ function fakeGithub() {
     if (method === "POST" && endpoint === `repos/${repo}/labels`) { labels.add(body.name); return body; }
     throw new Error("Unexpected fixture API route");
   };
-  return { github, items, pullRequests, calls, comments, failNextDelete() { deleteFailures = 1; }, loseNextCommentResponse() { lostCommentResponse = true; } };
+  return { github, items, pullRequests, calls, comments, failNextDelete() { deleteFailures = 1; }, loseNextCommentResponse() { lostCommentResponse = true; }, setProduct(text: string) { product = text; } };
 }
 
 async function start(name: string, extras: Record<string, any> = {}) {
@@ -342,6 +348,26 @@ try {
     assert.equal(drift.comments.get(1)![0].id, firstId);
     assert.equal(drift.service.status().failed, 0);
   } finally { await drift.close(); }
+
+  // Repo product description reaches the model as untrusted context; editing it re-triages.
+  const seenContexts: (string | undefined)[] = [];
+  const context = await start("repo-context", { classify: async (input: any) => { seenContexts.push(input.repoContext); return decision; } });
+  try {
+    context.setProduct("Primary user runs agents all day from a phone.");
+    await context.service.reconcile(repo);
+    await context.service.waitForIdle();
+    assert.ok(seenContexts.length >= 2 && seenContexts.every(text => text === "Primary user runs agents all day from a phone."));
+    assert.deepEqual(await context.service.reconcile(repo), { scanned: 2, queued: 0 });
+    context.setProduct("Primary user reviews agent work on a laptop.");
+    await new Promise(resolve => setTimeout(resolve, 0));
+  } finally { await context.close(); }
+  const noProduct = await start("no-product", { classify: async (input: any) => { seenContexts.push(input.repoContext === undefined ? "none" : input.repoContext); return decision; } });
+  try {
+    await noProduct.post(payload());
+    await noProduct.service.waitForIdle();
+    assert.equal(seenContexts.at(-1), "none", "A repo without PRODUCT.md or README sends no context and still triages");
+    assert.equal(noProduct.service.status().failed, 0);
+  } finally { await noProduct.close(); }
 
   let stale: Awaited<ReturnType<typeof start>>;
   let staleClassifications = 0;

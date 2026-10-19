@@ -36,7 +36,7 @@ assert.deepEqual(parsed.scorecard!.pricing.thresholds, quoted.thresholds);
 assert.equal(parsed.scorecard!.tokens.confidence, "experimental");
 assert.match(parsed.scorecard!.tokens.formula, /work|complexity/i);
 assert.deepEqual(parsed.scorecard!.facts, { changedFiles: 2, additions: 40, deletions: 5 });
-assert.equal(parsed.scorecard!.version, 6);
+assert.equal(parsed.scorecard!.version, 7);
 assert.equal(parsed.scorecard!.pricing.scope, "completed-session");
 assert.match(parsed.reason, /per whole session/);
 assert.ok(!/\d\.\d{2,}/.test(parsed.reason), "The summary should round work estimates to one decimal.");
@@ -83,10 +83,36 @@ assert.deepEqual(parseTriageReply(longerPlan, input)!.scorecard!.pricing, parsed
 assert.equal(scores([0, 0, 0, 0, 0, 0, 0]).priority, "p3");
 assert.equal(scores([1, 1, 1, 1, 2, 0, 1]).priority, "p2");
 assert.equal(scores([1, 1, 1, 1, 2, 0, 2]).priority, "p1");
-assert.equal(scores([1, 1, 1, 1, 3, 0, 0]).priority, "p1");
+// Urgency is the priority: impact, workflow frequency, and stated timing combine; code never reads a model-written priority.
+assert.equal(scores([1, 1, 1, 1, 3, 0, 0]).priority, "p2", "A broken workflow with no deadline met once is soon, not next");
 assert.equal(scores([1, 1, 1, 2, 3, 2, 2]).priority, "p0");
-assert.equal(scores([1, 1, 1, 1, 3, 2, 2]).priority, "p1");
-assert.equal(scores([1, 1, 1, 2, 2, 2, 2]).priority, "p1");
+assert.equal(scores([1, 1, 1, 1, 3, 2, 2]).priority, "p0", "A confirmed current incident on a broken workflow is P0");
+assert.equal(scores([1, 1, 1, 2, 2, 2, 2]).priority, "p0");
+assert.equal(scores([1, 1, 1, 1, 2, 1, 1]).priority, "p0", "A stated deadline on a painful problem escalates to P0");
+assert.equal(scores([1, 1, 1, 1, 1, 1, 0]).priority, "p2", "A deadline on a one-off convenience is only soon");
+assert.deepEqual(scores([1, 1, 1, 1, 3, 0, 2]).scorecard!.urgency!.drivers, ["impact 3/3", "workflow frequency 2/2", "no deadline stated"]);
+// Workflow frequency is inferred from the request plus repo context, with a verbatim repo quote.
+const repoContext = "Primary user runs coding agents all day from a phone. Threads map to repos. Long-running agent turns: the user leaves, comes back, and must see state.";
+const infer = (frequency: unknown, extra: Record<string, unknown> = {}) => {
+  const record = structuredClone(assessment) as any;
+  const empty = { value: null, evidence: null, basis: null, rationale: null, context: null };
+  record.planningMetrics = Object.fromEntries(Object.keys(record.metrics).map(name => [name, { ...empty }]));
+  record.planningMetrics.impact = { value: 1, evidence: "Repair app preview", basis: "inferred", rationale: "Ordinary preview repair.", context: null };
+  record.planningMetrics.frequency = frequency;
+  return parseTriageReply(JSON.stringify(record), { ...input, repoContext, ...extra });
+};
+const inferred = infer({ value: 2, evidence: "fails every build", basis: "inferred", rationale: "Previews are part of every agent turn the user reviews.", context: "must see state" });
+assert.equal(inferred!.priority, "p1");
+assert.equal(inferred!.scorecard!.urgency!.score, 2);
+assert.equal(inferred!.scorecard!.planningMetrics!.frequency.context, "must see state");
+assert.equal(infer({ value: 2, evidence: "fails every build", basis: "inferred", rationale: "Core loop.", context: null }), undefined, "Inferred frequency needs a repo quote");
+assert.equal(infer({ value: 2, evidence: "fails every build", basis: "inferred", rationale: "Core loop.", context: "invented workflow sentence" }), undefined, "The repo quote must exist verbatim");
+assert.equal(infer({ value: 2, evidence: "fails every build", basis: "inferred", rationale: "Core loop.", context: "must see state" }, { repoContext: undefined }), undefined, "No repo context means no inference");
+assert.equal(infer({ value: 1, evidence: "Repair app preview", basis: "observed", rationale: "Occasional.", context: null }), undefined, "Observed frequency still needs a recurrence phrase");
+const timing = structuredClone(assessment) as any;
+timing.planningMetrics = Object.fromEntries(Object.keys(timing.metrics).map(name => [name, { value: null, evidence: null, basis: null, rationale: null, context: null }]));
+timing.planningMetrics.urgency = { value: 1, evidence: "Deployment is blocked", basis: "inferred", rationale: "Guess.", context: null };
+assert.equal(parseTriageReply(JSON.stringify(timing), input), undefined, "Deadline timing is never inferred");
 assert.equal(scores([0, 0, 1, 1, 0, 0, 0]).scorecard!.design.level, "none");
 assert.equal(scores([1, 1, 1, 1, 1, 0, 0]).scorecard!.design.level, "light");
 assert.equal(scores([1, 1, 3, 1, 1, 0, 0]).scorecard!.design.level, "detailed");

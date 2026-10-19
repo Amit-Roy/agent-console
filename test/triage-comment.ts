@@ -35,14 +35,20 @@ assert.ok(rendered.includes("Rejected complexity-fit work MAE: 1,937,335,120"));
 assert.ok(rendered.includes("P80 35.3%; P95 88.2%"));
 assert.ok(visible.length < 1800, "Routine visible comment should fit a short phone read");
 
+decision.scorecard.urgency = { score: 2, priority: "p1", drivers: ["impact 3/3", "workflow frequency 2/2 (assumed)"] };
+const withUrgency = renderTriageComment(decision);
+assert.ok(withUrgency.split("<details>")[0].includes("Urgency 2/3 sets the priority: impact 3/3; workflow frequency 2/2 (assumed)."));
 const inferred = structuredClone(decision) as any;
 inferred.scorecard.planningMetrics = structuredClone(metrics);
+inferred.scorecard.planningMetrics.frequency = { value: 2, evidence: "fails every build", basis: "inferred", rationale: "Previews are in every turn.", context: "must see state" };
 inferred.scorecard.planningMetrics.breadth = { value: 2, evidence: "delivery path", basis: "inferred", rationale: "The request crosses queue and receiver boundaries." };
 const inferenceComment = renderTriageComment(inferred);
 assert.ok(inferenceComment.includes("breadth 2/3 (inferred)"));
 assert.ok(inferenceComment.includes("The request crosses queue and receiver boundaries."));
 assert.equal(inferred.scorecard.metrics.breadth.value, null, "Rendering planning inferences must not rewrite pricing predictors");
-assert.ok(inferenceComment.includes("Missing: complexity, uncertainty, risk, impact, urgency, frequency."));
+assert.ok(inferenceComment.includes("frequency 2/2 (inferred)"));
+assert.ok(inferenceComment.includes("Repo context: “must see state”"));
+assert.ok(inferenceComment.includes("Missing: complexity, uncertainty, risk, impact, urgency."));
 
 const malicious = structuredClone(decision);
 const attack = "<details open>\n# @everyone [click](https://example.com) ![](x) ~~~";

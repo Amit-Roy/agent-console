@@ -63,8 +63,8 @@ function labelNames(issue: any): string[] {
     .filter((label: unknown): label is string => typeof label === "string");
 }
 
-export function triageSourceMarker(issue: any, pr?: any): string {
-  const source = JSON.stringify([issue.title ?? "", issue.body ?? "", pr?.head?.sha ?? null, Boolean(pr?.draft)]);
+export function triageSourceMarker(issue: any, pr?: any, repoContext = ""): string {
+  const source = JSON.stringify([issue.title ?? "", issue.body ?? "", pr?.head?.sha ?? null, Boolean(pr?.draft), repoContext]);
   return `<!-- agent-console-triage-source:${createHash("sha256").update(source).digest("hex")} -->`;
 }
 
@@ -184,6 +184,26 @@ export function createTriageService(options: Options) {
     return managedLabels(issue) === wanted;
   }
 
+  // Product description grounds workflow-frequency inference. Last good text survives API failures,
+  // so a transient error never changes the source fingerprint and re-triages every item.
+  const contexts = new Map<string, { text: string; fetched: number }>();
+  async function repoContext(repo: string): Promise<string> {
+    const cached = contexts.get(repo);
+    if (cached && Date.now() - cached.fetched < 10 * 60_000) return cached.text;
+    for (const file of ["PRODUCT.md", "README.md"]) {
+      try {
+        const found = await github("GET", `repos/${repo}/contents/${file}`);
+        if (typeof found?.content === "string" && found.encoding === "base64") {
+          const text = Buffer.from(found.content, "base64").toString("utf8").slice(0, 6_000);
+          contexts.set(repo, { text, fetched: Date.now() });
+          return text;
+        }
+      } catch (error) { if ((error as any)?.status !== 404) break; }
+    }
+    contexts.set(repo, { text: cached?.text ?? "", fetched: Date.now() });
+    return cached?.text ?? "";
+  }
+
   const reconciling = new Map<string, Promise<{ scanned: number; queued: number }>>();
   async function scan(selectedRepo?: string) {
     let scanned = 0;
@@ -198,7 +218,7 @@ export function createTriageService(options: Options) {
           if (db.prepare("SELECT 1 FROM github_triage WHERE repo=? AND number=? AND status IN ('queued','running') LIMIT 1").get(repo, issue.number)) continue;
           const kind = issue.pull_request ? "pull_request" : "issue";
           const pr = kind === "pull_request" ? await github("GET", `repos/${repo}/pulls/${issue.number}`) : undefined;
-          const assessment = cachedAssessment(repo, issue.number, triageSourceMarker(issue, pr), revision());
+          const assessment = cachedAssessment(repo, issue.number, triageSourceMarker(issue, pr, await repoContext(repo)), revision());
           const comment = await findComment(repo, issue.number);
           if (matchesAssessment(issue, comment, assessment)) continue;
           if (enqueue(repo, issue.number, kind, "reconcile")) queued++;
@@ -242,7 +262,8 @@ export function createTriageService(options: Options) {
         if (rows.length < 100) break;
       }
     }
-    const sourceMarker = triageSourceMarker(issue, pr);
+    const context = await repoContext(job.repo);
+    const sourceMarker = triageSourceMarker(issue, pr, context);
     let existingComment = await findComment(job.repo, job.number);
     const currentRevision = revision();
     let assessment = cachedAssessment(job.repo, job.number, sourceMarker, currentRevision);
@@ -253,6 +274,7 @@ export function createTriageService(options: Options) {
         title: typeof issue.title === "string" ? issue.title : "",
         body: typeof issue.body === "string" ? issue.body : "", files, draft,
         changedFiles: pr?.changed_files, additions: pr?.additions, deletions: pr?.deletions,
+        ...(context ? { repoContext: context } : {}),
       });
       if (!Object.hasOwn(EFFORT_LABELS, decision.effort) || !Object.hasOwn(PRIORITY_LABELS, decision.priority)
         || typeof decision.model !== "string" || !decision.model.length || decision.model.length > 200) {

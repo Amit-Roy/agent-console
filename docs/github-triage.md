@@ -38,7 +38,9 @@ Effort follows **pre-work complexity → predicted logged actions → token quot
 
 Quotes show P50, P80, and P95 scenarios, plus P80−P50 reserve. Generated tokens, non-cached input, and cached replay are separate. The current model remains experimental and under-covers its small held-out sample. These quantiles are not guaranteed completion probabilities. See [the model, formula, and initial evidence](triage-effort-pricing.md).
 
-Priority remains an explicit business policy: P0 requires urgency 2, impact 3, and risk at least 2; P1 requires impact 3 or impact at least 2 with frequency 2; P3 requires impact 0; otherwise P2. Historical token consumption does not establish business priority.
+Urgency is the priority label: 3 is P0, 2 is P1, 1 is P2, 0 is P3. Code computes it from impact (0–3), workflow frequency, and stated timing, and clamps the sum to 0–2. Frequency 2 adds one and frequency 0 subtracts one; impact 0 ignores frequency. A stated deadline adds one and an explicit "no deadline" subtracts one. Urgency 3 needs a confirmed current incident with impact of at least 2, or a stated deadline when urgency is already 2. Historical token consumption does not enter priority.
+
+Frequency means how often the app user meets the problem in their workflow. Pi infers it from the request plus the repository's `PRODUCT.md` (or `README.md`), which the worker fetches and sends as untrusted `repoContext`. An inferred frequency must quote the repo text it relies on, and the worker rejects quotes that do not appear in it. Editing `PRODUCT.md` changes the source fingerprint, so every item is re-assessed. Without a product description, frequency stays unknown and counts as 1. Pi cannot infer deadlines.
 
 Design is detailed for breadth 3, complexity 3, uncertainty 3, or risk at least 2. No separate design is needed only for breadth 0, complexity 0, uncertainty at most 1, and risk at most 1. Other work needs a light design. The book of work contains one to five proposed steps, each with an observable acceptance check.
 
