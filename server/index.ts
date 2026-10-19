@@ -15,7 +15,7 @@ import express from "express";
 import fs from "node:fs";
 import crypto from "node:crypto";
 import http from "node:http";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -498,7 +498,8 @@ await headroom.start();
 
 if (acodeSettings) {
   const bridgeServer = acodePublicApp(acode, ROOT).listen(acodeSettings.port, HOST);
-  bridgeServer.on("error", () => { console.error("Acode bridge could not listen on its configured port."); process.exit(1); });
+  // a scratch server reads the same env file as the live one: exiting here made agents hunt down the port's owner, the live server
+  bridgeServer.on("error", () => console.error(`Acode bridge port ${acodeSettings.port} is in use (normally by the live server); Acode Edit is off in this one.`));
 }
 
 server.listen(PORT, HOST, () => {
@@ -523,6 +524,10 @@ for (const sig of ["SIGINT", "SIGTERM"] as const) {
   process.on(sig, async () => {
     if (shuttingDown) return;
     shuttingDown = true;
+    // Node cannot tell who sent the signal; the sender is usually among the newest processes, so log those
+    let newest = "";
+    try { newest = execFileSync("ps", ["-eo", "pid,ppid,etime,args", "--sort=-start_time"], { encoding: "utf8" }).split("\n").slice(0, 16).map(l => l.slice(0, 240)).join("\n"); } catch {}
+    console.log(`[${new Date().toISOString()}] stopping on ${sig}; newest processes:\n${newest}`);
     schedules.shutdown();
     threads.shutdown();
     await headroom.stop();
