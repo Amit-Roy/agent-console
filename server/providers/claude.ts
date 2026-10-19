@@ -7,6 +7,7 @@ import { threadDir } from "../uploads.ts";
 import { cleanQuestions, clip, type Agent, type AgentCtx, type Attachment, type Command, type Provider, type QuestionReply, type ThreadSpec } from "./types.ts";
 import { parseJson, spawnLines } from "./proc.ts";
 import { stylePreamble } from "./brain.ts";
+import { consoleMcpServer, SESSION_INSTRUCTIONS } from "./console-mcp.mjs";
 
 // never let the subscription login be silently replaced by metered API billing
 const SCRUBBED_ENV = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDECODE"];
@@ -16,12 +17,14 @@ const SCRUBBED_ENV = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_
 // AGENT_CONSOLE_MCP=all restores everything.
 export function leanMcpArgs(): string[] {
   const keep = (process.env.AGENT_CONSOLE_MCP ?? "codegraph").split(",").map((x) => x.trim()).filter(Boolean);
-  if (keep.includes("all")) return [];
+  const consoleServer = consoleMcpServer();
+  if (keep.includes("all")) return consoleServer ? ["--mcp-config", JSON.stringify({ mcpServers: { agent_console: consoleServer } })] : [];
   let servers: Record<string, unknown> = {};
   try {
     const all = JSON.parse(fs.readFileSync(path.join(os.homedir(), ".claude.json"), "utf8")).mcpServers ?? {};
     servers = Object.fromEntries(keep.filter((k) => all[k]).map((k) => [k, all[k]]));
   } catch {}
+  if (consoleServer) servers.agent_console = consoleServer;
   return ["--strict-mcp-config", "--mcp-config", JSON.stringify({ mcpServers: servers })];
 }
 
@@ -58,6 +61,12 @@ export function claudeControl(write: (msg: object) => void, emit: (ev: any) => v
       const r = ev.request ?? {};
       if (r.subtype !== "can_use_tool") {
         write({ type: "control_response", response: { subtype: "error", request_id: ev.request_id, error: `Unsupported control request: ${r.subtype}` } });
+        return true;
+      }
+      // Session history tools are read-only and authenticated by the Console bridge.
+      // Allow only these exact names in Plan/acceptEdits; all other permission prompts retain their policy.
+      if (["mcp__agent_console__session_search", "mcp__agent_console__session_read"].includes(r.tool_name)) {
+        respond(ev.request_id, { behavior: "allow", updatedInput: r.input ?? {} });
         return true;
       }
       if (r.tool_name === "AskUserQuestion" && Array.isArray(r.input?.questions)) {
@@ -149,12 +158,13 @@ export const claude: Provider = {
     if (t.effort && t.effort !== "default") args.push("--effort", t.effort);
     args.push(...claudeConsoleSettingsArgs(t.advisor));
     args.push(...leanMcpArgs());
-    const style = stylePreamble();
+    const style = [stylePreamble(), SESSION_INSTRUCTIONS].filter(Boolean).join("\n\n");
     if (style) args.push("--append-system-prompt", style); // brain index arrives via the user hook
     fs.mkdirSync(threadDir(t.id), { recursive: true, mode: 0o700 });
     if (t.sessionId) args.push("--resume", t.sessionId);
     else if (t.forkFrom) args.push("--resume", t.forkFrom, "--fork-session"); // a forked thread: continue a copy of the parent session
     const env = claudeRoutingEnv(process.env);
+    env.AGENT_CONSOLE_THREAD = t.id;
     if (account === "nefro") env.CLAUDE_CONFIG_DIR = claudeConfigDir(account);
     for (const k of SCRUBBED_ENV) delete env[k];
     const control = claudeControl((msg) => p.write(JSON.stringify(msg)), ctx.event, t.mode);

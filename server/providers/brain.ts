@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import { SESSION_INSTRUCTIONS } from "./console-mcp.mjs";
 
 // The shared "brain" wiki (~/repos/brain, see its CLAUDE.md) is one memory for every agent on this machine. Claude Code reaches it through
 // user-level hooks. Pi and Codex have no equivalent installed, so we do the same two jobs here, for any harness:
@@ -65,4 +66,4 @@ export function brainInstructions(): string {
 }
 
 /** Style, memory write contract, and index for harnesses accepting one instruction string. */
-export const harnessInstructions = async () => [stylePreamble(), brainInstructions(), await brainContext()].filter(Boolean).join("\n\n");
+export const harnessInstructions = async () => [stylePreamble(), brainInstructions(), SESSION_INSTRUCTIONS, await brainContext()].filter(Boolean).join("\n\n");
