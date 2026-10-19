@@ -28,6 +28,8 @@ rl.on("line", (l) => {
 `, { mode: 0o755 });
 
 const { pi } = await import("../server/providers/pi.ts");
+const { startModelRateBroker } = await import("../server/providers/model-rate-client.ts");
+startModelRateBroker(1, tmp); // the queue runs in this process; the fake Pi never calls the broker
 
 async function run(mode: string) {
   process.env.FAKE_PI_MODE = mode;
