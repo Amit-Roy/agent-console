@@ -1,10 +1,22 @@
 import "./privacy.ts";
-import { usage, refreshRouterUsage, refreshUsage } from "./usage.ts";
+import { usage, refreshRouterUsage, refreshUsage, readCodexUsage } from "./usage.ts";
+import { hostMetrics, hostProcesses, hostKill, hostPorts } from "./host.ts";
+import { createDispatcher, startIssue, defaultDirs } from "./window-dispatch.ts";
+import { route as routeWork } from "./automation/router.ts";
+import { createOpener } from "./window-opener.ts";
+import { createReviewer } from "./issue-review.ts";
+import { createEventLog } from "./automation/events.ts";
+import { createTriageBridge } from "./automation/triage-bridge.ts";
+import { usageEvents } from "./automation/usage-events.ts";
+import { automationApi, scanHooks } from "./automation/snapshot.ts";
+import { startDebug } from "./automation/debug.ts";
+import { loadConfig as loadDispatchConfig } from "./window-dispatch.ts";
+import { loadOpenerConfig } from "./window-opener.ts";
 import express from "express";
 import fs from "node:fs";
 import crypto from "node:crypto";
 import http from "node:http";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,7 +25,7 @@ import { authed, CODER_HOSTS, cookieFrom, limited, makeToken, passwordOk, PASSWO
 import { providerInfo, refreshPiModels } from "./providers/index.ts";
 import { threadToMarkdown } from "./export.ts";
 import { Threads, turnTiming } from "./threads.ts";
-import { Schedules } from "./schedules.ts";
+import { Schedules, describe } from "./schedules.ts";
 import { Notifications } from "./notifications.ts";
 import { dashboard } from "./analytics.ts";
 import { pricing, rates } from "./api-pricing.ts";
@@ -59,8 +71,47 @@ const acodeSettings = acodeConfig();
 let latency: LatencyStore | undefined;
 try { latency = new LatencyStore(path.join(DATA_DIR, "latency.sqlite")); }
 catch { console.warn("Local latency storage is unavailable."); }
-usage.subscribe((provider, usage) => broadcast({ t: "usage", provider, usage }));
 setInterval(() => threads.sweep(), 60_000).unref();
+// Every automation stage writes here; the dashboard reads it. A previous process's unfinished runs are closed as abandoned.
+const automationLog = createEventLog({ file: path.join(DATA_DIR, "automation-events.jsonl") });
+automationLog.recoverOpenRuns();
+const recordUsage = usageEvents(automationLog);
+usage.subscribe((provider, u) => { broadcast({ t: "usage", provider, usage: u }); recordUsage(provider, u); });
+const triageBridge = createTriageBridge({ dbPath: path.join(DATA_DIR, "github-triage.sqlite"), events: automationLog });
+setInterval(() => triageBridge.poll(), 30_000).unref();
+const automation = automationApi({
+  log: automationLog,
+  config: () => ({ dispatch: loadDispatchConfig(), opener: loadOpenerConfig() }),
+  hooks: () => scanHooks(defaultDirs().worktrees),
+  runs: () => threads.list().filter(t => t.issueRun && !t.archived).map(t => ({ thread: t.id, key: t.issueRun!.key, role: t.issueRun!.role, effort: t.issueRun!.effort, state: t.status, title: t.title })),
+  schedules: () => schedules.list().map(t => ({ id: t.id, title: t.title, schedule: describe(t), enabled: t.enabled })),
+});
+// Plan-only until ~/.config/agent-console/window-dispatch.json sets enabled (see docs/window-dispatch.md).
+if (process.env.AGENT_CONSOLE_MOCK !== "1") {
+  const activeRuns = () => threads.list().filter(t => t.issueRun && t.status === "running").map(t => ({ provider: t.provider, role: t.issueRun!.role }));
+  const dispatcher = createDispatcher({
+    usage: () => usage.all(), events: automationLog,
+    active: () => activeRuns(),
+    start: d => startIssue(d, { create: o => threads.create(o), send: (id, text) => threads.send(id, text) }),
+  });
+  const reviewer = createReviewer({
+    runner: { create: o => threads.create(o), send: (id, text) => threads.send(id, text), mark: (id, patch) => threads.setIssueRun(id, patch) },
+    route: effort => routeWork({ role: "review", effort: effort as any, usage: usage.all(), active: activeRuns(), now: Date.now() }),
+    events: automationLog,
+  });
+  threads.onIssueTurnEnd = (t, ev) => reviewer.turnEnded(t, ev);
+  setInterval(() => { dispatcher.tick().catch(() => {}); reviewer.sweep(threads.list()).catch(() => {}); }, 5 * 60_000).unref();
+  const opener = createOpener({
+    usage: () => usage.all(), events: automationLog,
+    refresh: readCodexUsage,
+    open: (provider, route) => {
+      const t = threads.create({ provider, ...route, cwd: path.join(os.homedir(), "repos"), mode: "bypassPermissions", title: `Window opener · ${provider}` });
+      threads.send(t.id, "Reply with the single word: ok");
+      threads.archive(t.id, true);
+    },
+  });
+  setInterval(() => { opener.tick().catch(() => {}); }, 5 * 60_000).unref();
+}
 
 const app = express();
 app.disable("x-powered-by");
@@ -223,6 +274,30 @@ app.get("/api/context-allocation/:thread", async (req, res) => {
   if (!thread) return void res.status(404).json({ error: "Unknown thread." });
   res.json(await contextAllocation(thread));
 });
+app.get("/api/automation", (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  try { res.json(automation.snapshot({ v: req.query.v ? Number(req.query.v) : undefined, limit: Number(req.query.limit) || undefined })); }
+  catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+if (process.env.AGENT_CONSOLE_MOCK === "1") { // UI tests add events after start-up; never exists on a real server
+  app.post("/api/automation/_mock/event", express.json(), (req, res) => { try { res.json(automationLog.record(req.body)); } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); } });
+}
+app.post("/api/automation/debug", sameOrigin, express.json({ limit: "4kb" }), (req, res) => {
+  try {
+    const mock = process.env.AGENT_CONSOLE_MOCK === "1"; // the mock server has no real agents: debug runs on the mock provider
+    const out = startDebug({ v: req.body?.v, focus: req.body?.focus, note: req.body?.note }, {
+      api: automation, log: automationLog, usage: () => usage.all(), dirs: defaultDirs(),
+      active: () => threads.list().filter(t => t.issueRun && t.status === "running").map(t => ({ provider: t.provider, role: t.issueRun!.role })),
+      runner: { create: o => threads.create(mock ? { ...o, provider: "mock", model: "echo", effort: "default" } : o), send: (id, text) => threads.send(id, text) },
+    });
+    res.json(out);
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+app.get("/api/automation/log", (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  try { res.json(automation.log({ v: req.query.v ? Number(req.query.v) : undefined, step: String(req.query.step) as any, limit: Number(req.query.limit) || undefined, before: req.query.before ? Number(req.query.before) : undefined })); }
+  catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
 app.get("/api/dashboard", async (req, res) => {
   res.setHeader("Cache-Control", "no-store");
   const to = Number(req.query.to) || Date.now();
@@ -238,6 +313,10 @@ app.get("/api/dashboard", async (req, res) => {
   }
   catch { res.status(503).json({ error: "Dashboard data is unavailable." }); }
 });
+app.get("/api/host/metrics", hostMetrics);
+app.get("/api/host/processes", hostProcesses);
+app.get("/api/host/ports", hostPorts);
+app.post("/api/host/processes/:pid/kill", express.json({ limit: "1kb" }), sameOrigin, hostKill);
 app.get("/uploads/:thread/:id/:name", (req, res) => {
   const { thread, id, name } = req.params;
   if (!isId(thread) || !isId(id) || !SAFE_NAME.test(name)) return void res.status(404).end();
@@ -424,7 +503,8 @@ await headroom.start();
 
 if (acodeSettings) {
   const bridgeServer = acodePublicApp(acode, ROOT).listen(acodeSettings.port, HOST);
-  bridgeServer.on("error", () => { console.error("Acode bridge could not listen on its configured port."); process.exit(1); });
+  // a scratch server reads the same env file as the live one: exiting here made agents hunt down the port's owner, the live server
+  bridgeServer.on("error", () => console.error(`Acode bridge port ${acodeSettings.port} is in use (normally by the live server); Acode Edit is off in this one.`));
 }
 
 server.listen(PORT, HOST, () => {
@@ -449,6 +529,10 @@ for (const sig of ["SIGINT", "SIGTERM"] as const) {
   process.on(sig, async () => {
     if (shuttingDown) return;
     shuttingDown = true;
+    // Node cannot tell who sent the signal; the sender is usually among the newest processes, so log those
+    let newest = "";
+    try { newest = execFileSync("ps", ["-eo", "pid,ppid,etime,args", "--sort=-start_time"], { encoding: "utf8" }).split("\n").slice(0, 16).map(l => l.slice(0, 240)).join("\n"); } catch {}
+    console.log(`[${new Date().toISOString()}] stopping on ${sig}; newest processes:\n${newest}`);
     schedules.shutdown();
     threads.shutdown();
     await headroom.stop();

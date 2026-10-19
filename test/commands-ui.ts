@@ -14,7 +14,7 @@ try {
     const page=await ctx.newPage();const errors:string[]=[];page.on("pageerror",e=>errors.push(e.message));await page.goto(base);await page.waitForFunction(()=>!(document.querySelector("#input") as HTMLTextAreaElement)?.disabled);
     await page.fill("#input","/");await page.waitForSelector("#slash:not([hidden])");assert.ok(await page.locator("#slash .cmd",{hasText:"/compact"}).count());
     await page.fill("#input","remember the original fact");await page.click("#send");await page.waitForSelector(".msg.asst");await page.waitForFunction(()=>document.querySelector("#stop")?.hasAttribute("hidden"));
-    await page.fill("#input","/com");await page.locator("#input").press("Tab");assert.equal(await page.locator("#input").inputValue(),"/compact ");await page.locator("#input").press("Enter");
+    await page.fill("#input","/com");await page.locator("#input").press("Tab");assert.equal(await page.locator("#input").evaluate((e:any)=>e.value),"/compact ");await page.locator("#input").press("Enter");
     await page.waitForSelector(".compact-card.done:has-text('Context compacted')");assert.equal(await page.locator(".msg.asst").count(),1);assert.match(await page.locator("#chat").innerText(),/remember the original fact/);assert.equal(await page.locator("#ctx .pct").innerText(),"3%");
     await page.fill("#input","/model");await page.locator("#input").press("Enter");await page.waitForSelector(".menu[role=listbox]");await page.keyboard.press("Escape");
     await page.fill("#input","/help");await page.locator("#input").press("Enter");await page.waitForSelector(".command-note:has-text('/compact')");assert.equal(await page.locator(".msg.asst").count(),1);

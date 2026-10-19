@@ -47,5 +47,22 @@ export function stylePreamble(): string {
   try { return fs.readFileSync(STYLE_FILE, "utf8").trim(); } catch { return ""; }
 }
 
-/** Style preamble plus brain index, for harnesses that take one instruction string. */
-export const harnessInstructions = async () => [stylePreamble(), await brainContext()].filter(Boolean).join("\n\n");
+/** Keep the write contract discoverable without loading the schema or full memory pages. */
+export function brainInstructions(): string {
+  if (!brainAvailable()) return "";
+  const root = path.dirname(path.dirname(BRAIN_BIN));
+  return [
+    "# Shared brain: required save workflow",
+    `Use the shared memory repository at ${root}; do not create another memory store.`,
+    `Before any memory write, read ${path.join(root, "CLAUDE.md")} and follow its schema.`,
+    `Use the full CLI path ${BRAIN_BIN}; do not assume brain is on PATH.`,
+    "Search existing pages first. Save only durable preferences, decisions, and non-obvious lessons; exclude code inventories, test status, and conversation dumps.",
+    "Update flat wiki/<lowercase-kebab-slug>.md pages with required frontmatter and concise facts. Update wiki/index.md with one summary and explicit file reference per page.",
+    `Append the log using ${BRAIN_BIN} log, then run ${BRAIN_BIN} lint and fix findings before claiming the save is complete.`,
+    "Never edit wiki/log.md by hand or run git in the brain repository. The console commits saved changes after each turn.",
+    "Automatic recall below contains only the index. Open relevant referenced pages on demand.",
+  ].join("\n");
+}
+
+/** Style, memory write contract, and index for harnesses accepting one instruction string. */
+export const harnessInstructions = async () => [stylePreamble(), brainInstructions(), await brainContext()].filter(Boolean).join("\n\n");

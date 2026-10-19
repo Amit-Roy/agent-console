@@ -503,7 +503,7 @@ details[open]>summary .chev{transform:rotate(90deg)}
 .card pre{margin:0;max-height:20rem;overflow:auto;white-space:pre-wrap;word-break:break-word;background:var(--code-bg);border-radius:var(--r-sm);padding:var(--sp-3);font:var(--fw-reg) var(--fm-sm);font-variant-ligatures:none;letter-spacing:0;scrollbar-width:thin;scrollbar-color:var(--s3) transparent}
 .card .body pre+pre{margin-top:var(--sp-2)}
 /* open card: the row wraps to show the whole label (said once, not repeated in the body) */
-.card[open]>summary .sum{white-space:normal;overflow-wrap:anywhere;padding-block:var(--sp-1)}
+.card[open]>summary .sum{white-space:normal;overflow-wrap:break-word;word-break:normal;padding-block:var(--sp-1)}
 /* an open agent card puts its task on a line of its own: beside the name and status chip it squeezes to a letter per line */
 .card.agent[open]>summary{flex-wrap:wrap;row-gap:0}
 .card.agent[open]>summary .sum{order:1;flex-basis:100%;overflow-wrap:break-word;padding:0 0 var(--sp-1) calc(var(--ico) + var(--sp-2))}
@@ -582,14 +582,14 @@ details[open]>summary .chev{transform:rotate(90deg)}
 #queued{display:flex;flex-direction:column;gap:var(--sp-1);margin:0 0 var(--sp-3);padding:0;list-style:none}
 #queued[hidden]{display:none}
 #queued li{display:flex;align-items:center;gap:var(--sp-2);min-height:2rem;padding:0 var(--sp-1) 0 var(--sp-3);border-radius:var(--r-sm);background:var(--s3);color:var(--t2);font:var(--fw-reg) var(--f-sm);letter-spacing:var(--ls-sm)}
-#queued .tag{flex:none;display:inline-flex;color:var(--accent)}
+#queued .tag{flex:none;padding:0;display:inline-flex;color:var(--accent)}
 #queued .tag .ico{width:1rem;height:1rem}
 /* Steer, Edit, Remove sit together as one tight group at the end of the row */
 #queued .q-actions{flex:none;display:flex;align-items:center;margin-right:calc(var(--sp-1) * -1)}
 #queued .txt{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--t1)}
 #queued :is(.rm,.queue-edit){flex:none;width:1.75rem;min-height:1.75rem;padding:0;background:transparent;color:var(--t2)}
 #queued :is(.rm,.queue-edit):hover{background:var(--hover);color:var(--t1)}
-@media (pointer:coarse){#queued li{min-height:2.75rem}#queued :is(.rm,.queue-edit){width:2.75rem;min-height:2.75rem}}
+@media (pointer:coarse){#queued li{min-height:2.75rem}#queued :is(.rm,.queue-edit){width:2.25rem;min-height:2.75rem}}
 .user .delivery{margin-top:var(--sp-1);color:var(--t3);font:var(--fw-reg) var(--f-xs);letter-spacing:var(--ls-xs)}
 
 /* context meter: ring + percentage, details on hover/focus */
@@ -620,7 +620,8 @@ details[open]>summary .chev{transform:rotate(90deg)}
 .diff>div:not(.add):not(.del)::before{content:""}
 
 .foot{font:var(--fw-reg) var(--f-xs);letter-spacing:var(--ls-xs);color:var(--t3);font-variant-numeric:tabular-nums}
-.actions .foot{margin-left:var(--sp-2)}
+.actions .foot{order:-1;margin-left:var(--sp-2)}
+.actions .btn{margin-left:auto}
 div.msg.foot{margin-top:calc(var(--sp-2) * -1)}
 .note{display:flex;align-items:center;gap:var(--sp-2);font:var(--fw-reg) var(--f-sm);letter-spacing:var(--ls-sm);color:var(--t3)}
 .errtxt{display:flex;gap:var(--sp-3);align-items:flex-start;padding:var(--sp-3) var(--sp-4);border-radius:var(--r-md);background:var(--bad-tint);color:var(--bad);font:var(--fw-reg) var(--fm-sm);white-space:pre-wrap;overflow-wrap:anywhere}
@@ -646,15 +647,17 @@ div.msg.foot{margin-top:calc(var(--sp-2) * -1)}
 #composer{flex:none;padding:var(--sp-2) max(var(--sp-3),calc((100% - var(--col))/2)) calc(var(--sp-3) + env(safe-area-inset-bottom))}
 .cwrap{position:relative}
 #cbox{background:var(--s2);border-radius:var(--r-lg);padding:var(--sp-3) var(--sp-3) var(--sp-2) var(--sp-4);box-shadow:inset 0 0 0 1px var(--edge),var(--shadow-card);transition:box-shadow var(--dur-2) var(--ease)}
-#input{display:block;width:100%;resize:none;min-height:1.5rem;max-height:40vh;padding:0;border:0;background:transparent;outline:none;font:var(--fw-text) var(--f-text);letter-spacing:-.003em;line-height:1.5;overflow-y:auto;scrollbar-width:thin}
-#input::placeholder{color:var(--t3);opacity:1}
-#input:disabled{opacity:.6}
+#input{display:block;white-space:pre-wrap;overflow-wrap:anywhere;width:100%;resize:none;min-height:1.5rem;max-height:40vh;padding:0;border:0;background:transparent;outline:none;font:var(--fw-text) var(--f-text);letter-spacing:-.003em;line-height:1.5;overflow-y:auto;scrollbar-width:thin}
+#input:empty::before{content:attr(data-placeholder);color:var(--t3);pointer-events:none}
+#input[contenteditable=false]{opacity:.6}
 /* toolbar pulled left so the paperclip glyph lines up with the text above it */
 .toolbar{display:flex;align-items:center;gap:var(--sp-1);margin-top:var(--sp-2);margin-left:calc((var(--ctl-h) - 1.125rem) / -2)}
 .toolbar .spacer{flex:1}
 #send,#stop,#attach{width:var(--ctl-h);padding:0}
 /* attach: leading edge (adds content; Send keeps the trailing edge), extra space before the text chips */
-#attach{--ico:1.125rem;margin-right:var(--sp-1);color:var(--t2)}
+#attach{color:var(--t2)}
+/* one glyph size across the composer toolbar: attach, permission, send, stop and the context ring all draw at 18px */
+.toolbar{--ico:1.125rem}
 #attach:hover:not(:disabled){background:var(--hover);color:var(--t1)}
 #attach:active:not(:disabled){background:var(--press);color:var(--t1)}
 #attach:disabled{opacity:1;color:var(--t3)}
@@ -819,13 +822,16 @@ body.login{display:grid;place-items:center;overflow:auto;padding:var(--sp-4)}
 @media (max-width: 600px) {
   :root{--ctl-h:2.75rem;--ctl-h-sm:2.75rem;--item-h:2.75rem}
   #cbox{padding:var(--sp-3) var(--sp-3) var(--sp-2)}
-  #cbox .toolbar{flex-wrap:wrap;margin-left:calc(var(--sp-3) / -2);margin-right:calc(var(--sp-3) / -2);gap:var(--sp-1)}
-  #cbox .toolbar #model,#cbox .toolbar #effort{flex:1 1 2.75rem;min-width:2.75rem;padding:0 var(--sp-1);gap:var(--sp-1)}
+  #cbox .toolbar{flex-wrap:wrap;margin-left:calc(var(--sp-3) / -2);margin-right:calc(var(--sp-3) / -2);gap:0}
+  /* settings stay one group at the leading edge (they shrink, never stretch); status and send own the trailing edge */
+  #cbox .toolbar #model,#cbox .toolbar #effort{flex:1 1 2.75rem;max-width:max-content;min-width:2.75rem;padding:0 var(--sp-2);gap:var(--sp-1)}
   #model .compact-label,#effort .compact-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   #model .chip-label,#effort .chip-label{display:none}
   #model .compact-label,#effort .compact-label{display:block}
   #mode{width:var(--ctl-h);padding:0}
   #mode .chip-label,#mode .chev{display:none}
+  /* icon controls share one shape: a 36px circle (fill or hover) centred in the 44px touch target */
+  #cbox .toolbar :is(#attach,#mode,#send,#stop,#ctx){width:var(--ctl-h);min-width:var(--ctl-h);padding:var(--sp-1);background-clip:content-box;border-radius:var(--r-full);justify-content:center}
   #attach{margin-right:0}
   #head .state{background:transparent;height:auto;padding:0 var(--sp-1);gap:var(--sp-1);font:var(--fw-med) var(--f-xs)}
 }
@@ -987,7 +993,7 @@ body.login{display:grid;place-items:center;overflow:auto;padding:var(--sp-4)}
 .side-actions .btn:hover:not(:disabled){color:var(--t1)}
 #queued .steer{flex:none;width:1.75rem;min-height:1.75rem;padding:0;background:transparent;color:var(--accent)}
 #queued .steer:hover:not(:disabled){background:var(--accent-tint)}
-@media (pointer:coarse){#queued .steer{width:2.75rem;min-height:2.75rem}}   /* 44px touch target, same as the row's edit/remove */
+@media (pointer:coarse){#queued .steer{width:2.25rem;min-height:2.75rem}}   /* 36x44 touch target, same as the row's edit/remove */
 
 
 /* An agent's question stays in the conversation, with a deliberate hand-off back to the user. */
@@ -1084,3 +1090,11 @@ body.login{display:grid;place-items:center;overflow:auto;padding:var(--sp-4)}
 .tb-step-top .ms{color:var(--t1);font-variant-numeric:tabular-nums}
 .tb-steps .note{margin:0;overflow-wrap:anywhere}
 @media (forced-colors:active){.tb-bar{forced-color-adjust:none;background:CanvasText!important}.tb-row.err .tb-bar{background:repeating-linear-gradient(135deg,CanvasText 0 3px,Canvas 3px 6px)!important}}
+
+/* Auto lane: threads started by automation, grouped by issue */
+.auto-list .auto-group{display:flex;align-items:baseline;justify-content:space-between;gap:var(--sp-2);margin:var(--sp-3) 0 var(--sp-1);padding:0 var(--sp-3);color:var(--t2);font:var(--fw-med) var(--f-xs);letter-spacing:var(--ls-sm);cursor:default;background:transparent}
+.auto-list .auto-group:first-child{margin-top:var(--sp-1)}
+.auto-list .auto-group .k{color:var(--t1);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.auto-list .auto-group .n{color:var(--t3);flex:none}
+.auto-list .tag.role{text-transform:capitalize}
+.auto-list .tag.role-review{color:var(--accent)}
