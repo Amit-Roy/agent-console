@@ -57,6 +57,7 @@ export interface Thread {
   operation?: "compact";
   lastCompactedAt?: number;
   archived?: number; // when it was archived: it leaves the working list until unarchived or sent to again
+  schedule?: { task: string; run: string }; // a scheduled task's run: the sidebar files it under its task
   cost: number;
   costMeasured?: boolean;
   createdAt: number;
@@ -154,6 +155,7 @@ export class Threads {
   private onNotification?: (notice: ThreadNotice) => void;
   private labeler: Labeler; // plain-English labels for shell commands that arrive without a description
   private commands: Record<string, Command[]> = {}; // per provider: each harness has its own slash commands and skills
+  onTurnEnd?: (t: Thread, ev: any) => void; // a scheduled run's turn ended (Schedules records the run)
   constructor(emit: Emit, onNotification?: (notice: ThreadNotice) => void) {
     this.onNotification = onNotification;
     this.emit = emit;
@@ -316,7 +318,7 @@ export class Threads {
     this.emit({ t: "thread", thread: t });
   }
 
-  create(opts: { provider?: string; cwd: string; mode?: Mode; model?: string; effort?: string; title?: string }): Thread {
+  create(opts: { provider?: string; cwd: string; mode?: Mode; model?: string; effort?: string; title?: string; schedule?: Thread["schedule"] }): Thread {
     const prov = PROVIDERS.get(opts.provider || DEFAULT_PROVIDER);
     if (!prov) throw new Error("Unknown provider.");
     const st = prov.status();
@@ -335,6 +337,7 @@ export class Threads {
       mode,
       model,
       effort: this.validEffort(prov, model, opts.effort),
+      ...(opts.schedule ? { schedule: opts.schedule } : {}),
       status: "idle",
       cost: 0,
       createdAt: now,
@@ -457,6 +460,11 @@ export class Threads {
     fs.rmSync(path.join(DATA_DIR, "pi-sessions", id), { recursive: true, force: true });
     removeUploads(id);
     this.emit({ t: "removed", thread: id });
+  }
+
+  // A console event in the thread's transcript (a scheduled run's report card)
+  note(id: string, ev: unknown) {
+    if (this.threads.has(id)) this.publish(id, ev);
   }
 
   history(id: string): unknown[] {
@@ -699,6 +707,7 @@ export class Threads {
       if (t.status === "idle" && !ev.is_error) this.wake(t);
     }
     this.publish(t.id, ev, ev.type !== "stream_event");
+    if (ev.type === "result" && t.schedule && t.status === "idle") try { this.onTurnEnd?.(t, ev); } catch {}
     if (ev.type === "assistant") {
       for (const b of ev.message?.content ?? []) {
         if (b?.type === "tool_use" && needsLabel(b.name, b.input)) this.labeler.request({ thread: t.id, id: b.id, command: b.input.command, cwd: t.cwd });
@@ -799,7 +808,8 @@ export class Threads {
   // `attachments` is untrusted browser input: [{id}] naming files already uploaded to this thread
   // While a turn is running a message either steers it (delivered to the agent now, picked up after its current tool call) or waits in
   // a queue for the turn to end. `mode: "queue"` forces the queue; so does an agent that cannot take input mid-turn.
-  send(id: string, text: string, opts: { auto?: "brain" | "subagent"; attachments?: unknown; mode?: "steer" | "queue"; delivery?: "queued"; questionAnswer?: true; queuedAt?: number } = {}) {
+  // `instructions` go to the agent after the text but stay out of the transcript bubble; `scheduled` labels a scheduled run's prompt.
+  send(id: string, text: string, opts: { auto?: "brain" | "subagent"; attachments?: unknown; mode?: "steer" | "queue"; delivery?: "queued"; questionAnswer?: true; queuedAt?: number; instructions?: string; scheduled?: string } = {}) {
     const t = this.threads.get(id);
     if (!t) throw new Error("Unknown thread");
     if (!opts.auto && !opts.questionAnswer && this.command(t, text, opts.attachments)) return;
@@ -827,7 +837,7 @@ export class Threads {
       return this.drain(id);
     }
     const attachments = incomingAttachments;
-    let prompt = withFileList(text, attachments);
+    let prompt = withFileList(text, attachments) + (opts.instructions ? `\n\n---\n${opts.instructions}` : "");
     if (t.replay && !opts.auto) {
       prompt = (t.replayLimit === 6000 ? recentPreamble(this.history(id)) : replayPreamble(this.history(id))) + prompt; // exclude this new message
       t.replay = false;
@@ -850,6 +860,7 @@ export class Threads {
       ...(opts.auto ? { auto: opts.auto } : {}),
       ...(opts.delivery ? { delivery: opts.delivery } : {}),
       ...(opts.questionAnswer ? { questionAnswer: true } : {}),
+      ...(opts.scheduled ? { scheduled: opts.scheduled } : {}),
       ...(attachments.length ? { attachments: attachments.map(({ id, name, kind, media_type, size, n }) => ({ id, name, kind, media_type, size, ...(n ? { n } : {}) })) } : {}),
     });
     this.touch(t);

@@ -15,11 +15,11 @@ try {
     await page.fill("#input","/");await page.waitForSelector("#slash:not([hidden])");assert.ok(await page.locator("#slash .cmd",{hasText:"/compact"}).count());
     await page.fill("#input","remember the original fact");await page.click("#send");await page.waitForSelector(".msg.asst");await page.waitForFunction(()=>document.querySelector("#stop")?.hasAttribute("hidden"));
     await page.fill("#input","/com");await page.locator("#input").press("Tab");assert.equal(await page.locator("#input").inputValue(),"/compact ");await page.locator("#input").press("Enter");
-    await page.waitForSelector(".command-note:has-text('Context compacted')");assert.equal(await page.locator(".msg.asst").count(),1);assert.match(await page.locator("#chat").innerText(),/remember the original fact/);assert.equal(await page.locator("#ctx .pct").innerText(),"3%");
+    await page.waitForSelector(".compact-card.done:has-text('Context compacted')");assert.equal(await page.locator(".msg.asst").count(),1);assert.match(await page.locator("#chat").innerText(),/remember the original fact/);assert.equal(await page.locator("#ctx .pct").innerText(),"3%");
     await page.fill("#input","/model");await page.locator("#input").press("Enter");await page.waitForSelector(".menu[role=listbox]");await page.keyboard.press("Escape");
     await page.fill("#input","/help");await page.locator("#input").press("Enter");await page.waitForSelector(".command-note:has-text('/compact')");assert.equal(await page.locator(".msg.asst").count(),1);
-    await page.click("#more");await page.getByRole("menuitem",{name:/Compact context/}).click();await page.waitForFunction(()=>document.querySelectorAll(".command-note").length>=5);await page.waitForFunction(()=>document.querySelector("#stop")?.hasAttribute("hidden"));
-    await page.reload();await page.waitForSelector(".command-note:has-text('Context compacted')");assert.equal(await page.locator(".msg.asst").count(),1);
+    await page.click("#more");await page.getByRole("menuitem",{name:/^Compaction/}).click();await page.getByRole("menuitem",{name:/^Compact context/}).click();await page.waitForFunction(()=>document.querySelectorAll(".compact-card.done").length===2);await page.waitForFunction(()=>document.querySelector("#stop")?.hasAttribute("hidden"));
+    await page.reload();await page.waitForSelector(".compact-card.done:has-text('Context compacted')");assert.equal(await page.locator(".compact-card.done").count(),2,"both compactions survive a reload");assert.equal(await page.locator(".msg.asst").count(),1);
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);assert.deepEqual(errors,[]);console.log(`PASS ${width}px slash menu before first turn, completion+Enter, native compaction, model/help commands, header action, transcript and reload`);await ctx.close();
   }
 }finally{for(const id of ids)ws.send(JSON.stringify({t:"delete",thread:id}));ws.close();await browser.close();}

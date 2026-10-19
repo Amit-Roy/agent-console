@@ -17,6 +17,12 @@ Anthropic's terms restrict third-party products that offer claude.ai login, so d
 ## Features
 - [Automatic GitHub triage](docs/github-triage.md) labels issues and pull requests by effort and priority through a signed webhook, with Pi small-model classification and subscription fallbacks.
 - Type `/` in the composer for a command/skill menu (list comes from `claude`'s own `commands_changed` event, cached in `~/.config/agent-console/commands.json`). Skills run headless when a message starts with `/name`.
+- Scheduled tasks: the sidebar's **Scheduled** view lists saved prompts that run on a timer (Manual, Hourly, Daily, Weekdays or Weekly at a time in your time zone). Pi is the default agent; Claude and Codex work too.
+  Every run is an ordinary thread, filed under its task as a child row (the latest three, then "All N runs"). Reply in a run to ask follow-ups, or fork it.
+  A run never overlaps the previous one: it is recorded as skipped instead. After downtime, one catch-up run covers the latest missed time within 7 days.
+  Each run's report is committed to a local git repo, `~/repos/agent-outputs/<task>/<date>-<time>.md` (`AGENT_CONSOLE_OUTPUTS` overrides). The agent's final message is the report unless it calls `save_output` itself.
+  The run thread ends with a report card: outcome, duration, cost, the committed file, plus Open report, Fork and Run again.
+  Pi threads get small, flat tools for this (`schedule_list`, `schedule_create`, `schedule_update`, `schedule_delete`, `schedule_run_now`, `save_output`), so free models can manage schedules from chat. Tasks live in `schedules.json`.
 - Several agents behind one UI: Claude Code, Pi (any model Pi knows: OpenRouter, OpenAI, Google, local), Codex. Pick one per thread; see Providers.
 - Threads (each its own agent session, resumable), streaming output, markdown, tool cards with diffs
 - Search within a chat from the header search button, the thread menu, or Ctrl/Cmd+F. Search ignores case and treats punctuation literally. Older messages load as needed; matches are highlighted with a count and previous/next controls. Enter advances, Shift+Enter goes back, and Escape closes search.

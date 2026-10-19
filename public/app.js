@@ -7,6 +7,7 @@ import { openContextEconomics } from "/context-economics.js";
 import { openBreakdown, closeBreakdown } from "/turn-breakdown.js";
 import { setupNotifications } from "/notifications.js";
 import { createChatSearch } from "/chat-search.js";
+import { createSchedules, REPEAT_ITEMS, DAY_ITEMS } from "/schedules.js";
 
 const MODE_META = {
   plan: { label: "Plan", desc: "Read-only. Plans without editing.", icon: "eye" },
@@ -18,7 +19,7 @@ const EFFORT_LABEL = { xhigh: "Extra high", ultracode: "Ultra" };
 const EFFORT_DESC = { ultracode: "Claude Code's Ultracode: starts a multi-agent workflow on every task. Slow and costly; keep it for big jobs.", max: "Deepest reasoning the model offers.", xhigh: "More reasoning than High, less than Max." };
 const effortLabel = (v) => EFFORT_LABEL[v] || cap(v);
 const state = {
-  commands: {}, providers: new Map(), threads: new Map(), current: null, ready: false, dirs: [], live: null, cards: new Map(), usage: {}, usageTab: "claude", archiveOpen: !!localStorage.getItem("ac_archive_open"),
+  commands: {}, providers: new Map(), threads: new Map(), tasks: new Map(), lane: localStorage.getItem("ac_lane") === "tasks" ? "tasks" : "threads", current: null, ready: false, dirs: [], live: null, cards: new Map(), usage: {}, usageTab: "claude", archiveOpen: !!localStorage.getItem("ac_archive_open"),
   stick: true, // the reader is at the bottom of the chat (kept from scroll events, since layout growth fires none)
   subs: new Map(), // tool_use id of a subagent (or nested subagent) -> the <ol> its activity is listed in
   subTools: new Map(), // tool_use id of a call made inside a subagent -> its row
@@ -251,6 +252,7 @@ function handle(m) {
       state.providers = new Map(m.providers.map((p) => [p.id, p]));
       menus.model.provider = null; // re-read per-agent model lists below
       state.threads = new Map(m.threads.map((t) => [t.id, t]));
+      state.tasks = new Map((m.tasks || []).map((t) => [t.id, t]));
       menus.dProv.setItems(m.providers.map((p) => ({ value: p.id, label: p.label, desc: p.ok ? undefined : p.hint, disabled: !p.ok })), m.providers.find((p) => p.ok)?.id);
       menus.dCwd.setItems(m.dirs.map((d) => ({ value: d, label: d.replace(/^.*\/repos\/?/, "~/repos/") || d, icon: "folder" })), m.dirs[0]);
       fillDialog(menus.dProv.value);
@@ -296,6 +298,13 @@ function handle(m) {
       break;
     case "created":
       openThread(m.thread.id);
+      break;
+    case "tasks":
+      state.tasks = new Map(m.tasks.map((t) => [t.id, t]));
+      renderThreads();
+      break;
+    case "task_saved":
+      toast(m.task.repeat === "manual" ? `Saved “${m.task.title}”. Run it from ⋯ → Run now.` : m.task.enabled && m.task.nextRunAt ? `Saved “${m.task.title}”. Next run ${new Date(m.task.nextRunAt).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" })}.` : `Saved “${m.task.title}”.`);
       break;
     case "history":
       if (m.thread !== state.current || (m.request != null && m.request !== state.request)) break;
@@ -547,7 +556,13 @@ const menus = {
   dCwd: createMenu({ trigger: $("d-cwd"), label: "Folder", renderTrigger: fieldTrigger }),
   dModel: createMenu({ trigger: $("d-model"), label: "Model", renderTrigger: fieldTrigger, onSelect: v => dialogEffort(v) }),
   dMode: createMenu({ trigger: $("d-mode"), label: "Permission mode", renderTrigger: fieldTrigger, onSelect: (v) => { $("d-warn").hidden = v !== "bypassPermissions"; } }),
+  dRepeat: createMenu({ trigger: $("d-repeat"), label: "Repeat", renderTrigger: fieldTrigger, items: REPEAT_ITEMS, value: "daily", onSelect: () => queueMicrotask(syncWhen) }),
+  dDay: createMenu({ trigger: $("d-day"), label: "Day", renderTrigger: fieldTrigger, items: DAY_ITEMS, value: "1" }),
 };
+const schedules = createSchedules({
+  state, send, openThread: (id) => openThread(id), setNav: (open) => setNav(open), provLabel: (id) => provLabel(id), editTask: (t) => openTaskDialog(t),
+  confirmDelete: (t) => confirm(`Delete “${t.title}”${t.runs.some(r => r.thread) ? " and its run threads" : ""}? Reports already saved to git stay there.`),
+});
 
 // ---------- threads UI ----------
 const cur = () => state.threads.get(state.current);
@@ -571,7 +586,8 @@ function renderThreads() {
   const ul = $("threads"), shelf = $("archived");
   ul.replaceChildren();
   shelf.replaceChildren();
-  const list = [...state.threads.values()].sort((a, b) => b.updatedAt - a.updatedAt);
+  // a scheduled task's runs are listed under the task in the Scheduled lane, not here
+  const list = [...state.threads.values()].filter((t) => !(t.schedule && state.tasks.has(t.schedule.task))).sort((a, b) => b.updatedAt - a.updatedAt);
   // archived threads sit in their own section below, collapsed unless the user opened it
   const filed = list.filter((t) => t.archived).length;
   $("archive").hidden = !filed;
@@ -635,6 +651,7 @@ function renderThreads() {
     (t.archived ? shelf : ul).append(li);
   }
   if (list.length === filed) ul.append(el("li", "empty-list", list.length ? "Everything is archived." : "No threads yet."));
+  schedules.render();
 }
 setInterval(() => state.threads.size && renderThreads(), 30000);
 
@@ -1847,6 +1864,7 @@ function onEvent(e, live) {
         bubble.append(userText(e.text, e.attachments));
         d.append(bubble);
         if (e.delivery) d.append(el("div", "delivery", e.delivery === "steer" ? "Sent while the agent was working" : "Was queued"));
+        if (e.scheduled) d.append(el("div", "delivery", e.scheduled === "catch-up" ? "Scheduled run · catch-up for a missed time" : e.scheduled === "manual" ? "Scheduled task · run now" : "Scheduled run"));
         d.append(copyActions(() => e.text));
       }
       push(d, live);
@@ -1985,6 +2003,9 @@ function onEvent(e, live) {
       break;
     case "console_error":
       push(errBlock(e.text), live);
+      break;
+    case "schedule_report":
+      push(schedules.reportCard(e), live);
       break;
     case "rate_limit_event":
       if (live) setUsage(e);
@@ -2497,10 +2518,82 @@ document.addEventListener("keydown", (e) => {
     $("menu").focus();
   }
 });
+// The new-thread dialog doubles as the scheduled-task editor: same agent, folder, model, effort and permission fields, plus the task's
+// name, instructions and schedule.
+let dialogTask = null; // "new" or the task being edited; null for a new thread
+function setDialogKind(task) {
+  const wasTask = dialogTask !== null;
+  dialogTask = task;
+  const isTask = task !== null, editing = isTask && task !== "new";
+  $("task-fields").hidden = $("save-field").hidden = !isTask;
+  $("dlg-title").textContent = editing ? "Edit scheduled task" : isTask ? "New scheduled task" : "New thread";
+  $("dlg-sub").textContent = isTask ? "Runs on this server with nobody watching. Each run opens a thread you can reply to." : "Run a coding agent in one of your folders.";
+  $("d-title").required = $("d-prompt").required = isTask;
+  if (isTask) {
+    const id = editing ? task.provider : prov("pi")?.ok ? "pi" : menus.dProv.value;
+    menus.dProv.setValue(id);
+    fillDialog(id);
+    if (editing) {
+      if (!menus.dCwd.items().some((i) => i.value === task.cwd)) menus.dCwd.setItems([...menus.dCwd.items(), { value: task.cwd, label: task.cwd.replace(/^.*\/repos\/?/, "~/repos/"), icon: "folder" }]);
+      menus.dCwd.setValue(task.cwd);
+      if (menus.dModel.items().some((i) => i.value === task.model)) { menus.dModel.setValue(task.model); dialogEffort(task.model, id); }
+      menus.dEffort.setValue(task.effort || "default");
+      menus.dMode.setValue(task.mode);
+      $("d-warn").hidden = task.mode !== "bypassPermissions";
+    }
+    $("d-title").value = editing ? task.title : "";
+    $("d-prompt").value = editing ? task.prompt : "";
+    menus.dRepeat.setValue(editing ? task.repeat : "daily");
+    menus.dDay.setValue(String(editing ? task.day : 1));
+    $("d-time").value = editing ? task.time : "09:00";
+    $("d-save").checked = editing ? task.saveOutput : true;
+    syncWhen();
+  } else if (wasTask) {
+    const first = [...state.providers.values()].find((p) => p.ok)?.id;
+    if (first) { menus.dProv.setValue(first); fillDialog(first); }
+  }
+  $("d-ok").textContent = editing ? "Save task" : isTask ? "Schedule task" : "Create thread";
+  if (isTask && !prov(menus.dProv.value)?.ok) $("d-ok").disabled = true;
+}
+function syncWhen() {
+  const r = menus.dRepeat.value;
+  $("d-day").hidden = r !== "weekly";
+  $("d-time").hidden = r === "manual";
+  $("d-time").required = r !== "manual";
+  const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  $("d-next").textContent = r === "manual" ? "Runs only when you press Run now." : r === "hourly" ? `Every hour at the minute shown (${zone}).` : `Your time zone: ${zone}.`;
+}
 function openNewDialog() {
   setNav(false);
+  setDialogKind(null);
   $("dlg").showModal();
 }
+function openTaskDialog(task) {
+  setNav(false);
+  setDialogKind(task || "new");
+  $("dlg").showModal();
+  $(task ? "d-prompt" : "d-title").focus();
+}
+$("new-task").onclick = () => openTaskDialog();
+// Threads | Scheduled: two views of the same sidebar place, remembered per device
+function setLane(lane, focus = false) {
+  state.lane = lane;
+  try { localStorage.setItem("ac_lane", lane); } catch {}
+  for (const [name, tab, pane] of [["threads", "lane-threads", "pane-threads"], ["tasks", "lane-tasks", "pane-tasks"]]) {
+    $(tab).setAttribute("aria-selected", String(lane === name));
+    $(tab).tabIndex = lane === name ? 0 : -1;
+    $(pane).hidden = lane !== name;
+  }
+  if (focus) $(lane === "tasks" ? "lane-tasks" : "lane-threads").focus();
+}
+$("lane-threads").onclick = () => setLane("threads");
+$("lane-tasks").onclick = () => setLane("tasks");
+$("lanes").addEventListener("keydown", (e) => {
+  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) return;
+  e.preventDefault();
+  setLane(e.key === "Home" ? "threads" : e.key === "End" ? "tasks" : state.lane === "threads" ? "tasks" : "threads", true);
+});
+setLane(state.lane);
 $("new").onclick = openNewDialog;
 $("archive-toggle").onclick = () => {
   state.archiveOpen = !state.archiveOpen;
@@ -2513,6 +2606,7 @@ createMenu({
   trigger: $("side-more"), kind: "menu", label: "Console", align: "end",
   getItems: () => [
     { value: "new", label: "New thread", icon: "plus" },
+    { value: "task", label: "New scheduled task", icon: "clock" },
     { value: "notifications", label: "Notifications", desc: /: on$/.test($("notifications").getAttribute("aria-label") || "") ? "On for this device" : "Off", icon: "bell" },
     { value: "dashboard", label: "Usage dashboard", icon: "chart" },
     { value: "reload", label: "Reload page", icon: "refresh" },
@@ -2520,6 +2614,7 @@ createMenu({
   ],
   onSelect: (v) => {
     if (v === "dashboard") location.href = $("dash-link").href;
+    else if (v === "task") { setLane("tasks"); openTaskDialog(); }
     else (v === "new" ? $("new") : $(v)).click();
   },
 });
@@ -2528,7 +2623,15 @@ $("restart").onclick = async () => {
   toast(r?.ok ? "Restart scheduled. It happens once every thread is idle, then this page reloads." : "Could not schedule a restart.");
 };
 $("dform").addEventListener("submit", (e) => {
-  if (e.submitter?.value === "ok") send({ t: "create", provider: menus.dProv.value, cwd: menus.dCwd.value, model: menus.dModel.value, effort: menus.dEffort.value, mode: menus.dMode.value });
+  if (e.submitter?.value !== "ok") return;
+  const settings = { provider: menus.dProv.value, cwd: menus.dCwd.value, model: menus.dModel.value, effort: menus.dEffort.value, mode: menus.dMode.value };
+  if (dialogTask === null) return void send({ t: "create", ...settings });
+  send({
+    t: "task_save", ...(dialogTask !== "new" ? { id: dialogTask.id } : {}), ...settings,
+    title: $("d-title").value, prompt: $("d-prompt").value, repeat: menus.dRepeat.value, day: Number(menus.dDay.value), time: $("d-time").value || "09:00",
+    tz: Intl.DateTimeFormat().resolvedOptions().timeZone, saveOutput: $("d-save").checked,
+  });
+  setLane("tasks");
 });
 
 function linkedThread() {

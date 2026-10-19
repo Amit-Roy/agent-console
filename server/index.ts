@@ -13,6 +13,7 @@ import { authed, CODER_HOSTS, cookieFrom, limited, makeToken, passwordOk, PASSWO
 import { providerInfo, refreshPiModels } from "./providers/index.ts";
 import { threadToMarkdown } from "./export.ts";
 import { Threads, turnTiming } from "./threads.ts";
+import { Schedules } from "./schedules.ts";
 import { Notifications } from "./notifications.ts";
 import { dashboard } from "./analytics.ts";
 import { pricing, rates } from "./api-pricing.ts";
@@ -48,6 +49,11 @@ catch { console.warn("Browser notification storage is unavailable."); }
 const threads = new Threads(broadcast, notice => {
   void notifications?.notify(notice).catch(() => console.warn("Browser notification delivery failed."));
 });
+const schedules = new Schedules(threads, broadcast);
+// Agent tools (Pi extension providers/console-tools.mjs) call back over loopback with a per-process secret, never the session cookie
+const TOOL_TOKEN = crypto.randomBytes(24).toString("base64url");
+process.env.AGENT_CONSOLE_TOOL_URL = `http://${HOST}:${PORT}/api/agent-tools`;
+process.env.AGENT_CONSOLE_TOOL_TOKEN = TOOL_TOKEN;
 const acode = createAcodeBridge(id => threads.get(id));
 const acodeSettings = acodeConfig();
 let latency: LatencyStore | undefined;
@@ -84,6 +90,14 @@ app.get("/style.css", (_req, res) => res.sendFile(path.join(ROOT, "public", "sty
 app.use("/fonts", express.static(path.join(ROOT, "public", "fonts"), { maxAge: "7d" })); // OFL fonts: public, so the sign-in page can use them too
 app.get("/icon.svg", (_req, res) => res.sendFile(path.join(ROOT, "public", "icon.svg")));
 app.get("/manifest.webmanifest", (_req, res) => res.sendFile(path.join(ROOT, "public", "manifest.webmanifest")));
+
+app.post("/api/agent-tools/:name", express.json({ limit: "1mb" }), (req, res) => {
+  const given = Buffer.from(String(req.headers["x-agent-console-tool"] || ""));
+  if (given.length !== TOOL_TOKEN.length || !crypto.timingSafeEqual(given, Buffer.from(TOOL_TOKEN))) return void res.status(401).json({ error: "Not an Agent Console tool call." });
+  const thread = typeof req.headers["x-agent-console-thread"] === "string" ? req.headers["x-agent-console-thread"] : undefined;
+  try { res.json(schedules.tool(req.params.name, thread, req.body ?? {})); }
+  catch (e: any) { res.status(400).json({ error: e?.message || String(e) }); }
+});
 
 // everything below requires the session cookie
 app.use((req, res, next) => {
@@ -294,7 +308,7 @@ wss.on("connection", (ws) => {
   clients.add(ws);
   void refreshRouterUsage(); // quota refresh only on demand; no idle network polling
   const reply = (m: unknown) => ws.readyState === ws.OPEN && ws.send(JSON.stringify(m));
-  reply({ t: "hello", build: BUILD, features: { acks: true, queueEditing: true, questions: true, latency: !!latency, selectiveEvents: true }, questions: threads.getQuestions(), usage: usage.all(), commands: threads.getCommands(), threads: threads.list(), queues: threads.getQueues(), dirs: dirs(), providers: providerInfo() });
+  reply({ t: "hello", build: BUILD, features: { acks: true, queueEditing: true, questions: true, latency: !!latency, selectiveEvents: true }, questions: threads.getQuestions(), tasks: schedules.list(), usage: usage.all(), commands: threads.getCommands(), threads: threads.list(), queues: threads.getQueues(), dirs: dirs(), providers: providerInfo() });
   let metricsWindow = Date.now(), metricsCount = 0;
   // A socket that misses a whole ping interval is dead (phone slept, network changed): drop it so its client reconnects cleanly.
   let isAlive = true;
@@ -381,6 +395,19 @@ wss.on("connection", (ws) => {
             title: typeof m.title === "string" ? m.title : undefined,
           });
         }
+        case "task_save": {
+          const input = { title: m.title, prompt: m.prompt, provider: m.provider, model: m.model, effort: m.effort, mode: m.mode, cwd: m.cwd === undefined ? undefined : safeCwd(m.cwd), repeat: m.repeat, time: m.time, day: m.day, tz: m.tz, enabled: typeof m.enabled === "boolean" ? m.enabled : undefined, saveOutput: typeof m.saveOutput === "boolean" ? m.saveOutput : undefined };
+          const task = typeof m.id === "string" ? schedules.update(m.id, input) : schedules.create(input);
+          return reply({ t: "task_saved", request: m.request, task });
+        }
+        case "task_delete":
+          return schedules.remove(String(m.id));
+        case "task_run": {
+          const run = schedules.run(String(m.id), "manual");
+          if (run.status === "skipped") return reply({ t: "error", message: run.reason });
+          if (run.status === "failed") return reply({ t: "error", message: run.reason });
+          return run.thread && reply({ t: "created", thread: threads.get(run.thread) });
+        }
         case "archive":
           return threads.archive(m.thread, m.archived !== false);
         case "delete":
@@ -422,6 +449,7 @@ for (const sig of ["SIGINT", "SIGTERM"] as const) {
   process.on(sig, async () => {
     if (shuttingDown) return;
     shuttingDown = true;
+    schedules.shutdown();
     threads.shutdown();
     await headroom.stop();
     latency?.close();
