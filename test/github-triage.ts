@@ -214,6 +214,28 @@ try {
     assert.deepEqual(seen, [{ repo, number: 5, kind: "issue" }, { repo, number: 6, kind: "pull_request" }]);
     await hooked.service.waitForIdle();
   } finally { await hooked.close(); }
+  // Lost webhook: jobs queued by reconcile (no webhook) still run onItem once triage finishes; hook failure never fails the job.
+  const lost: any[] = [];
+  const unhooked = await start("on-item-reconcile", { onItem: async (item: any) => { lost.push(item); throw new Error("hook failure must not fail the job"); } });
+  try {
+    assert.equal((await unhooked.service.reconcile(repo)).queued, 2);
+    await unhooked.service.waitForIdle();
+    assert.deepEqual(lost.sort((x, y) => x.number - y.number), [{ repo, number: 1, kind: "issue" }, { repo, number: 2, kind: "pull_request" }]);
+    assert.equal(unhooked.service.status().failed, 0);
+    assert.equal(unhooked.comments.get(1)?.length, 1);
+  } finally { await unhooked.close(); }
+  // Reconcile of an already-triaged item holding only the triage comment (no telemetry comment) calls onItem; one with two comments does not.
+  const cheap: number[] = [];
+  const triaged = await start("on-item-cheap", { onItem: (item: any) => { cheap.push(item.number); } });
+  try {
+    await triaged.service.reconcile(repo);
+    await triaged.service.waitForIdle();
+    cheap.length = 0;
+    triaged.items.get(1).comments = 1;
+    triaged.items.get(2).comments = 2;
+    assert.deepEqual(await triaged.service.reconcile(repo), { scanned: 2, queued: 0 });
+    assert.deepEqual(cheap, [1]);
+  } finally { await triaged.close(); }
   const deploys: string[] = [];
   const deployer = await start("deploy", { deploy: { workflow: "CI", run: (r: string, sha: string) => deploys.push(`${r}@${sha}`) } });
   try {
