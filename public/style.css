@@ -582,7 +582,7 @@ details[open]>summary .chev{transform:rotate(90deg)}
 #queued{display:flex;flex-direction:column;gap:var(--sp-1);margin:0 0 var(--sp-3);padding:0;list-style:none}
 #queued[hidden]{display:none}
 #queued li{display:flex;align-items:center;gap:var(--sp-2);min-height:2rem;padding:0 var(--sp-1) 0 var(--sp-3);border-radius:var(--r-sm);background:var(--s3);color:var(--t2);font:var(--fw-reg) var(--f-sm);letter-spacing:var(--ls-sm)}
-#queued .tag{flex:none;display:inline-flex;color:var(--accent)}
+#queued .tag{flex:none;padding:0;display:inline-flex;color:var(--accent)}
 #queued .tag .ico{width:1rem;height:1rem}
 /* Steer, Edit, Remove sit together as one tight group at the end of the row */
 #queued .q-actions{flex:none;display:flex;align-items:center;margin-right:calc(var(--sp-1) * -1)}
