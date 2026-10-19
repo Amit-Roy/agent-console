@@ -44,6 +44,11 @@ function closeProcModal() {
   const m = $("proc-modal");
   if (m) { m.hidden = true; m.setAttribute("aria-hidden", "true"); }
 }
+const $modal = $("proc-modal");
+if ($modal) {
+  $modal.querySelector(".modal-backdrop").onclick = closeProcModal;
+  $modal.querySelector('button[aria-label="Close"]').onclick = closeProcModal;
+}
 
 function openProcModal(pid) {
   const m = $("proc-modal");
