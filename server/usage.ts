@@ -21,7 +21,15 @@ export function routerUsage(d: any): Omit<ProviderUsage, "updatedAt"> {
   if (Number.isFinite(d.limit) && d.limit > 0 && Number.isFinite(d.limit_remaining)) windows.push({ label: "Budget", used: d.limit - d.limit_remaining, limit: d.limit, unit: "$" });
   return { windows, ...(Number.isFinite(d.usage_daily) ? { spendToday: d.usage_daily } : {}), note: windows.length ? undefined : "OpenRouter does not report a request allowance for this key." };
 }
+/** Rows to append to the usage history: windows whose used%, limit or reset time changed since `prev`. */
+export function historyRows(provider: string, prev: ProviderUsage | undefined, next: ProviderUsage) {
+  return next.windows.filter(w => {
+    const p = prev?.windows.find(x => x.label === w.label);
+    return !p || p.used !== w.used || p.limit !== w.limit || p.resetsAt !== w.resetsAt;
+  }).map(w => ({ ts: next.updatedAt, provider, ...w }));
+}
 const file = path.join(DATA_DIR, "usage.json");
+const historyFile = path.join(DATA_DIR, "usage-history.jsonl");
 let values: Record<string, ProviderUsage> = {};
 try { values = JSON.parse(fs.readFileSync(file, "utf8")); } catch {}
 let notify = (_provider: string, _usage: ProviderUsage) => {};
@@ -31,7 +39,10 @@ export const usage = {
   subscribe(fn: typeof notify) { notify = fn; },
   record(provider: string, sample: Omit<ProviderUsage, "updatedAt">, updatedAt = Date.now()) {
     if (values[provider]?.updatedAt > updatedAt) return;
+    const rows = historyRows(provider, values[provider], { ...sample, updatedAt });
     values[provider] = { ...sample, updatedAt };
+    // Latest-only usage.json cannot show how much of an expired window went unused; the history can.
+    if (rows.length) try { fs.appendFileSync(historyFile, rows.map(r => JSON.stringify(r)).join("\n") + "\n", { mode: 0o600 }); } catch {}
     fs.writeFileSync(file, JSON.stringify(values), { mode: 0o600 });
     notify(provider, values[provider]);
   },
