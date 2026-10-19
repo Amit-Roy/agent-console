@@ -1,7 +1,7 @@
 import { quoteEffort, requestShape, type EffortQuote, type LoadedEffortModel } from "./triage-effort.ts";
 
 /** Initial-request complexity predicts observed session usage; later outcomes are not features. */
-export const TRIAGE_SCORECARD_VERSION = 9;
+export const TRIAGE_SCORECARD_VERSION = 10;
 export const METRIC_MAX = { breadth: 3, complexity: 3, uncertainty: 3, risk: 3, impact: 3, urgency: 2, frequency: 2 } as const;
 export type MetricName = keyof typeof METRIC_MAX;
 export interface MetricEvidence { value: number | null; evidence: string | null }

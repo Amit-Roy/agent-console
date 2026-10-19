@@ -27,6 +27,7 @@ assert.ok(visible.includes("Historical quotes are not task-specific."));
 assert.equal(rendered.split("complexity fit failed").length - 1, 1);
 assert.ok(visible.includes("Ranges under-covered held-out outcomes."));
 assert.ok(visible.includes("not success probabilities"));
+ assert.ok(!visible.includes("| P50"));
 assert.ok(visible.includes("Whole-session usage includes later follow-ups."));
 // Effort follows the design level; the token table is only a rough guide.
 assert.equal(derived.scorecard.design.level, "light");

@@ -10,8 +10,9 @@ export const TRIAGE_COMMENT_VERSION_MARKER = `<!-- agent-console-triage-version:
 /** Render untrusted prose as text, without HTML, mentions, or Markdown structure. */
 export const safeTriageText = (value: unknown): string => String(value ?? "")
   .replace(/[\u0000-\u001f\u007f]/g, " ")
-  .replace(/[&<>@|`!*_#[\]\\~+\-]/g, char => `&#${char.charCodeAt(0)};`);
+  .replace(/[&<>@|`!*_#[\]\\~]/g, char => `&#${char.charCodeAt(0)};`);
 
+const compact = (value: number): string => value >= 1e6 ? `${(value / 1e6).toFixed(1)}M` : value >= 1e3 ? `${Math.round(value / 1e3)}K` : String(Math.round(value));
 const number = (value: number): string => value.toLocaleString("en-US", { maximumFractionDigits: 1 });
 const amount = (values: EffortQuantiles | null, percentile: keyof EffortQuantiles): string => values ? number(values[percentile]) : "Unavailable";
 type ValidationMetric = { mae?: number };
@@ -49,14 +50,15 @@ export function renderTriageComment(decision: TriageDecision, sourceMarker = "")
   const workCoverage = metrics.activeCoverage?.[totalTarget ? "total" : "work"] ?? metrics.activeCoverage?.work ?? metrics.workCoverage;
   const outputCoverage = metrics.activeCoverage?.output ?? metrics.outputCoverage;
   const underCovered = [workCoverage, outputCoverage].some(coverage => (coverage?.p80 ?? 1) < 0.8 || (coverage?.p95 ?? 1) < 0.95);
-  lines.push("", "### Estimated token usage", "", "| Scenario | Total tokens | Generated |", "| --- | ---: | ---: |");
-  for (const key of ["p50", "p80", "p95"] as const) lines.push(`| ${key.toUpperCase()} | ${amount(price.total, key)} | ${amount(price.output, key)} |`);
-  lines.push("", `Plan with **${price.recommendedBudget.toUpperCase()}**; P50 is the central scenario and P95 the stretch reserve.`);
+  const budget = price.total?.[price.recommendedBudget] ?? null;
+  lines.push("", "### Estimated token usage", "", price.total
+    ? `About **${compact(price.total.p50)}** tokens typical; **${compact(price.total.p80)}** likely ceiling; **${compact(price.total.p95)}** worst case. Plan with **${compact(budget ?? price.total.p80)}**.`
+    : "Unavailable.");
   const warning: string[] = [];
   if (price.estimator === "historical-baseline") warning.push("The complexity fit failed the held-out baseline check. Historical quotes are not task-specific.");
   else if (metrics.hasLearnedComplexitySignal === false) warning.push("Initial-request features have not established predictive value.");
   if (underCovered) warning.push("Ranges under-covered held-out outcomes.");
-  warning.push("P80/P95 are scenario percentiles, not success probabilities.");
+  warning.push("Percentiles are scenarios, not success probabilities.");
   lines.push(warning.join(" "), session
     ? "Whole-session usage includes later follow-ups. Only the initial request supplies predictors."
     : "Usage covers one observed direct-agent delivery run.");
@@ -75,6 +77,8 @@ export function renderTriageComment(decision: TriageDecision, sourceMarker = "")
     "", "<details><summary>Token accounting and model check</summary>", "",
     `Status: ${safeTriageText(price.confidence)}. Target: ${totalTarget ? "Initial request → total session usage" : session ? "initial request → session work → whole-session tokens" : "initial request → delivery-run work → tokens"}.`,
     `Training: ${safeTriageText(price.training.sampleCount ?? price.training.sampleIds.length)} ${session ? "sessions" : "delivery runs"}; ${safeTriageText(price.training.groupCount ?? "unknown")} thread groups.`,
+    "", "| Scenario | Total tokens | Generated |", "| --- | ---: | ---: |",
+    ...(["p50", "p80", "p95"] as const).map(key => `| ${key.toUpperCase()} | ${amount(price.total, key)} | ${amount(price.output, key)} |`),
     "", "| Input tokens | P50 | P80 | P95 |", "| --- | ---: | ---: | ---: |");
   for (const [label, values] of [["Total input", price.input], ["Non-cached input", price.freshInput], ["Cached replay", price.cachedInput]] as const) {
     lines.push(`| ${label} | ${amount(values, "p50")} | ${amount(values, "p80")} | ${amount(values, "p95")} |`);
