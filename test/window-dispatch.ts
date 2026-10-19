@@ -92,10 +92,11 @@ try {
   assert.equal(loadConfig(path.join(dir, "none.json")).enabled, false);
   fs.writeFileSync(path.join(dir, "window-dispatch.json"), JSON.stringify({ enabled: true, leadMinutes: 9999, repos: ["../evil"] }));
   const c = loadConfig(path.join(dir, "window-dispatch.json"));
+  assert.deepEqual(c.authors, ["Amit-Roy"]);
   assert.equal(c.enabled, true); assert.equal(c.dryRun, true); assert.equal(c.leadMinutes, 300); assert.deepEqual(c.repos, ["Amit-Roy/agent-console"]);
 
   // dispatcher: disabled does nothing; dry run logs once per window and starts nothing
-  const github = async () => [{ number: 1, title: "x", labels: [{ name: "Eff: Deep" }, { name: "Pri: P1" }] }, { number: 2, pull_request: {}, labels: [] }];
+  const github = async () => [{ number: 1, title: "x", user: { login: "Amit-Roy" }, labels: [{ name: "Eff: Deep" }, { name: "Pri: P1" }] }, { number: 2, pull_request: {}, user: { login: "Amit-Roy" }, labels: [] }, { number: 3, title: "stranger", user: { login: "someone-else" }, labels: [{ name: "Eff: Deep" }] }];
   const started: string[] = [];
   const d = createDispatcher({ usage: () => ({ claude: win(10, 60) }), github, dir, now: () => now, start: x => { started.push(x.key); } });
   fs.rmSync(path.join(dir, "window-dispatch.json"));

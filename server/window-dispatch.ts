@@ -18,11 +18,12 @@ export interface Config {
   maxUsedPct: number;    // skip a window that is already this full: nothing would be wasted
   perWindow: number;     // issues handed to one provider per window
   repos: string[];
+  authors: string[];     // only issues opened by these GitHub logins are dispatched: issue text steers an unattended agent
 }
 export interface Issue { repo: string; number: number; title: string; labels: string[] }
 export interface Decision { key: string; issue: Issue; effort: Effort; route: Route; window?: { provider: string; resetsAt: number; used: number }; reason: string }
 
-export const DEFAULTS: Config = { enabled: false, dryRun: true, leadMinutes: 90, maxUsedPct: 90, perWindow: 2, repos: ["Amit-Roy/agent-console"] };
+export const DEFAULTS: Config = { enabled: false, dryRun: true, leadMinutes: 90, maxUsedPct: 90, perWindow: 2, repos: ["Amit-Roy/agent-console"], authors: ["Amit-Roy"] };
 
 // Issue #10: BAU = Sonnet medium or Sol low; Deep = Opus medium or Sol high; Trivial = any cheap Pi model, reviewed by a better one.
 export const ROUTES: Record<Effort, Route[]> = {
@@ -175,17 +176,18 @@ export function loadConfig(file = path.join(DATA_DIR, "window-dispatch.json")): 
     leadMinutes: num(raw.leadMinutes, DEFAULTS.leadMinutes, 5, 300),
     maxUsedPct: num(raw.maxUsedPct, DEFAULTS.maxUsedPct, 1, 100),
     perWindow: num(raw.perWindow, DEFAULTS.perWindow, 1, 10),
+    authors: Array.isArray(raw.authors) && raw.authors.length && raw.authors.every((a: unknown) => typeof a === "string" && /^[\w-]{1,39}$/.test(a)) ? raw.authors : DEFAULTS.authors,
     repos: Array.isArray(raw.repos) && raw.repos.every((r: unknown) => typeof r === "string" && /^[\w-]+\/(?!\.)[\w.-]+$/.test(r)) && raw.repos.length ? raw.repos : DEFAULTS.repos,
   };
 }
 
-export async function openIssues(repos: string[], github: GithubRequest = githubRequest): Promise<Issue[]> {
+export async function openIssues(repos: string[], github: GithubRequest = githubRequest, authors: string[] = DEFAULTS.authors): Promise<Issue[]> {
   const out: Issue[] = [];
   for (const repo of repos) {
     const items = await github("GET", `repos/${repo}/issues?state=open&per_page=100`);
     if (!Array.isArray(items)) throw new Error("Invalid GitHub issues response");
     for (const i of items) {
-      if (i.pull_request || !Number.isSafeInteger(i.number)) continue;
+      if (i.pull_request || !Number.isSafeInteger(i.number) || !authors.includes(i.user?.login)) continue;
       out.push({ repo, number: i.number, title: String(i.title ?? ""), labels: (i.labels || []).map((l: any) => typeof l === "string" ? l : l?.name).filter(Boolean) });
     }
   }
@@ -201,7 +203,7 @@ export function createDispatcher(opts: { usage: () => Record<string, ProviderUsa
   async function tick() {
     const cfg = loadConfig(path.join(dir, "window-dispatch.json"));
     if (!cfg.enabled) return [];
-    const issues = await openIssues(cfg.repos, opts.github);
+    const issues = await openIssues(cfg.repos, opts.github, cfg.authors);
     const rows = read();
     const done = new Set<string>(rows.filter(r => !r.dryRun).map(r => r.key));
     const live = !cfg.dryRun && !!opts.start;
