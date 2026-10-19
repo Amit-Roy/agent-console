@@ -26,7 +26,8 @@ const parsed = parseTriageReply(valid, input)!;
 const quoted = quoteEffort(assessment.metrics, fixtureEffortModel);
 assert.equal(quoted.status, "ready");
 if (quoted.status !== "ready") throw Error("Invalid fixture quote");
-assert.equal(parsed.effort, quoted.effort);
+assert.equal(parsed.effort, "deep", "Effort follows the detailed design level, not the token tier");
+assert.equal(parsed.scorecard!.pricing.effort, quoted.effort, "The token quote keeps its own tier");
 assert.equal(parsed.priority, "p1");
 assert.equal(parsed.scorecard!.design.level, "detailed");
 assert.deepEqual(parsed.scorecard!.tokens.input, [quoted.input!.p50, quoted.input!.p95]);
@@ -36,7 +37,7 @@ assert.deepEqual(parsed.scorecard!.pricing.thresholds, quoted.thresholds);
 assert.equal(parsed.scorecard!.tokens.confidence, "experimental");
 assert.match(parsed.scorecard!.tokens.formula, /work|complexity/i);
 assert.deepEqual(parsed.scorecard!.facts, { changedFiles: 2, additions: 40, deletions: 5 });
-assert.equal(parsed.scorecard!.version, 8);
+assert.equal(parsed.scorecard!.version, 9);
 assert.equal(parsed.scorecard!.pricing.scope, "completed-session");
 assert.match(parsed.reason, /per whole session/);
 assert.ok(!/\d\.\d{2,}/.test(parsed.reason), "The summary should round work estimates to one decimal.");
@@ -88,6 +89,15 @@ function scores(values: number[]) {
 }
 assert.equal(scores([0, 0, 0, 0, 0, 0, 0]).effort, "trivial");
 assert.equal(scores([3, 3, 3, 3, 0, 0, 0]).effort, "deep");
+// Effort is the design level: none is trivial, light is bau, detailed is deep, whatever the token quote says.
+assert.equal(scores([1, 1, 1, 1, 0, 0, 0]).effort, "bau");
+assert.equal(scores([1, 1, 1, 1, 0, 0, 0]).scorecard!.design.level, "light");
+assert.equal(scores([0, 0, 1, 1, 0, 0, 0]).effort, "trivial");
+assert.equal(scores([0, 0, 0, 2, 0, 0, 0]).effort, "deep", "Risk 2 requires detailed design");
+for (const values of [[0, 0, 0, 0, 0, 0, 0], [1, 1, 1, 1, 0, 0, 0], [3, 0, 0, 0, 0, 0, 0]]) {
+  const row = scores(values);
+  assert.equal(row.effort, ({ none: "trivial", light: "bau", detailed: "deep" } as const)[row.scorecard!.design.level]);
+}
 assert.ok(scores([3, 3, 3, 3, 0, 0, 0]).scorecard!.pricing.output.p50 > scores([0, 0, 0, 0, 0, 0, 0]).scorecard!.pricing.output.p50);
 const metadataOnly = parseTriageReply(valid, { ...input, additions: 999999, deletions: 999999, changedFiles: 999999 })!;
 assert.deepEqual(metadataOnly.scorecard!.pricing, parsed.scorecard!.pricing);

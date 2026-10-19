@@ -71,7 +71,7 @@ export function renderTriageComment(decision: TriageDecision, sourceMarker = "")
   }
   if (unknowns.length) lines.push("", `Missing: ${unknowns.join(", ")}.`, `Next: ${unknowns.map(name => investigation[name]).join("; ")}.`);
   if (score.facts && Object.keys(score.facts).length) lines.push("", `PR facts: ${Object.entries(score.facts).map(([key, value]) => `${safeTriageText(key)}=${safeTriageText(value)}`).join(", ")}. These are not pricing predictors.`);
-  lines.push("", "Design and priority follow scoring rules. Urgency (the priority) comes from impact, how often the workflow meets the problem, and any stated deadline; past token usage does not determine them.", "", "</details>",
+  lines.push("", "Effort, design, and priority follow scoring rules. Effort follows the level of design. Urgency (the priority) comes from impact, how often the workflow meets the problem, and any stated deadline; past token usage does not determine them.", "", "</details>",
     "", "<details><summary>Token accounting and model check</summary>", "",
     `Status: ${safeTriageText(price.confidence)}. Target: ${totalTarget ? "Initial request → total session usage" : session ? "initial request → session work → whole-session tokens" : "initial request → delivery-run work → tokens"}.`,
     `Training: ${safeTriageText(price.training.sampleCount ?? price.training.sampleIds.length)} ${session ? "sessions" : "delivery runs"}; ${safeTriageText(price.training.groupCount ?? "unknown")} thread groups.`,
@@ -81,7 +81,7 @@ export function renderTriageComment(decision: TriageDecision, sourceMarker = "")
   }
   if (!totalTarget) lines.push("", `Logged tool actions: P50 ${amount(price.activity, "p50")}; P80 ${amount(price.activity, "p80")}; P95 ${amount(price.activity, "p95")}.`);
   lines.push("", "Total tokens include input and output. Cached replay is included once. Human hours and unmeasured child agents are excluded.",
-    `Effort uses ${price.effortBasis.toUpperCase()} ${workUnit}. Trivial ≤${number(price.thresholds.trivialMax)}; Deep ≥${number(price.thresholds.deepMin)}; otherwise BAU. Unknown or extrapolated pricing scope selects P95 by policy.`,
+    `Effort follows the level of design: none is Trivial, light is BAU, detailed is Deep. The token table is a rough guide only. It prices ${price.effortBasis.toUpperCase()} ${workUnit}; unknown or extrapolated pricing scope selects P95 by policy.`,
     `P80 − P50 reserve: ${price.total ? `${number(price.total.p80 - price.total.p50)} total tokens; ` : ""}${number(price.riskPremium.output)} generated tokens.`);
   if (price.unknowns.length || price.outOfRange.length) lines.push(`Pricing features missing: ${price.unknowns.join(", ") || "none"}. Outside training range: ${price.outOfRange.join(", ") || "none"}.`);
   const selectedWork = metrics.activeWork ?? metrics.work;
