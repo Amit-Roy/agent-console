@@ -13,7 +13,7 @@ export async function isModelRequest(input, init = {}) {
     const base = new URL(tools);
     if (url.origin === base.origin && (url.pathname === base.pathname || url.pathname.startsWith(base.pathname + "/"))) return false;
   }
-  if (/(?:^|\/)(?:chat\/completions|completions|responses|messages|generate|chat|invoke|invoke-with-response-stream|converse|converse-stream)(?:\/|$)|:(?:streamGenerateContent|generateContent)(?:$|\?)/i.test(url.pathname)) return true;
+  if (/(?:^|\/)(?:chat\/completions|completions|responses|messages|generate|chat|invoke|invoke-with-response-stream|converse|converse-stream)(?:\/|$)|:(?:streamGenerateContent|generateContent|streamRawPredict|rawPredict)(?:$|\?)/i.test(url.pathname)) return true;
   // Custom compatible endpoints may use a vendor-specific path. Match their
   // model payload rather than throttling tool callbacks, catalog and auth calls.
   let body = init.body;
@@ -55,7 +55,7 @@ export function installPiRateLimit() {
   const addRequest = http.Agent.prototype.addRequest;
   http.Agent.prototype.addRequest = function rateLimitedAddRequest(request, options) {
     const url = new URL(request.path, `${options.protocol || "http:"}//${options.hostname || options.host || "localhost"}`);
-    if (request.method !== "POST" || !/(?:^|\/)(?:chat\/completions|completions|responses|messages|generate|chat|invoke|invoke-with-response-stream|converse|converse-stream)(?:\/|$)|:(?:streamGenerateContent|generateContent)$/i.test(url.pathname)) {
+    if (request.method !== "POST" || !/(?:^|\/)(?:chat\/completions|completions|responses|messages|generate|chat|invoke|invoke-with-response-stream|converse|converse-stream)(?:\/|$)|:(?:streamGenerateContent|generateContent|streamRawPredict|rawPredict)$/i.test(url.pathname)) {
       return addRequest.call(this, request, options);
     }
     const controller = new AbortController();

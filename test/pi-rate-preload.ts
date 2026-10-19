@@ -56,7 +56,7 @@ const childScript = `
 import assert from 'node:assert/strict';
 import http from 'node:http';
 const base = ${JSON.stringify(base)};
-const paths = ['/v1/responses','/v1/messages','/models/a:streamGenerateContent','/models/a:generateContent','/api/generate','/model/a/converse-stream'];
+const paths = ['/v1/responses','/v1/messages','/models/a:streamGenerateContent','/models/a:generateContent','/api/generate','/model/a/converse-stream','/publishers/anthropic/models/claude:streamRawPredict','/publishers/anthropic/models/claude:rawPredict'];
 for (const p of paths) await fetch(base+p,{method:'POST',body:'{}'});
 await fetch(new Request(base+'/vendor-custom',{method:'POST',body:JSON.stringify({model:'fixture',messages:[]})}));
 await new Promise((resolve,reject)=>{
@@ -102,7 +102,7 @@ try {
   assert.equal(code, 0, stderr);
   assert.equal(upstream.filter(url => url === "/v1/responses").length, 1, "aborted queue never sends upstream");
   assert.equal(upstream.includes("/must-not-send"), false, "broker failure blocks upstream");
-  assert.equal(actions.filter(action => action.action === "acquire").length, 13 + (sdk ? 2 : 0));
+  assert.equal(actions.filter(action => action.action === "acquire").length, 15 + (sdk ? 2 : 0));
   assert.equal(websocketMessages, 4, "reused WebSocket model messages each acquire a slot");
   assert.deepEqual(websocketOrder, [-1, -1, 1, 2], "queued WebSocket sends preserve order");
   assert.equal(actions.some(action => action.action === "cooldown" && action.retryAfter === undefined), true, "WebSocket rate limits update shared cooldown");
