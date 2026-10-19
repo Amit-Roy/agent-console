@@ -5,6 +5,8 @@ import { route as routeWork } from "./automation/router.ts";
 import { createOpener } from "./window-opener.ts";
 import { createReviewer } from "./issue-review.ts";
 import { createEventLog } from "./automation/events.ts";
+import { createTriageBridge } from "./automation/triage-bridge.ts";
+import { usageEvents } from "./automation/usage-events.ts";
 import { automationApi, scanHooks } from "./automation/snapshot.ts";
 import { loadConfig as loadDispatchConfig } from "./window-dispatch.ts";
 import { loadOpenerConfig } from "./window-opener.ts";
@@ -67,11 +69,14 @@ const acodeSettings = acodeConfig();
 let latency: LatencyStore | undefined;
 try { latency = new LatencyStore(path.join(DATA_DIR, "latency.sqlite")); }
 catch { console.warn("Local latency storage is unavailable."); }
-usage.subscribe((provider, usage) => broadcast({ t: "usage", provider, usage }));
 setInterval(() => threads.sweep(), 60_000).unref();
 // Every automation stage writes here; the dashboard reads it. A previous process's unfinished runs are closed as abandoned.
 const automationLog = createEventLog({ file: path.join(DATA_DIR, "automation-events.jsonl") });
 automationLog.recoverOpenRuns();
+const recordUsage = usageEvents(automationLog);
+usage.subscribe((provider, u) => { broadcast({ t: "usage", provider, usage: u }); recordUsage(provider, u); });
+const triageBridge = createTriageBridge({ dbPath: path.join(DATA_DIR, "github-triage.sqlite"), events: automationLog });
+setInterval(() => triageBridge.poll(), 30_000).unref();
 const automation = automationApi({
   log: automationLog,
   config: () => ({ dispatch: loadDispatchConfig(), opener: loadOpenerConfig() }),
