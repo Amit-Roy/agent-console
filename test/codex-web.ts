@@ -27,6 +27,11 @@ assert.equal(codexWebTool({query:'misleading',action:{type:'other'}}).name,'WebB
 assert.match(codexWebTool({action:{type:'search'}}).input.description,/not reported/);
 assert.equal(toolName('WebSearch',{query:''}),'WebBrowse');
 assert.match(toolSummary('WebSearch',{query:''}),/not reported/);
+// Read calls get a shortened, readable path summary instead of the raw absolute path
+assert.equal(toolSummary('Read',{file_path:'/home/coder/repos/agent-console/server/threads.ts'}),'agent-console/server/threads.ts');
+assert.equal(toolSummary('Read',{file_path:'/tmp/scratch/notes.md'}),'scratch/notes.md');
+assert.equal(toolSummary('Read',{file_path:'README.md'}),'README.md');
+assert.equal(toolSummary('Read',{}),'');
 translate({type:'item.completed',item:{id:'fail',type:'web_search',status:'failed',error:{message:'network down'}}});
 assert.equal(events.at(-1).message.content[0].is_error,true);
 assert.equal(events.at(-1).message.content[0].content,'network down');
