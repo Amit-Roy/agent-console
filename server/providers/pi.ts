@@ -10,6 +10,7 @@ import { childEnv } from "./env.ts";
 import { parseJson, spawnLines, type Proc } from "./proc.ts";
 import { piQuestions } from "./pi-questions.ts";
 import { piRateEnv } from "./pi-rate-env.ts";
+import { CODING_ROUTE, DIRECT_CODING } from "./pi-coding-route.mjs";
 import { defaultPiModel } from "./pi-model.ts";
 import { retryEvent } from "../turn-timing.ts";
 import { acquireModelRequest } from "./model-rate-limit.ts";
@@ -215,8 +216,8 @@ export const pi: Provider = {
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     // Only unattended NVIDIA coding runs use the host router. Manual model
     // choices and explicit OpenRouter selections retain their exact provider.
-    const routed = !!t.issueRun && t.model === "nvidia/nvidia/nemotron-3-super-120b-a12b";
-    const args = ["--mode", "rpc", "--model", routed ? "agent-console/auto-coding" : t.model, "--session-dir", dir, "--extension", QUESTIONS_EXTENSION, "--extension", TOOLS_EXTENSION];
+    const routed = !!t.issueRun && t.model === `nvidia/${DIRECT_CODING}`;
+    const args = ["--mode", "rpc", "--model", routed ? CODING_ROUTE : t.model, "--session-dir", dir, "--extension", QUESTIONS_EXTENSION, "--extension", TOOLS_EXTENSION];
     if (routed) args.push("--extension", CODING_ROUTE_EXTENSION);
     if (fs.readdirSync(dir).length) args.push("--continue");
     if (t.mode === "plan") args.push("--tools", READ_ONLY_TOOLS);
