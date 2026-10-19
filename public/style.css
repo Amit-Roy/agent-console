@@ -1090,3 +1090,11 @@ body.login{display:grid;place-items:center;overflow:auto;padding:var(--sp-4)}
 .tb-step-top .ms{color:var(--t1);font-variant-numeric:tabular-nums}
 .tb-steps .note{margin:0;overflow-wrap:anywhere}
 @media (forced-colors:active){.tb-bar{forced-color-adjust:none;background:CanvasText!important}.tb-row.err .tb-bar{background:repeating-linear-gradient(135deg,CanvasText 0 3px,Canvas 3px 6px)!important}}
+
+/* Auto lane: threads started by automation, grouped by issue */
+.auto-list .auto-group{display:flex;align-items:baseline;justify-content:space-between;gap:var(--sp-2);margin:var(--sp-3) 0 var(--sp-1);padding:0 var(--sp-3);color:var(--t2);font:var(--fw-med) var(--f-xs);letter-spacing:var(--ls-sm);cursor:default;background:transparent}
+.auto-list .auto-group:first-child{margin-top:var(--sp-1)}
+.auto-list .auto-group .k{color:var(--t1);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.auto-list .auto-group .n{color:var(--t3);flex:none}
+.auto-list .tag.role{text-transform:capitalize}
+.auto-list .tag.role-review{color:var(--accent)}

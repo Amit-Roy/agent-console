@@ -12,6 +12,7 @@
     "test:questions-ui": "node test/questions-ui.ts",
     "test:async-questions-ui": "node test/async-questions-ui.ts",
     "test:ui": "node test/ui.ts",
+    "test:automation-ui": "node test/automation-ui.ts",
     "test:chat-search": "node test/chat-search-ui.ts",
     "test:mobile": "node test/mobile-ui.ts",
     "test:queue-ui": "node test/queue-telemetry-ui.ts",
