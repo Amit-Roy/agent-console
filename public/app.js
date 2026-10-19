@@ -2216,7 +2216,8 @@ const readDataUrl = (blob) =>
 // images the browser can decode are checked, downscaled and previewed; anything else is attached as a plain file
 async function prepare(file) {
   const label = file.name || "That file";
-  const bmp = file.type.startsWith("image/") ? await createImageBitmap(file).catch(() => null) : null;
+  // Keyboard image insertion on Android (Gboard clipboard, stickers) hands over raw bytes, possibly with no type: try decoding.
+  const bmp = !file.type || file.type.startsWith("image/") ? await createImageBitmap(file).catch(() => null) : null;
   if (!bmp) {
     if (!file.size) throw new Error(`${label} is empty (or a folder).`);
     if (file.size > MAX_FILE_BYTES) throw new Error(`${label} is over ${MAX_FILE_BYTES >> 20} MB.`);
