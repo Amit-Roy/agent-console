@@ -54,6 +54,7 @@ export type TaskInput = Partial<Pick<Task, "title" | "prompt" | "provider" | "mo
 
 const CATCH_UP_MS = 7 * 86_400_000;
 const MAX_SKIPPED = 20;
+const RUN_LIMIT_MS = 45 * 60_000; // a run that has not ended its turn by then is hung (e.g. a tool call that never returns)
 
 export function cronPattern(t: Pick<Task, "repeat" | "time" | "day">): string | null {
   const [h, m] = t.time.split(":").map(Number);
@@ -110,9 +111,12 @@ export class Schedules {
   readonly outputs: string;
   private threads: Threads;
   private emit: Emit;
+  private limit: number;
+  private watchdogs = new Map<string, NodeJS.Timeout>(); // run id -> timer
 
-  constructor(threads: Threads, emit: Emit, opts: { file?: string; outputs?: string; catchUp?: boolean } = {}) {
+  constructor(threads: Threads, emit: Emit, opts: { file?: string; outputs?: string; catchUp?: boolean; runLimitMs?: number } = {}) {
     this.threads = threads;
+    this.limit = opts.runLimitMs ?? RUN_LIMIT_MS;
     this.emit = emit;
     this.file = opts.file ?? path.join(DATA_DIR, "schedules.json");
     this.outputs = opts.outputs ?? process.env.AGENT_CONSOLE_OUTPUTS ?? path.join(os.homedir(), "repos", "agent-outputs");
@@ -251,6 +255,7 @@ export class Schedules {
       const thread = this.threads.create({ provider: t.provider, cwd: t.cwd, mode: t.mode, model: t.model, effort: t.effort, title: `${t.title} · ${when.short} ${when.time}`, schedule: { task: t.id, run: run.id } });
       run.thread = thread.id;
       this.changed();
+      this.watch(t, run);
       this.threads.send(thread.id, t.prompt, { instructions: this.instructions(t, trigger, when), scheduled: trigger });
     } catch (e: any) {
       run.status = "failed";
@@ -280,10 +285,28 @@ export class Schedules {
     return task && run ? { task, run } : undefined;
   }
 
+  // A hung tool call never yields a result, so turnEnded never fires. Past the limit, stop the thread and fail the run.
+  private watch(task: Task, run: Run) {
+    const timer = setTimeout(() => {
+      this.watchdogs.delete(run.id);
+      if (run.status !== "running" || !run.thread) return;
+      try { this.threads.abort(run.thread); } catch {}
+      run.status = "failed";
+      run.reason = `The run was stopped after ${Math.round(this.limit / 60_000)} minutes without finishing.`;
+      run.ms = Date.now() - run.at;
+      this.changed();
+      this.threads.note(run.thread, { type: "schedule_report", task: task.id, title: task.title, run: { ...run }, ts: Date.now() });
+    }, this.limit);
+    timer.unref();
+    this.watchdogs.set(run.id, timer);
+  }
+
   private turnEnded(t: Thread, ev: any) {
     const found = this.findRun(t.id);
     if (!found || found.run.status !== "running") return; // follow-up turns in a finished run change nothing
     const { task, run } = found;
+    clearTimeout(this.watchdogs.get(run.id));
+    this.watchdogs.delete(run.id);
     run.status = ev.is_error ? "failed" : "done";
     if (ev.is_error) run.reason = "The agent ended the run with an error.";
     run.ms = Date.now() - run.at;
@@ -353,5 +376,7 @@ export class Schedules {
   shutdown() {
     for (const c of this.crons.values()) c.stop();
     this.crons.clear();
+    for (const w of this.watchdogs.values()) clearTimeout(w);
+    this.watchdogs.clear();
   }
 }
