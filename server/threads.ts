@@ -162,6 +162,7 @@ export class Threads {
   private commands: Record<string, Command[]> = {}; // per provider: each harness has its own slash commands and skills
   onTurnEnd?: (t: Thread, ev: any) => void; // a scheduled run's turn ended (Schedules records the run)
   onIssueTurnEnd?: (t: Thread, ev: any) => void; // an issue run's turn ended (window-dispatch starts the review of trivial work)
+  onTurnDone?: (t: Thread, ev: any) => void; // any thread's turn finished (token telemetry comments)
   constructor(emit: Emit, onNotification?: (notice: ThreadNotice) => void) {
     this.onNotification = onNotification;
     this.emit = emit;
@@ -740,6 +741,7 @@ export class Threads {
     }
     this.publish(t.id, ev, ev.type !== "stream_event");
     if (ev.type === "result" && t.schedule && t.status === "idle") try { this.onTurnEnd?.(t, ev); } catch {}
+    if (ev.type === "result" && t.status === "idle") try { this.onTurnDone?.(t, ev); } catch {}
     if (ev.type === "result" && t.issueRun && t.status === "idle") try { this.onIssueTurnEnd?.(t, ev); } catch {}
     if (ev.type === "assistant") {
       for (const b of ev.message?.content ?? []) {

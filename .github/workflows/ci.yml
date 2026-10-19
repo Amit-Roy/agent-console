@@ -17,6 +17,28 @@ permissions:
   contents: read
 
 jobs:
+  # Required check: every PR carries the one token-telemetry comment (the server posts it, even if only
+  # "No agent usage recorded."). Add "telemetry-comment" to the branch protection required checks.
+  telemetry-comment:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pull-requests: read
+      issues: read
+    steps:
+      - name: Require token telemetry comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          for attempt in $(seq 1 20); do
+            count="$(gh api --paginate "repos/$REPO/issues/$PR/comments?per_page=100" --jq '.[] | select(.body | startswith("<!-- agent-console-telemetry -->")) | .id' | grep -c . || true)"
+            if [ "${count:-0}" -ge 1 ]; then echo "Telemetry comment found."; exit 0; fi
+            echo "No telemetry comment yet (attempt $attempt of 20)."; [ "$attempt" -lt 20 ] && sleep 15
+          done
+          echo "::error::No agent-console telemetry comment on this PR."; exit 1
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 20

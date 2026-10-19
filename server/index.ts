@@ -27,6 +27,7 @@ import { authed, CODER_HOSTS, cookieFrom, limited, makeToken, passwordOk, PASSWO
 import { providerInfo, refreshPiModels } from "./providers/index.ts";
 import { threadToMarkdown } from "./export.ts";
 import { Threads, turnTiming } from "./threads.ts";
+import { createTelemetryService } from "./token-telemetry.ts";
 import { Schedules, describe } from "./schedules.ts";
 import { SessionSearch } from "./session-search.ts";
 import { Notifications } from "./notifications.ts";
@@ -91,6 +92,15 @@ const automation = automationApi({
   runs: () => threads.list().filter(t => t.issueRun && !t.archived).map(t => ({ thread: t.id, key: t.issueRun!.key, role: t.issueRun!.role, effort: t.issueRun!.effort, state: t.status, title: t.title })),
   schedules: () => schedules.list().map(t => ({ id: t.id, title: t.title, schedule: describe(t), enabled: t.enabled })),
 });
+// One upserted token-usage comment per GitHub issue/PR the finished thread links to (repos = the triage allowlist).
+if (process.env.AGENT_CONSOLE_MOCK !== "1") {
+  const triageRepos = (): string[] => {
+    try { const r = JSON.parse(fs.readFileSync(process.env.AGENT_CONSOLE_TRIAGE_CONFIG || path.join(os.homedir(), ".config/agent-console/github-triage.json"), "utf8")).repos; return Array.isArray(r) ? r : []; } catch { return []; }
+  };
+  const telemetry = createTelemetryService({ repos: triageRepos, dataDir: DATA_DIR, threads: () => threads.list() as any,
+    log: (event, fields) => console.warn(JSON.stringify({ event, ...fields })) });
+  threads.onTurnDone = t => { void telemetry.threadTurnEnded(t as any); };
+}
 // Plan-only until ~/.config/agent-console/window-dispatch.json sets enabled (see docs/window-dispatch.md).
 if (process.env.AGENT_CONSOLE_MOCK !== "1") {
   const activeRuns = () => threads.list().filter(t => t.issueRun && t.status === "running").map(t => ({ provider: t.provider, role: t.issueRun!.role }));

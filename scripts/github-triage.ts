@@ -9,6 +9,7 @@ import { execFile, spawn } from "node:child_process";
 import { sign } from "@octokit/webhooks-methods";
 import { childEnv } from "../server/providers/env.ts";
 import { createTriageService } from "../server/github-triage.ts";
+import { createTelemetryService } from "../server/token-telemetry.ts";
 import { effortModelPath, loadEffortModel, quoteEffort, requestShape } from "../server/providers/triage-effort.ts";
 
 const SCRIPT = fileURLToPath(import.meta.url);
@@ -326,6 +327,8 @@ async function main() {
   if (command === "serve") {
     fs.mkdirSync(RUN, { recursive: true, mode: 0o700 });
     let service: ReturnType<typeof createTriageService> | undefined;
+    const telemetry = createTelemetryService({ repos: () => config().repos, dataDir: process.env.AGENT_CONSOLE_DATA || path.join(os.homedir(), ".config", "agent-console"),
+      log: (event, fields) => console.info(JSON.stringify({ event, ...fields })) });
     const server = http.createServer((req, res) => {
       if (service) {
         try { service.updateRepos(config().repos); }
@@ -341,6 +344,8 @@ async function main() {
       // Claim the port before opening the queue, so a duplicate start cannot recover another worker's active job.
       service = createTriageService({ secret: c.secret, repos: c.repos, dbPath: path.join(path.dirname(CONFIG), "github-triage.sqlite"),
         deploy: c.deploy ? { workflow: "CI", run: repo => { if (repo === c.deploy) deploy(); } } : undefined,
+        // Items without agent threads get "No agent usage recorded." so the required CI check can pass honestly.
+        onItem: item => telemetry.ensureComment(item.repo, item.number),
         log: metadata => console.info(JSON.stringify(metadata)) });
       fs.writeFileSync(PID, String(process.pid), { mode: 0o600 });
       console.log(`GitHub triage listening on port ${c.port}.`);
