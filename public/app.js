@@ -654,6 +654,7 @@ function renderThreads() {
     (t.archived ? shelf : ul).append(li);
   }
   if (list.length === filed) ul.append(el("li", "empty-list", list.length ? "Everything is archived." : "No threads yet."));
+  $("lane-threads-dot").hidden = !list.some(t => (questions.count(t.id) || t.waiting) || t.background || t.status === "running");
   schedules.render();
   autoLane.render();
 }
