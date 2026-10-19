@@ -3,6 +3,7 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { accountingSamples } from "./accounting-log.ts";
 import { safeTriageText } from "./triage-comment.ts";
+import { raisedPrs } from "./session-prs.ts";
 import { githubRequest, type GithubRequest } from "./github-triage.ts";
 
 export const TELEMETRY_MARKER = "<!-- agent-console-telemetry -->";
@@ -19,17 +20,18 @@ export type ThreadFacts = {
   branch?: string;       // git branch checked out in the thread's cwd (manual threads)
   defaultRepo?: string;  // owner/name of the cwd's origin; resolves bare #n
   texts?: string[];      // user messages
+  raised?: { repo: string; number: number }[]; // PRs the thread opened with `gh pr create`, from its log
 };
 export type LinkItem = { repo: string; number: number; head?: string };
 export type LinkRequest = { version?: number; thread: ThreadFacts; repos: string[]; item?: LinkItem };
-export type LinkResponse = { version: 1; items: { repo: string; number: number; via: "issue-run" | "pr-run" | "reference" }[]; linked: boolean; branch?: string };
+export type LinkResponse = { version: 1; items: { repo: string; number: number; via: "issue-run" | "pr-run" | "reference" | "raised" }[]; linked: boolean; branch?: string };
 
 const NOT_A_FEATURE_BRANCH = new Set(["main", "master", "HEAD", "develop"]);
 
 /**
  * Rules, in order: (1) automation IssueRun gives its issue and PR; (2) `#n` (default repo) or a github.com issue/pull URL in
  * user messages, at most five, allowlisted repos only; (3) with `item` given, a thread branch equal to the PR head ref (never
- * main/master). Tolerant: unknown request fields and malformed facts are ignored.
+ * main/master); (4) PRs the thread itself opened with `gh pr create`, whatever directory or worktree it ran in. Tolerant: unknown request fields and malformed facts are ignored.
  */
 export function linkThread(req: LinkRequest): LinkResponse {
   const allowed = new Set((Array.isArray(req?.repos) ? req.repos : []).filter(r => typeof r === "string" && REPO.test(r)));
@@ -48,6 +50,7 @@ export function linkThread(req: LinkRequest): LinkResponse {
     if (typeof t.defaultRepo === "string") for (const m of text.matchAll(/(?<![\w/&#])#(\d{1,9})(?!\w)/g)) refs.push({ repo: t.defaultRepo, number: Number(m[1]) });
   }
   for (const ref of refs.slice(0, MAX_REFS)) add(ref.repo, ref.number, "reference");
+  for (const pr of Array.isArray(t.raised) ? t.raised.slice(0, 20) : []) add(pr?.repo, pr?.number, "raised");
   const branch = typeof t.branch === "string" && !NOT_A_FEATURE_BRANCH.has(t.branch) ? t.branch : run?.branch;
   const item = req?.item;
   let linked = false;
@@ -156,7 +159,7 @@ export function createTelemetryService(options: TelemetryOptions) {
       if (!line.includes('"user_input"')) continue;
       try { const ev = JSON.parse(line); if (ev.type === "user_input" && typeof ev.text === "string") texts.push(ev.text.slice(0, 4000)); } catch {}
     }
-    return { id: t.id, issueRun: t.issueRun, branch: t.branch, defaultRepo: t.defaultRepo, texts };
+    return { id: t.id, issueRun: t.issueRun, branch: t.branch, defaultRepo: t.defaultRepo, texts, raised: raw ? raisedPrs(raw) : [] };
   }
 
   // Branch and origin repo come from git in the thread's cwd; both are best effort.

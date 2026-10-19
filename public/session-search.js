@@ -10,6 +10,28 @@ function element(tag, text, className) {
   if (className) node.className = className;
   return node;
 }
+// A GitHub PR/issue/comment URL, owner/repo#n or #n asks "which session raised this PR?" instead of searching text.
+const PR_REF = /^(https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/(pull|issues)\/\d+\S*|[\w.-]+\/[\w.-]+#\d+|#\d+)$/;
+async function lookupPrs(request, ref) {
+  const response = await fetch('/api/sessions/prs?' + new URLSearchParams({ref}), {signal: request.signal, cache: 'no-store'});
+  if (response.status === 401) { location.assign('/login'); return; }
+  const body = await response.json();
+  if (!response.ok) throw new Error(body.error || 'PR lookup failed. Try again.');
+  if (request !== pending) return;
+  status.textContent = body.prs.length ? `${body.prs.length} session${body.prs.length === 1 ? '' : 's'} raised this PR` : 'No session raised this PR. It may have been opened by hand, by automation, or before logs were kept.';
+  for (const pr of body.prs) {
+    const row = element('li');
+    const heading = element('h2');
+    const link = element('a', pr.title || pr.thread);
+    link.href = pr.sessionUrl;
+    heading.append(link);
+    const pull = element('a', `${pr.repo}#${pr.number}`);
+    pull.href = pr.url; pull.rel = 'noopener noreferrer';
+    const meta = element('p', `${pr.provider} · line ${pr.line} · `, 'search-meta');
+    meta.append(pull);
+    row.append(heading, meta); results.append(row);
+  }
+}
 async function search() {
   pending?.abort();
   const request = pending = new AbortController();
@@ -20,6 +42,7 @@ async function search() {
   status.textContent = 'Searching sessions…';
   results.setAttribute('aria-busy', 'true');
   try {
+    if (PR_REF.test(query.value.trim())) { await lookupPrs(request, query.value.trim()); return; }
     const response = await fetch('/api/sessions/search?' + params, {signal: request.signal, cache: 'no-store'});
     if (response.status === 401) { location.assign('/login'); return; }
     const body = await response.json();
