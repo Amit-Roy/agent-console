@@ -1,5 +1,6 @@
 import { $, el, icon, iconButton, wireCopy, renderMarkdown, highlightInto, langFromPath, parseFileRef, setFileScope } from "/render.js";
 import { createMenu } from "/menu.js";
+import { composerField } from "/composer-field.js";
 import { toolName, toolSummary } from "/tool-display.js";
 import { createLatencyReporter } from "/telemetry.js";
 import { createQuestions } from "/questions.js";
@@ -8,6 +9,9 @@ import { openBreakdown, closeBreakdown } from "/turn-breakdown.js";
 import { setupNotifications } from "/notifications.js";
 import { createChatSearch } from "/chat-search.js";
 import { createSchedules, REPEAT_ITEMS, DAY_ITEMS } from "/schedules.js";
+import { createAutoLane } from "/automation-lane.js";
+
+composerField($("input"));
 
 const MODE_META = {
   plan: { label: "Plan", desc: "Read-only. Plans without editing.", icon: "eye" },
@@ -566,6 +570,7 @@ const schedules = createSchedules({
 
 // ---------- threads UI ----------
 const cur = () => state.threads.get(state.current);
+const autoLane = createAutoLane({ state, openThread: (id) => openThread(id), setNav: (open) => setNav(open), provLabel: (id) => provLabel(id), ago: (ts) => ago(ts) });
 function ago(ts) {
   const s = Math.max(0, (Date.now() - ts) / 1000);
   if (s < 60) return "now";
@@ -587,7 +592,8 @@ function renderThreads() {
   ul.replaceChildren();
   shelf.replaceChildren();
   // a scheduled task's runs are listed under the task in the Scheduled lane, not here
-  const list = [...state.threads.values()].filter((t) => !(t.schedule && state.tasks.has(t.schedule.task))).sort((a, b) => b.updatedAt - a.updatedAt);
+  // automation-started runs (issue work, reviews) are listed in the Auto lane
+  const list = [...state.threads.values()].filter((t) => !(t.schedule && state.tasks.has(t.schedule.task)) && !t.issueRun).sort((a, b) => b.updatedAt - a.updatedAt);
   // archived threads sit in their own section below, collapsed unless the user opened it
   const filed = list.filter((t) => t.archived).length;
   $("archive").hidden = !filed;
@@ -651,7 +657,9 @@ function renderThreads() {
     (t.archived ? shelf : ul).append(li);
   }
   if (list.length === filed) ul.append(el("li", "empty-list", list.length ? "Everything is archived." : "No threads yet."));
+  $("lane-threads-dot").hidden = !list.some(t => (questions.count(t.id) || t.waiting) || t.background || t.status === "running");
   schedules.render();
+  autoLane.render();
 }
 setInterval(() => state.threads.size && renderThreads(), 30000);
 
@@ -1962,6 +1970,9 @@ function onEvent(e, live) {
       dropLive("thinking");
       state.live = null;
       const bits = [];
+      const at = new Date(e.ts || Date.now());
+      const clock = at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      bits.push(at.toDateString() === new Date().toDateString() ? clock : `${at.toLocaleDateString([], { month: "short", day: "numeric" })} ${clock}`);
       if (e.duration_ms) bits.push(`${(e.duration_ms / 1000).toFixed(1)}s`);
       if (typeof e.total_cost_usd === "number") bits.push(`$${e.total_cost_usd.toFixed(4)}`);
       if (e.is_error || (e.subtype && e.subtype !== "success")) bits.push(e.subtype || "error");
@@ -2205,7 +2216,8 @@ const readDataUrl = (blob) =>
 // images the browser can decode are checked, downscaled and previewed; anything else is attached as a plain file
 async function prepare(file) {
   const label = file.name || "That file";
-  const bmp = file.type.startsWith("image/") ? await createImageBitmap(file).catch(() => null) : null;
+  // Keyboard image insertion on Android (Gboard clipboard, stickers) hands over raw bytes, possibly with no type: try decoding.
+  const bmp = !file.type || file.type.startsWith("image/") ? await createImageBitmap(file).catch(() => null) : null;
   if (!bmp) {
     if (!file.size) throw new Error(`${label} is empty (or a folder).`);
     if (file.size > MAX_FILE_BYTES) throw new Error(`${label} is over ${MAX_FILE_BYTES >> 20} MB.`);
@@ -2583,19 +2595,21 @@ $("new-task").onclick = () => openTaskDialog();
 function setLane(lane, focus = false) {
   state.lane = lane;
   try { localStorage.setItem("ac_lane", lane); } catch {}
-  for (const [name, tab, pane] of [["threads", "lane-threads", "pane-threads"], ["tasks", "lane-tasks", "pane-tasks"]]) {
+  for (const [name, tab, pane] of [["threads", "lane-threads", "pane-threads"], ["tasks", "lane-tasks", "pane-tasks"], ["auto", "lane-auto", "pane-auto"]]) {
     $(tab).setAttribute("aria-selected", String(lane === name));
     $(tab).tabIndex = lane === name ? 0 : -1;
     $(pane).hidden = lane !== name;
   }
-  if (focus) $(lane === "tasks" ? "lane-tasks" : "lane-threads").focus();
+  if (focus) $(`lane-${lane}`).focus();
 }
 $("lane-threads").onclick = () => setLane("threads");
 $("lane-tasks").onclick = () => setLane("tasks");
+$("lane-auto").onclick = () => setLane("auto");
 $("lanes").addEventListener("keydown", (e) => {
   if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) return;
   e.preventDefault();
-  setLane(e.key === "Home" ? "threads" : e.key === "End" ? "tasks" : state.lane === "threads" ? "tasks" : "threads", true);
+  const order = ["threads", "tasks", "auto"], at = order.indexOf(state.lane);
+  setLane(e.key === "Home" ? order[0] : e.key === "End" ? order.at(-1) : order[(at + (e.key === "ArrowRight" ? 1 : order.length - 1)) % order.length], true);
 });
 setLane(state.lane);
 $("new").onclick = openNewDialog;
@@ -2613,11 +2627,15 @@ createMenu({
     { value: "task", label: "New scheduled task", icon: "clock" },
     { value: "notifications", label: "Notifications", desc: /: on$/.test($("notifications").getAttribute("aria-label") || "") ? "On for this device" : "Off", icon: "bell" },
     { value: "dashboard", label: "Usage dashboard", icon: "chart" },
+    { value: "automation", label: "Automation dashboard", icon: "play" },
+    { value: "host", label: "Host dashboard", icon: "terminal" },
     { value: "reload", label: "Reload page", icon: "refresh" },
     { value: "restart", label: "Restart server…", desc: "Once every thread is idle", icon: "power" },
   ],
   onSelect: (v) => {
     if (v === "dashboard") location.href = $("dash-link").href;
+    else if (v === "automation") location.href = $("auto-link").href;
+    else if (v === "host") location.href = $("host-link").href;
     else if (v === "task") { setLane("tasks"); openTaskDialog(); }
     else (v === "new" ? $("new") : $(v)).click();
   },

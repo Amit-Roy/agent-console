@@ -120,7 +120,7 @@ try {
     const chatRequest = (await wait(m => m.t === "event" && m.thread === id && m.event.type === "question")).event;
     await card.waitFor();
     const note = "Use your judgment and focus on the changed code";
-    assert.equal(await page.locator("#input").getAttribute("placeholder"), "Reply to the agent, or choose an option above…");
+    assert.equal(await page.locator("#input").getAttribute("data-placeholder"), "Reply to the agent, or choose an option above…");
     assert.equal(await page.locator("#send").getAttribute("aria-label"), "Reply to agent");
     await page.locator("#input").fill(note);
     if (width === 390) await page.getByRole("button", { name: "Reply to agent", exact: true }).click();
