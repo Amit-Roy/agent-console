@@ -45,8 +45,12 @@ check("title: capped at 30 chars on a word boundary", cleanTitle("Refresh thread
 check("title: a whole sentence is not a title", cleanTitle("I'm sorry, but I cannot determine a title for this particular message because it is empty.") === undefined);
 check("title: empty / junk is rejected", cleanTitle("") === undefined && cleanTitle(undefined) === undefined && cleanTitle('""') === undefined);
 check("title input: media references dropped", titleText("look ![a](/x/y.png) at [Image #2] this data:image/png;base64,AAAA bug") === "look at this bug");
-check("title input: capped at 100 chars", titleText("x".repeat(500)).length === 100);
-check("title input: only the last two non-empty messages", titleInput(["a", "b", "![i](x)", "c"]).join("|") === "b|c");
+check("title input: a long message is kept whole", titleText("x".repeat(500)).length === 500);
+check("title input: every non-empty message, oldest first", titleInput(["a", "b", "![i](x)", "c"]).join("|") === "a|b|c");
+check("title input: newest messages fill the budget", titleInput(["old".repeat(100), "n".repeat(300), "m".repeat(300)], 700).join("|").startsWith("old") === false && titleInput(["old".repeat(100), "n".repeat(300), "m".repeat(300)], 700).length === 2);
+check("title input: overflow message is cut, not dropped", titleInput(["a".repeat(900), "b".repeat(300)], 700).map(m => m.length).join() === "400,300");
+check("title input: tiny remainder is not worth a fragment", titleInput(["a".repeat(900), "b".repeat(300)], 400).map(m => m.length).join() === "300");
+check("title input: 100000 chars by default", titleInput(["x".repeat(60_000), "y".repeat(60_000)]).reduce((n, m) => n + m.length, 0) === 100_000);
 
 // ---- tool labels
 check("labels: only a 100-char excerpt of a command is sent, with dots", excerpt("x".repeat(500)) === "x".repeat(100) + "..." && excerpt("ls  -la\n/tmp") === "ls -la /tmp");

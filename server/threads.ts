@@ -12,7 +12,7 @@ import { DATA_DIR } from "./auth.ts";
 import { Questions, type PendingQuestion } from "./questions.ts";
 import { brainCommit } from "./providers/brain.ts";
 import { createLabeler, needsLabel, type Labeler } from "./providers/label.ts";
-import { suggestTitle, titleText, MAX_MESSAGES } from "./providers/title.ts";
+import { suggestTitle, titleText } from "./providers/title.ts";
 import { recentPreamble, replayPreamble } from "./export.ts";
 import { backfill, restoreAccounting, recordTurn, readTurns, type Turn } from "./analytics.ts";
 import { repairAccounting } from "./accounting-repair.ts";
@@ -29,7 +29,7 @@ export interface Thread {
   title: string;
   autoTitle?: boolean; // still carries the folder-name default: the first message renames it (cleared by a manual rename)
   titleLocked?: boolean; // the user chose this title (at creation or by renaming): the title helper never rewrites it. Threads from before this flag count as unlocked
-  recent?: string[]; // text of the last user prompts, media-free and clipped: what the title helper reads
+  recent?: string[]; // legacy: the title helper now reads every user message from the thread log
   cwd: string;
   mode: Mode;
   model: string;
@@ -880,10 +880,9 @@ export class Threads {
   private notePrompt(t: Thread, text: string) {
     const clean = titleText(text);
     if (!clean) return;
-    t.recent = [...(t.recent ?? []), clean].slice(-MAX_MESSAGES);
     if (clean.split(" ").length < 3) return;
     if (t.autoTitle) t.autoTitle = false; // the folder-name default is gone, whatever the outcome
-    if (!t.titleLocked) void this.retitle(t);
+    if (!t.titleLocked) void this.retitle(t, clean);
   }
 
   private whileRunning(t: Thread, text: string, opts: { attachments?: unknown; mode?: "steer" | "queue"; questionAnswer?: true }) {
@@ -1010,11 +1009,21 @@ export class Threads {
     }, 250).unref();
   }
 
-  // Name the thread after its last two user messages. Never blocks the turn; on any failure the current title stays.
-  private async retitle(t: Thread) {
+  // Every typed user message of the thread, oldest first. The log is read only for its user_input lines.
+  private userTexts(id: string): string[] {
+    try {
+      return fs.readFileSync(path.join(LOG_DIR, `${id}.jsonl`), "utf8").split("\n")
+        .filter(l => l.includes('"user_input"'))
+        .flatMap(l => { try { const e = JSON.parse(l); return e.type === "user_input" && !e.auto && !e.command && typeof e.text === "string" ? [e.text] : []; } catch { return []; } });
+    } catch { return []; }
+  }
+
+  // Name the thread after all its user messages (newest weigh most). Never blocks the turn; on any failure the current title stays.
+  private async retitle(t: Thread, latest: string) {
     const n = (this.titling.get(t.id) ?? 0) + 1;
     this.titling.set(t.id, n);
-    const title = await suggestTitle(t.recent ?? []).catch(() => undefined);
+    const texts = this.userTexts(t.id);
+    const title = await suggestTitle(texts.length ? texts : [latest]).catch(() => undefined);
     if (!title || !this.threads.has(t.id) || t.titleLocked || this.titling.get(t.id) !== n) return; // deleted, renamed by the user, or a newer prompt is already being named
     t.title = title;
     this.touch(t);
