@@ -1078,10 +1078,11 @@ function renderAction() {
   const running = t?.status === "running";
   const waiting = questions.count(t?.id) || t?.waiting;
   const empty = !$("input").value.trim() && !pending.length;
-  const stop = running && empty;
+  const busy = running || !!t?.background; // background subagents outlive the turn; Stop still ends them
+  const stop = busy && empty;
   $("stop").hidden = !stop;
   $("send").hidden = stop;
-  $("send").disabled = !t || (empty && !running);
+  $("send").disabled = !t || (empty && !busy);
   $("send").title = waiting ? "Reply to the agent (Enter)" : running ? "Queue: sent when this turn ends (Enter)" : "Send (Enter)";
   $("send").setAttribute("aria-label", waiting ? "Reply to agent" : running ? "Queue message" : "Send");
 }
