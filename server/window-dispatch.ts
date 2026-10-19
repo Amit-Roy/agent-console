@@ -1,5 +1,7 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 import { DATA_DIR } from "./auth.ts";
 import { EFFORT_LABELS, PRIORITY_LABELS, githubRequest, type GithubRequest } from "./github-triage.ts";
 import type { ProviderUsage, UsageWindow } from "./usage.ts";
@@ -86,6 +88,54 @@ export function plan(input: { now: number; usage: Record<string, ProviderUsage>;
   return out;
 }
 
+/** Repos whose work is applied locally before it is pushed (issue #10); everything else, and all trivial work, goes through a PR. */
+export const DIRECT_REPOS = ["agent-console", "dotfiles", "brain"];
+
+/** Thread name: `<repo>:<issue#> <short desc>`. Created as a user-chosen title, so the auto-namer and later renames never touch it. */
+export function threadTitle(issue: Pick<Issue, "repo" | "number" | "title">): string {
+  const repo = issue.repo.split("/")[1];
+  const words = issue.title.replace(/^\s*(?:\[[^\]]*\]|\w+:)\s*/, "").replace(/\s+/g, " ").trim().split(" ").filter(Boolean);
+  let desc = "";
+  for (const w of words) { if ((desc + " " + w).trim().length > 32) break; desc = (desc + " " + w).trim(); }
+  return `${repo}:${issue.number} ${desc || words[0]?.slice(0, 32) || "issue"}`.trim();
+}
+
+export function issuePrompt(d: Decision, branch: string, base: string): string {
+  const { issue, effort } = d, repo = issue.repo.split("/")[1];
+  const direct = effort !== "trivial" && DIRECT_REPOS.includes(repo);
+  return [
+    `Work GitHub issue ${issue.repo}#${issue.number}: ${issue.title}`,
+    `Read it first: gh issue view ${issue.number} --repo ${issue.repo} --comments. The triage comment holds the book of work.`,
+    `You are in your own git worktree on branch ${branch} (from ${base}). Never touch the main checkout.`,
+    direct
+      ? `When done and verified, commit, rebase onto origin/${base} and push to ${base}. Reference the issue (Refs #${issue.number}).`
+      : `When done and verified, push the branch and open a pull request into ${base} that references the issue. Do not merge it.${effort === "trivial" ? " A Sonnet or Sol review must approve it before merge: say so in the PR body and stop." : ""}`,
+    `Unattended run: do not ask questions. End with a short summary: what changed, how it was checked, what is left.`,
+  ].join("\n\n");
+}
+
+export interface IssueRunner {
+  create(opts: { provider: string; model: string; effort: string; cwd: string; mode: "bypassPermissions"; title: string }): { id: string };
+  send(id: string, text: string): void;
+}
+const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || "issue";
+
+/** Start one decision: a worktree on a new branch, then a thread titled for the issue working in it. */
+export function startIssue(d: Decision, runner: IssueRunner, dirs = { repos: path.join(os.homedir(), "repos"), worktrees: path.join(os.homedir(), "worktrees") }, git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", timeout: 60_000 }).trim()) {
+  const name = d.issue.repo.split("/")[1];
+  const main = path.join(dirs.repos, name);
+  if (!fs.existsSync(path.join(main, ".git"))) throw new Error(`No local checkout of ${d.issue.repo} at ${main}`);
+  git(main, "fetch", "-q", "origin");
+  const base = git(main, "symbolic-ref", "--short", "refs/remotes/origin/HEAD").replace(/^origin\//, "");
+  const branch = `issue-${d.issue.number}-${slug(d.issue.title)}`;
+  const cwd = path.join(dirs.worktrees, `${name}-issue-${d.issue.number}`);
+  fs.mkdirSync(dirs.worktrees, { recursive: true });
+  if (!fs.existsSync(cwd)) git(main, "worktree", "add", "-q", "-b", branch, cwd, `origin/${base}`);
+  const thread = runner.create({ ...d.route, cwd, mode: "bypassPermissions", title: threadTitle(d.issue) });
+  runner.send(thread.id, issuePrompt(d, branch, base));
+  return { thread: thread.id, cwd, branch };
+}
+
 export function loadConfig(file = path.join(DATA_DIR, "window-dispatch.json")): Config {
   let raw: any = {};
   try { raw = JSON.parse(fs.readFileSync(file, "utf8")); } catch {}
@@ -130,8 +180,12 @@ export function createDispatcher(opts: { usage: () => Record<string, ProviderUsa
     const decisions = plan({ now: now(), usage: opts.usage(), issues, done, cfg })
       .filter(d => live || !seen.has(`${d.key}@${d.window?.resetsAt}`));
     for (const d of decisions) {
-      fs.appendFileSync(ledger, JSON.stringify({ ts: now(), dryRun: !live, key: d.key, effort: d.effort, route: d.route, window: d.window, reason: d.reason }) + "\n", { mode: 0o600 });
-      if (live) await opts.start!(d);
+      // Logged before the start so a crash cannot start the same issue twice; a failed start stays in the ledger with its error and is not retried.
+      const row = { ts: now(), dryRun: !live, key: d.key, effort: d.effort, route: d.route, window: d.window, reason: d.reason };
+      fs.appendFileSync(ledger, JSON.stringify(row) + "\n", { mode: 0o600 });
+      if (!live) continue;
+      try { await opts.start!(d); }
+      catch (e: any) { fs.appendFileSync(ledger, JSON.stringify({ ...row, error: String(e?.message ?? e).slice(0, 300) }) + "\n", { mode: 0o600 }); }
     }
     return decisions;
   }
