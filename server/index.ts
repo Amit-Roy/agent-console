@@ -80,7 +80,7 @@ setInterval(() => triageBridge.poll(), 30_000).unref();
 const automation = automationApi({
   log: automationLog,
   config: () => ({ dispatch: loadDispatchConfig(), opener: loadOpenerConfig() }),
-  hooks: () => scanHooks(path.join(os.homedir(), "worktrees")),
+  hooks: () => scanHooks(process.env.AGENT_CONSOLE_WORKTREES || path.join(os.homedir(), "worktrees")),
   runs: () => threads.list().filter(t => t.issueRun && !t.archived).map(t => ({ thread: t.id, key: t.issueRun!.key, role: t.issueRun!.role, effort: t.issueRun!.effort, state: t.status, title: t.title })),
   schedules: () => schedules.list().map(t => ({ id: t.id, title: t.title, schedule: describe(t), enabled: t.enabled })),
 });
@@ -277,6 +277,9 @@ app.get("/api/automation", (req, res) => {
   try { res.json(automation.snapshot({ v: req.query.v ? Number(req.query.v) : undefined, limit: Number(req.query.limit) || undefined })); }
   catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
 });
+if (process.env.AGENT_CONSOLE_MOCK === "1") { // UI tests add events after start-up; never exists on a real server
+  app.post("/api/automation/_mock/event", express.json(), (req, res) => { try { res.json(automationLog.record(req.body)); } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); } });
+}
 app.get("/api/automation/log", (req, res) => {
   res.setHeader("Cache-Control", "no-store");
   try { res.json(automation.log({ v: req.query.v ? Number(req.query.v) : undefined, step: String(req.query.step) as any, limit: Number(req.query.limit) || undefined, before: req.query.before ? Number(req.query.before) : undefined })); }

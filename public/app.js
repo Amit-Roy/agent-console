@@ -8,6 +8,7 @@ import { openBreakdown, closeBreakdown } from "/turn-breakdown.js";
 import { setupNotifications } from "/notifications.js";
 import { createChatSearch } from "/chat-search.js";
 import { createSchedules, REPEAT_ITEMS, DAY_ITEMS } from "/schedules.js";
+import { createAutoLane } from "/automation-lane.js";
 
 const MODE_META = {
   plan: { label: "Plan", desc: "Read-only. Plans without editing.", icon: "eye" },
@@ -566,6 +567,7 @@ const schedules = createSchedules({
 
 // ---------- threads UI ----------
 const cur = () => state.threads.get(state.current);
+const autoLane = createAutoLane({ state, openThread: (id) => openThread(id), setNav: (open) => setNav(open), provLabel: (id) => provLabel(id), ago: (ts) => ago(ts) });
 function ago(ts) {
   const s = Math.max(0, (Date.now() - ts) / 1000);
   if (s < 60) return "now";
@@ -587,7 +589,8 @@ function renderThreads() {
   ul.replaceChildren();
   shelf.replaceChildren();
   // a scheduled task's runs are listed under the task in the Scheduled lane, not here
-  const list = [...state.threads.values()].filter((t) => !(t.schedule && state.tasks.has(t.schedule.task))).sort((a, b) => b.updatedAt - a.updatedAt);
+  // automation-started runs (issue work, reviews) are listed in the Auto lane
+  const list = [...state.threads.values()].filter((t) => !(t.schedule && state.tasks.has(t.schedule.task)) && !t.issueRun).sort((a, b) => b.updatedAt - a.updatedAt);
   // archived threads sit in their own section below, collapsed unless the user opened it
   const filed = list.filter((t) => t.archived).length;
   $("archive").hidden = !filed;
@@ -652,6 +655,7 @@ function renderThreads() {
   }
   if (list.length === filed) ul.append(el("li", "empty-list", list.length ? "Everything is archived." : "No threads yet."));
   schedules.render();
+  autoLane.render();
 }
 setInterval(() => state.threads.size && renderThreads(), 30000);
 
@@ -2586,19 +2590,21 @@ $("new-task").onclick = () => openTaskDialog();
 function setLane(lane, focus = false) {
   state.lane = lane;
   try { localStorage.setItem("ac_lane", lane); } catch {}
-  for (const [name, tab, pane] of [["threads", "lane-threads", "pane-threads"], ["tasks", "lane-tasks", "pane-tasks"]]) {
+  for (const [name, tab, pane] of [["threads", "lane-threads", "pane-threads"], ["tasks", "lane-tasks", "pane-tasks"], ["auto", "lane-auto", "pane-auto"]]) {
     $(tab).setAttribute("aria-selected", String(lane === name));
     $(tab).tabIndex = lane === name ? 0 : -1;
     $(pane).hidden = lane !== name;
   }
-  if (focus) $(lane === "tasks" ? "lane-tasks" : "lane-threads").focus();
+  if (focus) $(`lane-${lane}`).focus();
 }
 $("lane-threads").onclick = () => setLane("threads");
 $("lane-tasks").onclick = () => setLane("tasks");
+$("lane-auto").onclick = () => setLane("auto");
 $("lanes").addEventListener("keydown", (e) => {
   if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) return;
   e.preventDefault();
-  setLane(e.key === "Home" ? "threads" : e.key === "End" ? "tasks" : state.lane === "threads" ? "tasks" : "threads", true);
+  const order = ["threads", "tasks", "auto"], at = order.indexOf(state.lane);
+  setLane(e.key === "Home" ? order[0] : e.key === "End" ? order.at(-1) : order[(at + (e.key === "ArrowRight" ? 1 : order.length - 1)) % order.length], true);
 });
 setLane(state.lane);
 $("new").onclick = openNewDialog;
@@ -2616,11 +2622,13 @@ createMenu({
     { value: "task", label: "New scheduled task", icon: "clock" },
     { value: "notifications", label: "Notifications", desc: /: on$/.test($("notifications").getAttribute("aria-label") || "") ? "On for this device" : "Off", icon: "bell" },
     { value: "dashboard", label: "Usage dashboard", icon: "chart" },
+    { value: "automation", label: "Automation dashboard", icon: "play" },
     { value: "reload", label: "Reload page", icon: "refresh" },
     { value: "restart", label: "Restart server…", desc: "Once every thread is idle", icon: "power" },
   ],
   onSelect: (v) => {
     if (v === "dashboard") location.href = $("dash-link").href;
+    else if (v === "automation") location.href = $("auto-link").href;
     else if (v === "task") { setLane("tasks"); openTaskDialog(); }
     else (v === "new" ? $("new") : $(v)).click();
   },
