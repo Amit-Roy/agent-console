@@ -255,10 +255,11 @@ class EffortFitTests(unittest.TestCase):
         # One enormous session must not decide estimator selection through raw-token MAE.
         fixture["samples"][-1]["outcomes"].update(inputTokens=9e9, outputTokens=1e9)
         artifact, report = fit.build_artifact(fixture)
-        self.assertEqual(artifact["featureNames"], fit.LEGACY_FEATURES + fit.SHAPE_FEATURES)
-        self.assertEqual(len(artifact["workload"]["coefficients"]), 8)
-        self.assertEqual(len(artifact["workload"]["featureRanges"]), 8)
-        self.assertTrue(any(weight > 0 for weight in artifact["workload"]["coefficients"][4:]))
+        # Model-extracted metrics are mostly unknown and vary by model, so pricing uses shape alone.
+        self.assertEqual(artifact["featureNames"], fit.SHAPE_FEATURES)
+        self.assertEqual(len(artifact["workload"]["coefficients"]), 4)
+        self.assertEqual(len(artifact["workload"]["featureRanges"]), 4)
+        self.assertTrue(any(weight > 0 for weight in artifact["workload"]["coefficients"]))
         self.assertEqual(artifact["estimator"], "complexity")
         self.assertLess(artifact["validation"]["work"]["rmsle"], artifact["validation"]["baselineWork"]["rmsle"])
         fit.use_features({"samples": []})

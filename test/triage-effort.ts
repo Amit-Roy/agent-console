@@ -279,6 +279,16 @@ assert.deepEqual(unknownModelMetrics.unknowns, [...LEGACY_EFFORT_FEATURES]);
 assert.equal(unknownModelMetrics.effortBasis, "p50", "Unknown model-extracted metrics do not force the stretch reserve once request shape prices the work");
 assert.equal(predict(features(null)).effortBasis, "p95", "Four-feature artifacts keep the unknown-scope policy");
 assert.equal(quoteEffort(features(1), validateEffortModel(shaped)).status, "unavailable", "A shaped model needs every shape feature");
+// A shape-only artifact is valid and prices without any model-extracted metric.
+const shapeOnly = fixture();
+shapeOnly.featureNames = SHAPE_FEATURES;
+shapeOnly.workload = { ...shapeOnly.workload, coefficients: [0.5, 0, 0, 0.1], missingCoefficients: [0, 0, 0, 0], imputation: Array(4).fill(1), scale: Array(4).fill(1),
+  featureRanges: SHAPE_FEATURES.map(() => ({ min: 0, max: 3, known: 5, missing: 0 })) };
+const shapeQuote = predict({ ...requestShape("Fix the login flow") }, shapeOnly);
+assert.equal(shapeQuote.contributions.length, 4);
+assert.deepEqual(shapeQuote.unknowns, []);
+assert.equal(shapeQuote.effortBasis, "p50");
+assert.ok(predict(requestShape("x".repeat(500)), shapeOnly).activity.p50 > predict(requestShape("x"), shapeOnly).activity.p50);
 const wrongSize = fixture();
 wrongSize.featureNames = EFFORT_FEATURES;
 assert.equal(validateEffortModel(wrongSize).status, "unavailable", "Eight names need eight-element vectors");
