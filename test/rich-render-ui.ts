@@ -143,7 +143,9 @@ try {
   assert.equal(full.status(), 200);
   assert.equal((await full.body()).length, clipSize);
   const media = (p: string) => `${base}/api/file-media?thread=${rich.id}&path=${encodeURIComponent(p)}`;
-  assert.equal((await page.request.get(media('../outside.webm'))).status(), 403, 'outside the thread folder');
+  // home and /tmp are viewable by design (6ea823f), so the fixture's ../outside.webm is in scope; system folders are not
+  assert.equal((await page.request.get(media('../outside.webm'))).status(), 415, 'elsewhere in /tmp: in scope, refused only as not a real video');
+  assert.equal((await page.request.get(media('/etc/outside.webm'))).status(), 403, 'outside home and /tmp');
   assert.equal((await page.request.get(media('.env'))).status(), 403, 'credential file');
   assert.equal((await page.request.get(media('shot.png'))).status(), 415, 'not a video extension');
   assert.equal((await page.request.get(media('fake.mp4'))).status(), 415, 'wrong magic bytes');

@@ -48,6 +48,8 @@
   <symbol id="i-compose" viewBox="0 0 16 16"><path d="M7.5 2.75H4a1.5 1.5 0 0 0-1.5 1.5V12A1.5 1.5 0 0 0 4 13.5h7.75a1.5 1.5 0 0 0 1.5-1.5V8.5"/><path d="M11.75 2.25a1.24 1.24 0 0 1 1.75 1.75L8.5 9 6.5 9.5 7 7.5z"/></symbol>
   <symbol id="i-bell" viewBox="0 0 16 16"><path d="M4.25 11.5V7.25a3.75 3.75 0 0 1 7.5 0v4.25l1 1.25H3.25zM6.5 13.75a1.6 1.6 0 0 0 3 0"/></symbol>
   <symbol id="i-chart" viewBox="0 0 16 16"><path d="M3 13V8.5M8 13V3M13 13V6"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.75"/><path d="M8 4.75V8l2.25 1.5"/></symbol>
+  <symbol id="i-play" viewBox="0 0 16 16"><path d="M5.25 3.75v8.5a.5.5 0 0 0 .77.42l6.4-4.25a.5.5 0 0 0 0-.84l-6.4-4.25a.5.5 0 0 0-.77.42z"/></symbol>
   <symbol id="i-wrap" viewBox="0 0 16 16"><path d="M2.5 4h11M2.5 12h4M2.5 8h8.5a2 2 0 0 1 0 4H9.5m1.25-1.5L9.25 12l1.5 1.5"/></symbol>
 </defs></svg>
 <div id="app">
@@ -66,14 +68,23 @@
       <button id="reload" type="button">Reload page</button>
       <button id="restart" type="button">Restart server</button>
     </div>
+    <div id="lanes" class="lanes" role="tablist" aria-label="Sidebar">
+      <button id="lane-threads" class="lane" type="button" role="tab" aria-selected="true" aria-controls="pane-threads">Threads</button>
+      <button id="lane-tasks" class="lane" type="button" role="tab" aria-selected="false" aria-controls="pane-tasks" tabindex="-1">Scheduled<i id="lane-tasks-dot" class="dot running" aria-hidden="true" hidden></i></button>
+    </div>
     <div class="side-scroll">
-      <h2 class="side-label">Threads</h2>
-      <ul id="threads" class="thread-list" aria-label="Thread list"></ul>
-      <div id="archive" hidden>
-        <button id="archive-toggle" class="side-label side-toggle" type="button" aria-expanded="false" aria-controls="archived">
-          <svg class="ico" aria-hidden="true"><use href="#i-chev-right"/></svg><span>Archived</span><span id="archive-count" class="count"></span>
-        </button>
-        <ul id="archived" class="thread-list" aria-label="Archived threads" hidden></ul>
+      <div id="pane-threads" role="tabpanel" aria-labelledby="lane-threads">
+        <ul id="threads" class="thread-list" aria-label="Thread list"></ul>
+        <div id="archive" hidden>
+          <button id="archive-toggle" class="side-label side-toggle" type="button" aria-expanded="false" aria-controls="archived">
+            <svg class="ico" aria-hidden="true"><use href="#i-chev-right"/></svg><span>Archived</span><span id="archive-count" class="count"></span>
+          </button>
+          <ul id="archived" class="thread-list" aria-label="Archived threads" hidden></ul>
+        </div>
+      </div>
+      <div id="pane-tasks" role="tabpanel" aria-labelledby="lane-tasks" hidden>
+        <ul id="tasks" class="thread-list task-list" aria-label="Scheduled tasks"></ul>
+        <button id="new-task" class="btn ghost new-task" type="button"><svg class="ico" aria-hidden="true"><use href="#i-plus"/></svg><span>New scheduled task</span></button>
       </div>
     </div>
     <div id="usage" class="usage" title="Subscription usage" role="group" aria-label="Subscription usage"></div>
@@ -165,12 +176,21 @@
 </form></dialog>
 <dialog id="dlg" aria-labelledby="dlg-title"><form method="dialog" id="dform">
   <h2 id="dlg-title">New thread</h2>
-  <p class="sub">Run a coding agent in one of your folders.</p>
+  <p class="sub" id="dlg-sub">Run a coding agent in one of your folders.</p>
+  <div id="task-fields" hidden>
+    <label class="fld"><span class="lbl">Name</span><input id="d-title" class="input" maxlength="80" autocomplete="off" placeholder="Morning AI news digest"></label>
+    <label class="fld"><span class="lbl">Instructions</span><textarea id="d-prompt" class="input" rows="4" maxlength="20000" placeholder="Find the notable AI releases since yesterday. Link sources and say why each matters."></textarea></label>
+    <div class="fld"><span class="lbl" id="l-repeat">Repeat</span>
+      <div class="when"><button type="button" id="d-repeat" class="btn field" aria-labelledby="l-repeat d-repeat"><span></span></button><button type="button" id="d-day" class="btn field" aria-label="Day" hidden><span></span></button><input id="d-time" class="input" type="time" value="09:00" aria-label="Time" required></div>
+      <p id="d-next" class="hint"></p>
+    </div>
+  </div>
   <div class="fld"><span class="lbl" id="l-prov">Agent</span><button type="button" id="d-prov" class="btn field" aria-labelledby="l-prov d-prov"><span></span></button></div>
   <div class="fld"><span class="lbl" id="l-cwd">Folder</span><button type="button" id="d-cwd" class="btn field" aria-labelledby="l-cwd d-cwd"><span></span></button></div>
   <div class="fld" id="effort-field" hidden><span class="lbl" id="l-effort">Reasoning effort</span><button type="button" id="d-effort" class="btn field" aria-labelledby="l-effort d-effort"><span></span></button></div>
   <div class="fld"><span class="lbl" id="l-model">Model</span><button type="button" id="d-model" class="btn field" aria-labelledby="l-model d-model"><span></span></button></div>
   <div class="fld"><span class="lbl" id="l-mode">Permission mode</span><button type="button" id="d-mode" class="btn field" aria-labelledby="l-mode d-mode"><span></span></button></div>
+  <label class="fld check" id="save-field" hidden><input id="d-save" type="checkbox" checked><span>Save each report to git<span class="hint">~/repos/agent-outputs, one commit per run</span></span></label>
   <p id="d-note" class="hint" hidden></p>
   <p id="d-warn" class="callout" role="alert" hidden><svg class="ico" aria-hidden="true"><use href="#i-alert"/></svg><span>Bypass mode runs every tool without asking. Use only in folders you trust.</span></p>
   <div class="row"><button value="cancel" class="btn" formnovalidate>Cancel</button><button value="ok" class="btn primary" id="d-ok">Create thread</button></div>

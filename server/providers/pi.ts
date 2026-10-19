@@ -15,8 +15,9 @@ import { clip, IMAGE_ONLY_PROMPT, type Agent, type AgentCtx, type Attachment, ty
 // (OpenRouter, OpenAI, Google, local, ...). Pi has no per-action approvals, so only Plan (read-only tools) and Bypass exist.
 
 const SESSIONS = path.join(DATA_DIR, "pi-sessions");
-const READ_ONLY_TOOLS = "read,grep,find,ls,ask_user";
+const READ_ONLY_TOOLS = "read,grep,find,ls,ask_user,schedule_list,save_output";
 const QUESTIONS_EXTENSION = fileURLToPath(new URL("./pi-questions-extension.mjs", import.meta.url));
+const TOOLS_EXTENSION = fileURLToPath(new URL("./console-tools.mjs", import.meta.url)); // scheduled tasks + save_output
 
 let cached: string[] = [];
 const thinking = new Set<string>();
@@ -204,7 +205,7 @@ export const pi: Provider = {
   start(t: ThreadSpec, ctx: AgentCtx): Agent {
     const dir = path.join(SESSIONS, t.id);
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-    const args = ["--mode", "rpc", "--model", t.model, "--session-dir", dir, "--extension", QUESTIONS_EXTENSION];
+    const args = ["--mode", "rpc", "--model", t.model, "--session-dir", dir, "--extension", QUESTIONS_EXTENSION, "--extension", TOOLS_EXTENSION];
     if (fs.readdirSync(dir).length) args.push("--continue");
     if (t.mode === "plan") args.push("--tools", READ_ONLY_TOOLS);
     const translate = piTranslator((ev) => ctx.event(ev), (list) => ctx.commands(list), () => contexts.get(t.model));
@@ -216,7 +217,7 @@ export const pi: Provider = {
     void harnessInstructions().then((brain) => {
       if (dead) return;
       if (brain) args.push("--append-system-prompt", brain); // style preamble + shared memory index
-      p = spawnLines("pi", "pi", args, { cwd: t.cwd, env: childEnv() }, {
+      p = spawnLines("pi", "pi", args, { cwd: t.cwd, env: { ...childEnv(), AGENT_CONSOLE_THREAD: t.id } }, {
         ...ctx,
         exited(info) { questions.cancelAll(); ctx.exited(info); },
       }, (line) => {
