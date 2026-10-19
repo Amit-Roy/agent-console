@@ -115,6 +115,7 @@ try {
     assert.equal(await page.locator("#d-ok").isDisabled(),true);
     assert.equal(await page.locator("#d-account-note").isVisible(),true,"Sign-in guidance stays visible on phones.");
     assert.match(await page.locator("#d-account-note").innerText(),/Sign in/);
+    assert.equal(await page.locator("#d-signin-go").isVisible(),true,"An unsigned account offers in-app sign-in.");
     await page.screenshot({path:path.join(out,`${name}-account-signin.png`),fullPage:true});
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),true,"No horizontal page overflow.");
     await page.locator("#d-prov").click();
