@@ -20,9 +20,9 @@ Claude and Codex subscriptions reset every 5 hours whether or not the quota was 
 | --- | --- | --- |
 | `enabled` | `false` | Master switch. |
 | `dryRun` | `true` | Log decisions to `window-dispatch.jsonl`; start nothing. |
-| `leadMinutes` | `90` | Assign only in the last N minutes of a 5-hour window (5–300). |
+| `leadMinutes` | `90` | Assign premium work only in the last N minutes of a 5-hour window (5–300). |
 | `maxUsedPct` | `90` | Deep and BAU skip a window already this full; nothing would expire. Trivial work ignores this check. |
-| `perWindow` | `2` | Issues per provider per window. |
+| `perWindow` | `2` | Premium candidates per provider per tick; Pi candidates per tick. |
 | `repos` | `["Amit-Roy/agent-console"]` | Allowlist, `owner/name` only. |
 | `authors` | `["Amit-Roy"]` | Only issues opened by these GitHub logins are dispatched: issue text steers an unattended agent. |
 | `routing` | `{"mode":"shadow","bauOnPi":false}` | `shadow`: the router logs its choice beside the legacy route. `live`: the router decides. `bauOnPi`: BAU runs on Pi. |
@@ -35,7 +35,7 @@ Only open issues with exactly one `Eff:` label are considered. Higher `Pri:` goe
 | BAU | Pi when `routing.bauOnPi`, else Sonnet medium or `gpt-6.1-sol` low | PR review by Sonnet medium or `gpt-6.1-sol` low |
 | Trivial | Pi | PR review as for BAU |
 
-Trivial work needs a reviewer window with room, so it is planned only when Claude or Codex is expiring. Copilot is not a Console provider; Pi covers trivial work.
+In live routing, Trivial work and BAU with `routing.bauOnPi` start independently of premium reset windows. Pi daily allowance, failure limits and three-run concurrency still apply. A tick considers at most `perWindow` Pi issues. Premium review is routed after the worker opens its PR; it does not reserve a reviewer window before work starts. Shadow mode retains the legacy window policy.
 
 ## Threads for picked issues
 
@@ -64,7 +64,7 @@ When a trivial worker's turn ends successfully and its branch has an open PR, a 
 ## Repository rules from the issue
 
 - Every repo merges to its default branch by pull request. Enforced: a started worktree gets a `pre-push` hook (per-worktree `core.hooksPath`, which turns on `extensions.worktreeConfig` in that repo) that refuses any push to the default branch.
-- Exceptions: agent-console, dotfiles and brain are applied locally before they are pushed. Their Deep and BAU workers have no hook and push the default branch themselves. Trivial work in them still goes through a PR.
+- Exceptions: agent-console, dotfiles and brain are applied locally before they are pushed. Their Deep workers have no hook and push the default branch themselves. BAU and Trivial work in them still go through a PR.
 - Every run, trivial or not, has its own worktree, never the deploy branch.
-- Trivial work is reviewed by Sonnet or Sol before the PR merges.
+- BAU and Trivial work are reviewed by Sonnet or Sol before the PR merges.
 - The hook binds only the dispatched worktrees; it cannot stop a person or another session pushing elsewhere. Direct pushes to the default branch of other repos are blocked on GitHub only if branch protection is on.

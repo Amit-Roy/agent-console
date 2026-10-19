@@ -60,7 +60,8 @@ assert.equal(threadTitle({ repo: "o/r", number: 7, title: "" }), "r:7 issue");
 
 // prompts: PRs everywhere except the local-apply repos; trivial always needs a reviewer
 const dec = (repo: string, effort: any): any => ({ issue: { repo, number: 5, title: "t", labels: [] }, effort, route: ROUTES.bau[0], key: "k", reason: "" });
-assert.match(issuePrompt(dec("o/agent-console", "bau"), "b", "main"), /push to main/);
+assert.match(issuePrompt(dec("o/agent-console", "deep"), "b", "main"), /push to main/);
+assert.match(issuePrompt(dec("o/agent-console", "bau"), "b", "main"), /pull request[^]*Sonnet or Sol review/, "BAU must wait for review even in direct repos");
 assert.match(issuePrompt(dec("o/webapp", "bau"), "b", "main"), /open a pull request into main[^]*Do not merge/);
 assert.match(issuePrompt(dec("o/agent-console", "trivial"), "b", "main"), /pull request[^]*Sonnet or Sol review/, "trivial work never pushes to the default branch");
 
@@ -81,7 +82,14 @@ assert.match(issuePrompt(dec("o/agent-console", "trivial"), "b", "main"), /pull 
     assert.equal(res.cwd, path.join(root, "wt", "webapp-issue-42")); assert.equal(res.branch, "issue-42-fix-the-export-totals");
     assert.equal(g(res.cwd, "rev-parse", "--abbrev-ref", "HEAD"), res.branch);
     assert.equal(made[0].title, "webapp:42 Fix the export"); assert.equal(made[0].cwd, res.cwd); assert.equal(made[0].provider, "claude");
+    const hook = g(res.cwd, "config", "--get", "core.hooksPath");
+    assert.ok(fs.existsSync(path.join(hook, "pre-push")), "BAU work gets a default-branch push guard");
     assert.equal(sentTo.length, 1); assert.match(sentTo[0].text, /gh issue view 42 --repo o\/webapp/);
+    const directRepo = path.join(repos, "agent-console");
+    execFileSync("git", ["clone", "-q", origin, directRepo]);
+    g(directRepo, "remote", "set-head", "origin", "main");
+    const bauDirect = startIssue(dec("o/agent-console", "bau"), runner, { repos, worktrees: path.join(root, "wt") });
+    assert.ok(fs.existsSync(path.join(g(bauDirect.cwd, "config", "--get", "core.hooksPath"), "pre-push")), "BAU in local-apply repos also gets a push guard");
     assert.throws(() => startIssue(dec("o/missing", "bau"), runner, { repos, worktrees: path.join(root, "wt") }), /No local checkout/);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 }
@@ -143,6 +151,33 @@ try {
     put({ mode: "live", bauOnPi: true }); reset(); started = [];
     await mk(both, started).tick();
     assert.deepEqual(started, [["o/r#1", "claude"], ["o/r#2", "pi"]], "live: Deep on premium, BAU on Pi");
+
+    // Pi workers do not borrow a premium review window before their PR exists.
+    put({ mode: "live", bauOnPi: true }); reset(); started = [];
+    await mk({}, started).tick();
+    assert.deepEqual(started, [["o/r#2", "pi"]], "BAU starts even without premium usage");
+    reset(); started = [];
+    await mk({ claude: win(100, 60), codex: win(10, 180) }, started).tick();
+    assert.deepEqual(started, [["o/r#2", "pi"]], "full or non-expiring premium windows do not block Pi");
+    reset(); started = [];
+    fs.writeFileSync(path.join(dir, "window-dispatch.json"), JSON.stringify({ enabled: true, dryRun: true, repos: ["o/r"], routing: { mode: "live", bauOnPi: true } }));
+    const dryPi = mk({}, started);
+    assert.equal((await dryPi.tick()).length, 1);
+    assert.equal((await dryPi.tick()).length, 0, "windowless Pi dry runs are logged only once");
+    assert.deepEqual(started, []);
+    put({ mode: "live", bauOnPi: true });
+    reset(); started = [];
+    const lowIssues = async () => [2, 3, 4, 5].map(number => ({ number, title: "small", user: { login: "Amit-Roy" }, labels: [{ name: number === 2 ? "Eff: BAU" : "Eff: Trivial" }] }));
+    const limited = createDispatcher({ usage: () => ({}), github: lowIssues as any, dir, now: () => now, active: () => [{ provider: "pi", role: "work" }, { provider: "pi", role: "review" }], start: d => { started.push([d.key, d.route.provider]); } });
+    await limited.tick();
+    assert.deepEqual(started, [["o/r#2", "pi"]], "new picks count against Pi's three-run capacity within the tick");
+    started = [];
+    await limited.tick();
+    assert.deepEqual(started, [["o/r#3", "pi"]], "deferred Trivial issue remains eligible next tick");
+    reset(); started = [];
+    const exhaustedPi = { pi: { windows: [{ label: "Free/day", used: 1000, limit: 1000 }], updatedAt: now } };
+    await mk(exhaustedPi, started).tick();
+    assert.deepEqual(started, [], "Pi's own exhausted quota still defers work");
 
     put({ mode: "live", bauOnPi: false }); reset(); started = [];
     await mk({ claude: win(10, 60, 100), codex: win(10, 60, 100) }, started).tick();
