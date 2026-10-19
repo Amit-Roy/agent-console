@@ -206,6 +206,14 @@ try {
     assert.equal(fixture.comments.get(1)?.length, 1);
     assert.equal(fixture.calls.filter(call => call.method === "POST" && call.endpoint.endsWith("/comments")).length, 2);
   } finally { await fixture.close(); }
+  const seen: any[] = [];
+  const hooked = await start("on-item", { onItem: async (item: any) => { seen.push(item); throw new Error("hook failure must not break the webhook"); } });
+  try {
+    assert.equal((await hooked.post(payload(5))).status, 202);
+    assert.equal((await hooked.post(payload(6, "pull_request"), { event: "pull_request" })).status, 202);
+    assert.deepEqual(seen, [{ repo, number: 5, kind: "issue" }, { repo, number: 6, kind: "pull_request" }]);
+    await hooked.service.waitForIdle();
+  } finally { await hooked.close(); }
   const deploys: string[] = [];
   const deployer = await start("deploy", { deploy: { workflow: "CI", run: (r: string, sha: string) => deploys.push(`${r}@${sha}`) } });
   try {
