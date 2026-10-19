@@ -22,11 +22,12 @@ const child = spawn(process.execPath, ["server/index.ts"], {
     AGENT_CONSOLE_MOCK: "1", AGENT_CONSOLE_AUTH: "password", AGENT_CONSOLE_PASSWORD: "fixture-password-0123456789" },
   stdio: ["ignore", "pipe", "pipe"],
 });
-child.stderr.resume();
+let errors = "";
+child.stderr.on("data", chunk => { errors = (errors + chunk.toString()).slice(-600); });
 try {
   await new Promise<void>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error("Scratch server startup timed out.")), 20_000);
-    child.once("exit", code => { clearTimeout(timer); reject(new Error(`Scratch server exited: ${code}`)); });
+    child.once("exit", code => { clearTimeout(timer); reject(new Error(`Scratch server exited: ${code} ${errors.replace(/[A-Za-z0-9_-]{24,}/g, "[redacted]")}`)); });
     let output = "";
     child.stdout.on("data", chunk => {
       output = (output + chunk.toString()).slice(-2048);
