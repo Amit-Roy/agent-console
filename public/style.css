@@ -249,6 +249,52 @@ li.sel .dot{background:var(--press)}
 .tag.warn{background:var(--warn-tint);color:var(--warn)}
 .tag .ico{width:.75rem;height:.75rem}
 
+/* Threads | Scheduled: a segmented control, two views of the same place */
+.lanes{display:flex;gap:2px;padding:2px;margin:0 var(--sp-1) var(--sp-2);border-radius:var(--r-sm);background:var(--s2)}
+.lane{flex:1;display:inline-flex;align-items:center;justify-content:center;gap:var(--sp-2);min-height:var(--ctl-h-sm);padding:0 var(--sp-2);background:transparent;border:0;border-radius:calc(var(--r-sm) - 2px);color:var(--t2);font:var(--fw-med) var(--f-sm);letter-spacing:var(--ls-sm);cursor:pointer;transition:background-color var(--dur-1) var(--ease),color var(--dur-1) var(--ease)}
+.lane[aria-selected=true]{background:var(--s1);color:var(--t1);box-shadow:0 1px 2px rgb(0 0 0 / .12)}
+@media (hover:hover){.lane[aria-selected=false]:hover{color:var(--t1)}}
+.lane .dot{width:.375rem;height:.375rem}
+#tasks{list-style:none;margin:0;padding:0}
+/* a task: name over schedule · agent · next run, then its on/off switch and ⋯ */
+.task-list li.task{grid-template-columns:minmax(0,1fr) auto auto}
+.task-list li.task+li.task,.task-list li.run+li.task{margin-top:var(--sp-2)}
+.task-list .task .t{display:flex;align-items:center;gap:var(--sp-2);color:var(--t1);font-weight:var(--fw-med)}
+.task-list .task .t>span:last-child{overflow:hidden;text-overflow:ellipsis}
+.task-list .task .t .dot{display:block}
+.task-list .task .meta{grid-column:1}
+.task-list .task .meta .ico{width:.75rem;height:.75rem;flex:none}
+.task-list .task .meta .sched{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.task-list .task .meta .paused{margin-left:auto;flex:none}
+.task-list .task .switch{grid-column:2;grid-row:1/3}
+.task-list .task .row-more{grid-column:3}
+/* runs hang off their task on a hairline: when, then outcome */
+.task-list li.run{grid-template-columns:auto minmax(0,1fr);column-gap:var(--sp-2);min-height:2.5rem;margin:0 0 0 var(--sp-4);padding:var(--sp-1) var(--sp-3) var(--sp-1) var(--sp-3);border-radius:0 var(--r-sm) var(--r-sm) 0;box-shadow:inset 1px 0 0 var(--edge-strong)}
+.task-list li.run+li.run{margin-top:0}
+.task-list li.run .dot{display:block;grid-column:1;grid-row:1/3;width:.375rem;height:.375rem}
+.task-list li.run .t{grid-column:2;font:var(--fw-reg) var(--f-sm);letter-spacing:var(--ls-sm);color:var(--t2);font-variant-numeric:tabular-nums}
+.task-list li.run.sel .t{color:var(--t1);font-weight:var(--fw-med)}
+.task-list li.run .meta{grid-column:2;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.task-list li.run .run-trigger{color:var(--t3)}
+.task-list .dot.done{background:var(--ok)}
+.task-list .dot.failed{background:var(--bad)}
+.task-list .dot.skipped{background:transparent;box-shadow:inset 0 0 0 1px var(--t3)}
+.task-list li.run.failed .meta{color:var(--bad)}
+.task-list li.inert{cursor:default}
+@media (hover:hover){.task-list li.inert:hover{background:none}}
+.task-list li.empty-run,.task-list li.all-runs{display:block;cursor:default;min-height:0;padding:var(--sp-1) var(--sp-3);color:var(--t3);font:var(--fw-reg) var(--f-xs);letter-spacing:var(--ls-xs)}
+@media (hover:hover){.task-list li.empty-run:hover,.task-list li.all-runs:hover{background:none}}
+.task-list li.all-runs .side-toggle{margin:0;min-height:var(--ctl-h-sm);padding:0;color:var(--t2);font:var(--fw-med) var(--f-xs);letter-spacing:var(--ls-xs)}
+.task-list li.empty-tasks{padding:var(--sp-3);font:var(--fw-reg) var(--f-sm);letter-spacing:var(--ls-sm);line-height:1.45}
+.new-task{width:calc(100% - var(--sp-2));margin:var(--sp-3) var(--sp-1) 0;justify-content:flex-start;gap:var(--sp-2);color:var(--t2)}
+.new-task .ico{color:var(--accent)}
+/* iOS-style switch: green when on; the hit area is the full 44px row height on touch */
+.switch{position:relative;width:2.125rem;height:1.25rem;padding:0;border:0;border-radius:var(--r-full);background:var(--s3);cursor:pointer;flex:none;transition:background-color var(--dur-2) var(--ease)}
+.switch::before{content:"";position:absolute;inset:-.75rem -.375rem}
+.switch::after{content:"";position:absolute;top:2px;left:2px;width:1rem;height:1rem;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgb(0 0 0 / .3);transition:transform var(--dur-2) var(--ease)}
+.switch[aria-checked=true]{background:var(--ok)}
+.switch[aria-checked=true]::after{transform:translateX(.875rem)}
+
 .usage{margin:0 var(--sp-1);padding:var(--sp-3) var(--sp-2) calc(var(--sp-3) + env(safe-area-inset-bottom));border-top:1px solid var(--edge);font:var(--fw-reg) var(--f-xs);letter-spacing:var(--ls-xs);color:var(--t3);display:flex;flex-direction:column;gap:var(--sp-2)}
 .usage:empty{display:none}
 .usage .u{display:grid;grid-template-columns:2.75rem 1fr 2.25rem;align-items:center;gap:var(--sp-2)}
@@ -576,6 +622,22 @@ div.msg.foot{margin-top:calc(var(--sp-2) * -1)}
 .note{display:flex;align-items:center;gap:var(--sp-2);font:var(--fw-reg) var(--f-sm);letter-spacing:var(--ls-sm);color:var(--t3)}
 .errtxt{display:flex;gap:var(--sp-3);align-items:flex-start;padding:var(--sp-3) var(--sp-4);border-radius:var(--r-md);background:var(--bad-tint);color:var(--bad);font:var(--fw-reg) var(--fm-sm);white-space:pre-wrap;overflow-wrap:anywhere}
 .errtxt .ico{margin-top:.125rem}
+/* a scheduled run's report card: outcome, facts, the committed report and next steps */
+.run-report{padding:var(--sp-4);border-radius:var(--r-md);background:var(--s2);box-shadow:inset 0 0 0 1px var(--edge);display:flex;flex-direction:column;gap:var(--sp-2)}
+.rr-head{display:flex;align-items:center;gap:var(--sp-2);min-width:0;font:var(--fw-semi) var(--f-md);letter-spacing:var(--ls-md)}
+.rr-head .ico{flex:none;color:var(--ok)}
+.run-report.failed .rr-head .ico,.run-report.failed .rr-status{color:var(--bad)}
+.run-report.skipped .rr-head .ico{color:var(--t3)}
+.rr-task{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--t2);font-weight:var(--fw-reg)}
+.rr-facts{display:flex;flex-wrap:wrap;gap:var(--sp-1) var(--sp-3);font:var(--fw-reg) var(--f-xs);letter-spacing:var(--ls-xs);color:var(--t3);font-variant-numeric:tabular-nums}
+.rr-reason{font:var(--fw-reg) var(--f-sm);color:var(--t2)}
+.rr-file{display:flex;align-items:center;gap:var(--sp-2);min-width:0;padding:var(--sp-2) var(--sp-3);border-radius:var(--r-sm);background:var(--s1);color:var(--t1);text-decoration:none;font:var(--fw-reg) var(--f-sm)}
+.rr-file .ico{flex:none;color:var(--t3)}
+.rr-path{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:var(--fm-xs)}
+.rr-file code{margin-left:auto;flex:none;color:var(--t3);font:var(--fm-xs)}
+.rr-actions{display:flex;flex-wrap:wrap;gap:var(--sp-2);margin-top:var(--sp-1)}
+.rr-actions .btn{text-decoration:none}
+.rr-hint{font:var(--fw-reg) var(--f-xs);letter-spacing:var(--ls-xs);color:var(--t3)}
 
 /* ---------- composer: one rounded card (textarea over toolbar) ---------- */
 #composer{flex:none;padding:var(--sp-2) max(var(--sp-3),calc((100% - var(--col))/2)) calc(var(--sp-3) + env(safe-area-inset-bottom))}
@@ -678,6 +740,16 @@ dialog .sub{font:var(--fw-reg) var(--f-md);color:var(--t2)}
 .btn.chip>span{max-width:14rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .callout .ico{margin-top:.1875rem}
 .row{display:flex;gap:var(--sp-2);justify-content:flex-end;margin-top:var(--sp-6)}
+#dlg{max-height:calc(var(--viewport-height,100dvh) - var(--sp-8));overflow:auto;overscroll-behavior:contain}
+.fld .input{width:100%}
+textarea.input{padding:var(--sp-2) var(--sp-3);min-height:6rem;resize:vertical;line-height:1.45}
+.when{display:flex;gap:var(--sp-2)}
+.when .btn.field{flex:1;min-width:0}
+.when input[type=time]{flex:none;width:8.75rem;font-variant-numeric:tabular-nums;color-scheme:light dark}
+.fld.check{display:flex;gap:var(--sp-3);align-items:flex-start;font:var(--fw-reg) var(--f-md);letter-spacing:var(--ls-md);color:var(--t1);cursor:pointer}
+.fld.check input{width:1.125rem;height:1.125rem;margin-top:.125rem;accent-color:var(--accent);flex:none}
+.fld.check .hint{display:block;margin-top:2px;padding:0;font-size:var(--f-xs)}
+#d-next{display:block;padding:0;margin-top:var(--sp-2)}
 .row .btn{min-height:calc(var(--ctl-h) + var(--sp-1));padding:0 var(--sp-4)}
 
 /* ---------- sign-in (same type, buttons and surfaces) ---------- */
