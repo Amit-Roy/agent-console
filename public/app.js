@@ -1962,6 +1962,9 @@ function onEvent(e, live) {
       dropLive("thinking");
       state.live = null;
       const bits = [];
+      const at = new Date(e.ts || Date.now());
+      const clock = at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      bits.push(at.toDateString() === new Date().toDateString() ? clock : `${at.toLocaleDateString([], { month: "short", day: "numeric" })} ${clock}`);
       if (e.duration_ms) bits.push(`${(e.duration_ms / 1000).toFixed(1)}s`);
       if (typeof e.total_cost_usd === "number") bits.push(`$${e.total_cost_usd.toFixed(4)}`);
       if (e.is_error || (e.subtype && e.subtype !== "success")) bits.push(e.subtype || "error");
