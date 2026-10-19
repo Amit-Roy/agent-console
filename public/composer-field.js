@@ -1,6 +1,6 @@
-// The composer is a plaintext-only contenteditable, not a <textarea>: Chrome on Android (Gboard clipboard, keyboard
-// stickers) only delivers pasted images to editable hosts, and answers "Chrome does not support image pasting here"
-// for a textarea. This gives the element the textarea surface app.js uses: value, disabled, placeholder, selection.
+// The composer is a contenteditable, not a <textarea>: Chrome on Android (Gboard clipboard, keyboard stickers) only
+// delivers pasted images to richly editable hosts, and answers "Chrome does not support image pasting here" for a
+// <textarea> or a plaintext-only host. This gives the element the textarea surface app.js uses: value, disabled, placeholder, selection.
 // Typing and paste keep "\n" inside text nodes; programmatic inserts (and some IMEs) wrap lines in <div>s. Read both.
 const BLOCK = new Set(["DIV", "P"]);
 const text = (root, stop, stopOffset) => {
@@ -45,7 +45,7 @@ export function composerField(box) {
     disabled: {
       get: () => box.getAttribute("contenteditable") === "false",
       set(v) {
-        box.setAttribute("contenteditable", v ? "false" : "plaintext-only");
+        box.setAttribute("contenteditable", v ? "false" : "true");
         box.setAttribute("aria-disabled", String(!!v));
       },
     },
@@ -64,7 +64,14 @@ export function composerField(box) {
     s.removeAllRanges();
     s.addRange(r);
   };
-  box.setAttribute("contenteditable", "plaintext-only");
+  box.setAttribute("contenteditable", "true");
+  // Richly editable, but only ever text: pasted or dropped HTML is flattened.
+  box.addEventListener("beforeinput", (e) => {
+    if (e.inputType !== "insertFromPaste" && e.inputType !== "insertFromDrop") return;
+    e.preventDefault();
+    const t = e.dataTransfer?.getData("text/plain");
+    if (t) document.execCommand("insertText", false, t);
+  });
   box.setAttribute("role", "combobox");
   return box;
 }
