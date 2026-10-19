@@ -112,7 +112,11 @@ export function automationSandboxConfig(t: AutoThread, env: NodeJS.ProcessEnv, o
   const runtime = privateDir(path.join(dataDir, "auto-runtime", t.id));
   const tmp = privateDir(path.join(runtime, "tmp"));
   const cache = privateDir(path.join(runtime, "cache"));
-  const result: NodeJS.ProcessEnv = { ...env, TMPDIR: tmp, TMP: tmp, TEMP: tmp, XDG_CACHE_HOME: cache };
+  const result: NodeJS.ProcessEnv = {
+    ...env, TMPDIR: tmp, TMP: tmp, TEMP: tmp, XDG_CACHE_HOME: cache,
+    npm_config_cache: privateDir(path.join(cache, "npm")),
+    PLAYWRIGHT_BROWSERS_PATH: env.PLAYWRIGHT_BROWSERS_PATH ?? path.join(env.XDG_CACHE_HOME || path.join(home, ".cache"), "ms-playwright"),
+  };
   const writable = [fs.realpathSync(t.cwd), runtime];
   if (t.provider === "pi") {
     const config = privateDir(path.join(runtime, "pi"));
