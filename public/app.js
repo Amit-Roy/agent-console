@@ -2088,6 +2088,12 @@ function setUsage(e, provider = threadUsageKey(cur())) {
   state.usage[provider] = { updatedAt: Date.now(), windows: [["5-hour", w.five_hour], ["7-day", w.seven_day]].filter(([,x]) => Number.isFinite(x?.utilization)).map(([label,x]) => ({ label, used: x.utilization * 100, limit: 100, unit: "%", ...((x.resetsAt || x.resets_at) ? { resetsAt: (x.resetsAt || x.resets_at) * 1000 } : {}) })) };
   renderUsage();
 }
+function resetsText(at) {
+  const ms = at - Date.now();
+  if (ms <= 0) return "Reset passed";
+  const m = Math.round(ms / 60000), d = Math.floor(m / 1440), h = Math.floor(m % 1440 / 60);
+  return `Resets in ${d ? `${d}d ${h}h` : h ? `${h}h ${m % 60}m` : `${m}m`}`;
+}
 function usageMeter(label, used, limit, unit = "%", resetsAt) {
   const pct = Math.max(0, Math.min(100, used / limit * 100));
   const row = el("div", "u");
@@ -2101,6 +2107,7 @@ function usageMeter(label, used, limit, unit = "%", resetsAt) {
   const fill = el("i"); fill.style.width = `${pct}%`; fill.style.background = meterColor(pct); bar.append(fill);
   const value = el("span", "pct", unit === "%" || unit === "tokens" ? `${Math.round(pct)}%` : text); value.style.color = meterColor(pct);
   row.append(el("span", "", label), bar, value);
+  if (resetsAt) row.append(el("span", "u-reset", resetsText(resetsAt)));
   return row;
 }
 const usageName = (p) => p?.id === "claude" ? "Claude" : p?.id === "pi" ? "OpenRouter" : p?.label || "";

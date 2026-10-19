@@ -300,6 +300,7 @@ li.sel .dot{background:var(--press)}
 .usage .u{display:grid;grid-template-columns:2.75rem 1fr 2.25rem;align-items:center;gap:var(--sp-2)}
 .usage .bar{height:.25rem;border-radius:var(--r-full);background:var(--s3);overflow:hidden}
 .usage .bar>i{display:block;height:100%;background:var(--accent);border-radius:inherit}
+.usage .u .u-reset{grid-column:2 / 4;color:var(--t3);font-size:var(--fs-xs,.75rem);margin-top:calc(var(--sp-1,.25rem) * -1)}
 .usage .u.hot .bar>i{background:var(--warn)}
 .usage .u.hot .pct{color:var(--warn);font-weight:var(--fw-semi)}
 .usage .pct{text-align:right;font-variant-numeric:tabular-nums;color:var(--t2)}
