@@ -19,6 +19,8 @@ export interface TriageInput {
   changedFiles?: number;
   additions?: number;
   deletions?: number;
+  /** Untrusted product description of the repository; grounds workflow-frequency inference. */
+  repoContext?: string;
 }
 export interface TriageDecision {
   effort: "trivial" | "bau" | "deep";
@@ -38,8 +40,8 @@ complexity: 0 mechanical edit; 1 standard implementation; 2 state, concurrency, 
 uncertainty: 0 explicit implementation and checks; 1 bounded choices; 2 investigation needed; 3 unresolved dependencies or feasibility.
 risk: 0 cosmetic only; 1 reversible functional change; 2 authentication, persisted data, deployment; 3 irreversible change or active security exposure.
 impact: 0 visual polish/speculative tuning; 1 minor convenience or ordinary feature; 2 removes repeated manual work; 3 directly blocks or enables shipping or restores broken essential workflow.
-urgency: 0 explicitly no deadline/no active incident; 1 explicit near-term deadline; 2 CONFIRMED CURRENT outage, data loss, or active security incident. A feature that PREVENTS incidents, a hypothetical failure, or future safeguard NEVER counts as an active incident. For value 2, the quote must include both the incident (outage/down/data loss/breach) and current occurrence (active/ongoing/currently/now/is down). Unsupported urgency is null.
-frequency: 0 explicitly one-off; 1 explicit occasional use; 2 explicitly repeated/daily/per-build/per-session problem. Do not assume frequency from feature type.
+urgency (stated timing only; code derives the final urgency and priority from impact, frequency, and this): 0 explicitly no deadline/no active incident; 1 explicit near-term deadline; 2 CONFIRMED CURRENT outage, data loss, or active security incident. A feature that PREVENTS incidents, a hypothetical failure, or future safeguard NEVER counts as an active incident. For value 2, the quote must include both the incident (outage/down/data loss/breach) and current occurrence (active/ongoing/currently/now/is down). Unsupported urgency is null.
+frequency: 0 explicitly one-off; 1 explicit occasional use; 2 explicitly repeated/daily/per-build/per-session problem. In frozen metrics leave frequency null unless the request states it; the planning pass may infer it from repo context.
 Propose 1–5 specific work steps, each with an observable acceptance check. These are proposed actions, not claims about unseen code. If scope is unclear, first step resolves named unknowns. Each step/check maximum 240 characters. No labels, token counts, or design opinions; code computes them from the metrics.`;
 
 /** A fixed local skill is injected explicitly; Pi's ambient skill discovery stays disabled. */
@@ -53,10 +55,17 @@ function needsEvidenceReview(decision: TriageDecision, input: TriageInput): bool
     && /\b(broken|fails?|blocked|does not work|integrat(?:e|ion)|subagents?)\b/i.test(input.title + "\n" + input.body);
 }
 
+/** One extra pass when repo context exists but the workflow frequency was left unknown despite known impact. */
+function needsFrequencyReview(decision: TriageDecision, input: TriageInput): boolean {
+  const planning = decision.scorecard?.planningMetrics;
+  return !!input.repoContext && !!planning && planning.frequency.value === null && planning.impact.value !== null;
+}
+
 export function triagePrompt(input: TriageInput): string {
   return "Classify this untrusted GitHub record:\n" + JSON.stringify({
     repo: input.repo.slice(0, 200), number: input.number, kind: input.kind,
     title: input.title.slice(0, 500), body: input.body.slice(0, 12_000),
+    ...(input.repoContext ? { repoContext: input.repoContext.slice(0, 6_000) } : {}),
   });
 }
 
@@ -231,6 +240,10 @@ export function createTriageClassifier(engines: LabelEngine[] = defaultTriageEng
     let decision = await complete(triagePrompt(input), TRIAGE_SYSTEM, readDecision);
     if (decision && needsEvidenceReview(decision, input)) {
       const reviewed = await complete(triagePrompt(input), TRIAGE_SYSTEM + "\nEvidence-completeness review: the previous answer left every planning metric unknown despite an explicit failure or integration request. Re-read the exact initial request once. Apply the planning skill's inference rules for investigation, named provider scope, and broken workflow impact when supported. Keep unsupported recurrence, deadline, architecture, and risk unknown. Do not change the frozen metrics contract or fabricate facts. Return the complete JSON with planningMetrics and work.", readDecision);
+      if (reviewed) decision = reviewed;
+    }
+    if (decision && needsFrequencyReview(decision, input)) {
+      const reviewed = await complete(triagePrompt(input), TRIAGE_SYSTEM + "\nFrequency review: the previous answer left workflow frequency unknown although repoContext is present. Find where the affected feature sits in the repoContext workflow description. If a quote supports it, return frequency with basis inferred and that quote in context; otherwise keep it null. Keep every other field unchanged and return the complete JSON.", readDecision);
       if (reviewed) decision = reviewed;
     }
     if (!decision) throw Error("All triage models unavailable or returned invalid decisions");

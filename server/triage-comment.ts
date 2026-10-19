@@ -16,18 +16,20 @@ const number = (value: number): string => value.toLocaleString("en-US", { maximu
 const amount = (values: EffortQuantiles | null, percentile: keyof EffortQuantiles): string => values ? number(values[percentile]) : "Unavailable";
 type ValidationMetric = { mae?: number };
 type Coverage = { p80?: number; p95?: number };
-type PlanningMetric = { value: number | null; evidence: string | null; basis?: "observed" | "inferred" | null; rationale?: string | null };
+type PlanningMetric = { value: number | null; evidence: string | null; basis?: "observed" | "inferred" | null; rationale?: string | null; context?: string | null };
 const investigation: Record<MetricName, string> = {
   breadth: "map affected components", complexity: "trace required behavior", uncertainty: "check unresolved dependencies",
   risk: "check data and recovery paths", impact: "name the blocked workflow", urgency: "confirm any deadline or current incident",
-  frequency: "confirm how often this occurs",
+  frequency: "confirm how often users meet this in the app workflow",
 };
 
 /** Pi supplies work and evidence; the renderer preserves computed labels and token counts. */
 export function renderTriageComment(decision: TriageDecision, sourceMarker = ""): string {
   const score = decision.scorecard;
   const lines = [TRIAGE_COMMENT_MARKER, TRIAGE_COMMENT_VERSION_MARKER, ...(sourceMarker ? [sourceMarker] : []),
-    `**${EFFORT_LABELS[decision.effort]} · ${PRIORITY_LABELS[decision.priority]}**`, "", "### Book of work", ""];
+    `**${EFFORT_LABELS[decision.effort]} · ${PRIORITY_LABELS[decision.priority]}**`,
+    ...(score?.urgency ? [`Urgency ${score.urgency.score}/3 sets the priority: ${score.urgency.drivers.map(safeTriageText).join("; ")}.`] : []),
+    "", "### Book of work", ""];
   if (!score) {
     lines.push("Assessment unavailable. Run triage again to generate a work plan.", "", "### Estimated token usage", "",
       "Unavailable without a scorecard.", "", "### Level of design", "", "Unknown.", "", `Model: ${safeTriageText(decision.model)}.`);
@@ -65,11 +67,11 @@ export function renderTriageComment(decision: TriageDecision, sourceMarker = "")
   for (const name of Object.keys(METRIC_MAX) as MetricName[]) {
     const assessment: PlanningMetric | undefined = planning[name];
     if (!assessment || assessment.value === null) { unknowns.push(name); continue; }
-    lines.push(`- **${name} ${assessment.value}/${METRIC_MAX[name]}${assessment.basis === "inferred" ? " (inferred)" : ""}:** ${safeTriageText(assessment.evidence)}${assessment.basis === "inferred" && assessment.rationale ? ` — ${safeTriageText(assessment.rationale)}` : ""}`);
+    lines.push(`- **${name} ${assessment.value}/${METRIC_MAX[name]}${assessment.basis === "inferred" ? " (inferred)" : ""}:** ${safeTriageText(assessment.evidence)}${assessment.basis === "inferred" && assessment.rationale ? ` — ${safeTriageText(assessment.rationale)}` : ""}${assessment.context ? ` Repo context: “${safeTriageText(assessment.context)}”` : ""}`);
   }
   if (unknowns.length) lines.push("", `Missing: ${unknowns.join(", ")}.`, `Next: ${unknowns.map(name => investigation[name]).join("; ")}.`);
   if (score.facts && Object.keys(score.facts).length) lines.push("", `PR facts: ${Object.entries(score.facts).map(([key, value]) => `${safeTriageText(key)}=${safeTriageText(value)}`).join(", ")}. These are not pricing predictors.`);
-  lines.push("", "Design and priority follow scoring rules; past token usage does not determine them.", "", "</details>",
+  lines.push("", "Design and priority follow scoring rules. Urgency (the priority) comes from impact, how often the workflow meets the problem, and any stated deadline; past token usage does not determine them.", "", "</details>",
     "", "<details><summary>Token accounting and model check</summary>", "",
     `Status: ${safeTriageText(price.confidence)}. Target: ${totalTarget ? "Initial request → total session usage" : session ? "initial request → session work → whole-session tokens" : "initial request → delivery-run work → tokens"}.`,
     `Training: ${safeTriageText(price.training.sampleCount ?? price.training.sampleIds.length)} ${session ? "sessions" : "delivery runs"}; ${safeTriageText(price.training.groupCount ?? "unknown")} thread groups.`,
