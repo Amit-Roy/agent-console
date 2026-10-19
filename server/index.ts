@@ -6,6 +6,7 @@ import { createDispatcher, startIssue, defaultDirs } from "./window-dispatch.ts"
 import { route as routeWork } from "./automation/router.ts";
 import { createOpener } from "./window-opener.ts";
 import { claudeAccounts } from "./providers/claude-accounts.ts";
+import { cancelClaudeLogin, finishClaudeLogin, startClaudeLogin } from "./claude-login.ts";
 import { createReviewer } from "./issue-review.ts";
 import { createEventLog } from "./automation/events.ts";
 import { createTriageBridge } from "./automation/triage-bridge.ts";
@@ -244,6 +245,16 @@ const RUN_DIR = process.env.AGENT_CONSOLE_RUN || path.join(os.homedir(), ".cache
 // (which inherit everything else) can never overwrite the live server's pid file.
 const PID_FILE = process.env.AGENT_CONSOLE_PID_FILE;
 delete process.env.AGENT_CONSOLE_PID_FILE;
+// In-app Claude sign-in: start returns Anthropic's link, finish takes the code its page shows.
+app.post("/api/claude-login/:account", sameOrigin, express.json({ limit: "4kb" }), async (req, res) => {
+  try {
+    const { account } = req.params;
+    if (req.body?.cancel) { cancelClaudeLogin(account); return res.json({ ok: true }); }
+    if (req.body?.code === undefined) return res.json(await startClaudeLogin(account));
+    await finishClaudeLogin(account, req.body.code);
+    res.json({ ok: true, providers: providerInfo() });
+  } catch (e: any) { res.status(400).json({ error: e?.message || "Sign-in failed." }); }
+});
 app.post("/restart", sameOrigin, (_req, res) => {
   fs.mkdirSync(RUN_DIR, { recursive: true });
   const out = fs.openSync(path.join(RUN_DIR, "idle-restart.log"), "a");
