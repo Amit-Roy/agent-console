@@ -1,7 +1,7 @@
 import { quoteEffort, type EffortQuote, type LoadedEffortModel } from "./triage-effort.ts";
 
 /** Initial-request complexity predicts observed session usage; later outcomes are not features. */
-export const TRIAGE_SCORECARD_VERSION = 6;
+export const TRIAGE_SCORECARD_VERSION = 7;
 export const METRIC_MAX = { breadth: 3, complexity: 3, uncertainty: 3, risk: 3, impact: 3, urgency: 2, frequency: 2 } as const;
 export type MetricName = keyof typeof METRIC_MAX;
 export interface MetricEvidence { value: number | null; evidence: string | null }
@@ -9,13 +9,18 @@ export interface MetricEvidence { value: number | null; evidence: string | null 
 export interface PlanningMetricEvidence extends MetricEvidence {
   basis: "observed" | "inferred" | null;
   rationale: string | null;
+  /** Verbatim repo-context quote that grounds an inferred workflow frequency. */
+  context?: string | null;
 }
+/** Urgency decides the priority label; it is computed from impact, workflow frequency and stated timing. */
+export interface UrgencyAssessment { score: 0 | 1 | 2 | 3; priority: "p0" | "p1" | "p2" | "p3"; drivers: string[] }
 export interface WorkStep { step: string; check: string }
 export interface ScorecardFacts { changedFiles?: number; additions?: number; deletions?: number }
 export interface TriageScorecard {
   version: typeof TRIAGE_SCORECARD_VERSION;
   metrics: Record<MetricName, MetricEvidence>;
   planningMetrics?: Record<MetricName, PlanningMetricEvidence>;
+  urgency?: UrgencyAssessment;
   unknowns: MetricName[];
   facts: ScorecardFacts;
   work: WorkStep[];
@@ -23,18 +28,18 @@ export interface TriageScorecard {
   tokens: { input: [number, number] | null; output: [number, number]; formula: string; confidence: "experimental" | "validated" };
   pricing: EffortQuote;
 }
-export interface AssessmentInput extends ScorecardFacts { title: string; body: string; files?: string[] }
+export interface AssessmentInput extends ScorecardFacts { title: string; body: string; files?: string[]; repoContext?: string }
 export interface ExtractedAssessment { metrics: Record<MetricName, MetricEvidence>; planningMetrics?: Record<MetricName, PlanningMetricEvidence>; work: WorkStep[] }
 
 /** Unknowns must remain visible; defaults are planning assumptions, never evidence. */
 export const UNKNOWN_DEFAULTS: Record<MetricName, number> = {
-  breadth: 1, complexity: 1, uncertainty: 2, risk: 1, impact: 1, urgency: 0, frequency: 0,
+  breadth: 1, complexity: 1, uncertainty: 2, risk: 1, impact: 1, urgency: 0, frequency: 1,
 };
 export const TRIAGE_RULES = {
   effort: "Initial-request breadth, behavior complexity, uncertainty, and risk enter a learned nonnegative log-usage equation. Current session models fit total recorded input plus output tokens directly; tool counts are optional diagnostics. Effort tiers use training-session token terciles. P50 routes known scope; P95 routes unknown or extrapolated scope by policy. Chronological out-of-fold residuals and paired token shares produce budgets. Raw usage is the supervised outcome, never a complexity feature. Later conversation and realized PR diffs never enter predictors. Legacy artifacts retain their declared workload metric. Session usage is not human hours.",
-  priority: "P0 if urgency =2, impact =3, and risk ≥2. Otherwise P1 if impact =3 or impact ≥2 and frequency =2. Otherwise P3 if impact =0; otherwise P2.",
+  priority: "Urgency is the priority label: 3 → P0, 2 → P1, 1 → P2, 0 → P3. Urgency = impact (0–3) + workflow frequency adjustment (frequency 2: +1, frequency 0: −1; impact 0 ignores frequency) + stated timing (deadline: +1, explicitly none: −1), clamped to 0–2. Urgency 3 requires a confirmed current incident with impact ≥2, or a stated deadline with urgency already 2. Frequency is how often the app user meets the problem in their workflow, inferred from the request and the repository's product description.",
   design: "Detailed if breadth =3, complexity =3, uncertainty =3, or risk ≥2. Otherwise None if breadth =0, complexity =0, uncertainty ≤1, and risk ≤1; otherwise Light.",
-  unknowns: "Unknowns remain visible. Priority/design defaults: breadth 1, complexity 1, uncertainty 2, risk 1, impact 1, urgency 0, frequency 0. Effort never uses these defaults or model-proposed work-step counts.",
+  unknowns: "Unknowns remain visible. Priority/design defaults: breadth 1, complexity 1, uncertainty 2, risk 1, impact 1, frequency 1, no stated timing. Effort never uses these defaults or model-proposed work-step counts.",
 } as const;
 
 function plainText(value: unknown, max: number): value is string {
@@ -93,16 +98,21 @@ export function parseAssessment(raw: string | undefined, input: AssessmentInput)
         const item = value.planningMetrics[name];
         if (!item || typeof item !== "object" || Array.isArray(item)) return;
         if (item.value === null && item.evidence === null && item.basis === null && item.rationale === null) {
-          planningMetrics[name] = { value: null, evidence: null, basis: null, rationale: null };
+          planningMetrics[name] = { value: null, evidence: null, basis: null, rationale: null, context: null };
           continue;
         }
         if (!Number.isInteger(item.value) || item.value < 0 || item.value > METRIC_MAX[name]
           || !plainText(item.evidence, 240) || item.evidence.trim().length < 4
           || !sources.some(source => source.includes(item.evidence))
           || !["observed", "inferred"].includes(item.basis) || !plainText(item.rationale, 240)) return;
-        if ((name === "urgency" || name === "frequency") && item.basis !== "observed") return;
-        if (!supportedPlanningFact(name, item.value, item.evidence)) return;
-        planningMetrics[name] = { value: item.value, evidence: item.evidence, basis: item.basis, rationale: item.rationale.trim() };
+        if (name === "urgency" && item.basis !== "observed") return;
+        let context: string | null = null;
+        if (name === "frequency" && item.basis === "inferred") {
+          // Workflow frequency needs a quote from the repository's own description of its workflow.
+          if (!plainText(item.context, 240) || item.context.trim().length < 8 || !input.repoContext?.includes(item.context)) return;
+          context = item.context;
+        } else if (!supportedPlanningFact(name, item.value, item.evidence)) return;
+        planningMetrics[name] = { value: item.value, evidence: item.evidence, basis: item.basis, rationale: item.rationale.trim(), context };
       }
     }
     if (!Array.isArray(value.work) || value.work.length < 1 || value.work.length > 5) return;
@@ -115,6 +125,21 @@ export function parseAssessment(raw: string | undefined, input: AssessmentInput)
   } catch { return; }
 }
 
+/** Pure rule: how soon the work should happen, from user pain, how often it is felt, and stated timing. */
+export function deriveUrgency(scores: Record<MetricName, number>, timing: number | null, assumed: MetricName[] = []): UrgencyAssessment {
+  const { impact, frequency } = scores;
+  const note = (name: MetricName) => assumed.includes(name) ? " (assumed)" : "";
+  const drivers = [`impact ${impact}/3${note("impact")}`, `workflow frequency ${frequency}/2${note("frequency")}`];
+  const frequencyAdjust = impact === 0 ? 0 : frequency - 1;
+  const timingAdjust = timing === 1 ? 1 : timing === 0 ? -1 : 0;
+  if (timing === 1) drivers.push("stated deadline"); else if (timing === 0) drivers.push("no deadline stated");
+  let score = Math.max(0, Math.min(2, impact + frequencyAdjust + timingAdjust));
+  if (timing === 2 && impact >= 2) { score = 3; drivers.push("confirmed current incident"); }
+  else if (timing === 1 && score === 2) score = 3;
+  const priority = (["p3", "p2", "p1", "p0"] as const)[score];
+  return { score: score as UrgencyAssessment["score"], priority, drivers };
+}
+
 export function deriveAssessment(extracted: ExtractedAssessment, input: AssessmentInput, model: LoadedEffortModel) {
   const pricing = quoteEffort(extracted.metrics, model);
   if (pricing.status !== "ready") return;
@@ -123,9 +148,8 @@ export function deriveAssessment(extracted: ExtractedAssessment, input: Assessme
   const unknowns = names.filter(name => planning[name].value === null);
   const scores = Object.fromEntries(names.map(name => [name, planning[name].value ?? UNKNOWN_DEFAULTS[name]])) as Record<MetricName, number>;
   const effort = pricing.effort;
-  const priority = scores.urgency === 2 && scores.impact === 3 && scores.risk >= 2 ? "p0"
-    : scores.impact === 3 || scores.impact >= 2 && scores.frequency === 2 ? "p1"
-    : scores.impact === 0 ? "p3" : "p2";
+  const urgency = deriveUrgency(scores, planning.urgency.value, unknowns);
+  const priority = urgency.priority;
   const detailed = scores.breadth === 3 || scores.complexity === 3 || scores.uncertainty === 3 || scores.risk >= 2;
   const none = scores.breadth === 0 && scores.complexity === 0 && scores.uncertainty <= 1 && scores.risk <= 1;
   const designSignals = (["breadth", "complexity", "uncertainty", "risk"] as const)
@@ -140,7 +164,7 @@ export function deriveAssessment(extracted: ExtractedAssessment, input: Assessme
     if (Number.isSafeInteger(input[name]) && input[name]! >= 0 && input[name]! <= 100_000_000) facts[name] = input[name];
   }
   const scorecard: TriageScorecard = {
-    version: TRIAGE_SCORECARD_VERSION, metrics: extracted.metrics, ...(extracted.planningMetrics ? { planningMetrics: extracted.planningMetrics } : {}), unknowns, facts, work: extracted.work, design,
+    version: TRIAGE_SCORECARD_VERSION, metrics: extracted.metrics, ...(extracted.planningMetrics ? { planningMetrics: extracted.planningMetrics } : {}), urgency, unknowns, facts, work: extracted.work, design,
     tokens: { input: pricing.input ? [pricing.input.p50, pricing.input.p95] : null,
       output: [pricing.output.p50, pricing.output.p95], formula: pricing.formula, confidence: pricing.confidence },
     pricing,
