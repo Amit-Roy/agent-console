@@ -73,6 +73,7 @@
     <div id="lanes" class="lanes" role="tablist" aria-label="Sidebar">
       <button id="lane-threads" class="lane" type="button" role="tab" aria-selected="true" aria-controls="pane-threads">Threads</button>
       <button id="lane-tasks" class="lane" type="button" role="tab" aria-selected="false" aria-controls="pane-tasks" tabindex="-1">Scheduled<i id="lane-tasks-dot" class="dot running" aria-hidden="true" hidden></i></button>
+      <button id="lane-auto" class="lane" type="button" role="tab" aria-selected="false" aria-controls="pane-auto" tabindex="-1">Auto<i id="lane-auto-dot" class="dot running" aria-hidden="true" hidden></i></button>
     </div>
     <div class="side-scroll">
       <div id="pane-threads" role="tabpanel" aria-labelledby="lane-threads">
@@ -83,6 +84,10 @@
           </button>
           <ul id="archived" class="thread-list" aria-label="Archived threads" hidden></ul>
         </div>
+      </div>
+      <div id="pane-auto" role="tabpanel" aria-labelledby="lane-auto" hidden>
+        <a id="auto-link" class="btn ghost new-task" href="/automation"><svg class="ico" aria-hidden="true"><use href="#i-chart"/></svg><span>Automation dashboard</span></a>
+        <ul id="autos" class="thread-list auto-list" aria-label="Automated runs"></ul>
       </div>
       <div id="pane-tasks" role="tabpanel" aria-labelledby="lane-tasks" hidden>
         <ul id="tasks" class="thread-list task-list" aria-label="Scheduled tasks"></ul>

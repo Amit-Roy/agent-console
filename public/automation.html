@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>Automation · Agent Console</title>
+<link rel="icon" href="/icon.svg"><link rel="apple-touch-icon" href="/icon-192.png">
+<meta name="theme-color" content="#eeeef2" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0b0b0d" media="(prefers-color-scheme: dark)">
+<link rel="preload" href="/fonts/inter-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/dashboard.css"><link rel="stylesheet" href="/automation.css"></head>
+<body class="dash auto">
+<header class="dh">
+  <a class="btn ghost back" href="/" aria-label="Back to the console"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M10 3.5 5.5 8l4.5 4.5"/></svg><span>Console</span></a>
+  <h1>Automation</h1>
+  <span id="mode" class="chips" aria-live="polite"></span>
+  <button id="debug" class="btn sm" type="button" title="Start a thread that investigates the automation"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 5.5a2.5 2.5 0 0 1 2.5 2.5v2a2.5 2.5 0 0 1-5 0V8A2.5 2.5 0 0 1 8 5.5zM6.5 4 8 5.5 9.5 4M5.5 8H3M10.5 8H13M5.5 10.5 3.5 12M10.5 10.5l2 1.5"/></svg><span>Debug</span></button>
+</header>
+<main id="am" aria-busy="true">
+  <p class="muted" id="status">Loading automation…</p>
+</main>
+<aside id="drawer" class="drawer" role="dialog" aria-modal="false" aria-labelledby="drawer-title" hidden>
+  <header><h2 id="drawer-title"></h2><button id="drawer-close" class="btn icon sm ghost" type="button" aria-label="Close"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="m4 4 8 8M12 4l-8 8"/></svg></button></header>
+  <p id="drawer-hint" class="muted"></p>
+  <dl id="drawer-facts" class="facts"></dl>
+  <h3>Log</h3>
+  <ol id="drawer-log" class="log"></ol>
+  <button id="drawer-more" class="btn sm" type="button" hidden>Older</button>
+</aside>
+<script type="module" src="/automation.js"></script>
+</body></html>
