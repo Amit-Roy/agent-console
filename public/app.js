@@ -1,5 +1,6 @@
 import { $, el, icon, iconButton, wireCopy, renderMarkdown, highlightInto, langFromPath, parseFileRef, setFileScope } from "/render.js";
 import { createMenu } from "/menu.js";
+import { composerField } from "/composer-field.js";
 import { toolName, toolSummary } from "/tool-display.js";
 import { createLatencyReporter } from "/telemetry.js";
 import { createQuestions } from "/questions.js";
@@ -9,6 +10,8 @@ import { setupNotifications } from "/notifications.js";
 import { createChatSearch } from "/chat-search.js";
 import { createSchedules, REPEAT_ITEMS, DAY_ITEMS } from "/schedules.js";
 import { createAutoLane } from "/automation-lane.js";
+
+composerField($("input"));
 
 const MODE_META = {
   plan: { label: "Plan", desc: "Read-only. Plans without editing.", icon: "eye" },
