@@ -137,7 +137,7 @@ function loadPanel(m) {
   const boot = new Date(m.boot).toLocaleString();
   const up = m.uptime; const h = Math.floor(up / 3600), min = Math.floor((up % 3600) / 60);
   for (const [k, v] of [["Load 1 min", m.load[0].toFixed(2)], ["Load 5 min", m.load[1].toFixed(2)], ["Load 15 min", m.load[2].toFixed(2)], ["Uptime", `${h}h ${min}m`], ["Booted", boot]]) {
-    const row = el("div"); row.append(el("span", "k", k), el("span", "v", v)); body.append(row);
+    const row = el("div"); row.append(el("span", "k", k + "\u00A0"), el("span", "v", v)); body.append(row);
   }
   p.append(body);
   return p;
@@ -189,7 +189,7 @@ function procsPanel(list) {
     const mk = (cls, label, action) => { const b = el("button", cls, label); b.type = "button"; b.dataset.pid = String(r.pid); b.dataset.action = action; return b; };
     if (confirming.has(r.pid)) act.append(mk("btn sm kill sure", "Sure?", "sure"), mk("btn sm ghost", "Cancel", "cancel"));
     else act.append(mk("btn sm kill", "Kill", "kill"), mk("btn sm ghost", "Cancel", "cancel").hidden = true);
-    row.append(el("td", "", act));
+    const actTd = el("td"); actTd.append(act); row.append(actTd);
     tbody.append(row);
   }
   table.append(tbody); wrap.append(table);
