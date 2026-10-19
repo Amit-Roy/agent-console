@@ -130,3 +130,11 @@ bin/github-triage restart
 `AGENT_CONSOLE_TRIAGE_CONFIG` and `AGENT_CONSOLE_TRIAGE_RUN` override the private configuration and runtime paths for isolated checks.
 
 The CLI tests kill and recover an isolated worker and verify that healthy workers keep their PID. Host supervisor tests cover IP changes, restart policy, and preservation of intentionally stopped workspaces. Full host/workspace reboot tests require an external maintenance window; do not restart the workspace from an agent running inside it.
+
+## CI and deploy
+
+`.github/workflows/ci.yml` runs `npm test` against a mock scratch server, then `test/pi-e2e-ui.ts`. That smoke test drives the browser through a real `pi --mode rpc` child whose model is a local OpenAI-compatible stub, so CI needs no secrets and spends no quota.
+
+Deploy is opt-in. Set `"deploy": "owner/repo"` in `github-triage.json` (it must be in the allowlist) and subscribe the webhook to `workflow_run`. When the `CI` workflow passes on a push to `main`, the worker fast-forwards its own checkout, runs `bin/agent-console restart-when-idle`, and restarts itself. A dirty or diverged checkout fails the pull and skips both restarts; see `~/.cache/agent-console/github-triage/deploy.log`. Pull-request runs, failed runs, other branches and other workflows never deploy.
+
+`.devcontainer/devcontainer.json` pins a small Node 24 image. Without it, Codespaces prebuilds pull the multi-gigabyte `universal` image and take about 25 minutes per push.

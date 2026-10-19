@@ -29,6 +29,8 @@ type Options = {
   retryDelaysMs?: number[];
   maxBodyBytes?: number;
   assessmentRevision?: () => string;
+  // Called after the named CI workflow passes on a push to main of an allowed repository.
+  deploy?: { workflow: string; run: (repo: string, sha: string) => void };
   log?: (metadata: Record<string, unknown>) => void;
 };
 
@@ -395,6 +397,19 @@ export function createTriageService(options: Options) {
     }
     if (typeof event !== "string" || typeof delivery !== "string") { respond(res, 401, { error: "Invalid webhook headers" }); return; }
     if (event === "ping") { respond(res, 200, { pong: true }); return; }
+    if (event === "workflow_run") {
+      const run = payload.workflow_run;
+      const repo = payload.repository?.full_name;
+      if (!options.deploy || payload.action !== "completed" || run?.name !== options.deploy.workflow || run.conclusion !== "success"
+        || run.event !== "push" || run.head_branch !== "main" || typeof run.head_sha !== "string" || !/^[a-f0-9]{40}$/.test(run.head_sha)) {
+        respond(res, 200, { ignored: true }); return;
+      }
+      if (typeof repo !== "string" || !repos.has(repo)) { respond(res, 403, { error: "Repository not allowed" }); return; }
+      log("deploy_requested", { repo, sha: run.head_sha });
+      respond(res, 202, { deploying: true });
+      try { options.deploy.run(repo, run.head_sha); } catch { log("deploy_failed", { repo }); }
+      return;
+    }
     if (!Object.hasOwn(ACTIONS, event)) { respond(res, 200, { ignored: true }); return; }
     const repo = payload.repository?.full_name;
     if (typeof repo !== "string" || !repos.has(repo)) { respond(res, 403, { error: "Repository not allowed" }); return; }
