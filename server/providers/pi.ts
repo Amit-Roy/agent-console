@@ -9,6 +9,7 @@ import { harnessInstructions } from "./brain.ts";
 import { childEnv } from "./env.ts";
 import { parseJson, spawnLines, type Proc } from "./proc.ts";
 import { piQuestions } from "./pi-questions.ts";
+import { piRateEnv } from "./pi-rate-env.ts";
 import { defaultPiModel } from "./pi-model.ts";
 import { retryEvent } from "../turn-timing.ts";
 import { clip, IMAGE_ONLY_PROMPT, type Agent, type AgentCtx, type Attachment, type Command, type Provider, type ThreadSpec } from "./types.ts";
@@ -222,7 +223,7 @@ export const pi: Provider = {
     void harnessInstructions().then((brain) => {
       if (dead) return;
       if (brain) args.push("--append-system-prompt", brain); // style preamble + shared memory index
-      const launch = sandboxLaunch(t, "pi", args, { ...childEnv(), AGENT_CONSOLE_THREAD: t.id });
+      const launch = sandboxLaunch(t, "pi", args, piRateEnv({ ...childEnv(), AGENT_CONSOLE_THREAD: t.id }));
       p = spawnLines("pi", launch.command, launch.args, { cwd: t.cwd, env: launch.env }, {
         ...ctx,
         exited(info) { questions.cancelAll(); ctx.exited(info); },

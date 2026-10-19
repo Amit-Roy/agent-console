@@ -52,6 +52,8 @@ const check = setInterval(async () => {
       execFileSync(process.execPath, ["--check", "--input-type=module"], { input: source, stdio: "pipe" });
     }
   } catch (e) { give(`Restart cancelled: the new code does not parse.\n${String(e.stderr ?? e).slice(0, 800)}`, 1); }
+  // Syntax validation can take seconds. A different restart may have completed meanwhile.
+  if (read() !== original) give("Server was already restarted; nothing to do.", 0);
   console.log("All threads idle. Restarting Agent Console.");
   console.log(execFileSync(BIN, ["stop"], { encoding: "utf8" }).trim());
   for (let i = 0; i < 100; i++) { try { process.kill(Number(original), 0); } catch { break; } await sleep(100); }

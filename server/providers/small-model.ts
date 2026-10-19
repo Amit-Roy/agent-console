@@ -1,3 +1,4 @@
+import { acquireModelRequest, reportModel429 } from "./model-rate-limit.ts";
 import { childEnv } from "./env.ts";
 
 export interface LabelEngine { id: string; call(prompt: string, system: string): Promise<string | undefined>; available?(): boolean; cooldownMs?: number }
@@ -25,20 +26,21 @@ export function createLabelCompletion(engines: LabelEngine[], cooldownMs = 5 * 6
 // Titles and tool labels are written by Nemotron 3 Super 120B, direct from NVIDIA (the same `nvidia` provider Pi uses). Haiku and
 // Codex Luna are deliberately not used here. Thinking is off: it would spend the whole output budget before the label.
 const NVIDIA_MODEL = process.env.AGENT_CONSOLE_LABEL_NVIDIA_MODEL || "nvidia/nemotron-3-super-120b-a12b";
-// The key allows ~1 request per second and titles share it with batched tool labels, so calls are spaced out and a 429 gets one retry.
-let nvidiaNext = 0;
-const nvidiaSlot = async () => { const at = Math.max(Date.now(), nvidiaNext); nvidiaNext = at + 1100; if (at > Date.now()) await new Promise(r => setTimeout(r, at - Date.now())); };
+// All model requests share the same admission gate, including Pi subprocesses.
 export async function askNvidia(prompt: string, system: string) {
   const key = childEnv().NVIDIA_API_KEY;
   if (!key) return;
   for (let attempt = 0; ; attempt++) {
-    await nvidiaSlot();
+    await acquireModelRequest();
     const r = await fetch("https://integrate.api.nvidia.com/v1/chat/completions", {
       method: "POST", headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
       body: JSON.stringify({ model: NVIDIA_MODEL, messages: [{ role: "system", content: system }, { role: "user", content: prompt }], max_tokens: 512, temperature: 0.2, chat_template_kwargs: { enable_thinking: false } }),
       signal: AbortSignal.timeout(12_000),
     });
-    if (r.status === 429 && attempt === 0) continue;
+    if (r.status === 429) {
+      reportModel429(r.headers.get("retry-after"));
+      if (attempt === 0) { await r.body?.cancel(); continue; }
+    }
     if (!r.ok) throw Error(`NVIDIA HTTP ${r.status}`);
     return (await r.json() as any).choices?.[0]?.message?.content;
   }
@@ -47,11 +49,13 @@ export async function askNvidia(prompt: string, system: string) {
 export async function askRouter(prompt: string, system: string) {
   const key = childEnv().OPENROUTER_API_KEY;
   if (!key) return;
+  await acquireModelRequest();
   const r = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST", headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
     body: JSON.stringify({ models: ["nvidia/nemotron-3-super-120b-a12b:free"], messages: [{ role: "system", content: system }, { role: "user", content: prompt }], max_tokens: 512, reasoning: { effort: "none", exclude: true } }),
     signal: AbortSignal.timeout(12_000),
   });
+  if (r.status === 429) reportModel429(r.headers.get("retry-after"));
   if (!r.ok) throw Error(`OpenRouter HTTP ${r.status}`);
   return (await r.json() as any).choices?.[0]?.message?.content;
 }
