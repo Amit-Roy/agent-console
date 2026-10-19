@@ -1,5 +1,7 @@
 # Automation: routing, review, dashboard (plan)
 
+**Status (2026-10-19): steps 0 to 5 are built and tested; see [automation.md](automation.md) for how it works. Step 6 is deployment and turning the router live.**
+
 Follows [window-dispatch.md](window-dispatch.md). Method: **top down, test first**. Start at the entrypoint a person or caller touches, write the test from that side, then build only the methods the test calls. Every boundary takes a request model and returns a response model, so a new field or feature adds a property, not a new signature.
 
 ## Decisions (from the user, 2026-10-19)

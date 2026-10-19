@@ -2,7 +2,7 @@
 
 Claude and Codex subscriptions reset every 5 hours whether or not the quota was used. This feature finds open issues to run in the last part of a window, so expiring quota is not wasted. Issue #10 is the source.
 
-**Status:** built end to end. Defaults are off and dry-run (`dryRun: true`); production runs with both enabled and live. Not built: a loop that sends review feedback back to the worker; a changes-requested PR waits for a person.
+**Status:** built end to end. Defaults are off and dry-run (`dryRun: true`); production runs with both enabled and live. Routing, review, the dashboard and the Debug button are described in [automation.md](automation.md). Not built: a loop that sends review feedback back to the worker; a changes-requested PR waits for a person.
 
 ## Usage history
 
@@ -24,14 +24,16 @@ Claude and Codex subscriptions reset every 5 hours whether or not the quota was 
 | `maxUsedPct` | `90` | Deep and BAU skip a window already this full; nothing would expire. Trivial work ignores this check. |
 | `perWindow` | `2` | Issues per provider per window. |
 | `repos` | `["Amit-Roy/agent-console"]` | Allowlist, `owner/name` only. |
+| `authors` | `["Amit-Roy"]` | Only issues opened by these GitHub logins are dispatched: issue text steers an unattended agent. |
+| `routing` | `{"mode":"shadow","bauOnPi":false}` | `shadow`: the router logs its choice beside the legacy route. `live`: the router decides. `bauOnPi`: BAU runs on Pi. |
 
 Only open issues with exactly one `Eff:` label are considered. Higher `Pri:` goes first; Deep gets first pick of expiring quota.
 
-| Effort | Route |
-| --- | --- |
-| Deep | Claude Opus medium, or `gpt-6.1-sol` high |
-| BAU | Claude Sonnet medium, or `gpt-6.1-sol` low |
-| Trivial | Pi, then review by Sonnet medium or `gpt-6.1-sol` low before merge |
+| Effort | Worker | Second model |
+| --- | --- | --- |
+| Deep | Opus medium or `gpt-6.1-sol` high, chosen by the router | none |
+| BAU | Pi when `routing.bauOnPi`, else Sonnet medium or `gpt-6.1-sol` low | PR review by Sonnet medium or `gpt-6.1-sol` low |
+| Trivial | Pi | PR review as for BAU |
 
 Trivial work needs a reviewer window with room, so it is planned only when Claude or Codex is expiring. Copilot is not a Console provider; Pi covers trivial work.
 
