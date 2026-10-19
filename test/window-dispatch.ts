@@ -3,7 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { historyRows } from "../server/usage.ts";
-import { plan, effortOf, expiring, loadConfig, createDispatcher, ROUTES, type Issue } from "../server/window-dispatch.ts";
+import { execFileSync } from "node:child_process";
+import { plan, effortOf, expiring, loadConfig, createDispatcher, ROUTES, threadTitle, issuePrompt, startIssue, type Issue } from "../server/window-dispatch.ts";
 
 const now = 1_800_000_000_000, min = 60_000;
 const win = (used: number, endsInMin: number) => ({ windows: [{ label: "5-hour", used, limit: 100, unit: "%", resetsAt: now + endsInMin * min }, { label: "7-day", used: 5, limit: 100 }], updatedAt: now });
@@ -49,6 +50,40 @@ assert.deepEqual(plan({ now, usage: { claude: win(95, 30), codex: win(10, 30) },
 assert.deepEqual(plan({ now, usage: { claude: win(10, 60) }, issues, done: new Set(["o/r#1", "o/r#2", "o/r#3", "o/r#4", "o/r#5"]) }), []);
 assert.deepEqual(plan({ now, usage: { claude: win(10, 60) }, issues: [{ ...issue(9, "BAU"), labels: ["bug"] }], done: new Set() }), [], "unlabelled issues wait for triage");
 
+// thread names: <repo>:<issue#> <short desc>
+assert.equal(threadTitle({ repo: "Amit-Roy/agent-console", number: 10, title: "Identify unused reset windows" }), "agent-console:10 Identify unused reset windows");
+assert.equal(threadTitle({ repo: "o/brain", number: 3, title: "[Bug] feat: " + "word ".repeat(20) }).length <= "brain:3 ".length + 32, true);
+assert.equal(threadTitle({ repo: "o/r", number: 7, title: "x".repeat(80) }), "r:7 " + "x".repeat(32));
+assert.equal(threadTitle({ repo: "o/r", number: 7, title: "" }), "r:7 issue");
+
+// prompts: PRs everywhere except the local-apply repos; trivial always needs a reviewer
+const dec = (repo: string, effort: any): any => ({ issue: { repo, number: 5, title: "t", labels: [] }, effort, route: ROUTES.bau[0], key: "k", reason: "" });
+assert.match(issuePrompt(dec("o/agent-console", "bau"), "b", "main"), /push to main/);
+assert.match(issuePrompt(dec("o/webapp", "bau"), "b", "main"), /open a pull request into main[^]*Do not merge/);
+assert.match(issuePrompt(dec("o/agent-console", "trivial"), "b", "main"), /pull request[^]*Sonnet or Sol review/, "trivial work never pushes to the default branch");
+
+// startIssue: own worktree and branch, a locked-title thread inside it, one prompt
+{
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "ac-issue-"));
+  const g = (cwd: string, ...a: string[]) => execFileSync("git", ["-C", cwd, "-c", "user.name=t", "-c", "user.email=t@t", ...a], { encoding: "utf8" }).trim();
+  try {
+    const origin = path.join(root, "origin.git"); fs.mkdirSync(origin);
+    g(origin, "init", "-q", "--bare", "-b", "main");
+    const repos = path.join(root, "repos"), main = path.join(repos, "webapp"); fs.mkdirSync(repos);
+    execFileSync("git", ["clone", "-q", origin, main]);
+    fs.writeFileSync(path.join(main, "a"), "1"); g(main, "add", "a"); g(main, "commit", "-qm", "init"); g(main, "push", "-q", "origin", "HEAD:main");
+    g(main, "remote", "set-head", "origin", "main");
+    const made: any[] = [], sentTo: any[] = [];
+    const runner = { create: (o: any) => { made.push(o); return { id: "T1" }; }, send: (id: string, text: string) => sentTo.push({ id, text }) };
+    const res = startIssue({ ...dec("o/webapp", "bau"), issue: { repo: "o/webapp", number: 42, title: "Fix the export totals", labels: [] } }, runner, { repos, worktrees: path.join(root, "wt") });
+    assert.equal(res.cwd, path.join(root, "wt", "webapp-issue-42")); assert.equal(res.branch, "issue-42-fix-the-export-totals");
+    assert.equal(g(res.cwd, "rev-parse", "--abbrev-ref", "HEAD"), res.branch);
+    assert.equal(made[0].title, "webapp:42 Fix the export totals"); assert.equal(made[0].cwd, res.cwd); assert.equal(made[0].provider, "claude");
+    assert.equal(sentTo.length, 1); assert.match(sentTo[0].text, /gh issue view 42 --repo o\/webapp/);
+    assert.throws(() => startIssue(dec("o/missing", "bau"), runner, { repos, worktrees: path.join(root, "wt") }), /No local checkout/);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+}
+
 // config: clamped, safe defaults, repos validated
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ac-dispatch-"));
 try {
@@ -73,5 +108,12 @@ try {
   assert.equal((await d.tick()).length, 1);
   assert.deepEqual(started, ["o/r#1"]);
   assert.equal((await d.tick()).length, 0, "a started issue is never reassigned");
+  // a failed start is recorded with its error, does not stop the tick, and is not retried
+  fs.rmSync(path.join(dir, "window-dispatch.jsonl"));
+  const bad = createDispatcher({ usage: () => ({ claude: win(10, 60) }), github, dir, now: () => now, start: () => { throw new Error("no checkout"); } });
+  assert.equal((await bad.tick()).length, 1);
+  const rows = fs.readFileSync(path.join(dir, "window-dispatch.jsonl"), "utf8").trim().split("\n").map(l => JSON.parse(l));
+  assert.equal(rows.at(-1).error, "no checkout");
+  assert.equal((await bad.tick()).length, 0, "a failed start is not retried");
 } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 console.log("PASS usage history, 90-minute lead window, effort routing, priority order, config clamps, dry-run ledger");
