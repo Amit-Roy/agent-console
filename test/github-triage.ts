@@ -5,7 +5,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { createTriageService, TRIAGE_COMMENT_MARKER, TRIAGE_COMMENT_VERSION_MARKER, triageSourceMarker, type GithubRequest } from "../server/github-triage.ts";
+import { createTriageService, renderTriageComment, TRIAGE_COMMENT_MARKER, TRIAGE_COMMENT_VERSION_MARKER, triageSourceMarker, type GithubRequest } from "../server/github-triage.ts";
 
 import { fixtureEffortModel } from "./fixtures/triage-effort.ts";
 import { quoteEffort } from "../server/providers/triage-effort.ts";
@@ -17,11 +17,42 @@ const repo = "Amit-Roy/agent-console";
 const directory = fs.mkdtempSync(path.join(os.tmpdir(), "ac-github-triage-"));
 let sequence = 0;
 const decision = { effort: "bau", priority: "p1", reason: "Fixture", model: "fixture/small", scorecard: {
-  version: 4, pricing: fixtureQuote, metrics: { breadth: { value: 1, evidence: "Fixture title" } }, unknowns: [],
+  version: 5, pricing: fixtureQuote, metrics: { breadth: { value: 1, evidence: "Fixture title" } }, unknowns: [],
   work: [{ step: "Implement fixture", check: "Fixture passes" }],
   design: { level: "light", reason: "One known surface" },
   tokens: { input: [8000, 20000], output: [2000, 5000], formula: fixtureQuote.formula, confidence: "experimental" },
 } } as const;
+const sessionReport = renderTriageComment(decision as any, "fixture-source");
+assert.ok(sessionReport.includes("Initial request → estimated session work → whole-session token quote"));
+assert.ok(sessionReport.includes("Total session tokens"));
+assert.ok(sessionReport.includes("entire observed session/thread, including later follow-ups"));
+assert.ok(sessionReport.includes("later prompts are unseen and add variance"));
+const totalModel = structuredClone(fixtureEffortModel.model);
+totalModel.workloadMetric = "totalTokens";
+totalModel.tokenYieldBasis = "workload";
+totalModel.scenarios = totalModel.scenarios.map(row => ({ ...row, inputPerWork: 0.8, outputPerWork: 0.2,
+  freshInputPerWork: 0.2, cachedInputPerWork: 0.6, roundsPerWork: null }));
+const totalQuote = quoteEffort({ breadth: { value: 1 }, complexity: { value: 1 }, uncertainty: { value: 1 }, risk: { value: 1 } }, { status: "ready", model: totalModel });
+assert.equal(totalQuote.status, "ready");
+const totalReport = renderTriageComment({ ...decision, scorecard: { ...decision.scorecard, pricing: totalQuote } } as any);
+assert.ok(totalReport.includes("Initial request → total session usage"));
+assert.ok(totalReport.includes("total-token MAE"));
+assert.ok(!totalReport.includes("Logged tool actions"));
+assert.ok(totalReport.includes("predicted total session tokens"));
+totalModel.estimator = "historical-baseline";
+totalModel.workload.coefficients = [0, 0, 0, 0]; totalModel.workload.missingCoefficients = [0, 0, 0, 0];
+totalModel.validation = { ...totalModel.validation, hasLearnedComplexitySignal: false, activeWork: { mae: 3 }, activeOutputTokens: { mae: 2 } };
+const baselineQuote = quoteEffort({ breadth: { value: 1 }, complexity: { value: 1 }, uncertainty: { value: 1 }, risk: { value: 1 } }, { status: "ready", model: totalModel });
+assert.equal(baselineQuote.status, "ready");
+const baselineReport = renderTriageComment({ ...decision, scorecard: { ...decision.scorecard, pricing: baselineQuote } } as any);
+assert.ok(baselineReport.includes("complexity fit failed the held-out baseline check"));
+assert.ok(baselineReport.includes("not task-specific"));
+assert.ok(baselineReport.includes("Rejected complexity-fit total-token MAE"));
+const legacyDecision = structuredClone(decision) as any;
+legacyDecision.scorecard.pricing.scope = "completed-delivery-run";
+const legacyReport = renderTriageComment(legacyDecision, "fixture-source");
+assert.ok(legacyReport.includes("one observed direct-agent delivery run"));
+assert.ok(!legacyReport.includes("whole-session token quote"));
 const payload = (number = 1, kind = "issues", action = "opened") => ({
   action, repository: { full_name: repo }, [kind === "issues" ? "issue" : "pull_request"]: { number },
 });

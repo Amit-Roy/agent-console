@@ -1,7 +1,7 @@
 import { quoteEffort, type EffortQuote, type LoadedEffortModel } from "./triage-effort.ts";
 
-/** Complexity precedes work estimation; token budgets are derived from predicted activity. */
-export const TRIAGE_SCORECARD_VERSION = 4;
+/** Initial-request complexity predicts observed session usage; later outcomes are not features. */
+export const TRIAGE_SCORECARD_VERSION = 5;
 export const METRIC_MAX = { breadth: 3, complexity: 3, uncertainty: 3, risk: 3, impact: 3, urgency: 2, frequency: 2 } as const;
 export type MetricName = keyof typeof METRIC_MAX;
 export interface MetricEvidence { value: number | null; evidence: string | null }
@@ -25,7 +25,7 @@ export const UNKNOWN_DEFAULTS: Record<MetricName, number> = {
   breadth: 1, complexity: 1, uncertainty: 2, risk: 1, impact: 1, urgency: 0, frequency: 0,
 };
 export const TRIAGE_RULES = {
-  effort: "Pre-work breadth, behavior complexity, uncertainty, and risk enter a learned nonnegative log-work equation. Effort uses P50 predicted logged actions against historical activity terciles when scope is known, or P95 when features are unknown or outside training ranges. That conservative routing is an explicit policy. Token budgets follow from empirical per-action yields and out-of-fold residual scenarios. Raw token consumption and context length never set complexity. These are delivery-run proxies, not human hours or whole-issue totals.",
+  effort: "Initial-request breadth, behavior complexity, uncertainty, and risk enter a learned nonnegative log-usage equation. Current session models fit total recorded input plus output tokens directly; tool counts are optional diagnostics. Effort tiers use training-session token terciles. P50 routes known scope; P95 routes unknown or extrapolated scope by policy. Chronological out-of-fold residuals and paired token shares produce budgets. Raw usage is the supervised outcome, never a complexity feature. Later conversation and realized PR diffs never enter predictors. Legacy artifacts retain their declared workload metric. Session usage is not human hours.",
   priority: "P0 if urgency =2, impact =3, and risk ≥2. Otherwise P1 if impact =3 or impact ≥2 and frequency =2. Otherwise P3 if impact =0; otherwise P2.",
   design: "Detailed if breadth =3, complexity =3, uncertainty =3, or risk ≥2. Otherwise None if breadth =0, complexity =0, uncertainty ≤1, and risk ≤1; otherwise Light.",
   unknowns: "Unknowns remain visible. Priority/design defaults: breadth 1, complexity 1, uncertainty 2, risk 1, impact 1, urgency 0, frequency 0. Effort never uses these defaults or model-proposed work-step counts.",
@@ -50,7 +50,7 @@ export function parseAssessment(raw: string | undefined, input: AssessmentInput)
     const value = JSON.parse(raw.trim().replace(/^```(?:json)?\s*\n?([\s\S]*?)\n?```$/i, "$1"));
     if (!value || typeof value !== "object" || Array.isArray(value)) return;
     if (!value.metrics || typeof value.metrics !== "object" || Array.isArray(value.metrics)) return;
-    const sources = [input.title.slice(0, 500), input.body.slice(0, 12_000), ...(input.files || []).slice(0, 100).map(f => f.slice(0, 250))];
+    const sources = [input.title.slice(0, 500), input.body.slice(0, 12_000)];
     const metrics = {} as Record<MetricName, MetricEvidence>;
     for (const name of Object.keys(METRIC_MAX) as MetricName[]) {
       const metric = value.metrics[name];
@@ -102,6 +102,10 @@ export function deriveAssessment(extracted: ExtractedAssessment, input: Assessme
       output: [pricing.output.p50, pricing.output.p95], formula: pricing.formula, confidence: pricing.confidence },
     pricing,
   };
-  const reason = `Complexity implies ${pricing.activity.p50} logged tool actions (P50), ${pricing.activity.p80} (P80); ${pricing.confidence} quote with ${pricing.unknowns.length} unknown complexity feature(s).`;
+  const actions = (value: number) => value.toLocaleString("en-US", { maximumFractionDigits: 1 });
+  const workUnit = pricing.workloadMetric === "totalTokens" ? "total session tokens" : "logged tool actions";
+  const reason = pricing.estimator === "historical-baseline"
+    ? `Historical session usage: ${actions(pricing.activity.p50)} ${workUnit} (P50), ${actions(pricing.activity.p80)} (P80). Initial-message complexity did not beat the median baseline; this quote is not task-specific.`
+    : `Initial-request complexity implies ${actions(pricing.activity.p50)} ${workUnit} (P50), ${actions(pricing.activity.p80)} (P80) per ${pricing.scope === "completed-session" ? "whole session" : "delivery run"}; ${pricing.confidence} quote with ${pricing.unknowns.length} unknown complexity feature(s).`;
   return { effort, priority, reason, scorecard } as const;
 }

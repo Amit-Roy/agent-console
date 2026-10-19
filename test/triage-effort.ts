@@ -25,6 +25,40 @@ const predict = (input = features(1), model = fixture()): EffortQuote => {
   assert.equal(result.status, "ready");
   return result as EffortQuote;
 };
+const sessionTotals = fixture();
+sessionTotals.scope = "completed-session";
+sessionTotals.workloadMetric = "totalTokens";
+sessionTotals.tokenYieldBasis = "workload";
+sessionTotals.workload.intercept = Math.log1p(1000);
+sessionTotals.workload.coefficients = [0, 0, 0, 0];
+sessionTotals.workload.missingCoefficients = [0, 0, 0, 0];
+sessionTotals.scenarios = sessionTotals.scenarios.map(row => ({ ...row, logResidual: 0,
+  inputPerWork: 0.8, outputPerWork: 0.2, freshInputPerWork: null, cachedInputPerWork: null, roundsPerWork: null }));
+const directUsage = predict(features(1), sessionTotals);
+assert.equal(directUsage.workloadMetric, "totalTokens");
+assert.equal(directUsage.input!.p50, 800);
+assert.equal(directUsage.output.p50, 200);
+assert.equal(directUsage.total!.p50, 1000);
+assert.equal(directUsage.freshInput, null, "Unknown cache split must not erase a known total");
+assert.equal(directUsage.rounds, null, "Tool telemetry is not required to quote session usage");
+const zeros = structuredClone(sessionTotals);
+zeros.scenarios.slice(0, 3).forEach(row => { row.zeroWork = true; row.inputPerWork = 0; row.outputPerWork = 0; });
+assert.equal(predict(features(1), zeros).total!.p50, 0, "Measured zero-total sessions preserve an empirical point mass");
+assert.equal(predict(features(1), zeros).activity.p50, 0);
+const badShares = structuredClone(sessionTotals); badShares.scenarios[0].inputPerWork = 1;
+assert.equal(validateEffortModel(badShares).status, "unavailable");
+const noEvidence = structuredClone(sessionTotals);
+noEvidence.workload.featureRanges = noEvidence.workload.featureRanges.map(() => ({ min: null, max: null, known: 0, missing: 5 }));
+assert.equal(validateEffortModel(noEvidence).status, "ready");
+assert.deepEqual(predict(features(1), noEvidence).outOfRange, [...EFFORT_FEATURES]);
+const baselineModel = structuredClone(sessionTotals);
+baselineModel.estimator = "historical-baseline";
+assert.equal(predict(features(0), baselineModel).estimator, "historical-baseline");
+assert.deepEqual(predict(features(0), baselineModel).total, predict(features(3), baselineModel).total,
+  "A historical fallback must not pretend to vary budgets with task features");
+assert.match(predict(features(1), baselineModel).formula, /did not beat/);
+baselineModel.workload.coefficients[0] = 0.1;
+assert.equal(validateEffortModel(baselineModel).status, "unavailable", "Baseline artifacts cannot contain active complexity weights");
 
 assert.equal(empiricalQuantile([4, 1, 2, 3], 0.5), 2.5);
 assert.throws(() => empiricalQuantile([], 0.5));
@@ -53,11 +87,45 @@ assert.deepEqual(pythonQuote.output, { p50: 1811, p80: 3287, p95: 4025 });
 assert.deepEqual(pythonQuote.freshInput, { p50: 182, p80: 256, p95: 293 });
 assert.deepEqual(pythonQuote.cachedInput, { p50: 363, p80: 511, p95: 586 });
 assert.equal(quote.scope, "completed-delivery-run");
+assert.equal(quote.tokenYieldBasis, "actions");
 assert.equal(quote.workloadMetric, "toolCalls");
 assert.equal(quote.confidence, "experimental");
 assert.equal(quote.effortBasis, "p50");
 assert.equal(quote.recommendedBudget, "p80");
 assert.match(quote.formula, /not a whole issue or human hours/);
+const sessionModel = fixture();
+sessionModel.scope = "completed-session";
+sessionModel.tokenYieldBasis = "actions-plus-one";
+const sessionQuote = predict(features(1), sessionModel);
+assert.equal(sessionQuote.scope, "completed-session");
+assert.equal(sessionQuote.tokenYieldBasis, "actions-plus-one");
+assert.deepEqual(sessionQuote.activity, quote.activity);
+assert.ok(sessionQuote.output.p50 > quote.output.p50);
+assert.match(sessionQuote.formula, /entire completed session\/thread, including later follow-ups/);
+assert.match(sessionQuote.formula, /Only initial user requests supply predictors/);
+const zeroAction = fixture();
+zeroAction.scope = "completed-session";
+zeroAction.tokenYieldBasis = "actions-plus-one";
+zeroAction.workload.intercept = 0;
+zeroAction.workload.coefficients = [0, 0, 0, 0];
+zeroAction.scenarios.forEach(scenario => { scenario.logResidual = 0; scenario.outputPerWork = 100; scenario.freshInputPerWork = 20; scenario.cachedInputPerWork = 30; });
+const zeroActionQuote = predict(features(0), zeroAction);
+assert.deepEqual(zeroActionQuote.activity, { p50: 0, p80: 0, p95: 0 });
+assert.deepEqual(zeroActionQuote.output, { p50: 100, p80: 100, p95: 100 });
+assert.deepEqual(zeroActionQuote.input, { p50: 50, p80: 50, p95: 50 });
+assert.deepEqual(zeroActionQuote.total, { p50: 150, p80: 150, p95: 150 });
+// Complete session input remains available without cache/non-cache split telemetry.
+zeroAction.scenarios.forEach(scenario => { scenario.inputPerWork = 70; scenario.freshInputPerWork = null; scenario.cachedInputPerWork = null; });
+const unsplitQuote = predict(features(0), zeroAction);
+assert.deepEqual(unsplitQuote.input, { p50: 70, p80: 70, p95: 70 });
+assert.deepEqual(unsplitQuote.total, { p50: 170, p80: 170, p95: 170 });
+assert.equal(unsplitQuote.freshInput, null);
+assert.equal(unsplitQuote.cachedInput, null);
+zeroAction.scenarios.forEach((scenario, index) => { scenario.outputPerWork = (index + 1) * 100; scenario.inputPerWork = (5 - index) * 100; });
+const pairedTotal = predict(features(0), zeroAction);
+assert.deepEqual(pairedTotal.total, { p50: 600, p80: 600, p95: 600 });
+assert.ok(pairedTotal.total!.p95 < pairedTotal.output.p95 + pairedTotal.input!.p95,
+  "Joint scenario totals must not add unrelated marginal upper quantiles.");
 for (const channel of [quote.activity, quote.output, quote.input!, quote.freshInput!, quote.cachedInput!, quote.rounds!]) {
   assert.ok(channel.p50 <= channel.p80 && channel.p80 <= channel.p95);
 }
@@ -138,6 +206,9 @@ assert.equal(predict(features(3), equalCutoffs).effort, "bau");
 
 for (const mutate of [
   (model: any) => { model.schemaVersion = 2; },
+  (model: any) => { model.scope = "whole-company"; },
+  (model: any) => { model.tokenYieldBasis = "tokens"; },
+  (model: any) => { model.scenarios[0].inputPerWork = Infinity; },
   (model: any) => { model.workload.coefficients[0] = -0.1; },
   (model: any) => { model.workload.coefficients[0] = NaN; },
   (model: any) => { model.workload.scale[0] = 0; },
