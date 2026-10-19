@@ -2,7 +2,7 @@
 
 Claude and Codex subscriptions reset every 5 hours whether or not the quota was used. This feature finds open issues to run in the last part of a window, so expiring quota is not wasted. Issue #10 is the source.
 
-**Status:** everything is off by default and logs only (`dryRun: true`). With `dryRun: false` the dispatcher starts one thread per picked issue. Not built: the Sonnet/Sol review step for trivial work (the prompt only asks the agent to request it), and enforcing the PR-only rule outside the prompt.
+**Status:** built end to end. Defaults are off and dry-run (`dryRun: true`); production runs with both enabled and live. Not built: a loop that sends review feedback back to the worker; a changes-requested PR waits for a person.
 
 ## Usage history
 
@@ -37,7 +37,7 @@ Trivial work needs a reviewer window with room, so it is planned only when Claud
 
 ## Threads for picked issues
 
-Each started issue gets its own worktree, `~/worktrees/<repo>-issue-<n>` on branch `issue-<n>-<slug>` from the default branch, and a thread working in it with the route's provider, model and effort. The thread is named `<repo>:<issue#> <short desc>`, for example `agent-console:10 Identify unused reset windows`. It is created with a chosen title, so the auto-namer never changes it, and neither does a later rename (see below). Runs are unattended, so the thread uses `bypassPermissions`. A failed start (no local checkout under `~/repos`, git error) is logged with its error in `window-dispatch.jsonl` and is not retried.
+Each started issue gets its own worktree, `~/worktrees/<repo>-issue-<n>` on branch `issue-<n>-<slug>` from the default branch, and a thread working in it with the route's provider, model and effort. The thread is named `<repo>:<issue#> <short desc>`, at most 30 characters (the width an Android sidebar row shows, issue #11). A long repo name is shortened to its initials: `ac:10 Identify unused reset`. It is created with a chosen title, so the auto-namer never changes it, and neither does a later rename (see below). Runs are unattended, so the thread uses `bypassPermissions`. A failed start (no local checkout under `~/repos`, git error) is logged with its error in `window-dispatch.jsonl` and is not retried.
 
 ## Window opener
 
@@ -55,9 +55,14 @@ Same file as the dispatcher, under `opener`. Defaults: off, dry run, 23:00–07:
 - The namer (Nemotron via NVIDIA, free OpenRouter fallback; never Haiku or Luna) reads every user message of the thread from its log, newest first up to 100,000 characters, and names what the chat is about now. The message that overflows the budget is cut short; older ones are dropped.
 - Threads from before `titleLocked` existed count as unlocked: a manual rename from that time cannot be told apart from an automatic one.
 
-## Repository rules from the issue (policy, not yet enforced by code)
+## Review of trivial work
 
-- Every repo merges to its default branch by pull request.
-- Exceptions: agent-console, dotfiles and brain are applied locally before they are pushed.
-- Trivial work uses its own git worktree, never the deploy branch.
-- Trivial work asks Sonnet or Sol for review before the PR merges.
+When a trivial worker's turn ends successfully and its branch has an open PR, a reviewer thread starts in a detached worktree of the PR head (`~/worktrees/<repo>-review-<n>`), named `<repo>:<issue#> review PR#<pr>`. It is Sonnet medium, or `gpt-6.1-sol` low when Claude's quota is exhausted. It reads the issue and diff, runs the repo's checks, and posts `Review: APPROVED` or `Review: CHANGES REQUESTED` as a PR comment. The PR author and the reviewer share one GitHub account, so a formal approval is not possible; the comment is the verdict. It merges (squash, delete branch) only when approved. For agent-console, dotfiles and brain it then fast-forwards the local checkout, and for agent-console runs `restart-when-idle`, so the change is applied. One review per worker thread.
+
+## Repository rules from the issue
+
+- Every repo merges to its default branch by pull request. Enforced: a started worktree gets a `pre-push` hook (per-worktree `core.hooksPath`, which turns on `extensions.worktreeConfig` in that repo) that refuses any push to the default branch.
+- Exceptions: agent-console, dotfiles and brain are applied locally before they are pushed. Their Deep and BAU workers have no hook and push the default branch themselves. Trivial work in them still goes through a PR.
+- Every run, trivial or not, has its own worktree, never the deploy branch.
+- Trivial work is reviewed by Sonnet or Sol before the PR merges.
+- The hook binds only the dispatched worktrees; it cannot stop a person or another session pushing elsewhere. Direct pushes to the default branch of other repos are blocked on GitHub only if branch protection is on.
