@@ -900,9 +900,7 @@ body.login{display:grid;place-items:center;overflow:auto;padding:var(--sp-4)}
 #queued{max-height:10rem;overflow-y:auto}
 
 /* Provider usage: allowance and current context are separate measures. */
-.usage-tabs { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:2px; padding:2px; border-radius:var(--r-sm); background:var(--s2); margin-bottom:var(--sp-1); }
-.usage-tab { flex:1; min-width:0; min-height:24px; padding:2px 4px; background:transparent; border:0; border-radius:calc(var(--r-sm) - 2px); color:var(--t2); font:inherit; cursor:pointer; }
-.usage-tab[aria-selected=true] { background:var(--s1); color:var(--t1); box-shadow:0 1px 2px rgb(0 0 0 / .12); }
+.usage-picker { width:100%; min-height:32px; margin-bottom:var(--sp-2); font:inherit; }
 .usage-pane { display:flex; flex-direction:column; gap:var(--sp-2); }
 .usage-label { color:var(--t2); font-weight:var(--fw-med); }
 .usage-head { display:flex; align-items:center; gap:var(--sp-2); }
@@ -973,7 +971,7 @@ body.login{display:grid;place-items:center;overflow:auto;padding:var(--sp-4)}
 .usage-thread { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .usage .u { grid-template-columns:3.3rem minmax(20px,1fr) auto; }
 .ctx[data-level=crit] { color:var(--bad); }
-@media (pointer:coarse) { .usage-tab { min-height:44px; } }
+@media (pointer:coarse) { .usage-picker { min-height:44px; } }
 
 .command-note { white-space:pre-wrap; overflow-wrap:anywhere; }
 

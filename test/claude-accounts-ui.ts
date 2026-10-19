@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
-import { chromium } from "playwright";
+import { chromium, type Page } from "playwright";
 
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "ac-accounts-ui-"));
 const home = path.join(scratch, "home"), data = path.join(scratch, "data"), bin = path.join(scratch, "bin");
@@ -23,6 +23,25 @@ const port = process.env.ACCOUNT_TEST_PORT || "17842", base = `http://127.0.0.1:
 const server = spawn(process.execPath,["server/index.ts"],{env:{...process.env,HOME:home,CLAUDE_CONFIG_DIR:path.join(home,".claude"),PATH:bin+path.delimiter+process.env.PATH,PORT:port,AGENT_CONSOLE_DATA:data,AGENT_CONSOLE_RUN:path.join(scratch,"run"),AGENT_CONSOLE_MOCK:"1",AGENT_CONSOLE_WARM_MAX:"0"},stdio:["ignore","ignore","pipe"]});
 let errors = "";
 server.stderr?.on("data", chunk => errors += chunk.toString());
+async function fixtureUsage(page: Page) {
+  let client: any;
+  await page.routeWebSocket(/\/ws$/, socket => {
+    client = socket;
+    const upstream = socket.connectToServer();
+    socket.onMessage(message => upstream.send(message));
+    upstream.onMessage(raw => {
+      const message = JSON.parse(String(raw));
+      if (message.t === "hello") message.usage = {
+        claude: {updatedAt: Date.now(), windows: [{label:"5-hour", used:21, limit:100, unit:"%"}]},
+        "claude:nefro": {updatedAt: Date.now(), windows: [{label:"5-hour", used:63, limit:100, unit:"%"}]},
+        codex: {updatedAt: Date.now(), windows: [{label:"5-hour", used:15, limit:100, unit:"%"}]},
+        pi: {updatedAt: Date.now(), windows: [{label:"Free/day", used:40, limit:50}]},
+      };
+      socket.send(JSON.stringify(message));
+    });
+  });
+  return (message: unknown) => client.send(JSON.stringify(message));
+}
 let browser;
 const out = process.env.OUT || path.join(scratch,"screenshots");
 fs.mkdirSync(out,{recursive:true});
@@ -36,10 +55,55 @@ try {
     const page = await context.newPage();
     const pageErrors: string[] = [];
     page.on("pageerror", error => pageErrors.push(error.message));
+    const pushUsage = await fixtureUsage(page);
     await page.goto(base);
     await page.waitForFunction(() => document.getElementById("ttl")?.textContent === "Legacy Sunny");
     assert.match(await page.locator("#thread-account").innerText(),/Sunny/);
-    assert.equal(await page.locator("#usage .usage-tab").evaluateAll(buttons => buttons.every(button => button.scrollWidth <= button.clientWidth)),true,"Account usage tabs fit without overlapping labels.");
+    if (name === "phone") await page.locator("#menu").click();
+    const selector = page.locator("#usage-provider");
+    await selector.waitFor();
+    assert.equal(await selector.innerText(),"Claude · Sunny");
+    assert.equal(await selector.getAttribute("aria-label"),"Usage account: Claude · Sunny");
+    assert.equal(await selector.getAttribute("aria-haspopup"),"listbox");
+    assert.equal(await selector.evaluate(button => button.scrollWidth <= button.clientWidth),true,"Usage selector fits without overlapping labels.");
+    assert.equal(await page.locator("#usage .pct").first().innerText(),"21%");
+    await page.screenshot({path:path.join(out,`${name}-usage-closed.png`),fullPage:true});
+    await selector.click();
+    const usageMenu = page.getByRole("listbox",{name:"Usage account",exact:true});
+    await usageMenu.waitFor();
+    assert.deepEqual(await usageMenu.locator(".m-label").allTextContents(),["Claude · Sunny","Claude · Nefro","OpenRouter","Codex"]);
+    assert.match(await usageMenu.innerText(),/sunny\.amit\.roy@gmail\.com/);
+    assert.match(await usageMenu.innerText(),/nefro\.amit\.roy@gmail\.com/);
+    await page.screenshot({path:path.join(out,`${name}-usage-open.png`),fullPage:true});
+    if (name === "phone") {
+      await page.emulateMedia({colorScheme:"dark"});
+      await page.screenshot({path:path.join(out,"phone-usage-open-dark.png"),fullPage:true});
+      await page.emulateMedia({colorScheme:"light"});
+    }
+    await usageMenu.getByRole("option",{name:/Claude · Nefro/}).click();
+    assert.equal(await selector.innerText(),"Claude · Nefro");
+    assert.equal(await page.locator("#usage .pct").first().innerText(),"63%","Each Claude account has separate usage.");
+    const triggerNode = await selector.elementHandle();
+    await selector.click();
+    const menuNode = await usageMenu.elementHandle();
+    pushUsage({t:"usage",provider:"claude:nefro",usage:{updatedAt:Date.now(),windows:[{label:"5-hour",used:64,limit:100,unit:"%"}]}});
+    await page.waitForFunction(() => document.querySelector("#usage .pct")?.textContent === "64%");
+    assert.equal(await triggerNode!.evaluate(node => node.isConnected),true,"Telemetry keeps the same selector node.");
+    assert.equal(await menuNode!.evaluate(node => node.isConnected),true,"Telemetry keeps the open menu.");
+    assert.equal(await selector.getAttribute("aria-expanded"),"true");
+    await page.keyboard.press("Escape");
+    await usageMenu.waitFor({state:"detached"});
+    assert.equal(await selector.evaluate(node => node === document.activeElement),true,"Escape returns focus to the selector.");
+    await selector.press("ArrowDown");
+    await page.keyboard.press("End");
+    await page.keyboard.press("Enter");
+    assert.equal(await selector.innerText(),"Codex","Keyboard selects an account.");
+    assert.equal(await page.locator("#usage .pct").first().innerText(),"15%");
+    await selector.press("ArrowDown");
+    await page.keyboard.press("Home");
+    await page.keyboard.press("Enter");
+    assert.equal(await selector.innerText(),"Claude · Sunny");
+    assert.equal(await page.locator("#usage .pct").first().innerText(),"21%");
     await page.locator("#new").evaluate((el:HTMLElement) => el.click());
     await page.locator("#dlg").waitFor({state:"visible"});
     await page.locator("#d-prov").click();
@@ -84,6 +148,7 @@ try {
   await page.waitForFunction(() => !!document.getElementById("thread-account")?.textContent?.includes("Nefro"));
   const created = JSON.parse(fs.readFileSync(path.join(data,"threads.json"),"utf8")).find((t:any) => !["legacy-sunny","fixture-nefro"].includes(t.id));
   assert.equal(created.claudeAccount,"nefro","Create persists the selected account.");
+  assert.equal(await page.locator("#usage-provider").innerText(),"Claude · Nefro","Opening a Nefro thread selects its usage account.");
   assert.equal(created.sessionId,undefined,"Creating a thread does not start a prompt.");
   await page.screenshot({path:path.join(out,"desktop-nefro-thread.png"),fullPage:true});
   await context.close();
@@ -94,7 +159,7 @@ try {
   await phonePage.waitForFunction(() => !!document.getElementById("thread-account")?.textContent?.includes("Nefro"));
   await phonePage.screenshot({path:path.join(out,"phone-nefro-thread.png"),fullPage:true});
   await phone.close();
-  console.log(`PASS Claude account UI: phone/desktop, legacy Sunny, Nefro sign-in and creation, account reset, provider isolation. Screenshots: ${out}`);
+  console.log(`PASS Claude account UI: phone/desktop dropdown, separate meters, keyboard, Escape, telemetry stability, legacy Sunny, Nefro creation, account reset, provider isolation. Screenshots: ${out}`);
 } finally {
   await browser?.close();
   if (server.exitCode === null && server.signalCode === null) { server.kill("SIGTERM"); await once(server,"exit"); }
