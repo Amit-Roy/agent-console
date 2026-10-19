@@ -5,6 +5,7 @@ import { hostMetrics, hostProcesses, hostKill, hostPorts, hostProcessDetail } fr
 import { createDispatcher, startIssue, defaultDirs } from "./window-dispatch.ts";
 import { route as routeWork } from "./automation/router.ts";
 import { createOpener } from "./window-opener.ts";
+import { claudeAccounts } from "./providers/claude-accounts.ts";
 import { createReviewer } from "./issue-review.ts";
 import { createEventLog } from "./automation/events.ts";
 import { createTriageBridge } from "./automation/triage-bridge.ts";
@@ -108,8 +109,9 @@ if (process.env.AGENT_CONSOLE_MOCK !== "1") {
   const opener = createOpener({
     usage: () => usage.all(), events: automationLog,
     refresh: readCodexUsage,
-    open: (provider, route) => {
-      const t = threads.create({ provider, ...route, cwd: path.join(os.homedir(), "repos"), mode: "bypassPermissions", title: `Window opener · ${provider}` });
+    claudeAccounts: () => claudeAccounts().filter(a => a.ready).map(a => a.id),
+    open: (provider, route, account) => {
+      const t = threads.create({ provider, ...route, ...(account ? { claudeAccount: account } : {}), cwd: path.join(os.homedir(), "repos"), mode: "bypassPermissions", title: `Window opener · ${provider}${account ? ":" + account : ""}` });
       threads.send(t.id, "Reply with the single word: ok");
       threads.archive(t.id, true);
     },
