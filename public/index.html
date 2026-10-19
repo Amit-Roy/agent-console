@@ -89,10 +89,22 @@
         <div id="cwd" class="path" hidden><svg class="ico" aria-hidden="true"><use href="#i-folder"/></svg><span id="cwd-t"></span></div>
       </div>
       <span id="state" class="state" role="status" hidden><i class="dot running"></i><span id="state-t">Working</span></span>
+      <button id="chat-search-toggle" class="btn icon ghost" type="button" title="Search in chat (Ctrl+F)" aria-label="Search in chat" aria-expanded="false" aria-controls="chat-search" disabled>
+        <svg class="ico" aria-hidden="true"><use href="#i-search"/></svg>
+      </button>
       <button id="more" class="btn icon ghost" type="button" title="Thread actions" aria-label="Thread actions" disabled>
         <svg class="ico" aria-hidden="true"><use href="#i-more"/></svg>
       </button>
     </header>
+    <div id="chat-search" role="search" aria-label="Search in chat" hidden>
+      <div class="chat-search-field">
+        <input id="chat-search-input" type="search" aria-label="Search in chat" aria-describedby="chat-search-count" placeholder="Search in chat" autocomplete="off" spellcheck="false" enterkeyhint="search">
+        <span id="chat-search-count" role="status" aria-live="polite">Type to search</span>
+      </div>
+      <button id="chat-search-prev" class="btn icon ghost" type="button" aria-label="Previous match" title="Previous match (Shift+Enter)" disabled><svg class="ico" aria-hidden="true" style="transform:rotate(180deg)"><use href="#i-chev-down"/></svg></button>
+      <button id="chat-search-next" class="btn icon ghost" type="button" aria-label="Next match" title="Next match (Enter)" disabled><svg class="ico" aria-hidden="true"><use href="#i-chev-down"/></svg></button>
+      <button id="chat-search-close" class="btn icon ghost" type="button" aria-label="Close search" title="Close search (Escape)"><svg class="ico" aria-hidden="true"><use href="#i-x"/></svg></button>
+    </div>
     <div id="banner" role="status" hidden></div>
     <section id="chat" role="log" aria-label="Conversation" aria-relevant="additions" tabindex="-1"></section>
     <footer id="composer">
