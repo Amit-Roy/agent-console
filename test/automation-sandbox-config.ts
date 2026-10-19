@@ -39,6 +39,8 @@ try {
   assert.equal(pi.env.TMP, pi.env.TMPDIR);
   assert.equal(pi.env.TEMP, pi.env.TMPDIR);
   assert.equal(pi.env.XDG_CACHE_HOME, path.join(runtime, "cache"));
+  assert.equal(pi.env.npm_config_cache, path.join(runtime, "cache", "npm"));
+  assert.equal(pi.env.PLAYWRIGHT_BROWSERS_PATH, path.join(home, ".cache", "ms-playwright"));
   assert.equal(pi.env.ORIGINAL, "kept");
   assert.equal(env.TMPDIR, "/tmp");
   assert.equal(fs.statSync(runtime).mode & 0o777, 0o700);
