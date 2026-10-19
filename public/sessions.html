@@ -7,10 +7,10 @@
 <main>
 <form id="session-search-form" role="search">
 <label for="session-query">Search all conversations</label>
-<div class="search-fields"><input id="session-query" type="search" placeholder="e.g. pr-standards" required maxlength="500" autocomplete="off">
+<div class="search-fields"><input id="session-query" type="search" placeholder="Words, or a PR link to find who raised it" required maxlength="500" autocomplete="off">
 <select id="session-provider" aria-label="Provider"><option value="">All providers</option><option value="claude">Claude</option><option value="codex">Codex</option><option value="pi">Pi</option></select>
 <button class="btn primary" type="submit">Search</button></div>
 </form>
-<p id="search-status" role="status" aria-live="polite">Search messages and tool output, including archived sessions.</p>
+<p id="search-status" role="status" aria-live="polite">Search messages and tool output, including archived sessions. Paste a GitHub PR link to find the session that raised it.</p>
 <ol id="session-results" aria-label="Matching messages"></ol>
 </main><script type="module" src="/session-search.js"></script></body></html>
