@@ -1,7 +1,7 @@
 import { quoteEffort, requestShape, type EffortQuote, type LoadedEffortModel } from "./triage-effort.ts";
 
 /** Initial-request complexity predicts observed session usage; later outcomes are not features. */
-export const TRIAGE_SCORECARD_VERSION = 8;
+export const TRIAGE_SCORECARD_VERSION = 9;
 export const METRIC_MAX = { breadth: 3, complexity: 3, uncertainty: 3, risk: 3, impact: 3, urgency: 2, frequency: 2 } as const;
 export type MetricName = keyof typeof METRIC_MAX;
 export interface MetricEvidence { value: number | null; evidence: string | null }
@@ -36,10 +36,10 @@ export const UNKNOWN_DEFAULTS: Record<MetricName, number> = {
   breadth: 1, complexity: 1, uncertainty: 2, risk: 1, impact: 1, urgency: 0, frequency: 1,
 };
 export const TRIAGE_RULES = {
-  effort: "Initial-request breadth, behavior complexity, uncertainty, and risk enter a learned nonnegative log-usage equation. Current session models fit total recorded input plus output tokens directly; tool counts are optional diagnostics. Effort tiers use training-session token terciles. P50 routes known scope; P95 routes unknown or extrapolated scope by policy. Chronological out-of-fold residuals and paired token shares produce budgets. Raw usage is the supervised outcome, never a complexity feature. Later conversation and realized PR diffs never enter predictors. Legacy artifacts retain their declared workload metric. Session usage is not human hours.",
+  effort: "Initial-request breadth, behavior complexity, uncertainty, and risk enter a learned nonnegative log-usage equation. Current session models fit total recorded input plus output tokens directly; tool counts are optional diagnostics. The effort label follows the level of design: none is Trivial, light is BAU, detailed is Deep. The token quote is a rough guide only; it does not set the label. P50 prices known scope; P95 prices unknown or extrapolated scope by policy. Chronological out-of-fold residuals and paired token shares produce budgets. Raw usage is the supervised outcome, never a complexity feature. Later conversation and realized PR diffs never enter predictors. Legacy artifacts retain their declared workload metric. Session usage is not human hours.",
   priority: "Urgency is the priority label: 3 → P0, 2 → P1, 1 → P2, 0 → P3. Urgency = impact (0–3) + workflow frequency adjustment (frequency 2: +1, frequency 0: −1; impact 0 ignores frequency) + stated timing (deadline: +1, explicitly none: −1), clamped to 0–2. Urgency 3 requires a confirmed current incident with impact ≥2, or a stated deadline with urgency already 2. Frequency is how often the app user meets the problem in their workflow, inferred from the request and the repository's product description.",
   design: "Detailed if breadth =3, complexity =3, uncertainty =3, or risk ≥2. Otherwise None if breadth =0, complexity =0, uncertainty ≤1, and risk ≤1; otherwise Light.",
-  unknowns: "Unknowns remain visible. Priority/design defaults: breadth 1, complexity 1, uncertainty 2, risk 1, impact 1, frequency 1, no stated timing. Effort never uses these defaults or model-proposed work-step counts.",
+  unknowns: "Unknowns remain visible. Priority/design defaults: breadth 1, complexity 1, uncertainty 2, risk 1, impact 1, frequency 1, no stated timing. The token quote never uses these defaults or model-proposed work-step counts. Effort follows the design level, so these defaults can affect it.",
 } as const;
 
 function plainText(value: unknown, max: number): value is string {
@@ -150,7 +150,6 @@ export function deriveAssessment(extracted: ExtractedAssessment, input: Assessme
   const planning = extracted.planningMetrics ?? extracted.metrics;
   const unknowns = names.filter(name => planning[name].value === null);
   const scores = Object.fromEntries(names.map(name => [name, planning[name].value ?? UNKNOWN_DEFAULTS[name]])) as Record<MetricName, number>;
-  const effort = pricing.effort;
   const urgency = deriveUrgency(scores, planning.urgency.value, unknowns);
   const priority = urgency.priority;
   const detailed = scores.breadth === 3 || scores.complexity === 3 || scores.uncertainty === 3 || scores.risk >= 2;
@@ -162,6 +161,8 @@ export function deriveAssessment(extracted: ExtractedAssessment, input: Assessme
     ? { level: "detailed", reason: `Required by ${designSignals}. Write boundaries, state/data flow, failure paths, rollout, and acceptance checks before implementation.` }
     : none ? { level: "none", reason: "Breadth and complexity are 0; uncertainty and risk are ≤1. Use the work checklist and acceptance checks without a separate design document." }
     : { level: "light", reason: "Planning scores fall between mechanical and detailed-design thresholds. Record the approach, touched components, failure cases, and acceptance checks." };
+  // The label follows the design level. The token quote stays in the comment as a rough guide only.
+  const effort = ({ none: "trivial", light: "bau", detailed: "deep" } as const)[design.level];
   const facts: ScorecardFacts = {};
   for (const name of ["changedFiles", "additions", "deletions"] as const) {
     if (Number.isSafeInteger(input[name]) && input[name]! >= 0 && input[name]! <= 100_000_000) facts[name] = input[name];

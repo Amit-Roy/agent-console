@@ -75,6 +75,7 @@ export interface EffortQuote {
   workloadMetric: EffortWorkloadMetric;
   estimator: EffortEstimator;
   method: EffortModel["method"];
+  /** Token tercile tier, a rough guide only. The triage label follows the level of design. */
   effort: "trivial" | "bau" | "deep";
   /** Explicit routing policy; it does not modify the learned distribution. */
   effortBasis: "p50" | "p95";

@@ -39,7 +39,7 @@ scenario_input_i(x) = scenario_total_i(x) * observed_input_i / observed_total_i
 
 Explicit zero-total observations retain an empirical point mass at zero instead of dividing by zero. Their usage still trains the regression. Other scenarios preserve paired input/output shares that sum to one. Cache/fresh shares are optional; unknown cache splits do not erase known input totals. Grand-total quantiles use paired input-plus-output scenarios, not sums of marginal quantiles.
 
-Effort tiers reflect predicted session-token usage, not human hours or pure implementation difficulty. Provider behavior, cached replay, follow-ups, and later scope changes influence the measured outcome. The initial request supplies the complexity evidence; the model learns its relationship to whole-session usage.
+The triage effort label follows the level of design (none: Trivial, light: BAU, detailed: Deep), not these tokens. The quote's own tier (training-session terciles) is a rough guide only. Predicted session tokens reflect usage, not human hours or pure implementation difficulty. Provider behavior, cached replay, follow-ups, and later scope changes influence the measured outcome. The initial request supplies the complexity evidence; the model learns its relationship to whole-session usage.
 
 ## Request-shape features
 
@@ -60,7 +60,7 @@ When the model includes request-shape features, unknown model-extracted metrics 
 
 ## Uncertainty and validation
 
-Quotes show P50, P80, and P95 model scenarios. The planning reserve is P80 total tokens minus P50 total tokens; generated-token reserve is also shown. Unknown or extrapolated scope routes effort and the recommended budget through P95 by policy. Complete, in-range scope routes effort through P50 and recommends P80.
+Quotes show P50, P80, and P95 model scenarios. The planning reserve is P80 total tokens minus P50 total tokens; generated-token reserve is also shown. Unknown or extrapolated scope prices the quote tier and the recommended budget through P95 by policy. Complete, in-range scope uses P50 and recommends P80. Neither sets the label.
 
 This resembles an uncertainty reserve in pricing. It is not an options-market valuation. Initial messages cannot fully explain later scope changes, so whole-session usage can have substantial unexplained variance. Percentile names do not establish completion probabilities.
 

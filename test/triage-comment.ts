@@ -28,6 +28,19 @@ assert.equal(rendered.split("complexity fit failed").length - 1, 1);
 assert.ok(visible.includes("Ranges under-covered held-out outcomes."));
 assert.ok(visible.includes("not success probabilities"));
 assert.ok(visible.includes("Whole-session usage includes later follow-ups."));
+// Effort follows the design level; the token table is only a rough guide.
+assert.equal(derived.scorecard.design.level, "light");
+assert.equal(derived.effort, "bau");
+assert.ok(rendered.includes("Effort follows the level of design: none is Trivial, light is BAU, detailed is Deep. The token table is a rough guide only."));
+assert.ok(!/Trivial ≤|Deep ≥/.test(rendered));
+assert.ok(rendered.includes("Effort follows the level of design. Urgency"));
+const withScores = (values: number[]) => deriveAssessment({
+  metrics: Object.fromEntries(Object.keys(METRIC_MAX).map((name, index) => [name, { value: values[index], evidence: "Delivery" }])) as typeof metrics,
+  work: [{ step: "Trace the broken delivery path.", check: "A fixture reproduces the failure." }],
+}, { title: "Delivery broken", body: "" }, fixtureEffortModel)!;
+assert.equal(withScores([0, 0, 0, 0, 0, 0, 0]).effort, "trivial");
+assert.equal(withScores([1, 1, 1, 1, 0, 0, 0]).effort, "bau");
+assert.equal(withScores([3, 1, 1, 1, 0, 0, 0]).effort, "deep");
 assert.ok(!visible.includes("MAE"));
 assert.ok(!visible.includes("Non-cached input"));
 assert.ok(rendered.includes("Active work MAE: 6,997,939"));
