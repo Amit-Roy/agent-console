@@ -8,9 +8,9 @@ Each item receives one effort label and one priority label. Existing labels outs
 
 | Label | Meaning |
 | --- | --- |
-| `Eff: Trivial` | Predicted logged actions at or below the historical lower tercile. |
-| `Eff: BAU` | Predicted logged actions between the historical tercile cutoffs. |
-| `Eff: Deep` | Predicted logged actions at or above the historical upper tercile. |
+| `Eff: Trivial` | Level of design is none. |
+| `Eff: BAU` | Level of design is light. |
+| `Eff: Deep` | Level of design is detailed. |
 | `Pri: P0` | A confirmed current outage, data loss, or active security incident. |
 | `Pri: P1` | Work that unblocks delivery, improves essential reliability, or substantially reduces babysitting. |
 | `Pri: P2` | A useful workflow enhancement that does not block delivery. |
@@ -34,7 +34,9 @@ The comment records these metrics and their evidence:
 
 Unknown values use visible planning assumptions: breadth 1, complexity 1, uncertainty 2, risk 1, impact 1, urgency 0, frequency 0. These assumptions are never presented as evidence.
 
-Effort follows **pre-work complexity → predicted logged actions → token quote**. Four evidence-backed features enter a learned nonnegative log-work equation. Historical tool-call activity trains work coefficients; raw input/output totals never establish task complexity. Effort labels use predicted actions against observed activity terciles. Complete scope uses P50 for routing; unknown or extrapolated scope uses P95 by explicit policy.
+Effort follows the **level of design**: none is Trivial, light is BAU, detailed is Deep. Design comes from the planning scores below, so effort never depends on predicted tokens. Issue bodies predict far more tokens than the chat requests the model trained on, so token terciles labelled nearly every issue Deep.
+
+The token quote is a rough guide only. **Pre-work complexity → predicted tokens → token quote**: four evidence-backed features enter a learned nonnegative log-work equation. Historical session usage trains work coefficients; raw input/output totals never establish task complexity. Complete scope uses P50; unknown or extrapolated scope uses P95 by explicit policy.
 
 Quotes show P50, P80, and P95 scenarios, plus P80−P50 reserve. Generated tokens, non-cached input, and cached replay are separate. The current model remains experimental and under-covers its small held-out sample. These quantiles are not guaranteed completion probabilities. See [the model, formula, and initial evidence](triage-effort-pricing.md).
 
