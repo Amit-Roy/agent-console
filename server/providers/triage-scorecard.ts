@@ -70,6 +70,25 @@ function supportedPlanningFact(name: MetricName, value: number, quote: string): 
   return true;
 }
 
+const UNKNOWN_PLANNING: PlanningMetricEvidence = { value: null, evidence: null, basis: null, rationale: null, context: null };
+
+/** Returns a validated planning entry, or undefined when the quote, basis, or rule check fails. */
+function validPlanningEntry(name: MetricName, item: any, input: AssessmentInput, sources: string[]): PlanningMetricEvidence | undefined {
+  if (!item || typeof item !== "object" || Array.isArray(item)) return;
+  if (!Number.isInteger(item.value) || item.value < 0 || item.value > METRIC_MAX[name]
+    || !plainText(item.evidence, 240) || item.evidence.trim().length < 4
+    || !sources.some(source => source.includes(item.evidence))
+    || !["observed", "inferred"].includes(item.basis) || !plainText(item.rationale, 240)) return;
+  if (name === "urgency" && item.basis !== "observed") return;
+  let context: string | null = null;
+  if (name === "frequency" && item.basis === "inferred") {
+    // Workflow frequency needs a quote from the repository's own description of its workflow.
+    if (!plainText(item.context, 240) || item.context.trim().length < 8 || !input.repoContext?.includes(item.context)) return;
+    context = item.context;
+  } else if (!supportedPlanningFact(name, item.value, item.evidence)) return;
+  return { value: item.value, evidence: item.evidence, basis: item.basis, rationale: item.rationale.trim(), context };
+}
+
 /** The model extracts evidence and proposes a work plan; it cannot select labels or budgets. */
 export function parseAssessment(raw: string | undefined, input: AssessmentInput): ExtractedAssessment | undefined {
   if (!raw || raw.length > 16_384) return;
@@ -90,29 +109,12 @@ export function parseAssessment(raw: string | undefined, input: AssessmentInput)
       if (name === "urgency" && metric.value === 2 && !confirmedIncident(metric.evidence)) return;
       metrics[name] = { value: metric.value, evidence: metric.evidence };
     }
+    // Planning entries are advisory: one that fails validation becomes unknown instead of voiding the whole answer.
     let planningMetrics: ExtractedAssessment["planningMetrics"];
-    if (value.planningMetrics !== undefined) {
-      if (!value.planningMetrics || typeof value.planningMetrics !== "object" || Array.isArray(value.planningMetrics)) return;
+    if (value.planningMetrics && typeof value.planningMetrics === "object" && !Array.isArray(value.planningMetrics)) {
       planningMetrics = {} as NonNullable<ExtractedAssessment["planningMetrics"]>;
       for (const name of Object.keys(METRIC_MAX) as MetricName[]) {
-        const item = value.planningMetrics[name];
-        if (!item || typeof item !== "object" || Array.isArray(item)) return;
-        if (item.value === null && item.evidence === null && item.basis === null && item.rationale === null) {
-          planningMetrics[name] = { value: null, evidence: null, basis: null, rationale: null, context: null };
-          continue;
-        }
-        if (!Number.isInteger(item.value) || item.value < 0 || item.value > METRIC_MAX[name]
-          || !plainText(item.evidence, 240) || item.evidence.trim().length < 4
-          || !sources.some(source => source.includes(item.evidence))
-          || !["observed", "inferred"].includes(item.basis) || !plainText(item.rationale, 240)) return;
-        if (name === "urgency" && item.basis !== "observed") return;
-        let context: string | null = null;
-        if (name === "frequency" && item.basis === "inferred") {
-          // Workflow frequency needs a quote from the repository's own description of its workflow.
-          if (!plainText(item.context, 240) || item.context.trim().length < 8 || !input.repoContext?.includes(item.context)) return;
-          context = item.context;
-        } else if (!supportedPlanningFact(name, item.value, item.evidence)) return;
-        planningMetrics[name] = { value: item.value, evidence: item.evidence, basis: item.basis, rationale: item.rationale.trim(), context };
+        planningMetrics[name] = validPlanningEntry(name, value.planningMetrics[name], input, sources) ?? UNKNOWN_PLANNING;
       }
     }
     if (!Array.isArray(value.work) || value.work.length < 1 || value.work.length > 5) return;
