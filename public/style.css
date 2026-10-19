@@ -620,7 +620,8 @@ details[open]>summary .chev{transform:rotate(90deg)}
 .diff>div:not(.add):not(.del)::before{content:""}
 
 .foot{font:var(--fw-reg) var(--f-xs);letter-spacing:var(--ls-xs);color:var(--t3);font-variant-numeric:tabular-nums}
-.actions .foot{margin-left:var(--sp-2)}
+.actions .foot{order:-1;margin-left:var(--sp-2)}
+.actions .btn{margin-left:auto}
 div.msg.foot{margin-top:calc(var(--sp-2) * -1)}
 .note{display:flex;align-items:center;gap:var(--sp-2);font:var(--fw-reg) var(--f-sm);letter-spacing:var(--ls-sm);color:var(--t3)}
 .errtxt{display:flex;gap:var(--sp-3);align-items:flex-start;padding:var(--sp-3) var(--sp-4);border-radius:var(--r-md);background:var(--bad-tint);color:var(--bad);font:var(--fw-reg) var(--fm-sm);white-space:pre-wrap;overflow-wrap:anywhere}
