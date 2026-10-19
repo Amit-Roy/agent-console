@@ -91,13 +91,23 @@ export function plan(input: { now: number; usage: Record<string, ProviderUsage>;
 /** Repos whose work is applied locally before it is pushed (issue #10); everything else, and all trivial work, goes through a PR. */
 export const DIRECT_REPOS = ["agent-console", "dotfiles", "brain"];
 
-/** Thread name: `<repo>:<issue#> <short desc>`. Created as a user-chosen title, so the auto-namer and later renames never touch it. */
+const MAX_THREAD_TITLE = 30; // same width the sidebar shows for auto titles (issue #11: Android)
+/** Short repo label for thread names: the name itself when short, else initials of a hyphenated name, else its first 10 characters. */
+export function topicOf(repo: string): string {
+  const name = repo.split("/")[1] ?? repo;
+  if (name.length <= 10) return name;
+  const initials = name.split(/[-_.]/).filter(Boolean).map(w => w[0]).join("");
+  return initials.length >= 2 && initials.length <= 6 ? initials : name.slice(0, 10);
+}
+
+/** Thread name: `<repo>:<issue#> <short desc>`, at most 30 characters. Created as a user-chosen title, so the auto-namer and later renames never touch it. */
 export function threadTitle(issue: Pick<Issue, "repo" | "number" | "title">): string {
-  const repo = issue.repo.split("/")[1];
+  const prefix = `${topicOf(issue.repo)}:${issue.number} `;
+  const room = Math.max(8, MAX_THREAD_TITLE - prefix.length);
   const words = issue.title.replace(/^\s*(?:\[[^\]]*\]|\w+:)\s*/, "").replace(/\s+/g, " ").trim().split(" ").filter(Boolean);
   let desc = "";
-  for (const w of words) { if ((desc + " " + w).trim().length > 32) break; desc = (desc + " " + w).trim(); }
-  return `${repo}:${issue.number} ${desc || words[0]?.slice(0, 32) || "issue"}`.trim();
+  for (const w of words) { if ((desc + " " + w).trim().length > room) break; desc = (desc + " " + w).trim(); }
+  return `${prefix}${desc || words[0]?.slice(0, room) || "issue"}`;
 }
 
 export function issuePrompt(d: Decision, branch: string, base: string): string {
@@ -114,9 +124,27 @@ export function issuePrompt(d: Decision, branch: string, base: string): string {
   ].join("\n\n");
 }
 
+export type IssueRun = { key: string; repo: string; number: number; effort: string; role: "work" | "review"; branch?: string; base?: string; pr?: number; reviewedAt?: number };
 export interface IssueRunner {
-  create(opts: { provider: string; model: string; effort: string; cwd: string; mode: "bypassPermissions"; title: string }): { id: string };
+  create(opts: { provider: string; model: string; effort: string; cwd: string; mode: "bypassPermissions"; title: string; issueRun: IssueRun }): { id: string };
   send(id: string, text: string): void;
+}
+/** Work that goes through a PR may not push to the default branch: the worktree's pre-push hook refuses it. */
+export function installPrOnlyHook(cwd: string, base: string, git: (cwd: string, ...args: string[]) => string) {
+  git(cwd, "config", "extensions.worktreeConfig", "true");
+  const hooks = path.join(git(cwd, "rev-parse", "--absolute-git-dir"), "ac-hooks");
+  fs.mkdirSync(hooks, { recursive: true });
+  fs.writeFileSync(path.join(hooks, "pre-push"), `#!/bin/sh
+# agent-console: this worktree opens pull requests; it never pushes to ${base}.
+while read local_ref local_sha remote_ref remote_sha; do
+  if [ "$remote_ref" = "refs/heads/${base}" ]; then
+    echo "Blocked: push a branch and open a pull request; ${base} only changes by merged PR." >&2
+    exit 1
+  fi
+done
+exit 0
+`, { mode: 0o755 });
+  git(cwd, "config", "--worktree", "core.hooksPath", hooks);
 }
 const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || "issue";
 
@@ -131,7 +159,8 @@ export function startIssue(d: Decision, runner: IssueRunner, dirs = { repos: pat
   const cwd = path.join(dirs.worktrees, `${name}-issue-${d.issue.number}`);
   fs.mkdirSync(dirs.worktrees, { recursive: true });
   if (!fs.existsSync(cwd)) git(main, "worktree", "add", "-q", "-b", branch, cwd, `origin/${base}`);
-  const thread = runner.create({ ...d.route, cwd, mode: "bypassPermissions", title: threadTitle(d.issue) });
+  if (!(d.effort !== "trivial" && DIRECT_REPOS.includes(name))) installPrOnlyHook(cwd, base, git);
+  const thread = runner.create({ ...d.route, cwd, mode: "bypassPermissions", title: threadTitle(d.issue), issueRun: { key: d.key, repo: d.issue.repo, number: d.issue.number, effort: d.effort, role: "work", branch, base } });
   runner.send(thread.id, issuePrompt(d, branch, base));
   return { thread: thread.id, cwd, branch };
 }
