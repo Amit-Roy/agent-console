@@ -79,3 +79,9 @@ network access remain available; this is not a confidentiality boundary. Auto's
 Console tools are limited to reading session history; scheduling and output writes
 are refused. Reviewers leave shared-checkout application to the host after merge.
 Agent Console's existing green-CI deploy hook performs its host-side application.
+
+## Shared Pi request limit
+
+Pi model requests share one global admission gate: at least 1,100 milliseconds between request starts. The gate covers interactive and Auto sessions, tool continuations, SDK retries, triage subprocesses, and title/tool-label helpers across providers. It does not limit concurrent streams.
+
+SQLite coordinates Console and triage processes. Sandboxed Pi processes request admission through the authenticated loopback broker, without write access to shared limiter state. A 429 sets a shared cooldown from `Retry-After`, or 30 seconds when absent. Pending requests honor cancellation; unavailable admission fails closed.
