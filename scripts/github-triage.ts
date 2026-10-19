@@ -43,6 +43,15 @@ function deploy() {
   fs.closeSync(log);
 }
 
+async function exited(n: number, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    try { process.kill(n, 0); } catch { return true; }
+    if (Date.now() > deadline) return false;
+    await new Promise(resolve => setTimeout(resolve, 250));
+  }
+}
+
 function pid(): number | undefined {
   try {
     const n = Number(fs.readFileSync(PID, "utf8"));
@@ -198,12 +207,12 @@ async function main() {
     try { await health(c); }
     catch {
       start();
-      await new Promise<void>((resolve, reject) => {
-        execFile("waitfor", ["-t", "15", "url", `http://127.0.0.1:${c.port}/health`], { env: childEnv(), timeout: 20_000 }, err => {
-          if (err) reject(Error("Triage did not become healthy within 15 seconds.")); else resolve();
-        });
-      });
-      await health(c);
+      // Poll in-process: the worker must not depend on host tools that CI runners lack.
+      const deadline = Date.now() + 15_000;
+      while (await health(c).then(() => false, () => true)) {
+        if (Date.now() > deadline) throw Error("Triage did not become healthy within 15 seconds.");
+        await new Promise(resolve => setTimeout(resolve, 250));
+      }
       restarted = true;
     }
     // Recover the receiver first. Slow offline training must never block supervision.
@@ -225,12 +234,7 @@ async function main() {
     const n = pid();
     if (n) {
       process.kill(n, "SIGTERM");
-      await new Promise<void>((resolve, reject) => {
-        execFile("waitfor", ["-t", "180", "pid", String(n)], { timeout: 185_000 }, err => {
-          if (err) reject(Error("Triage is still draining. Wait for its PID to exit before restarting."));
-          else resolve();
-        });
-      });
+      if (!await exited(n, 180_000)) throw Error("Triage is still draining. Wait for its PID to exit before restarting.");
     }
     if (command === "restart") {
       await new Promise<void>((resolve, reject) => {

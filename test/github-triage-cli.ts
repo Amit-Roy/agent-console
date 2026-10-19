@@ -41,7 +41,10 @@ try {
   assert.equal(workerPid(), originalPid, "Healthy watchdog must not restart the worker");
   assert.equal(fs.readFileSync(path.join(runtime, "last-reconcile"), "utf8"), firstScan, "Healthy watchdog must respect the reconciliation interval");
   process.kill(originalPid, "SIGKILL");
-  await new Promise<void>((resolve, reject) => execFile("waitfor", ["-t", "5", "pid", String(originalPid)], { timeout: 8_000 }, error => error ? reject(error) : resolve()));
+  for (const deadline = Date.now() + 5_000; ; await new Promise(resolve => setTimeout(resolve, 100))) {
+    try { process.kill(originalPid, 0); } catch { break; }
+    assert.ok(Date.now() < deadline, "Killed worker must exit");
+  }
   assert.match(await cli("watchdog"), /Reconciled 0 open items; queued 0 repairs/);
   assert.notEqual(workerPid(), originalPid, "Watchdog must replace a crashed worker");
   assert.equal(JSON.parse(await cli("status")).ok, true);
