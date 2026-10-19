@@ -22,18 +22,20 @@ from sklearn.metrics import mean_absolute_error, mean_squared_log_error
 
 LEGACY_FEATURES = ["breadth", "complexity", "uncertainty", "risk"]
 SHAPE_FEATURES = ["requestSize", "requestLines", "requestReferences", "requestActions"]
-# Datasets that carry the deterministic request-shape buckets fit all eight features.
+# Datasets that carry the deterministic request-shape buckets price with those four alone. The
+# model-extracted metrics are unknown for most sessions and, when known, vary between models, so
+# they would make the same request price differently from run to run.
 FEATURES = list(LEGACY_FEATURES)
 
 
 def use_features(dataset):
-    """Pick the feature set once per dataset; older datasets keep the original four."""
+    """Pick the feature set once per dataset; datasets without request shape keep the original four."""
     global FEATURES
     samples = dataset.get("samples") if isinstance(dataset, dict) else None
     shaped = isinstance(samples, list) and samples and all(
         isinstance(s, dict) and isinstance(s.get("features"), dict) and all(name in s["features"] for name in SHAPE_FEATURES)
         for s in samples)
-    FEATURES = LEGACY_FEATURES + SHAPE_FEATURES if shaped else list(LEGACY_FEATURES)
+    FEATURES = list(SHAPE_FEATURES) if shaped else list(LEGACY_FEATURES)
 ALPHAS = [0.01, 0.1, 1.0, 10.0, 100.0]
 QUANTILES = {"p50": 0.5, "p80": 0.8, "p95": 0.95}
 
