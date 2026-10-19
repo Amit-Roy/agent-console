@@ -7,6 +7,9 @@ import { EFFORT_LABELS, PRIORITY_LABELS, githubRequest, type GithubRequest } fro
 import type { ProviderUsage, UsageWindow } from "./usage.ts";
 import type { EventLog } from "./automation/events.ts";
 import { route as routeWork } from "./automation/router.ts";
+import { DIRECT_REPOS } from "./automation/policy.ts";
+import { selfReviewBlock, skillDir } from "./automation/review-prompts.ts";
+export { DIRECT_REPOS };
 
 // Subscription quota resets every 5 hours whether or not it was used. Near the end of a window, hand open issues to
 // the provider whose quota would otherwise expire. This module only plans; `dryRun` (the default) never starts work.
@@ -92,8 +95,6 @@ export function plan(input: { now: number; usage: Record<string, ProviderUsage>;
   return out;
 }
 
-/** Repos whose work is applied locally before it is pushed (issue #10); everything else, and all trivial work, goes through a PR. */
-export const DIRECT_REPOS = ["agent-console", "dotfiles", "brain"];
 
 const MAX_THREAD_TITLE = 30; // same width the sidebar shows for auto titles (issue #11: Android)
 /** Short repo label for thread names: the name itself when short, else initials of a hyphenated name, else its first 10 characters. */
@@ -124,11 +125,12 @@ export function issuePrompt(d: Decision, branch: string, base: string): string {
     direct
       ? `When done and verified, commit, rebase onto origin/${base} and push to ${base}. Reference the issue (Refs #${issue.number}).`
       : `When done and verified, push the branch and open a pull request into ${base} that references the issue. Do not merge it.${effort === "trivial" ? " A Sonnet or Sol review must approve it before merge: say so in the PR body and stop." : ""}`,
+    selfReviewBlock(skillDir(), base),
     `Unattended run: do not ask questions. End with a short summary: what changed, how it was checked, what is left.`,
   ].join("\n\n");
 }
 
-export type IssueRun = { key: string; repo: string; number: number; effort: string; role: "work" | "review"; branch?: string; base?: string; pr?: number; reviewedAt?: number };
+export type IssueRun = { key: string; repo: string; number: number; effort: string; role: "work" | "review"; branch?: string; base?: string; pr?: number; reviewedAt?: number; finishedAt?: number };
 export interface IssueRunner {
   create(opts: { provider: string; model: string; effort: string; cwd: string; mode: "bypassPermissions"; title: string; issueRun: IssueRun }): { id: string };
   send(id: string, text: string): void;
