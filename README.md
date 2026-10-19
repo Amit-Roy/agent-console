@@ -16,6 +16,7 @@ Anthropic's terms restrict third-party products that offer claude.ai login, so d
 
 ## Features
 - [Automatic GitHub triage](docs/github-triage.md) labels issues and pull requests by effort and priority through a signed webhook, with Pi small-model classification and subscription fallbacks.
+- Token telemetry: one comment per issue and PR sums provider-reported tokens across every linked thread, refreshed after each turn. The required `telemetry-comment` CI check fails a PR without it; `bin/token-telemetry backfill` covers existing items.
 - Type `/` in the composer for a command/skill menu (list comes from `claude`'s own `commands_changed` event, cached in `~/.config/agent-console/commands.json`). Skills run headless when a message starts with `/name`.
 - Scheduled tasks: the sidebar's **Scheduled** view lists saved prompts that run on a timer (Manual, Hourly, Daily, Weekdays or Weekly at a time in your time zone). Pi is the default agent; Claude and Codex work too.
   Every run is an ordinary thread, filed under its task as a child row (the latest three, then "All N runs"). Reply in a run to ask follow-ups, or fork it.
