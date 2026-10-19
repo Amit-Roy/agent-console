@@ -50,6 +50,14 @@ The production watchdog recovers the receiver first, then schedules daily calibr
 
 The comment uses an ownership marker, scorecard version, and source fingerprint. Retries update the same account-owned comment instead of adding duplicates. User comments are preserved. Changed issue text, PR commits, or a new scorecard version makes the report stale.
 
+The comment opens with the two labels, then shows only the book of work, a P50/P80/P95 token table, and the level of design. Evidence, open questions, token accounting, and scoring rules sit in collapsed sections. Missing metrics appear once, each with the next question to ask.
+
+Pi writes the work steps and cites quotes for each metric. The skill at `skills/github-triage/SKILL.md` is injected into Pi's prompt and separates planning inference from the frozen pricing predictors. Pi may mark a planning metric `inferred` with a rationale. It may not infer urgency or frequency. Code derives labels, design level, and token counts; Pi cannot set them.
+
+### Drift repair
+
+Each rendered assessment is stored with the source fingerprint and a revision hash of the scorecard version plus the effort model. Reconciliation compares the live comment and labels with that stored assessment. A hand-edited comment or a wrong label is repaired from the stored assessment without a model call. A changed source or a recalibrated model produces a new revision, which triggers a fresh assessment and updates the same comment id. `status` reports detected and repaired drift plus calibration freshness and coverage.
+
 ## Setup
 
 The worker is a separate process on port 7077. The Console keeps its existing authentication and loopback listener. Install dependencies before starting the worker.

@@ -36,7 +36,7 @@ assert.deepEqual(parsed.scorecard!.pricing.thresholds, quoted.thresholds);
 assert.equal(parsed.scorecard!.tokens.confidence, "experimental");
 assert.match(parsed.scorecard!.tokens.formula, /work|complexity/i);
 assert.deepEqual(parsed.scorecard!.facts, { changedFiles: 2, additions: 40, deletions: 5 });
-assert.equal(parsed.scorecard!.version, 5);
+assert.equal(parsed.scorecard!.version, 6);
 assert.equal(parsed.scorecard!.pricing.scope, "completed-session");
 assert.match(parsed.reason, /per whole session/);
 assert.ok(!/\d\.\d{2,}/.test(parsed.reason), "The summary should round work estimates to one decimal.");
