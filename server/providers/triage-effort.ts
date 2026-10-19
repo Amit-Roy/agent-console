@@ -231,8 +231,10 @@ export function quoteEffort(metrics: ComplexityInput, loaded: LoadedEffortModel 
   const freshValues: number[] = [];
   const cachedValues: number[] = [];
   const roundValues: number[] = [];
+  // Match the offline fitter's numerical bounds before applying paired residuals.
+  const predictedLogWork = Math.max(0, Math.min(30, logWork));
   for (const scenario of model.scenarios) {
-    const activity = scenario.zeroWork === true ? 0 : Math.max(0, Math.expm1(Math.max(0, logWork) + scenario.logResidual));
+    const activity = scenario.zeroWork === true ? 0 : Math.max(0, Math.expm1(Math.min(30, predictedLogWork + scenario.logResidual)));
     // Session usage can be positive with zero logged actions. The fitted denominator
     // is explicit so legacy per-action artifacts keep their original arithmetic.
     const yieldWork = activity + (tokenYieldBasis === "actions-plus-one" ? 1 : 0);

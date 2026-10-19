@@ -41,6 +41,9 @@ assert.equal(directUsage.output.p50, 200);
 assert.equal(directUsage.total!.p50, 1000);
 assert.equal(directUsage.freshInput, null, "Unknown cache split must not erase a known total");
 assert.equal(directUsage.rounds, null, "Tool telemetry is not required to quote session usage");
+const cappedModel = structuredClone(sessionTotals); cappedModel.workload.intercept = 40;
+assert.ok(Math.abs(predict(features(1), cappedModel).activity.p50 / Math.expm1(30) - 1) < 1e-12,
+  "Runtime numerical bounds must match the offline fit and validation");
 const zeros = structuredClone(sessionTotals);
 zeros.scenarios.slice(0, 3).forEach(row => { row.zeroWork = true; row.inputPerWork = 0; row.outputPerWork = 0; });
 assert.equal(predict(features(1), zeros).total!.p50, 0, "Measured zero-total sessions preserve an empirical point mass");
