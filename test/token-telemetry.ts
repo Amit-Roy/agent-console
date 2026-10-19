@@ -13,6 +13,7 @@ let l = linkThread({ thread: { id: "a", issueRun: run }, repos });
 assert.deepEqual(l.items.map(i => [i.number, i.via]), [[7, "issue-run"], [9, "pr-run"]]);
 l = linkThread({ thread: { id: "b", defaultRepo: repo, texts: ["fix #12 and see https://github.com/Amit-Roy/agent-console/pull/13", "x#99 &#39; foo/#5"] }, repos });
 assert.deepEqual(l.items.map(i => i.number), [13, 12]); // url pass first, then #n; x#99 and &#39; are not refs
+assert.deepEqual(linkThread({ thread: { id: "w", branch: "main", raised: [{ repo, number: 28 }, { repo: "evil/repo", number: 1 }] }, repos, item: { repo, number: 28 } }).items.map(i => i.via), ["raised"], "PR opened from a worktree links without a matching cwd branch");
 assert.equal(linkThread({ thread: { id: "b", texts: ["https://github.com/evil/repo/issues/1", "#4"] }, repos }).items.length, 0, "other repos and no default repo are ignored");
 assert.equal(linkThread({ thread: { id: "c", branch: "feat/x" }, repos, item: { repo, number: 3, head: "feat/x" } }).linked, true);
 assert.equal(linkThread({ thread: { id: "c", branch: "feat/x" }, repos, item: { repo, number: 3, head: "other" } }).linked, false);

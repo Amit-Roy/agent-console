@@ -212,6 +212,11 @@ app.get("/api/sessions/search", async (req, res) => {
   try { res.json(await sessionSearch.search({ query: req.query.q, provider: req.query.provider, limit: req.query.limit === undefined ? undefined : Number(req.query.limit) } as any)); }
   catch (e: any) { res.status(400).json({ error: e?.message || "Search failed." }); }
 });
+app.get("/api/sessions/prs", async (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  try { res.json(await sessionSearch.prs({ thread: req.query.thread as any, ref: req.query.ref as any })); }
+  catch (e: any) { res.status(400).json({ error: e?.message || "PR lookup failed." }); }
+});
 app.get("/api/sessions/:thread", async (req, res) => {
   res.setHeader("Cache-Control", "no-store");
   try { res.json(await sessionSearch.read({ thread: req.params.thread, start: req.query.start === undefined ? undefined : Number(req.query.start), limit: req.query.limit === undefined ? undefined : Number(req.query.limit) } as any)); }
