@@ -71,6 +71,8 @@ try {
   assert.equal(r.title, "webapp:42 review PR#7"); assert.equal(r.issueRun.role, "review"); assert.equal(r.issueRun.pr, 7);
   assert.deepEqual([r.provider, r.model, r.effort], ["claude", "sonnet", "medium"], "the router's choice");
   assert.equal(run(r.cwd, "rev-parse", "--abbrev-ref", "HEAD"), "HEAD", "detached");
+  assert.equal(run(r.cwd, "rev-parse", "--path-format=absolute", "--git-common-dir"), path.join(r.cwd, ".git"), "review has private Git metadata");
+  assert.equal(run(r.cwd, "remote", "get-url", "origin"), origin, "review fixups target actual upstream");
   assert.ok(fs.existsSync(path.join(run(r.cwd, "rev-parse", "--absolute-git-dir"), "ac-hooks", "pre-push")), "a reviewer cannot push the default branch either");
   assert.equal(run(r.cwd, "rev-parse", "HEAD"), run(started.cwd, "rev-parse", "HEAD"), "reviewer sees the PR head");
   assert.match(sent.at(-1).text, /gh pr merge 7 --repo o\/webapp --squash/); assert.match(sent.at(-1).text, /at most 20 changed lines/);
@@ -83,6 +85,7 @@ try {
   // a PR with a Self-review section passes that step; a protected path is never merged by the reviewer
   prs = [{ number: 8, body: "x\n\n## Self-review\nchecked; failed first: t" }]; files = ["server/window-dispatch.ts"];
   await rv.sweep([{ id: "W2", status: "idle", issueRun: { ...created[0].issueRun, key: "o/webapp#44", number: 44, effort: "trivial", finishedAt: now } }] as any);
+  assert.notEqual(created.at(-1).cwd, r.cwd, "each review receives a fresh private checkout");
   assert.ok(steps("self_review").includes("ok:Self-review section present"));
   assert.match(sent.at(-1).text, /Do not merge it/); assert.doesNotMatch(sent.at(-1).text, /gh pr merge 8/);
   files = ["src/a.ts"];
@@ -110,6 +113,10 @@ try {
   assert.ok(steps("merge").some(m => /^info:PR #7 not merged/.test(m)));
   rv.turnEnded(reviewer("o/webapp"), { is_error: true }); await tick();
   assert.ok(steps("review").some(m => m.startsWith("fail:")));
+
+  const archivedCount = count();
+  await rv.sweep([{ id: "archived", archived: now, status: "idle", issueRun: { ...created[0].issueRun, finishedAt: now } }]);
+  assert.equal(count(), archivedCount, "archived workers cannot start a new review");
 
   // setup failures are logged, contained and retried
   const bad = createReviewer({ github: (async () => { throw new Error("gh down"); }) as any, runner, dirs, log: m => logs.push(m), route: routing, events: ev });

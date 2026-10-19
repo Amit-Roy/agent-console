@@ -1,3 +1,4 @@
+import { launch as sandboxLaunch } from "../automation/sandbox.ts";
 import { execFile } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -8,6 +9,7 @@ import { harnessInstructions } from "./brain.ts";
 import { childEnv } from "./env.ts";
 import { parseJson, spawnLines, type Proc } from "./proc.ts";
 import { piQuestions } from "./pi-questions.ts";
+import { defaultPiModel } from "./pi-model.ts";
 import { retryEvent } from "../turn-timing.ts";
 import { clip, IMAGE_ONLY_PROMPT, type Agent, type AgentCtx, type Attachment, type Command, type Provider, type ThreadSpec } from "./types.ts";
 
@@ -33,7 +35,8 @@ function configured(): boolean {
   try {
     if (Object.keys(JSON.parse(fs.readFileSync(path.join(os.homedir(), ".pi", "agent", "auth.json"), "utf8"))).length) return true;
   } catch {}
-  return !!childEnv().OPENROUTER_API_KEY;
+  const env = childEnv();
+  return !!(env.NVIDIA_API_KEY || env.OPENROUTER_API_KEY);
 }
 
 // `pi --list-models` only lists what the current credentials unlock. With an OpenRouter key we offer its free models
@@ -196,11 +199,11 @@ export const pi: Provider = {
   steer: true,
   note: "Plan limits Pi to read-only tools. Bypass gives it everything. Both support user questions.",
   models: () => cached,
-  // a free model known to answer reliably (others come and go upstream); otherwise the first listed
-  defaultModel: () => cached.find((m) => m.includes("nemotron-3-super-120b-a12b:free")) ?? cached[0] ?? "",
+  // Prefer a known coding model; manual sessions still allow every listed model.
+  defaultModel: () => defaultPiModel(cached),
   modelDetails: () => Object.fromEntries(cached.map(id => [id, { label: id.split("/").at(-1)!.replace(/:free$/, ""), efforts: thinking.has(id) ? ["off", "minimal", "low", "medium", "high"] : [] }])),
   status() {
-    if (!configured()) return { ok: false, hint: "Add OPEN_ROUTER_TOKEN to ~/openrouter/.env (or ~/.config/agent-console/env), or run `pi` and /login." };
+    if (!configured()) return { ok: false, hint: "Add NVIDIA_API_KEY or OPENROUTER_API_KEY to ~/.config/agent-console/env, or run `pi` and /login." };
     if (!cached.length) return { ok: false, hint: "Pi lists no models for these credentials." };
     return { ok: true };
   },
@@ -219,7 +222,8 @@ export const pi: Provider = {
     void harnessInstructions().then((brain) => {
       if (dead) return;
       if (brain) args.push("--append-system-prompt", brain); // style preamble + shared memory index
-      p = spawnLines("pi", "pi", args, { cwd: t.cwd, env: { ...childEnv(), AGENT_CONSOLE_THREAD: t.id } }, {
+      const launch = sandboxLaunch(t, "pi", args, { ...childEnv(), AGENT_CONSOLE_THREAD: t.id });
+      p = spawnLines("pi", launch.command, launch.args, { cwd: t.cwd, env: launch.env }, {
         ...ctx,
         exited(info) { questions.cancelAll(); ctx.exited(info); },
       }, (line) => {
@@ -227,6 +231,10 @@ export const pi: Provider = {
         if (r && !questions.handle(r)) translate(r);
       });
       for (const line of queued.splice(0)) p.write(line);
+    }).catch(error => {
+      dead = true;
+      ctx.event({ type: "console_error", text: String(error?.message || error) });
+      ctx.exited({ code: 78, signal: null, stderr: String(error?.message || error), aborted: false });
     });
     const stop = (how: "abort" | "kill") => {
       questions.cancelAll();

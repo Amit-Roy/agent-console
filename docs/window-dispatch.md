@@ -39,7 +39,7 @@ In live routing, Trivial work and BAU with `routing.bauOnPi` start independently
 
 ## Threads for picked issues
 
-Each started issue gets its own worktree, `~/worktrees/<repo>-issue-<n>` on branch `issue-<n>-<slug>` from the default branch, and a thread working in it with the route's provider, model and effort. The thread is named `<repo>:<issue#> <short desc>`, at most 30 characters (the width an Android sidebar row shows, issue #11). A long repo name is shortened to its initials: `ac:10 Identify unused reset`. It is created with a chosen title, so the auto-namer never changes it, and neither does a later rename (see below). Runs are unattended, so the thread uses `bypassPermissions`. A failed start (no local checkout under `~/repos`, git error) is logged with its error in `window-dispatch.jsonl` and is not retried.
+Each started issue gets its own private clone, `~/worktrees/<repo>-issue-<n>-<attempt>` on branch `issue-<n>-<slug>-<attempt>` from the default branch, and a thread working in it with the route's provider, model and effort. The thread is named `<repo>:<issue#> <short desc>`, at most 30 characters (the width an Android sidebar row shows, issue #11). A long repo name is shortened to its initials: `ac:10 Identify unused reset`. It is created with a chosen title, so the auto-namer never changes it, and neither does a later rename (see below). Runs are unattended, so the thread uses `bypassPermissions`. A failed start (no local checkout under `~/repos`, git error) is logged with its error in `window-dispatch.jsonl` and is not retried.
 
 ## Window opener
 
@@ -59,12 +59,12 @@ Same file as the dispatcher, under `opener`. Defaults: off, dry run, all day (`0
 
 ## Review of trivial work
 
-When a trivial worker's turn ends successfully and its branch has an open PR, a reviewer thread starts in a detached worktree of the PR head (`~/worktrees/<repo>-review-<n>`), named `<repo>:<issue#> review PR#<pr>`. It is Sonnet medium, or `gpt-6.1-sol` low when Claude's quota is exhausted. It reads the issue and diff, runs the repo's checks, and posts `Review: APPROVED` or `Review: CHANGES REQUESTED` as a PR comment. The PR author and the reviewer share one GitHub account, so a formal approval is not possible; the comment is the verdict. It merges (squash, delete branch) only when approved. For agent-console, dotfiles and brain it then fast-forwards the local checkout, and for agent-console runs `restart-when-idle`, so the change is applied. One review per worker thread.
+When a trivial worker's turn ends successfully and its branch has an open PR, a reviewer thread starts in a private clone detached at the PR head (`~/worktrees/<repo>-review-<n>-<attempt>`), named `<repo>:<issue#> review PR#<pr>`. It is Sonnet medium, or `gpt-6.1-sol` low when Claude's quota is exhausted. It reads the issue and diff, runs the repo's checks, and posts `Review: APPROVED` or `Review: CHANGES REQUESTED` as a PR comment. The PR author and the reviewer share one GitHub account, so a formal approval is not possible; the comment is the verdict. It merges (squash, delete branch) only when approved. For agent-console, green CI triggers host-side deployment. Other local-apply repositories are reported as pending host application; reviewers cannot write to shared checkouts. One review per worker thread.
 
 ## Repository rules from the issue
 
 - Every repo merges to its default branch by pull request. Enforced: a started worktree gets a `pre-push` hook (per-worktree `core.hooksPath`, which turns on `extensions.worktreeConfig` in that repo) that refuses any push to the default branch.
 - Exceptions: agent-console, dotfiles and brain are applied locally before they are pushed. Their Deep workers have no hook and push the default branch themselves. BAU and Trivial work in them still go through a PR.
-- Every run, trivial or not, has its own worktree, never the deploy branch.
+- Every run has its own private Git clone and kernel-enforced write boundary; see [filesystem guards](automation.md#model-and-filesystem-guards).
 - BAU and Trivial work are reviewed by Sonnet or Sol before the PR merges.
 - The hook binds only the dispatched worktrees; it cannot stop a person or another session pushing elsewhere. Direct pushes to the default branch of other repos are blocked on GitHub only if branch protection is on.

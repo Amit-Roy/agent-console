@@ -12,7 +12,7 @@ opener ─► usage windows ─┘
 1. **Triage** (separate worker) labels issues `Eff:` and `Pri:`.
 2. **Dispatcher** (every 5 minutes) picks premium work in the last 90 minutes of an expiring Claude or Codex window, only from allowed authors. Live Pi work uses its own capacity and does not wait for a premium window.
 3. **Router** chooses the provider (`server/automation/router.ts`, pure): headroom in the 5-hour and 7-day windows, minus a penalty for each running automation thread, plus a bonus for a window that ends soon. Unknown usage is never preferred over a known-good provider; an exhausted one is never chosen. Deep work waits when no premium provider has room. Pi has its own capacity: the daily allowance, at most three at once, and recent failures.
-4. **Worktree + hook**: own worktree, pre-push hook refusing the default branch.
+4. **Worktree + hook**: a private clone with its own Git metadata, a fresh attempt branch, and a pre-push hook refusing the default branch.
 5. **Worker**: Deep on a premium model, Trivial and BAU on Pi (BAU after `routing.bauOnPi`).
 6. **Self-review**: before the PR the worker writes its test first, then reviews its own diff with the `pr-standards` skill and ends the PR body with `## Self-review`.
 7. **Review** (Trivial and BAU): a premium reviewer, chosen by the router, applies the same skill, may fix up to 20 changed lines, and comments `Review: APPROVED` or `Review: CHANGES REQUESTED`. Deep PRs get no second reviewer.
@@ -51,3 +51,31 @@ All in `~/.config/agent-console/window-dispatch.json`: `enabled`, `dryRun`, `rou
 ## Checks that belong to a person
 
 The code cannot verify these; look at them on GitHub: the token the `gh` CLI uses has the narrowest scope that can push branches and open PRs; branch protection on the default branch (private repos need a paid plan for it); the webhook secret (the triage worker already verifies the HMAC signature).
+
+## Model and filesystem guards
+
+Unattended Pi runs select an exact approved coding model: direct NVIDIA Nemotron
+Super first, then its free OpenRouter equivalent. If neither is available, Auto
+refuses to start. Catalog ordering never selects an unrelated chat or vision model.
+Manual threads retain the full model picker.
+
+All issue workers, reviewers, and Debug runs use private clones with independent
+Git metadata and a host-created ownership marker. Existing shared worktrees and
+unmarked main checkouts are refused. New worker and review attempts get unique
+checkout and branch names, so old transcripts and files are never silently reused.
+Archived workers are excluded from review sweeps.
+
+The Python launcher installs Linux Landlock and seccomp before starting any
+provider. Writes are limited to the task clone and private per-thread runtime,
+session, cache, and temporary directories. Claude and Codex use private copies of
+login/config state. Shell commands and descendants inherit the same restriction;
+absolute paths, symlinks, and `git -C` cannot write to shared checkouts. Unsupported
+hosts fail closed before any model request. Requirements are Linux x86-64,
+Landlock ABI 3 or newer, and Python 3; no additional package is required.
+
+This boundary protects file contents, creation, deletion, renaming, linking, and
+truncation. Landlock does not constrain metadata changes such as chmod. Reads and
+network access remain available; this is not a confidentiality boundary. Auto's
+Console tools are limited to reading session history; scheduling and output writes
+are refused. Reviewers leave shared-checkout application to the host after merge.
+Agent Console's existing green-CI deploy hook performs its host-side application.
