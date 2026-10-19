@@ -1,6 +1,7 @@
 import "./privacy.ts";
 import { usage, refreshRouterUsage, refreshUsage, readCodexUsage } from "./usage.ts";
-import { createDispatcher, startIssue, REVIEWERS } from "./window-dispatch.ts";
+import { createDispatcher, startIssue } from "./window-dispatch.ts";
+import { route as routeWork } from "./automation/router.ts";
 import { createOpener } from "./window-opener.ts";
 import { createReviewer } from "./issue-review.ts";
 import { createEventLog } from "./automation/events.ts";
@@ -80,17 +81,19 @@ const automation = automationApi({
 });
 // Plan-only until ~/.config/agent-console/window-dispatch.json sets enabled (see docs/window-dispatch.md).
 if (process.env.AGENT_CONSOLE_MOCK !== "1") {
+  const activeRuns = () => threads.list().filter(t => t.issueRun && t.status === "running").map(t => ({ provider: t.provider, role: t.issueRun!.role }));
   const dispatcher = createDispatcher({
     usage: () => usage.all(), events: automationLog,
-    active: () => threads.list().filter(t => t.issueRun && t.status === "running").map(t => ({ provider: t.provider, role: t.issueRun!.role })),
+    active: () => activeRuns(),
     start: d => startIssue(d, { create: o => threads.create(o), send: (id, text) => threads.send(id, text) }),
   });
   const reviewer = createReviewer({
     runner: { create: o => threads.create(o), send: (id, text) => threads.send(id, text), mark: (id, patch) => threads.setIssueRun(id, patch) },
-    reviewer: () => usage.exhausted("claude") && !usage.exhausted("codex") ? REVIEWERS[1] : REVIEWERS[0],
+    route: effort => routeWork({ role: "review", effort: effort as any, usage: usage.all(), active: activeRuns(), now: Date.now() }),
+    events: automationLog,
   });
   threads.onIssueTurnEnd = (t, ev) => reviewer.turnEnded(t, ev);
-  setInterval(() => { dispatcher.tick().catch(() => {}); }, 5 * 60_000).unref();
+  setInterval(() => { dispatcher.tick().catch(() => {}); reviewer.sweep(threads.list()).catch(() => {}); }, 5 * 60_000).unref();
   const opener = createOpener({
     usage: () => usage.all(), events: automationLog,
     refresh: readCodexUsage,
