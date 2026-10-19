@@ -88,24 +88,34 @@ export function renderTriageComment(decision: TriageDecision, sourceMarker: stri
   } else lines.push("Assessment unavailable; re-triage with the current scorecard model.");
   lines.push("", "### Estimated token usage");
   if (score) {
-    const history = score.history;
-    lines.push(`Observed direct-agent input/run: **${score.tokens.input[0].toLocaleString("en-US")}–${score.tokens.input[1].toLocaleString("en-US")} tokens**.`,
-      `Observed direct-agent output/run: **${score.tokens.output[0].toLocaleString("en-US")}–${score.tokens.output[1].toLocaleString("en-US")} tokens**.`,
-      `These are historical P10–P90 sample ranges, not confidence intervals or whole-issue budgets. Child-agent totals and unlinked retries are not measured.`,
-      `Evidence: **${safeText(score.tokens.confidence)}**. Formula: ${safeText(score.tokens.formula)}`);
-    if (history) {
-      const number = (value: number) => value.toLocaleString("en-US");
-      lines.push(`Point estimate: **${number(history.output.median)} generated tokens/run**; input median ${number(history.input.median)} includes cache reads once.`,
-        `History: **${history.sampleCount} completed delivery runs in ${history.independentGroupCount} thread groups**, ${safeText(history.dateSpan.startedAt.slice(0, 10))} to ${safeText(history.dateSpan.completedAt.slice(0, 10))}.`,
-        `Method: ${safeText(history.method)}; ${history.analogueCount || history.sampleCount} source runs. ${safeText(history.validation.selectionReason)}`,
-        `Relative effort cutoffs: Trivial ≤${number(history.thresholds.trivialMax)} output tokens; Deep ≥${number(history.thresholds.deepMin)}; otherwise BAU. Equal cutoffs mean BAU.`);
-      const heldout = history.validation.holdout.model;
-      if (heldout.count && heldout.maeTokens !== null && heldout.multiplicativeError !== null && heldout.rangeCoverage !== null) {
-        lines.push(`Held-out check: ${heldout.count} runs; output-token MAE ${number(Math.round(heldout.maeTokens))}; multiplicative error ${heldout.multiplicativeError.toFixed(2)}×; sample-range hit rate ${Math.round(heldout.rangeCoverage * 100)}%. Small samples do not establish predictive accuracy.`);
-      } else lines.push("Not enough independent held-out runs to assess prediction error.");
-      const sources = history.analogues.flatMap(row => row.commits).filter(commit => /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(commit.repo)).slice(0, 3);
-      if (sources.length) lines.push(`Example source commits: ${sources.map(commit => `[${safeText(commit.sha.slice(0, 7))}](https://github.com/${commit.repo}/commit/${commit.sha})`).join(", ")}.`);
+    const price = score.pricing;
+    const number = (value: number) => value.toLocaleString("en-US", { maximumFractionDigits: 1 });
+    lines.push(`**Complexity → logged work → token budget**. Model status: **${safeText(price.confidence)}**.`,
+      "P50 is the central scenario; P80 is the planning quote; P95 is the stretch reserve. These are empirical model scenarios, not coverage guarantees.",
+      "| Budget | P50 | P80 | P95 |", "| --- | ---: | ---: | ---: |");
+    for (const [name, values] of [["Logged tool actions", price.activity], ["Generated tokens", price.output],
+      ["Non-cached input tokens", price.freshInput], ["Cached input replay tokens", price.cachedInput], ["Total input tokens", price.input]] as const) {
+      lines.push(values ? `| ${name} | ${number(values.p50)} | ${number(values.p80)} | ${number(values.p95)} |`
+        : `| ${name} | unavailable | unavailable | unavailable |`);
     }
+    lines.push(`Planning risk premium: **+${number(price.riskPremium.output)} generated tokens** above P50 (P80 − P50).`,
+      `Recommended budget: **${price.recommendedBudget.toUpperCase()}**. Effort routing uses **${price.effortBasis.toUpperCase()}** logged actions; unknown or extrapolated scope selects P95 by policy.`,
+      `Effort cutoffs: Trivial ≤${number(price.thresholds.trivialMax)} predicted logged actions; Deep ≥${number(price.thresholds.deepMin)}; otherwise BAU.`,
+      `Training: ${safeText(price.training.sampleCount ?? price.training.sampleIds.length)} runs in ${safeText(price.training.groupCount ?? "unknown")} thread groups.`,
+      "This prices one observed direct-agent delivery run. Human hours, whole-issue iterations, and unmeasured child agents are not priced.");
+    if (price.unknowns.length || price.outOfRange.length) lines.push(`Scope warning: unknown features [${price.unknowns.map(safeText).join(", ")}]; outside training range [${price.outOfRange.map(safeText).join(", ")}]. Use the stretch reserve until scope is confirmed.`);
+    if (price.validation.hasLearnedComplexitySignal === false) lines.push("The current fit has not identified a complexity signal. This quote is prior-driven and must not be treated as task-specific accuracy.");
+    const metrics = price.validation as { sampleCount?: number; groupCount?: number; work?: { mae?: number }; baselineWork?: { mae?: number }; outputTokens?: { mae?: number }; baselineOutputTokens?: { mae?: number }; workCoverage?: { p80?: number; p95?: number }; outputCoverage?: { p80?: number; p95?: number } };
+    if (typeof metrics.sampleCount === "number" && typeof metrics.work?.mae === "number" && typeof metrics.baselineWork?.mae === "number") {
+      lines.push(`Held-out check: ${metrics.sampleCount} runs in ${metrics.groupCount ?? "unknown"} thread groups; work MAE ${number(metrics.work.mae)} actions versus baseline ${number(metrics.baselineWork.mae)}.`);
+      if (typeof metrics.workCoverage?.p80 === "number") lines.push(`Observed P80 hit rate: ${number(metrics.workCoverage.p80 * 100)}%. Small samples do not establish predictive accuracy.`);
+      if (typeof metrics.outputTokens?.mae === "number" && typeof metrics.baselineOutputTokens?.mae === "number") lines.push(`Generated-token MAE: ${number(metrics.outputTokens.mae)} versus baseline ${number(metrics.baselineOutputTokens.mae)}.`);
+      if (typeof metrics.outputCoverage?.p80 === "number" && typeof metrics.outputCoverage?.p95 === "number") lines.push(`Generated-token hit rates: P80 ${number(metrics.outputCoverage.p80 * 100)}%; P95 ${number(metrics.outputCoverage.p95 * 100)}%.`);
+      if ((metrics.workCoverage?.p80 ?? 1) < 0.8 || (metrics.workCoverage?.p95 ?? 1) < 0.95 || (metrics.outputCoverage?.p80 ?? 1) < 0.8 || (metrics.outputCoverage?.p95 ?? 1) < 0.95) lines.push("Intervals under-covered held-out outcomes. P80/P95 are model-scenario percentiles, not 80%/95% success probabilities.");
+    }
+    lines.push("", "<details><summary>Learned complexity contributions</summary>", "", ...price.contributions.map(item =>
+      `${safeText(item.feature)}: ${item.value ?? "unknown"}; log-work contribution ${item.logWork.toFixed(3)}, missingness contribution ${item.missingLogWork.toFixed(3)}.`),
+      "", safeText(price.formula), "", "</details>");
   } else lines.push("Unavailable without a structured scorecard.");
   lines.push("", "### Level of design");
   if (score) lines.push(`**${safeText(score.design.level)}** — ${safeText(score.design.reason)}`, "Design and business priority use explicit policy rules; they are not inferred from past token usage.");

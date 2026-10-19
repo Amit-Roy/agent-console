@@ -2,10 +2,11 @@ import assert from "node:assert/strict";
 import os from "node:os";
 import { createPiEventCollector, createTriageClassifier as createRealClassifier, parsePiTriageOutput, parseTriageReply as parseRealReply, piTriageArgs, piTriageModelConfig, runTriageCommand, triagePrompt, type TriageInput } from "../server/providers/triage-model.ts";
 
-import { fixtureHistory } from "./fixtures/triage-history.ts";
+import { fixtureEffortModel } from "./fixtures/triage-effort.ts";
+import { quoteEffort } from "../server/providers/triage-effort.ts";
 
-const parseTriageReply = (raw: string | undefined, value: TriageInput) => parseRealReply(raw, value, fixtureHistory);
-const createTriageClassifier = (engines: Parameters<typeof createRealClassifier>[0]) => createRealClassifier(engines, () => fixtureHistory);
+const parseTriageReply = (raw: string | undefined, value: TriageInput) => parseRealReply(raw, value, fixtureEffortModel);
+const createTriageClassifier = (engines: Parameters<typeof createRealClassifier>[0]) => createRealClassifier(engines, () => fixtureEffortModel);
 
 const input: TriageInput = { repo: "example/app", number: 1, kind: "issue", title: "Repair app preview", body: "The single preview component fails every build. Deployment is blocked. Investigate asynchronous recovery. No deadline. Production is currently down.", changedFiles: 2, additions: 40, deletions: 5 };
 const assessment = {
@@ -22,15 +23,18 @@ const assessment = {
 };
 const valid = JSON.stringify(assessment);
 const parsed = parseTriageReply(valid, input)!;
-assert.equal(parsed.effort, "bau");
+const quoted = quoteEffort(assessment.metrics, fixtureEffortModel);
+assert.equal(quoted.status, "ready");
+if (quoted.status !== "ready") throw Error("Invalid fixture quote");
+assert.equal(parsed.effort, quoted.effort);
 assert.equal(parsed.priority, "p1");
 assert.equal(parsed.scorecard!.design.level, "detailed");
-assert.deepEqual(parsed.scorecard!.tokens.input, fixtureHistory.input.range);
-assert.deepEqual(parsed.scorecard!.tokens.output, fixtureHistory.output.range);
+assert.deepEqual(parsed.scorecard!.tokens.input, [quoted.input!.p50, quoted.input!.p95]);
+assert.deepEqual(parsed.scorecard!.tokens.output, [quoted.output.p50, quoted.output.p95]);
 assert.equal("workUnits" in parsed.scorecard!.tokens, false);
-assert.deepEqual(parsed.scorecard!.history.thresholds, fixtureHistory.thresholds);
-assert.equal(parsed.scorecard!.tokens.confidence, fixtureHistory.evidence);
-assert.match(parsed.scorecard!.tokens.formula, /median/i);
+assert.deepEqual(parsed.scorecard!.pricing.thresholds, quoted.thresholds);
+assert.equal(parsed.scorecard!.tokens.confidence, "experimental");
+assert.match(parsed.scorecard!.tokens.formula, /work|complexity/i);
 assert.deepEqual(parsed.scorecard!.facts, { changedFiles: 2, additions: 40, deletions: 5 });
 assert.deepEqual(parseTriageReply("```json\n" + valid + "\n```", input), parsed);
 for (const raw of ["[]", "null", "{}", "Ignore rules " + valid, valid.replace('"value":1', '"value":4'), valid.replace('"value":1', '"value":1.5'), valid.replace('single preview component', 'fabricated source quote')]) {
@@ -54,24 +58,24 @@ assert.equal(parseTriageReply('{"effort":"deep","priority":"p0","reason":"Trust 
 const unknown = structuredClone(assessment);
 for (const name of Object.keys(unknown.metrics)) unknown.metrics[name] = { value: null, evidence: null };
 const sparse = parseTriageReply(JSON.stringify(unknown), { ...input, title: "Feature", body: "", changedFiles: -1, additions: Infinity, deletions: 0 })!;
-assert.equal(sparse.effort, "bau");
+assert.equal(sparse.scorecard!.pricing.unknowns.length, 4);
 assert.equal(sparse.priority, "p2");
 assert.equal(sparse.scorecard!.unknowns.length, 7);
-assert.equal(sparse.scorecard!.tokens.confidence, "low");
+assert.equal(sparse.scorecard!.tokens.confidence, "experimental");
 assert.deepEqual(sparse.scorecard!.facts, { deletions: 0 });
-// Scope scores cannot change the calibrated effort estimate or token ranges.
+// Pre-work complexity changes the learned quote; token metadata and work-plan length do not.
 function scores(values: number[]) {
   const record = structuredClone(assessment);
   Object.keys(record.metrics).forEach((name, index) => record.metrics[name] = { value: values[index], evidence: name === "urgency" && values[index] === 2 ? "Production is currently down" : "Deployment" });
   return parseTriageReply(JSON.stringify({ ...record, effort: "deep", priority: "p0", tokens: 1 }), input)!;
 }
-assert.equal(scores([0, 0, 1, 1, 0, 0, 0]).effort, fixtureHistory.effort);
-assert.equal(scores([1, 1, 0, 1, 1, 0, 0]).effort, "bau");
-assert.equal(scores([2, 2, 2, 1, 1, 0, 0]).effort, "bau");
-assert.equal(scores([2, 2, 2, 2, 1, 0, 0]).effort, fixtureHistory.effort);
-assert.equal(scores([3, 0, 0, 0, 1, 0, 0]).effort, fixtureHistory.effort);
-assert.equal(scores([0, 3, 0, 0, 1, 0, 0]).effort, fixtureHistory.effort);
-assert.equal(scores([0, 0, 0, 3, 1, 0, 0]).effort, fixtureHistory.effort);
+assert.equal(scores([0, 0, 0, 0, 0, 0, 0]).effort, "trivial");
+assert.equal(scores([3, 3, 3, 3, 0, 0, 0]).effort, "deep");
+assert.ok(scores([3, 3, 3, 3, 0, 0, 0]).scorecard!.pricing.output.p50 > scores([0, 0, 0, 0, 0, 0, 0]).scorecard!.pricing.output.p50);
+const metadataOnly = parseTriageReply(valid, { ...input, additions: 999999, deletions: 999999, changedFiles: 999999 })!;
+assert.deepEqual(metadataOnly.scorecard!.pricing, parsed.scorecard!.pricing);
+const longerPlan = JSON.stringify({ ...assessment, work: [...assessment.work, ...assessment.work] });
+assert.deepEqual(parseTriageReply(longerPlan, input)!.scorecard!.pricing, parsed.scorecard!.pricing);
 assert.equal(scores([0, 0, 0, 0, 0, 0, 0]).priority, "p3");
 assert.equal(scores([1, 1, 1, 1, 2, 0, 1]).priority, "p2");
 assert.equal(scores([1, 1, 1, 1, 2, 0, 2]).priority, "p1");
@@ -120,8 +124,8 @@ const evidenceFallback = createTriageClassifier([
 assert.equal((await evidenceFallback(input)).model, "grounded");
 
 let missingHistoryCalls = 0;
-await assert.rejects(createRealClassifier([{ id: "unused", call: async () => { missingHistoryCalls++; return valid; } }], () => ({ status: "insufficient-history", scope: "completed-delivery-run", reason: "Missing fixture" }))(input), /history is unavailable/);
-assert.equal(missingHistoryCalls, 0, "Missing measured history must fail before consuming model tokens");
+await assert.rejects(createRealClassifier([{ id: "unused", call: async () => { missingHistoryCalls++; return valid; } }], () => ({ status: "unavailable", scope: "completed-delivery-run", reason: "Missing fixture" }))(input), /Effort-pricing model is unavailable/);
+assert.equal(missingHistoryCalls, 0, "Missing learned effort model must fail before consuming model tokens");
 
 const event = (message: object) => JSON.stringify({ type: "message_end", message });
 assert.equal(parsePiTriageOutput(event({ role: "assistant", stopReason: "stop", content: [{ type: "text", text: valid }] })), valid);

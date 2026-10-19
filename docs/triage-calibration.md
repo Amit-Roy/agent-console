@@ -1,4 +1,6 @@
-# Historical effort estimation
+# Historical usage baseline (superseded)
+
+This baseline is retained for audit. [Complexity-based effort pricing](triage-effort-pricing.md) is the active model.
 
 Effort now uses measured prior delivery runs. The previous token-per-work-unit constants have been removed.
 

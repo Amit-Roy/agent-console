@@ -1,7 +1,7 @@
-import type { HistoryEstimate } from "./triage-history.ts";
+import { quoteEffort, type EffortQuote, type LoadedEffortModel } from "./triage-effort.ts";
 
-/** Business priority and design are policies; effort uses measured delivery history. */
-export const TRIAGE_SCORECARD_VERSION = 3;
+/** Complexity precedes work estimation; token budgets are derived from predicted activity. */
+export const TRIAGE_SCORECARD_VERSION = 4;
 export const METRIC_MAX = { breadth: 3, complexity: 3, uncertainty: 3, risk: 3, impact: 3, urgency: 2, frequency: 2 } as const;
 export type MetricName = keyof typeof METRIC_MAX;
 export interface MetricEvidence { value: number | null; evidence: string | null }
@@ -14,8 +14,8 @@ export interface TriageScorecard {
   facts: ScorecardFacts;
   work: WorkStep[];
   design: { level: "none" | "light" | "detailed"; reason: string };
-  tokens: { input: [number, number]; output: [number, number]; formula: string; confidence: "low" | "backtested" };
-  history: HistoryEstimate;
+  tokens: { input: [number, number] | null; output: [number, number]; formula: string; confidence: "experimental" | "validated" };
+  pricing: EffortQuote;
 }
 export interface AssessmentInput extends ScorecardFacts { title: string; body: string; files?: string[] }
 export interface ExtractedAssessment { metrics: Record<MetricName, MetricEvidence>; work: WorkStep[] }
@@ -25,7 +25,7 @@ export const UNKNOWN_DEFAULTS: Record<MetricName, number> = {
   breadth: 1, complexity: 1, uncertainty: 2, risk: 1, impact: 1, urgency: 0, frequency: 0,
 };
 export const TRIAGE_RULES = {
-  effort: "Estimated workload is the median observed direct-agent output tokens from eligible completed delivery runs. Trivial is at or below the historical lower tercile; Deep is at or above the upper tercile; otherwise BAU. Equal cutoffs mean BAU. These are relative run sizes, not human hours or whole-issue totals. Input tokens include context replays and do not set effort.",
+  effort: "Pre-work breadth, behavior complexity, uncertainty, and risk enter a learned nonnegative log-work equation. Effort uses P50 predicted logged actions against historical activity terciles when scope is known, or P95 when features are unknown or outside training ranges. That conservative routing is an explicit policy. Token budgets follow from empirical per-action yields and out-of-fold residual scenarios. Raw token consumption and context length never set complexity. These are delivery-run proxies, not human hours or whole-issue totals.",
   priority: "P0 if urgency =2, impact =3, and risk ≥2. Otherwise P1 if impact =3 or impact ≥2 and frequency =2. Otherwise P3 if impact =0; otherwise P2.",
   design: "Detailed if breadth =3, complexity =3, uncertainty =3, or risk ≥2. Otherwise None if breadth =0, complexity =0, uncertainty ≤1, and risk ≤1; otherwise Light.",
   unknowns: "Unknowns remain visible. Priority/design defaults: breadth 1, complexity 1, uncertainty 2, risk 1, impact 1, urgency 0, frequency 0. Effort never uses these defaults or model-proposed work-step counts.",
@@ -73,11 +73,13 @@ export function parseAssessment(raw: string | undefined, input: AssessmentInput)
   } catch { return; }
 }
 
-export function deriveAssessment(extracted: ExtractedAssessment, input: AssessmentInput, history: HistoryEstimate) {
+export function deriveAssessment(extracted: ExtractedAssessment, input: AssessmentInput, model: LoadedEffortModel) {
+  const pricing = quoteEffort(extracted.metrics, model);
+  if (pricing.status !== "ready") return;
   const names = Object.keys(METRIC_MAX) as MetricName[];
   const unknowns = names.filter(name => extracted.metrics[name].value === null);
   const scores = Object.fromEntries(names.map(name => [name, extracted.metrics[name].value ?? UNKNOWN_DEFAULTS[name]])) as Record<MetricName, number>;
-  const effort = history.effort;
+  const effort = pricing.effort;
   const priority = scores.urgency === 2 && scores.impact === 3 && scores.risk >= 2 ? "p0"
     : scores.impact === 3 || scores.impact >= 2 && scores.frequency === 2 ? "p1"
     : scores.impact === 0 ? "p3" : "p2";
@@ -96,10 +98,10 @@ export function deriveAssessment(extracted: ExtractedAssessment, input: Assessme
   }
   const scorecard: TriageScorecard = {
     version: TRIAGE_SCORECARD_VERSION, metrics: extracted.metrics, unknowns, facts, work: extracted.work, design,
-    tokens: { input: history.input.range, output: history.output.range,
-      formula: history.formula, confidence: history.evidence },
-    history,
+    tokens: { input: pricing.input ? [pricing.input.p50, pricing.input.p95] : null,
+      output: [pricing.output.p50, pricing.output.p95], formula: pricing.formula, confidence: pricing.confidence },
+    pricing,
   };
-  const reason = `History median ${history.output.median.toLocaleString("en-US")} generated tokens across ${history.analogueCount || history.sampleCount} measured runs; impact ${scores.impact}/3, urgency ${scores.urgency}/2; ${unknowns.length} unknown metric(s).`;
+  const reason = `Complexity implies ${pricing.activity.p50} logged tool actions (P50), ${pricing.activity.p80} (P80); ${pricing.confidence} quote with ${pricing.unknowns.length} unknown complexity feature(s).`;
   return { effort, priority, reason, scorecard } as const;
 }
