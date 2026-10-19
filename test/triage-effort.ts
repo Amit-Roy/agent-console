@@ -2,16 +2,16 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { EFFORT_FEATURES, empiricalQuantile, loadEffortModel, quoteEffort, validateEffortModel,
+import { EFFORT_FEATURES, LEGACY_EFFORT_FEATURES, SHAPE_FEATURES, requestShape, empiricalQuantile, loadEffortModel, quoteEffort, validateEffortModel,
   type ComplexityInput, type EffortModel, type EffortQuote } from "../server/providers/triage-effort.ts";
 
 /** Synthetic fixtures exercise inference; production coefficients come only from measured runs. */
 function fixture(): EffortModel {
   return {
-    schemaVersion: 1, method: "nonnegative-ridge-log-work-v1", featureNames: EFFORT_FEATURES,
+    schemaVersion: 1, method: "nonnegative-ridge-log-work-v1", featureNames: LEGACY_EFFORT_FEATURES,
     workload: { intercept: 1, coefficients: [0.2, 0.3, 0.4, 0.1], missingCoefficients: [0, 0.1, 0, 0.1],
       imputation: [1, 1, 2, 1], scale: [1, 1, 1, 1],
-      featureRanges: EFFORT_FEATURES.map(() => ({ min: 0, max: 3, known: 5, missing: 0 })),
+      featureRanges: LEGACY_EFFORT_FEATURES.map(() => ({ min: 0, max: 3, known: 5, missing: 0 })),
       residualQuantiles: { p50: 0, p80: 0.2, p95: 0.4 } },
     scenarios: [-0.4, -0.2, 0, 0.2, 0.4].map((logResidual, index) => ({ sampleId: `sample-${index}`, logResidual,
       outputPerWork: 100 + index * 10, freshInputPerWork: 200 + index * 20, cachedInputPerWork: 300 + index * 30, roundsPerWork: 0.5 })),
@@ -19,7 +19,7 @@ function fixture(): EffortModel {
     training: { sampleIds: Array.from({ length: 5 }, (_, index) => `sample-${index}`), sampleCount: 5, groupCount: 5 },
   };
 }
-const features = (value: number | null): ComplexityInput => Object.fromEntries(EFFORT_FEATURES.map(name => [name, { value }])) as ComplexityInput;
+const features = (value: number | null): ComplexityInput => Object.fromEntries(LEGACY_EFFORT_FEATURES.map(name => [name, { value }])) as ComplexityInput;
 const predict = (input = features(1), model = fixture()): EffortQuote => {
   const result = quoteEffort(input, validateEffortModel(model));
   assert.equal(result.status, "ready");
@@ -53,7 +53,7 @@ assert.equal(validateEffortModel(badShares).status, "unavailable");
 const noEvidence = structuredClone(sessionTotals);
 noEvidence.workload.featureRanges = noEvidence.workload.featureRanges.map(() => ({ min: null, max: null, known: 0, missing: 5 }));
 assert.equal(validateEffortModel(noEvidence).status, "ready");
-assert.deepEqual(predict(features(1), noEvidence).outOfRange, [...EFFORT_FEATURES]);
+assert.deepEqual(predict(features(1), noEvidence).outOfRange, [...LEGACY_EFFORT_FEATURES]);
 const baselineModel = structuredClone(sessionTotals);
 baselineModel.estimator = "historical-baseline";
 assert.equal(predict(features(0), baselineModel).estimator, "historical-baseline");
@@ -137,7 +137,7 @@ assert.equal(quote.riskPremium.output, quote.output.p80 - quote.output.p50);
 assert.equal(quote.riskPremium.input, quote.input!.p80 - quote.input!.p50);
 
 // Monotone in each observed complexity feature when the unknown mask remains fixed.
-for (const name of EFFORT_FEATURES) {
+for (const name of LEGACY_EFFORT_FEATURES) {
   let previous = 0;
   for (let value = 0; value <= 3; value++) {
     const input = features(1);
@@ -162,7 +162,7 @@ for (let value = 0; value < 3; value++) {
   const high = { ...low, breadth: { value: value + 1 } };
   assert.ok(predict(high).activity.p50 >= predict(low).activity.p50);
 }
-assert.deepEqual(predict(features(null)).unknowns, [...EFFORT_FEATURES]);
+assert.deepEqual(predict(features(null)).unknowns, [...LEGACY_EFFORT_FEATURES]);
 const ranged = fixture();
 ranged.workload.featureRanges[0].max = 1;
 assert.deepEqual(predict(features(2), ranged).outOfRange, ["breadth"]);
@@ -250,4 +250,32 @@ try {
   assert.equal(loadEffortModel(file).status, "unavailable");
 } finally { fs.rmSync(temporary, { recursive: true, force: true }); }
 
+
+// Request-shape features: deterministic, always known, monotonic buckets.
+assert.deepEqual(Object.keys(requestShape("")), [...SHAPE_FEATURES]);
+assert.deepEqual(Object.values(requestShape("")).map(item => item.value), [0, 0, 0, 0]);
+assert.equal(requestShape("Fix the bug in login flow").requestSize.value, 1);
+assert.equal(requestShape("x".repeat(120)).requestSize.value, 2);
+assert.equal(requestShape("x".repeat(400)).requestSize.value, 3);
+const rich = requestShape("Add a retry queue.\nReview `server/queue.ts` and https://example.com/spec.\nFix flaky tests, update docs, deploy, then restart.\nCommit.\n");
+assert.equal(rich.requestLines.value, 2);
+assert.equal(rich.requestReferences.value, 2);
+assert.equal(rich.requestActions.value, 3);
+const longer = (text: string) => requestShape(text + " ".repeat(0));
+assert.ok(longer("x".repeat(500)).requestSize.value >= longer("x".repeat(5)).requestSize.value);
+const shaped = fixture();
+shaped.featureNames = EFFORT_FEATURES;
+shaped.workload = { ...shaped.workload, coefficients: [0, 0, 0, 0, 0.5, 0, 0, 0.1], missingCoefficients: [0, 0, 0, 0, 0, 0, 0, 0],
+  imputation: Array(8).fill(1), scale: Array(8).fill(1), featureRanges: EFFORT_FEATURES.map(() => ({ min: 0, max: 3, known: 5, missing: 0 })) };
+const shapedFeatures = (size: number) => ({ ...features(1), ...requestShape("x".repeat(size)) });
+const small = predict(shapedFeatures(5), shaped), large = predict(shapedFeatures(500), shaped);
+assert.ok(large.activity.p50 > small.activity.p50, "Longer requests price higher through the learned size weight");
+assert.equal(large.contributions.length, 8);
+assert.deepEqual(large.contributions.slice(4).map(item => item.feature), [...SHAPE_FEATURES]);
+const shapedTotals = { ...shaped, scope: sessionTotals.scope, workloadMetric: sessionTotals.workloadMetric, tokenYieldBasis: sessionTotals.tokenYieldBasis, scenarios: sessionTotals.scenarios } as EffortModel;
+assert.match(predict(shapedFeatures(5), shapedTotals).formula, /request shape/);
+assert.equal(quoteEffort(features(1), validateEffortModel(shaped)).status, "unavailable", "A shaped model needs every shape feature");
+const wrongSize = fixture();
+wrongSize.featureNames = EFFORT_FEATURES;
+assert.equal(validateEffortModel(wrongSize).status, "unavailable", "Eight names need eight-element vectors");
 console.log("triage effort inference: monotonic work, empirical budgets, private model validation passed");

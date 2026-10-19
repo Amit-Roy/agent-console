@@ -20,7 +20,20 @@ import sklearn
 from scipy.optimize import lsq_linear
 from sklearn.metrics import mean_absolute_error, mean_squared_log_error
 
-FEATURES = ["breadth", "complexity", "uncertainty", "risk"]
+LEGACY_FEATURES = ["breadth", "complexity", "uncertainty", "risk"]
+SHAPE_FEATURES = ["requestSize", "requestLines", "requestReferences", "requestActions"]
+# Datasets that carry the deterministic request-shape buckets fit all eight features.
+FEATURES = list(LEGACY_FEATURES)
+
+
+def use_features(dataset):
+    """Pick the feature set once per dataset; older datasets keep the original four."""
+    global FEATURES
+    samples = dataset.get("samples") if isinstance(dataset, dict) else None
+    shaped = isinstance(samples, list) and samples and all(
+        isinstance(s, dict) and isinstance(s.get("features"), dict) and all(name in s["features"] for name in SHAPE_FEATURES)
+        for s in samples)
+    FEATURES = LEGACY_FEATURES + SHAPE_FEATURES if shaped else list(LEGACY_FEATURES)
 ALPHAS = [0.01, 0.1, 1.0, 10.0, 100.0]
 QUANTILES = {"p50": 0.5, "p80": 0.8, "p95": 0.95}
 
@@ -87,6 +100,7 @@ def timestamp(value, field="completedAt"):
 
 
 def validate_dataset(dataset):
+    use_features(dataset)
     if not isinstance(dataset, dict) or dataset.get("schemaVersion") != 1 or not isinstance(dataset.get("samples"), list):
         raise ValueError("Expected schemaVersion=1 and samples array")
     scope = dataset_scope(dataset)
@@ -175,7 +189,7 @@ def design(samples, imputation=None, scale=None):
     matrix = np.array([[np.nan if s["features"][f] is None else s["features"][f] for f in FEATURES] for s in samples], dtype=float)
     missing = np.isnan(matrix)
     if imputation is None:
-        imputation = np.array([float(np.median(matrix[~missing[:, j], j])) if (~missing[:, j]).any() else 1.5 for j in range(4)])
+        imputation = np.array([float(np.median(matrix[~missing[:, j], j])) if (~missing[:, j]).any() else 1.5 for j in range(len(FEATURES))])
     filled = np.where(missing, imputation, matrix)
     if scale is None:
         scale = np.maximum(np.std(filled, axis=0), 1.0)
@@ -192,13 +206,14 @@ def fit_model(samples, alpha, workload_metric="toolCalls"):
     target = np.log1p([observed_work(s, workload_metric) for s in samples])
     # Intercept is not penalized. Only true complexity coefficients must be
     # nonnegative. Missingness is a separate signed data-quality indicator.
-    penalty = np.diag([0.0] + [math.sqrt(alpha)] * 8)
-    result = lsq_linear(np.vstack([matrix, penalty]), np.concatenate([target, np.zeros(9)]),
-                        bounds=([-np.inf] + [0.0] * 4 + [-np.inf] * 4, [np.inf] * 9), tol=1e-11, max_iter=2000)
+    n = len(FEATURES)
+    penalty = np.diag([0.0] + [math.sqrt(alpha)] * (2 * n))
+    result = lsq_linear(np.vstack([matrix, penalty]), np.concatenate([target, np.zeros(2 * n + 1)]),
+                        bounds=([-np.inf] + [0.0] * n + [-np.inf] * n, [np.inf] * (2 * n + 1)), tol=1e-11, max_iter=2000)
     if not result.success:
         raise ValueError("Nonnegative ridge fit failed")
-    return {"intercept": float(result.x[0]), "coefficients": result.x[1:5].tolist(),
-            "missingCoefficients": result.x[5:].tolist(), "imputation": imputation.tolist(), "scale": scale.tolist()}
+    return {"intercept": float(result.x[0]), "coefficients": result.x[1:1 + n].tolist(),
+            "missingCoefficients": result.x[1 + n:].tolist(), "imputation": imputation.tolist(), "scale": scale.tolist()}
 
 
 def predict_work(model, samples):
@@ -318,7 +333,9 @@ def build_artifact(dataset):
     baseline_error = errors(observed, [baseline_work] * len(heldout))
     coverage = {name: float(np.mean([observed_work(s, workload_metric) <= q["work"][name] for s, q in zip(heldout, quotes)])) for name in QUANTILES}
     output_coverage = {name: float(np.mean([s["outcomes"]["outputTokens"] <= q["outputTokens"][name] for s, q in zip(heldout, quotes)])) for name in QUANTILES}
-    improves = model_error["mae"] < baseline_error["mae"]
+    # Token totals span five orders of magnitude, so raw-token MAE is decided by a handful of
+    # extreme sessions. The fit minimizes log error, so selection uses the same log-scale metric.
+    improves = model_error["rmsle"] < baseline_error["rmsle"]
     has_signal = any(weight > 1e-8 for weight in model["coefficients"])
     # A tiny holdout can falsify a candidate but cannot establish accuracy.
     enough = len(groups(heldout)) >= 10 and len(scenarios) >= 30
@@ -384,12 +401,12 @@ def build_artifact(dataset):
         candidate_validation = copy.deepcopy(validation)
         candidate_scenarios = copy.deepcopy(scenarios)
         validation["candidateHasLearnedComplexitySignal"] = has_signal
-        validation["candidateMetricsNonfinite"] = not math.isfinite(model_error["mae"])
-        if not math.isfinite(model_error["mae"]) or not improves:
+        validation["candidateMetricsNonfinite"] = not math.isfinite(model_error["rmsle"])
+        if not math.isfinite(model_error["rmsle"]) or not improves:
             estimator = "historical-baseline"
-            selection_reason = "Candidate total-token MAE did not beat training-median baseline on held-out sessions."
+            selection_reason = "Candidate total-token log error (RMSLE) did not beat the training-median baseline on held-out sessions."
             model = {**model, "intercept": float(math.log1p(baseline_work)),
-                     "coefficients": [0.0] * 4, "missingCoefficients": [0.0] * 4}
+                     "coefficients": [0.0] * len(FEATURES), "missingCoefficients": [0.0] * len(FEATURES)}
             # Rebuild the full empirical training distribution. Candidate OOF
             # residuals must never distort a constant historical baseline.
             scenarios = [scenario(s, baseline_work, token_yield_basis) for s in train]
