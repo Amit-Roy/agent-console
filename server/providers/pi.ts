@@ -22,6 +22,7 @@ const SESSIONS = path.join(DATA_DIR, "pi-sessions");
 const READ_ONLY_TOOLS = "read,grep,find,ls,ask_user,schedule_list,save_output";
 const QUESTIONS_EXTENSION = fileURLToPath(new URL("./pi-questions-extension.mjs", import.meta.url));
 const TOOLS_EXTENSION = fileURLToPath(new URL("./console-tools.mjs", import.meta.url)); // scheduled tasks + save_output
+const CODING_ROUTE_EXTENSION = fileURLToPath(new URL("./pi-coding-route.mjs", import.meta.url));
 
 let cached: string[] = [];
 const thinking = new Set<string>();
@@ -212,7 +213,11 @@ export const pi: Provider = {
   start(t: ThreadSpec, ctx: AgentCtx): Agent {
     const dir = path.join(SESSIONS, t.id);
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-    const args = ["--mode", "rpc", "--model", t.model, "--session-dir", dir, "--extension", QUESTIONS_EXTENSION, "--extension", TOOLS_EXTENSION];
+    // Only unattended NVIDIA coding runs use the host router. Manual model
+    // choices and explicit OpenRouter selections retain their exact provider.
+    const routed = !!t.issueRun && t.model === "nvidia/nvidia/nemotron-3-super-120b-a12b";
+    const args = ["--mode", "rpc", "--model", routed ? "agent-console/auto-coding" : t.model, "--session-dir", dir, "--extension", QUESTIONS_EXTENSION, "--extension", TOOLS_EXTENSION];
+    if (routed) args.push("--extension", CODING_ROUTE_EXTENSION);
     if (fs.readdirSync(dir).length) args.push("--continue");
     if (t.mode === "plan") args.push("--tools", READ_ONLY_TOOLS);
     const translate = piTranslator((ev) => ctx.event(ev), (list) => ctx.commands(list), () => contexts.get(t.model));
@@ -227,7 +232,7 @@ export const pi: Provider = {
     void harnessInstructions().then((brain) => {
       if (dead) return;
       if (brain) args.push("--append-system-prompt", brain); // style preamble + shared memory index
-      const launch = sandboxLaunch(t, "pi", args, piRateEnv({ ...childEnv(), AGENT_CONSOLE_THREAD: t.id }));
+      const launch = sandboxLaunch(t, "pi", args, piRateEnv({ ...childEnv(), AGENT_CONSOLE_THREAD: t.id }, t.issueRun ? "automation" : "interactive"));
       p = spawnLines("pi", launch.command, launch.args, { cwd: t.cwd, env: launch.env }, {
         ...ctx,
         exited(info) { questions.cancelAll(); ctx.exited(info); },
