@@ -11,7 +11,7 @@ import path from "node:path";
 import { DATA_DIR } from "./auth.ts";
 import { Questions, type PendingQuestion } from "./questions.ts";
 import { brainCommit } from "./providers/brain.ts";
-import { createLabeler, needsLabel, type Labeler } from "./providers/label.ts";
+import { createLabeler, needsLabel, mcpSketch, type Labeler } from "./providers/label.ts";
 import { suggestTitle, titleText } from "./providers/title.ts";
 import { recentPreamble, replayPreamble } from "./export.ts";
 import { backfill, restoreAccounting, recordTurn, readTurns, type Turn } from "./analytics.ts";
@@ -714,7 +714,10 @@ export class Threads {
     if (ev.type === "result" && t.issueRun && t.status === "idle") try { this.onIssueTurnEnd?.(t, ev); } catch {}
     if (ev.type === "assistant") {
       for (const b of ev.message?.content ?? []) {
-        if (b?.type === "tool_use" && needsLabel(b.name, b.input)) this.labeler.request({ thread: t.id, id: b.id, command: b.input.command, cwd: t.cwd });
+        if (b?.type === "tool_use" && needsLabel(b.name, b.input)) {
+          const command = b.name === "Bash" ? String(b.input.command ?? "") : mcpSketch(b.name, b.input);
+          this.labeler.request({ thread: t.id, id: b.id, name: b.name, command, cwd: t.cwd });
+        }
       }
     }
   }

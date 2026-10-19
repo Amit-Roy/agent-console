@@ -3,7 +3,7 @@ import { brainContext } from "../server/providers/brain.ts";
 import { codexTranslator, unwrapShell } from "../server/providers/codex.ts";
 import { parseEnv } from "../server/providers/env.ts";
 import { replayPreamble, threadToMarkdown, turnsOf } from "../server/export.ts";
-import { excerpt, needsLabel, parseLabels } from "../server/providers/label.ts";
+import { excerpt, needsLabel, parseLabels, mcpName, mcpSketch } from "../server/providers/label.ts";
 import { claudeAdvisorArgs, claudeConsoleSettingsArgs, claudeRoutingEnv, leanMcpArgs } from "../server/providers/claude.ts";
 import { cleanTitle, titleText, titleInput } from "../server/providers/title.ts";
 import { normTool, parsePiModels, piTranslator } from "../server/providers/pi.ts";
@@ -63,6 +63,7 @@ check("labels: parses a clean JSON array", JSON.stringify(parseLabels('["Running
 check("labels: tolerates a code fence around the array", parseLabels('```json\n["Checking git status"]\n```', 1)?.[0] === "Checking git status");
 check("labels: wrong length is rejected", parseLabels('["a", "b"]', 3) === undefined);
 check("labels: prose / empty entries are rejected", parseLabels("Sure! Here you go", 1) === undefined && parseLabels('["ok", ""]', 2) === undefined && parseLabels("[1,", 1) === undefined);
+check("labels: MCP calls without a description need one, with a readable sketch", needsLabel("mcp__codegraph__codegraph_explore", { query: "x" }) && !needsLabel("mcp__a__b", { description: "d" }) && mcpName("mcp__codegraph__explore") === "codegraph/explore" && mcpSketch("mcp__a__b", { query: "find me" }) === "a/b: find me");
 check("labels: only description-less Bash needs one", needsLabel("Bash", { command: "ls" }) && !needsLabel("Bash", { command: "ls", description: "Lists files" }) && !needsLabel("Read", { file_path: "/a" }) && !needsLabel("Bash", { command: "  " }));
 
 // ---- export / fork replay
