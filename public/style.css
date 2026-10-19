@@ -654,7 +654,9 @@ div.msg.foot{margin-top:calc(var(--sp-2) * -1)}
 .toolbar .spacer{flex:1}
 #send,#stop,#attach{width:var(--ctl-h);padding:0}
 /* attach: leading edge (adds content; Send keeps the trailing edge), extra space before the text chips */
-#attach{--ico:1.125rem;margin-right:var(--sp-1);color:var(--t2)}
+#attach{margin-right:var(--sp-1);color:var(--t2)}
+/* one glyph size across the composer toolbar: attach, permission, send, stop and the context ring all draw at 18px */
+.toolbar{--ico:1.125rem}
 #attach:hover:not(:disabled){background:var(--hover);color:var(--t1)}
 #attach:active:not(:disabled){background:var(--press);color:var(--t1)}
 #attach:disabled{opacity:1;color:var(--t3)}
@@ -826,6 +828,8 @@ body.login{display:grid;place-items:center;overflow:auto;padding:var(--sp-4)}
   #model .compact-label,#effort .compact-label{display:block}
   #mode{width:var(--ctl-h);padding:0}
   #mode .chip-label,#mode .chev{display:none}
+  /* icon controls share one shape: a 36px circle (fill or hover) centred in the 44px touch target */
+  #cbox .toolbar :is(#attach,#mode,#send,#stop,#ctx){width:var(--ctl-h);min-width:var(--ctl-h);padding:var(--sp-1);background-clip:content-box;border-radius:var(--r-full);justify-content:center}
   #attach{margin-right:0}
   #head .state{background:transparent;height:auto;padding:0 var(--sp-1);gap:var(--sp-1);font:var(--fw-med) var(--f-xs)}
 }
