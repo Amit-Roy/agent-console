@@ -275,7 +275,7 @@ export class TurnTimingStore {
   }
   // The thread's last `limit` turns, newest first, each with its timeline (null for rows recorded before timelines existed).
   recent(thread: string, limit = 10): any[] {
-    const rows = this.db.prepare(`SELECT ${TurnTimingStore.COLS},timeline FROM turn_timing WHERE thread = ? ORDER BY turn_ts DESC LIMIT ?`).all(thread, Math.max(1, Math.min(20, limit))) as any[];
+    const rows = this.db.prepare(`SELECT ${TurnTimingStore.COLS},timeline FROM turn_timing WHERE thread = ? ORDER BY turn_ts DESC, id DESC LIMIT ?`).all(thread, Math.max(1, Math.min(20, limit))) as any[];
     const parse = (s: any, d: any) => { try { return s ? JSON.parse(s) : d; } catch { return d; } };
     return rows.map(({ id, at, thread: _t, ...r }) => ({ ...r, tools: parse(r.tools, []), retry_detail: parse(r.retry_detail, []), timeline: parse(r.timeline, null) }));
   }
