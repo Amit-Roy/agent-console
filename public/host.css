@@ -1,6 +1,8 @@
 /* Host dashboard. Extends the console's token layer (style.css + dashboard.css). No emoji, one accent. */
 
-#hm{overflow-y:auto;-webkit-overflow-scrolling:touch}
+body.host{display:flex;flex-direction:column;height:100vh;margin:0;overflow:hidden}
+body.host .dh{flex:0 0 auto}
+body.host #hm{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch}
 
 /* ---------- live chip ---------- */
 .live{display:flex;align-items:center;gap:var(--sp-2);margin-left:auto;color:var(--t2);font:var(--fw-reg) var(--f-xs);white-space:nowrap}
