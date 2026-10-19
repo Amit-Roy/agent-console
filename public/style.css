@@ -822,7 +822,8 @@ body.login{display:grid;place-items:center;overflow:auto;padding:var(--sp-4)}
   :root{--ctl-h:2.75rem;--ctl-h-sm:2.75rem;--item-h:2.75rem}
   #cbox{padding:var(--sp-3) var(--sp-3) var(--sp-2)}
   #cbox .toolbar{flex-wrap:wrap;margin-left:calc(var(--sp-3) / -2);margin-right:calc(var(--sp-3) / -2);gap:var(--sp-1)}
-  #cbox .toolbar #model,#cbox .toolbar #effort{flex:1 1 2.75rem;min-width:2.75rem;padding:0 var(--sp-1);gap:var(--sp-1)}
+  /* settings stay one group at the leading edge (they shrink, never stretch); status and send own the trailing edge */
+  #cbox .toolbar #model,#cbox .toolbar #effort{flex:1 1 2.75rem;max-width:max-content;min-width:2.75rem;padding:0 var(--sp-2);gap:var(--sp-1)}
   #model .compact-label,#effort .compact-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   #model .chip-label,#effort .chip-label{display:none}
   #model .compact-label,#effort .compact-label{display:block}
