@@ -43,13 +43,13 @@ Each started issue gets its own worktree, `~/worktrees/<repo>-issue-<n>` on bran
 
 ## Window opener
 
-A window opens at the first message after the last one ended, so overnight nothing opens one and the quota never starts counting down. The opener sends one tiny message (`Reply with the single word: ok`, Sonnet low or `gpt-6.1-sol` low) to each provider that has no live 5-hour window, only during configured hours. The window then ends five hours later, while you are away, which gives the dispatcher a last-90-minutes slot.
+A window opens at the first message after the last one ended. The opener sends one tiny message (`Reply with the single word: ok`, Sonnet low or `gpt-6.1-sol` low) to each provider with no live five-hour window. It runs throughout the day and night by default. The window ends five hours later, giving the dispatcher a last-90-minutes slot. Custom hour bounds can restrict openings; equal bounds mean all day.
 
 ```json
-{ "opener": { "enabled": true, "dryRun": false, "from": "23:00", "to": "07:00", "providers": ["claude", "codex"], "tz": "Asia/Kolkata" } }
+{ "opener": { "enabled": true, "dryRun": false, "from": "00:00", "to": "00:00", "providers": ["claude", "codex"], "tz": "Asia/Kolkata" } }
 ```
 
-Same file as the dispatcher, under `opener`. Defaults: off, dry run, 23:00–07:00 `Asia/Kolkata`, both providers. It checks every 5 minutes, refreshes Codex quota first (Claude reports quota only during turns, so an expired or unseen reading counts as no window), and never opens one provider twice within 10 minutes. The opener thread is archived at once; decisions go to `window-opener.jsonl`.
+Same file as the dispatcher, under `opener`. Defaults: off, dry run, all day (`00:00`–`00:00`) in `Asia/Kolkata`, both providers. It checks every 5 minutes, refreshes Codex quota first (Claude reports quota only during turns, so an expired or unseen reading counts as no window), and never opens one provider twice within 10 minutes. The opener thread is archived at once; decisions go to `window-opener.jsonl`.
 
 ## Thread names
 
