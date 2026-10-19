@@ -3,6 +3,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { createHash } from "node:crypto";
+import { isPrCreate, parsePrRef, prsFromResult } from "./session-prs.ts";
 
 const MAX_TEXT = 128_000;
 const MAX_LINE = 8 * 1024 * 1024;
@@ -66,7 +67,17 @@ export class SessionSearch {
         role TEXT NOT NULL, text TEXT NOT NULL, UNIQUE(thread,line)
       );
       CREATE INDEX IF NOT EXISTS events_thread_line ON events(thread,line);
+      CREATE TABLE IF NOT EXISTS pr_calls (thread TEXT NOT NULL, tool_id TEXT NOT NULL, PRIMARY KEY(thread,tool_id));
+      CREATE TABLE IF NOT EXISTS prs (
+        thread TEXT NOT NULL, line INTEGER NOT NULL, repo TEXT NOT NULL, number INTEGER NOT NULL, url TEXT NOT NULL,
+        PRIMARY KEY(thread,repo,number)
+      );
+      CREATE INDEX IF NOT EXISTS prs_number ON prs(number);
       CREATE VIRTUAL TABLE IF NOT EXISTS session_fts USING fts5(title,text,thread UNINDEXED,line UNINDEXED,role UNINDEXED, tokenize='unicode61 remove_diacritics 2');`);
+    // Logs indexed before PR tracking have no prs rows: drop them once so the next sync rebuilds from the logs.
+    if (Number(this.db.prepare("PRAGMA user_version").get()!.user_version) < 1) {
+      this.db.exec("DELETE FROM session_fts; DELETE FROM events; DELETE FROM sessions; PRAGMA user_version=1;");
+    }
   }
 
   private async sync() {
@@ -79,6 +90,22 @@ export class SessionSearch {
     this.db.prepare("DELETE FROM session_fts WHERE thread=?").run(thread);
     this.db.prepare("DELETE FROM events WHERE thread=?").run(thread);
     this.db.prepare("DELETE FROM sessions WHERE thread=?").run(thread);
+    this.db.prepare("DELETE FROM pr_calls WHERE thread=?").run(thread);
+    this.db.prepare("DELETE FROM prs WHERE thread=?").run(thread);
+  }
+
+  /** Remember `gh pr create` calls and record the PR each one printed. Tool calls and results may arrive in different syncs. */
+  private trackPrs(thread: string, line: number, event: any) {
+    const content = event?.message?.content;
+    if (!Array.isArray(content)) return;
+    for (const block of content) {
+      if (block?.type === "tool_use" && typeof block.id === "string" && isPrCreate(block.input?.command))
+        this.db.prepare("INSERT OR IGNORE INTO pr_calls(thread,tool_id) VALUES(?,?)").run(thread, block.id);
+      else if (block?.type === "tool_result" && typeof block.tool_use_id === "string" &&
+        this.db.prepare("SELECT 1 FROM pr_calls WHERE thread=? AND tool_id=?").get(thread, block.tool_use_id))
+        for (const pr of prsFromResult(block.content))
+          this.db.prepare("INSERT OR IGNORE INTO prs(thread,line,repo,number,url) VALUES(?,?,?,?,?)").run(thread, line, pr.repo, pr.number, pr.url);
+    }
   }
 
   private async fingerprint(file: string, end: number) {
@@ -151,7 +178,12 @@ export class SessionSearch {
           const raw = data.subarray(begin, newline);
           bytes += skipped + raw.length + 1; lines++;
           if (!skipped && raw.length <= MAX_LINE) {
-            try { const item = eventText(JSON.parse(raw.toString("utf8"))); if (item) batch.push({ line: lines, ...item }); } catch { /* Ignore malformed complete lines; keep exact physical line references. */ }
+            try {
+              const parsed = JSON.parse(raw.toString("utf8"));
+              const item = eventText(parsed);
+              if (item) batch.push({ line: lines, ...item });
+              this.trackPrs(t.id, lines, parsed);
+            } catch { /* Ignore malformed complete lines; keep exact physical line references. */ }
           }
           skipped = 0; begin = newline + 1;
         }
@@ -206,6 +238,22 @@ export class SessionSearch {
     for (const row of rows) { size += String(row.text).length; if (events.length && size > 48_000) break; events.push({ ...row, citation: `${input.thread}:L${row.line}` }); }
     const next = events.length ? Number(events.at(-1)!.line) + 1 : null;
     return { thread: input.thread, title: session.title, provider: session.provider, start, next: next !== null && next <= Number(session.lines) ? next : null, events };
+  }
+
+  /** PRs a session raised (by thread), or sessions that raised a PR (by `ref`: URL, `owner/repo#n` or number). */
+  async prs(input: { thread?: string; ref?: string }) {
+    await this.sync();
+    const select = `SELECT p.thread,s.title,s.provider,p.line,p.repo,p.number,p.url FROM prs p JOIN sessions s ON s.thread=p.thread`;
+    let rows: any[];
+    if (input.thread !== undefined) {
+      if (!safeId(input.thread)) throw new Error("Invalid thread id.");
+      rows = this.db.prepare(`${select} WHERE p.thread=? ORDER BY p.line`).all(input.thread);
+    } else {
+      const ref = parsePrRef(input.ref);
+      if (!ref) throw new Error("Give a GitHub PR URL, owner/repo#number, or a PR number.");
+      rows = this.db.prepare(`${select} WHERE p.number=? ${ref.repo ? "AND p.repo=?" : ""} ORDER BY s.mtime DESC, p.line LIMIT 50`).all(ref.number, ...(ref.repo ? [ref.repo] : []));
+    }
+    return { prs: rows.map(r => ({ ...r, citation: `${r.thread}:L${r.line}`, sessionUrl: `/#thread=${encodeURIComponent(String(r.thread))}` })) };
   }
 
   close() { this.closed = true; this.db.close(); }

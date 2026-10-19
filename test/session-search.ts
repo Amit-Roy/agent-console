@@ -22,6 +22,10 @@ write("claude-one", [user("Implement zebra pr-standards skill"), assistant("zebr
 write("codex-one", [user("Find zebra " + "unrelated ".repeat(200)), "broken json", assistant("Implementation deferred until tomorrow")]);
 write("pi-one", [JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", name: "Bash", input: { command: "cat pr-standards/SKILL.md", api_key: "secretneedle" } }] } }), JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", content: "The skill is empty: missingguidance" }] } })]);
 fs.writeFileSync(file("empty-one"), "");
+const toolUse = (id: string, command: string) => JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", id, name: "Bash", input: { command } }] } });
+const toolResult = (id: string, content: string) => JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: id, content }] } });
+fs.appendFileSync(file("pi-one"), [toolUse("t1", "gh pr list --json url"), toolResult("t1", "https://github.com/o/r/pull/7"), toolUse("t2", "cd ~/wt && gh pr create --title x"),
+  toolResult("t2", "Creating pull request\nhttps://github.com/Amit-Roy/agent-console/pull/28\n")].join("\n") + "\n");
 let search = new SessionSearch(root);
 try {
   const result = await search.search({ query: "zebra" });
@@ -32,6 +36,12 @@ try {
   assert.ok((await search.search({ query: "PR standards" })).results.some(r => r.thread === "claude-one"), "archived sessions searchable");
   assert.equal((await search.search({ query: "missingguidance" })).results[0].provider, "pi");
   assert.equal((await search.search({ query: "secretneedle" })).results.length, 0);
+  const raised = await search.prs({ thread: "pi-one" });
+  assert.deepEqual(raised.prs.map(p => `${p.repo}#${p.number}`), ["Amit-Roy/agent-console#28"], "only gh pr create output counts");
+  for (const ref of ["https://github.com/Amit-Roy/agent-console/pull/28#issuecomment-6272643047", "Amit-Roy/agent-console#28", "28"])
+    assert.equal((await search.prs({ ref })).prs[0]?.thread, "pi-one", ref);
+  assert.equal((await search.prs({ ref: "other/repo#28" })).prs.length, 0);
+  await assert.rejects(() => search.prs({ ref: "nonsense" }), /PR URL/);
   const read = await search.read({ thread: "codex-one", start: 2, limit: 1 });
   assert.equal(read.events[0].line, 3, "physical lines survive malformed records");
   assert.match(String(read.events[0].text), /deferred/);
@@ -43,7 +53,7 @@ try {
   assert.equal((await search.search({ query: "zebra", limit: 1 })).results.length, 1);
 
   fs.appendFileSync(file("pi-one"), assistant("appendedneedle") + "\n");
-  assert.equal((await search.search({ query: "appendedneedle" })).results[0].line, 3);
+  assert.equal((await search.search({ query: "appendedneedle" })).results[0].line, 7);
   threads[2].title = "Renamedneedle"; threads[2].provider = "another-provider"; catalog();
   assert.equal((await search.search({ query: "Renamedneedle", provider: "another-provider" })).results[0].thread, "pi-one");
   write("pi-one", [user("replacementneedle")]);
