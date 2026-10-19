@@ -202,7 +202,12 @@ export function createFileViewer(apiFetch, report = () => {}) {
   }
   body.addEventListener("click", openMarkdownLink);
   body.addEventListener("auxclick", openMarkdownLink);
-  wrap.onclick = () => wrap.setAttribute("aria-pressed", String(dialog.classList.toggle("is-wrapped")));
+  const setWrapped = on => {
+    wrap.setAttribute("aria-pressed", String(dialog.classList.toggle("is-wrapped", on)));
+    try { localStorage.setItem("file-viewer-wrap", on ? "1" : "0"); } catch {}
+  };
+  wrap.onclick = () => setWrapped(!dialog.classList.contains("is-wrapped"));
+  try { if (localStorage.getItem("file-viewer-wrap") === "1") setWrapped(true); } catch {}
   close.onclick = () => dialog.close();
   dialog.addEventListener("keydown", event => {
     if (event.key !== "Tab") return;
@@ -232,6 +237,7 @@ export function createFileViewer(apiFetch, report = () => {}) {
     path.textContent = file.path; path.title = file.path;
     const lines = content.split("\n");
     const count = lines.length;
+    body.style.setProperty("--gutter-ch", String(Math.max(2, String(count).length)));
     const lang = langFromPath(file.path, content);
     // Bound highlighting work and element count; very large files stay available as plain text.
     const plain = content.length > 128 * 1024 || count > 2000;
@@ -444,7 +450,7 @@ export function createFileViewer(apiFetch, report = () => {}) {
       content = ""; currentTextFile = null; markdownSource = false;
       title.textContent = "Files"; path.textContent = "~/repos"; path.title = "~/repos";
       status.textContent = ""; position.textContent = ""; source.hidden = true;
-      copy.disabled = true; wrap.disabled = true; wrap.setAttribute("aria-pressed", "false"); dialog.classList.remove("is-wrapped");
+      copy.disabled = true; wrap.disabled = true;
       error.hidden = true; body.hidden = false; body.classList.remove("is-plain", "is-image", "is-markdown");
       body.replaceChildren(el("p", "file-tree-note", "Select a file to preview.")); body.scrollTop = 0; body.scrollLeft = 0;
       performanceDetails.hidden = true; timings.setAttribute("aria-expanded", "false");
