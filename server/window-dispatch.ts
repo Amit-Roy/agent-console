@@ -130,7 +130,7 @@ export function issuePrompt(d: Decision, branch: string, base: string): string {
   ].join("\n\n");
 }
 
-export type IssueRun = { key: string; repo: string; number: number; effort: string; role: "work" | "review"; branch?: string; base?: string; pr?: number; reviewedAt?: number; finishedAt?: number };
+export type IssueRun = { key: string; repo: string; number: number; effort: string; role: "work" | "review" | "debug"; branch?: string; base?: string; pr?: number; reviewedAt?: number; finishedAt?: number };
 export interface IssueRunner {
   create(opts: { provider: string; model: string; effort: string; cwd: string; mode: "bypassPermissions"; title: string; issueRun: IssueRun }): { id: string };
   send(id: string, text: string): void;
@@ -154,17 +154,28 @@ exit 0
 }
 const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || "issue";
 
-/** Start one decision: a worktree on a new branch, then a thread titled for the issue working in it. */
-export function startIssue(d: Decision, runner: IssueRunner, dirs = { repos: path.join(os.homedir(), "repos"), worktrees: path.join(os.homedir(), "worktrees") }, git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", timeout: 60_000 }).trim()) {
-  const name = d.issue.repo.split("/")[1];
-  const main = path.join(dirs.repos, name);
-  if (!fs.existsSync(path.join(main, ".git"))) throw new Error(`No local checkout of ${d.issue.repo} at ${main}`);
+type Git = (cwd: string, ...args: string[]) => string;
+export const defaultGit: Git = (cwd, ...args) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", timeout: 60_000 }).trim();
+export const defaultDirs = () => ({ repos: process.env.AGENT_CONSOLE_REPOS || path.join(os.homedir(), "repos"), worktrees: process.env.AGENT_CONSOLE_WORKTREES || path.join(os.homedir(), "worktrees") });
+
+/** A worktree of a local checkout on a new branch off the default branch (reused if it already exists). */
+export function addWorktree(o: { repo: string; dirs: { repos: string; worktrees: string }; dirName: string; branch: string; git?: Git }) {
+  const git = o.git ?? defaultGit;
+  const main = path.join(o.dirs.repos, o.repo);
+  if (!fs.existsSync(path.join(main, ".git"))) throw new Error(`No local checkout of ${o.repo} at ${main}`);
   git(main, "fetch", "-q", "origin");
   const base = git(main, "symbolic-ref", "--short", "refs/remotes/origin/HEAD").replace(/^origin\//, "");
-  const branch = `issue-${d.issue.number}-${slug(d.issue.title)}`;
-  const cwd = path.join(dirs.worktrees, `${name}-issue-${d.issue.number}`);
-  fs.mkdirSync(dirs.worktrees, { recursive: true });
-  if (!fs.existsSync(cwd)) git(main, "worktree", "add", "-q", "-b", branch, cwd, `origin/${base}`);
+  const cwd = path.join(o.dirs.worktrees, o.dirName);
+  fs.mkdirSync(o.dirs.worktrees, { recursive: true });
+  const created = !fs.existsSync(cwd);
+  if (created) git(main, "worktree", "add", "-q", "-b", o.branch, cwd, `origin/${base}`);
+  return { cwd, base, branch: o.branch, created, remove: () => { try { git(main, "worktree", "remove", "--force", cwd); git(main, "branch", "-D", o.branch); } catch {} } };
+}
+
+/** Start one decision: a worktree on a new branch, then a thread titled for the issue working in it. */
+export function startIssue(d: Decision, runner: IssueRunner, dirs = defaultDirs(), git: Git = defaultGit) {
+  const name = d.issue.repo.split("/")[1];
+  const { cwd, base, branch } = addWorktree({ repo: name, dirs, dirName: `${name}-issue-${d.issue.number}`, branch: `issue-${d.issue.number}-${slug(d.issue.title)}`, git });
   if (!(d.effort !== "trivial" && DIRECT_REPOS.includes(name))) installPrOnlyHook(cwd, base, git);
   const thread = runner.create({ ...d.route, cwd, mode: "bypassPermissions", title: threadTitle(d.issue), issueRun: { key: d.key, repo: d.issue.repo, number: d.issue.number, effort: d.effort, role: "work", branch, base } });
   runner.send(thread.id, issuePrompt(d, branch, base));

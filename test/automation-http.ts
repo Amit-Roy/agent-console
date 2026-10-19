@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { once } from "node:events";
+import { execFileSync } from "node:child_process";
 
 // The dashboard's entrypoint over HTTP: auth gate, snapshot shape, paged step log, versioned contract, redaction on disk.
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -21,6 +22,12 @@ const seed = [
 ];
 fs.writeFileSync(path.join(data, "automation-events.jsonl"), seed.map(e => JSON.stringify(e)).join("\n") + "\n");
 fs.writeFileSync(path.join(data, "window-dispatch.json"), JSON.stringify({ enabled: true, dryRun: true }));
+// a local agent-console checkout for the Debug button to branch from
+const g = (cwd: string, ...a: string[]) => execFileSync("git", ["-C", cwd, "-c", "user.name=t", "-c", "user.email=t@t", ...a], { stdio: "ignore" });
+const repos = path.join(directory, "repos"), worktrees = path.join(directory, "wt"), originRepo = path.join(directory, "origin.git"), local = path.join(repos, "agent-console");
+fs.mkdirSync(originRepo); g(originRepo, "init", "-q", "--bare", "-b", "main"); fs.mkdirSync(repos);
+execFileSync("git", ["clone", "-q", originRepo, local], { stdio: "ignore" });
+fs.writeFileSync(path.join(local, "a"), "1"); g(local, "add", "a"); g(local, "commit", "-qm", "init"); g(local, "push", "-q", "origin", "HEAD:main"); g(local, "remote", "set-head", "origin", "main");
 const listener = net.createServer();
 listener.listen(0, "127.0.0.1");
 await once(listener, "listening");
@@ -30,7 +37,7 @@ const origin = `http://127.0.0.1:${port}`;
 const password = randomBytes(24).toString("base64url");
 const child = spawn(process.execPath, ["server/index.ts"], {
   cwd: root,
-  env: { ...process.env, PORT: String(port), AGENT_CONSOLE_DATA: data, AGENT_CONSOLE_RUN: path.join(directory, "run"), AGENT_CONSOLE_MOCK: "1", AGENT_CONSOLE_AUTH: "password", AGENT_CONSOLE_PASSWORD: password },
+  env: { ...process.env, PORT: String(port), AGENT_CONSOLE_DATA: data, AGENT_CONSOLE_RUN: path.join(directory, "run"), AGENT_CONSOLE_MOCK: "1", AGENT_CONSOLE_REPOS: repos, AGENT_CONSOLE_WORKTREES: worktrees, AGENT_CONSOLE_AUTH: "password", AGENT_CONSOLE_PASSWORD: password },
   stdio: ["ignore", "pipe", "pipe"],
 });
 child.stderr.resume();
@@ -64,6 +71,14 @@ try {
   assert.equal(log.entries[0].msg, "approved");
   assert.equal((await get("/api/automation/log?step=nope")).status, 400);
   assert.equal((await get("/api/automation?v=2")).status, 400);
+  // the Debug button: same-origin only, validated, one worktree and thread
+  const postDebug = (body: object, origin_ = origin) => fetch(origin + "/api/automation/debug", { method: "POST", headers: { ...headers, "content-type": "application/json", ...(origin_ ? { Origin: origin_ } : {}) }, body: JSON.stringify(body) });
+  assert.equal((await fetch(origin + "/api/automation/debug", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" })).status, 401);
+  assert.equal((await postDebug({ v: 1 }, "https://example.invalid")).status, 403, "cross-origin refused");
+  assert.equal((await postDebug({ v: 1, focus: "nope" })).status, 400);
+  const dbg = await postDebug({ v: 1, focus: "worktree", note: "why" });
+  assert.equal(dbg.status, 200); const made = await dbg.json();
+  assert.equal(typeof made.thread, "string"); assert.ok(fs.existsSync(path.join(made.cwd, "a")), "a worktree of the checkout"); assert.match(made.branch, /^debug\/automation-/);
   const onDisk = fs.readFileSync(path.join(data, "automation-events.jsonl"), "utf8");
   assert.match(onDisk, /"kind":"abandoned"[^\n]*"run":"b"|"run":"b"[^\n]*"kind":"abandoned"/);
 } finally {
