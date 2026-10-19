@@ -2,8 +2,8 @@ import path from "node:path";
 import { completeLabel } from "./small-model.ts";
 
 // Tool cards show what the agent is *doing*, not just the raw command. Claude usually supplies a `description` for Bash itself
-// and the UI derives labels for file/search tools from their input. What is left is shell commands and MCP tool calls with
-// no description (Codex, Pi, terse Claude calls): batch them through Nemotron on NVIDIA.
+// and the UI derives labels for file/search tools from their input. What is left is shell commands, Read calls and MCP tool
+// calls with no description (Codex, Pi, terse Claude calls): batch them through Nemotron on NVIDIA.
 
 const FLUSH_MS = 700;
 const MAX_BATCH = 8;
@@ -18,10 +18,11 @@ export interface LabelJob {
   cwd: string;
 }
 
-/** Which tool calls need a model-written label: shell commands and MCP calls without a description. */
+/** Which tool calls need a model-written label: shell commands, Read calls and MCP calls without a description. */
 export function needsLabel(name: string, input: any): boolean {
   if (typeof input?.description === "string" && input.description.trim()) return false;
   if (name === "Bash") return typeof input?.command === "string" && input.command.trim() !== "";
+  if (name === "Read") return typeof input?.file_path === "string" && input.file_path.trim() !== "";
   if (name.startsWith("mcp__")) return true;
   return false;
 }
@@ -45,6 +46,17 @@ export function mcpSketch(name: string, input: any): string {
   return `${label}: ${excerpt(JSON.stringify(input))}`;
 }
 
+/** A short sketch of a Read call: the verb plus a shortened, readable path. */
+export function readSketch(input: any): string {
+  if (!input || typeof input !== "object") return "Read";
+  const p = String(input.file_path ?? "");
+  if (!p) return "Read";
+  const segs = p.split(/[/\\]/).filter(Boolean);
+  const i = segs.lastIndexOf("repos");
+  const short = i !== -1 && segs[i + 1] ? segs.slice(i + 1).join("/") : segs.slice(-2).join("/");
+  return `Read: ${excerpt(short)}`;
+}
+
 const PROMPT = (cwd: string, jobs: LabelJob[]) =>
   `For each numbered tool call, write a plain-English label of 3 to 8 words saying what it does. Start with an -ing verb, e.g. "Running the test suite", "Searching the repo for TODOs", "Listing files in the project". No quotes, no trailing period. Reply with ONLY a JSON array of ${jobs.length} string(s), in order.\n\nWorking folder: ${cwd}\n\n${jobs.map((j, i) => `${i + 1}. ${j.command}`).join("\n")}`;
 
@@ -64,7 +76,7 @@ export function parseLabels(raw: string | undefined, n: number): string[] | unde
 }
 
 /** Deterministic stand-in for tests (AGENT_CONSOLE_MOCK=1). */
-const fake = (job: LabelJob) => job.name === "Bash" ? `Running ${job.command.trim().split(/\s+/)[0]}` : `Using ${mcpName(job.name)}`;
+const fake = (job: LabelJob) => job.name === "Bash" ? `Running ${job.command.trim().split(/\s+/)[0]}` : job.name === "Read" ? job.command : `Using ${mcpName(job.name)}`;
 
 export interface Labeler {
   request(job: LabelJob): void;
