@@ -19,12 +19,15 @@ case "${1:-status}" in
          [ -n "$pid" ] && grep -qa "server/index.ts" "/proc/$pid/cmdline" 2>/dev/null && { echo "$pid" >"$RUN/pid"; echo "already running (pid $pid)"; exit 0; }
          PORT=$PORT setsid nohup "$DIR/bin/agent-console" supervise </dev/null >/dev/null 2>&1 &
          for _ in $(seq 100); do running && break; sleep 0.2; done; "$0" status; "$0" url ;;
-  supervise) echo $$ >"$RUN/supervisor"; delay=1
+  supervise) # A PID file alone cannot serialize concurrent start or restart requests.
+         exec 8>"$RUN/supervisor.lock"
+         flock -n 8 || exit 0
+         echo $$ >"$RUN/supervisor"; delay=1
          while :; do
            # append, so the reason the last server died survives the restart; rotate at 5 MB
            [ "$(stat -c %s "$RUN/log" 2>/dev/null || echo 0)" -gt 5000000 ] && mv "$RUN/log" "$RUN/log.1"
            echo "[$(date -Is)] supervisor $$: starting server" >>"$RUN/log"; began=$(date +%s)
-           (cd "$DIR" && PORT=$PORT AGENT_CONSOLE_PID_FILE="$RUN/pid" exec node server/index.ts) >>"$RUN/log" 2>&1; code=$?
+           (cd "$DIR" && PORT=$PORT AGENT_CONSOLE_PID_FILE="$RUN/pid" exec node server/index.ts 8>&-) >>"$RUN/log" 2>&1; code=$?
            [ $(($(date +%s) - began)) -ge 60 ] && delay=1 # back off only while it keeps crashing on boot
            echo "[$(date -Is)] supervisor $$: server exited with code $code; restarting in ${delay}s" >>"$RUN/log"
            sleep "$delay"; delay=$((delay < 30 ? delay * 2 : 30))
@@ -35,7 +38,7 @@ case "${1:-status}" in
   # for agents: run as the last step of a turn that changed the server. Returns at once; a detached watcher waits for every running
   # thread (including the caller's) to finish, then restarts the server. Open browsers reload themselves.
   # redirect the whole subshell: a forked list left holding the caller's stdout makes `... | tail` wait for the restart
-  restart-when-idle) (cd "$DIR" && exec setsid nohup node scripts/idle-restart.mjs) </dev/null >>"$RUN/idle-restart.log" 2>&1 & echo "restart scheduled: it happens when no thread is running (log: $RUN/idle-restart.log)" ;;
+  restart-when-idle) (cd "$DIR" && exec setsid nohup flock --close -n "$RUN/idle-restart.lock" node scripts/idle-restart.mjs) </dev/null >>"$RUN/idle-restart.log" 2>&1 & echo "restart scheduled: it happens when no thread is running (log: $RUN/idle-restart.log)" ;;
   status) running && echo "up (pid $(cat "$RUN/pid"))" || echo down ;;
   password) cat "$HOME/.config/agent-console/password" 2>/dev/null || echo "(created on first start)" ;;
   url) echo "$(echo "${VSCODE_PROXY_URI:-}" | sed "s/{{port}}/$PORT/")" ;;
