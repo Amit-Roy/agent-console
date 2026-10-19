@@ -79,7 +79,13 @@ export function createTriageService(options: Options) {
   if (!options.repos.length || options.repos.some(repo => !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo))) {
     throw new Error("An explicit repository allowlist is required");
   }
-  const repos = new Set(options.repos);
+  let repos = new Set(options.repos);
+  function updateRepos(next: string[]) {
+    if (!next.length || next.some(repo => !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo))) {
+      throw new Error("An explicit repository allowlist is required");
+    }
+    repos = new Set(next);
+  }
   const github = options.github ?? githubRequest;
   const classify = options.classify ?? classifyTriage;
   const revision = options.assessmentRevision ?? assessmentRevision;
@@ -451,5 +457,5 @@ export function createTriageService(options: Options) {
     for (const resolve of idleListeners) resolve();
   }
   schedule();
-  return { handler, status, waitForIdle, reconcile, close };
+  return { handler, status, waitForIdle, reconcile, updateRepos, close };
 }

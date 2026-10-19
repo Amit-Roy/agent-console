@@ -81,6 +81,26 @@ bin/github-triage status
 
 Configuration is stored in `~/.config/agent-console/github-triage.json`, with mode 0600. Setup generates a private signing secret. The comma-separated repository argument is an explicit allowlist; configure every repository before registering its webhook.
 
+### All owned repositories
+
+Issue #5 uses the existing Pi worker and subscription fallbacks. This keeps the current calibrated scorecards and local CLI credentials in one place; no per-repository Actions workflow or additional Copilot integration is required.
+
+To cover all repositories owned by the authenticated personal account:
+
+```sh
+bin/github-triage configure --owner Amit-Roy https://github-webhook.nefro-dev-coder.duckdns.org/api/github/webhook
+bin/github-triage sync
+bin/github-triage reconcile
+```
+
+Owner discovery paginates GitHub's authenticated owned-repository list. It includes private repositories and forks when issues are enabled and the account has repository administration permission. It excludes archived, disabled, issues-disabled, and other owners' repositories. Organization and collaborator repositories still require an explicit allowlist entry.
+
+Configuration preserves the signing secret, deployment repository, listener settings, and existing allowed repositories. A failed discovery page leaves the previous configuration intact. Newly discovered repositories are added atomically before webhook registration. The running receiver reloads the allowlist on each request, so additions do not interrupt active jobs. When first upgrading an existing worker to this version, run `bin/github-triage restart` before syncing.
+
+`sync` creates missing hooks and repairs event subscriptions without duplicating existing hooks. It preserves other subscribed events and includes `workflow_run` for the deployment repository. `register` also repairs the signing secret on an existing hook. The production watchdog repeats discovery and hook repair with its five-minute reconciliation cycle, so newly created repositories join automatically. Registration failures are retried on the next watchdog run.
+
+Saved allowlist entries are retained even when they no longer qualify for discovery. Remove retired entries from the private configuration explicitly. To return to a fixed allowlist and stop discovery, run `configure owner/repo[,owner/repo] URL`.
+
 For the existing VPS, install the narrow Caddy route using the versioned routing script:
 
 ```sh

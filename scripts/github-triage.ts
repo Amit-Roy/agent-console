@@ -22,16 +22,31 @@ const CALIBRATION_INTERVAL_MS = 24 * 60 * 60_000;
 const CALIBRATION_RETRY_MS = 60 * 60_000;
 const CALIBRATION_PID = path.join(RUN, "calibration-pid");
 const CALIBRATION_ATTEMPT = path.join(RUN, "calibration-attempt");
-type Config = { repos: string[]; secret: string; url: string; port: number; host: string; deploy?: string };
+type Config = { repos: string[]; secret: string; url: string; port: number; host: string; deploy?: string; owner?: string };
+const OWNER = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/;
 
-function config(): Config {
-  const c = JSON.parse(fs.readFileSync(CONFIG, "utf8"));
+function validateConfig(c: Config): Config {
   if (!Array.isArray(c.repos) || !c.repos.length || !c.repos.every((r: unknown) => typeof r === "string" && /^[\w.-]+\/[\w.-]+$/.test(r))) throw Error("Configure an explicit repository allowlist first.");
   if (typeof c.secret !== "string" || c.secret.length < 32) throw Error("Webhook secret must contain at least 32 characters.");
   if (!Number.isInteger(c.port) || c.port < 1024 || c.port > 65535) throw Error("Invalid webhook port.");
   if (!c.host || new URL(c.url).protocol !== "https:") throw Error("Configure an HTTPS webhook URL.");
   if (c.deploy !== undefined && !c.repos.includes(c.deploy)) throw Error("The deploy repository must be in the allowlist.");
+  if (c.owner !== undefined && (typeof c.owner !== "string" || !OWNER.test(c.owner))) throw Error("Invalid repository owner.");
   return c;
+}
+
+function config(): Config {
+  return validateConfig(JSON.parse(fs.readFileSync(CONFIG, "utf8")));
+}
+
+function saveConfig(c: Config) {
+  validateConfig(c);
+  fs.mkdirSync(path.dirname(CONFIG), { recursive: true, mode: 0o700 });
+  const temporary = `${CONFIG}.${process.pid}.${crypto.randomUUID()}`;
+  try {
+    fs.writeFileSync(temporary, JSON.stringify(c, null, 2) + "\n", { mode: 0o600 });
+    fs.renameSync(temporary, CONFIG);
+  } finally { fs.rmSync(temporary, { force: true }); }
 }
 
 // Green CI on main: fast-forward this checkout, then restart the console when idle and this worker after it drains.
@@ -63,14 +78,70 @@ function pid(): number | undefined {
 
 function github(method: string, endpoint: string, body?: unknown): Promise<any> {
   return new Promise((resolve, reject) => {
-    const args = ["api", "--method", method, endpoint];
+    const args = ["api", "--hostname", "github.com", "--method", method, endpoint];
     if (body !== undefined) args.push("--input", "-");
     const p = execFile("gh", args, { env: childEnv(), timeout: 30_000, maxBuffer: 4 << 20 }, (err, stdout) => {
       if (err) return reject(Error(`GitHub ${method} request failed.`));
       try { resolve(stdout.trim() ? JSON.parse(stdout) : undefined); } catch { reject(Error("GitHub returned invalid JSON.")); }
     });
+    p.stdin?.on("error", () => {});
     p.stdin?.end(body === undefined ? undefined : JSON.stringify(body));
   });
+}
+
+async function pages(endpoint: string): Promise<any[]> {
+  const rows: any[] = [];
+  for (let page = 1; ; page++) {
+    const batch = await github("GET", `${endpoint}${endpoint.includes("?") ? "&" : "?"}per_page=100&page=${page}`);
+    if (!Array.isArray(batch)) throw Error("GitHub returned an invalid repository or webhook list.");
+    rows.push(...batch);
+    if (batch.length < 100) return rows;
+  }
+}
+
+async function ownedRepos(owner: string): Promise<string[]> {
+  const user = await github("GET", "user");
+  if (typeof user?.login !== "string" || user.login.toLowerCase() !== owner.toLowerCase()) {
+    throw Error("Repository owner must match the authenticated GitHub account.");
+  }
+  const rows = await pages("user/repos?affiliation=owner");
+  return [...new Set<string>(rows.filter(repo => repo?.owner?.login?.toLowerCase() === owner.toLowerCase()
+    && repo.permissions?.admin === true && repo.has_issues === true && !repo.archived && !repo.disabled
+    && typeof repo.full_name === "string" && /^[\w.-]+\/[\w.-]+$/.test(repo.full_name)
+    && repo.full_name.split("/")[0].toLowerCase() === owner.toLowerCase())
+    .map(repo => repo.full_name))].sort();
+}
+
+async function registerHooks(c: Config, force = false) {
+  for (const repo of c.repos) {
+    const hooks = await pages(`repos/${repo}/hooks`);
+    const existing = hooks.find(h => h.config?.url === c.url);
+    const required = ["issues", "pull_request", ...(repo === c.deploy ? ["workflow_run"] : [])];
+    const events = [...new Set<string>([...(existing?.events ?? []), ...required])];
+    const current = existing?.active && existing.config?.content_type === "json" && existing.config?.insecure_ssl === "0"
+      && (existing.events?.includes("*") || required.every(event => existing.events?.includes(event)));
+    if (!force && current) continue;
+    const body = { name: "web", active: true, events: existing?.events?.includes("*") ? ["*"] : events,
+      config: { url: c.url, content_type: "json", insecure_ssl: "0", secret: c.secret } };
+    const hook = await github(existing ? "PATCH" : "POST", `repos/${repo}/hooks${existing ? `/${existing.id}` : ""}`, body);
+    console.log(`Registered ${repo} webhook ${hook.id}.`);
+  }
+}
+
+async function syncRepos(c: Config): Promise<Config> {
+  if (c.owner) {
+    const discovered = await ownedRepos(c.owner);
+    // Reload before writing so discovery does not overwrite another command's settings.
+    const latest = config();
+    if (latest.owner !== c.owner) throw Error("Repository owner changed during discovery; retry sync.");
+    const repos = [...new Set([...latest.repos, ...discovered])];
+    c = { ...latest, repos };
+    if (repos.length !== latest.repos.length) saveConfig(c);
+  }
+  // The receiver reloads the allowlist per request, before a new hook can deliver.
+  await registerHooks(c);
+  console.log(`Repository sync complete: ${c.repos.length} allowed repositories.`);
+  return c;
 }
 
 async function health(c: Config) {
@@ -184,15 +255,17 @@ async function main() {
   const command = process.argv[2] || "status";
   if (command === "calibrate") { if (process.argv.includes("--background")) startCalibration(); else await calibrate(); return; }
   if (command === "configure") {
-    const repos = (process.argv[3] || "Amit-Roy/agent-console").split(",");
-    const url = process.argv[4];
-    if (!url || new URL(url).protocol !== "https:") throw Error("Usage: bin/github-triage configure owner/repo[,owner/repo] https://host/api/github/webhook");
-    let secret = crypto.randomBytes(32).toString("hex");
-    try { secret = config().secret; } catch { /* First setup generates a private signing secret. */ }
-    fs.mkdirSync(path.dirname(CONFIG), { recursive: true, mode: 0o700 });
-    fs.writeFileSync(CONFIG, JSON.stringify({ repos, secret, url, port: 7077, host: "0.0.0.0" }, null, 2) + "\n", { mode: 0o600 });
-    fs.chmodSync(CONFIG, 0o600);
-    config();
+    const ownerMode = process.argv[3] === "--owner";
+    const owner = ownerMode ? process.argv[4] : undefined;
+    const url = process.argv[ownerMode ? 5 : 4];
+    if (ownerMode && (!owner || !OWNER.test(owner))) throw Error("Invalid repository owner.");
+    if (!url || new URL(url).protocol !== "https:") throw Error("Usage: bin/github-triage configure owner/repo[,owner/repo]|--owner OWNER https://host/api/github/webhook");
+    let previous: Config | undefined;
+    if (fs.existsSync(CONFIG)) previous = config();
+    const repos = owner ? [...new Set([...(previous?.repos ?? []), ...await ownedRepos(owner)])]
+      : (process.argv[3] || "Amit-Roy/agent-console").split(",");
+    const next = { port: 7077, host: "0.0.0.0", ...previous, repos, secret: previous?.secret ?? crypto.randomBytes(32).toString("hex"), url, owner };
+    saveConfig(next);
     console.log("Webhook configuration saved. Signing secret remains private.");
     return;
   }
@@ -202,7 +275,7 @@ async function main() {
   }
   if (command === "watchdog") {
     if (process.env.AGENT_CONSOLE_MOCK === "1" || !fs.existsSync(CONFIG)) return;
-    const c = config();
+    let c = config();
     let restarted = false;
     try { await health(c); }
     catch {
@@ -227,7 +300,10 @@ async function main() {
     }
     let last = 0;
     try { last = Number(fs.readFileSync(LAST_RECONCILE, "utf8")); } catch {}
-    if (restarted || !Number.isFinite(last) || last > Date.now() || Date.now() - last >= RECONCILE_INTERVAL_MS) await reconcile(c);
+    if (restarted || !Number.isFinite(last) || last > Date.now() || Date.now() - last >= RECONCILE_INTERVAL_MS) {
+      if (c.owner) c = await syncRepos(c);
+      await reconcile(c);
+    }
     return;
   }
   if (command === "stop" || command === "restart") {
@@ -251,7 +327,11 @@ async function main() {
     fs.mkdirSync(RUN, { recursive: true, mode: 0o700 });
     let service: ReturnType<typeof createTriageService> | undefined;
     const server = http.createServer((req, res) => {
-      if (service) service.handler(req, res);
+      if (service) {
+        try { service.updateRepos(config().repos); }
+        catch { res.writeHead(503); res.end(); return; }
+        service.handler(req, res);
+      }
       else { res.writeHead(503); res.end(); }
     });
     server.requestTimeout = 10_000;
@@ -288,13 +368,12 @@ async function main() {
   }
   if (command === "register") {
     await health(c);
-    for (const repo of c.repos) {
-      const hooks = await github("GET", `repos/${repo}/hooks?per_page=100`);
-      const existing = hooks.find((h: any) => h.config?.url === c.url);
-      const body = { name: "web", active: true, events: ["issues", "pull_request"], config: { url: c.url, content_type: "json", insecure_ssl: "0", secret: c.secret } };
-      const hook = await github(existing ? "PATCH" : "POST", `repos/${repo}/hooks${existing ? `/${existing.id}` : ""}`, body);
-      console.log(`Registered ${repo} webhook ${hook.id}.`);
-    }
+    await registerHooks(c, true);
+    return;
+  }
+  if (command === "sync") {
+    await health(c);
+    await syncRepos(c);
     return;
   }
   if (command === "backfill") {
@@ -318,7 +397,7 @@ async function main() {
     console.log(`Queued ${count} open issues and pull requests for model triage.`);
     return;
   }
-  throw Error("Usage: bin/github-triage configure|start|stop|restart|status|watchdog|register|backfill|reconcile|calibrate");
+  throw Error("Usage: bin/github-triage configure|start|stop|restart|status|watchdog|sync|register|backfill|reconcile|calibrate");
 }
 
 main().catch(err => { console.error(err instanceof Error ? err.message : "GitHub triage failed."); process.exitCode = 1; });
