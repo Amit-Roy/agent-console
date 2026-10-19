@@ -43,4 +43,5 @@ try {
   assert.deepEqual(calls, ["abort"], "stop with background work kills the agent process");
   assert.equal(threads.get(t.id).background, undefined);
   console.log("PASS stop ends background subagents; plain turns are still interrupted in place");
-} finally { fs.rmSync(data, { recursive: true, force: true }); process.exit(0); }
+} catch (error) { console.error(error); process.exitCode = 1; }
+finally { fs.rmSync(data, { recursive: true, force: true }); setTimeout(() => process.exit(process.exitCode ?? 0), 50); }
