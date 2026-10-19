@@ -54,6 +54,8 @@ try {
   const launch = launches[0];
   assert.ok(launch.nice >= 15);
   assert.ok(launch.args.includes("--no-code-aware"));
+  assert.ok(launch.args.includes("--no-ccr"), "Clients without a retrieval tool must receive output instead of unresolved CCR markers");
+  assert.ok(!launch.args.includes("--lossless"), "Disabling CCR must preserve the existing compression pipeline");
   assert.ok(launch.args.includes("--disable-kompress"));
   assert.ok(launch.args.includes("--disable-kompress-fallback"));
   assert.ok(!launch.args.includes("--no-rate-limit"));

@@ -42,10 +42,14 @@ export function createFileViewer(apiFetch, report = () => {}) {
   const heading = el("div", "file-viewer-heading");
   const title = el("h2"); title.id = "file-viewer-title";
   const path = el("p", "file-viewer-path"); path.id = "file-viewer-path";
+  const copyPath = iconButton("copy", "Copy path");
+  const pathRow = el("div", "file-viewer-path-row");
+  pathRow.style.cssText = "display:flex;align-items:center;gap:var(--sp-2);";
+  pathRow.append(path, copyPath);
   const meta = el("div", "file-viewer-meta");
   const status = el("span"); status.id = "file-viewer-status"; status.setAttribute("role", "status");
   meta.append(status);
-  heading.append(title, path, meta);
+  heading.append(title, pathRow, meta);
   const close = iconButton("x", "Close file viewer");
   close.autofocus = true;
   header.append(heading, close);
@@ -176,6 +180,7 @@ export function createFileViewer(apiFetch, report = () => {}) {
   files.onclick = () => { treeShown = !treeShown; showTree(); if (treeShown) ensureTree(); };
   const paint = () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
   wireCopy(copy, () => content, "Copy file");
+  wireCopy(copyPath, () => path.textContent, "Copy path");
   source.onclick = async () => {
     if (!currentTextFile) return;
     const token = generation, at = performance.now();

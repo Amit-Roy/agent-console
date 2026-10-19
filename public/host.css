@@ -1,0 +1,75 @@
+/* Host dashboard. Extends the console's token layer (style.css + dashboard.css). No emoji, one accent. */
+
+body.host{display:flex;flex-direction:column;height:100vh;margin:0;overflow:hidden}
+body.host .dh{flex:0 0 auto}
+body.host #hm{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch}
+
+/* ---------- live chip ---------- */
+.live{display:flex;align-items:center;gap:var(--sp-2);margin-left:auto;color:var(--t2);font:var(--fw-reg) var(--f-xs);white-space:nowrap}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--ok);opacity:.55;animation:pulse 1.2s infinite}
+@keyframes pulse{0%,100%{opacity:.55}50%{opacity:1}}
+.live.paused .dot{animation:none;opacity:.35;background:var(--t3)}
+
+/* ---------- gauges: HIG capacity style, continuous fill ---------- */
+.gauge{width:100%;height:10px;border-radius:var(--r-full);background:var(--s3);overflow:hidden;position:relative}
+.gauge i{position:absolute;left:0;top:0;bottom:0;border-radius:var(--r-full);background:var(--accent);min-width:2px;transition:width var(--dur-1) var(--ease),background-color var(--dur-1) var(--ease)}
+.gauge.warn i{background:var(--warn)}
+.gauge.bad i{background:var(--bad)}
+.gauge .v{position:absolute;right:0;top:calc(100% + 3px);font:var(--fw-semi) var(--fm-xs);color:var(--t1);font-variant-numeric:tabular-nums}
+.gauge.wrap{display:flex;align-items:center;justify-content:space-between;gap:var(--sp-3);margin-bottom:var(--sp-3)}
+.gauge.wrap .l{color:var(--t2);font:var(--fw-reg) var(--f-sm);min-width:5rem}
+
+/* ---------- per-core mini bars ---------- */
+.cores{display:grid;grid-template-columns:repeat(auto-fill,minmax(5.5rem,1fr));gap:var(--sp-2)}
+.core{display:flex;flex-direction:column;gap:2px}
+.core .n{font:var(--fw-reg) var(--f-xs);color:var(--t3);text-transform:uppercase;letter-spacing:var(--ls-xs)}
+.core .b{height:6px;border-radius:var(--r-full);background:var(--s3);overflow:hidden;position:relative}
+.core .b i{display:block;height:100%;border-radius:var(--r-full);background:var(--accent);min-width:1px;transition:width var(--dur-1) var(--ease)}
+.core .v{font:var(--fw-reg) var(--fm-xs);color:var(--t1);font-variant-numeric:tabular-nums}
+
+/* ---------- tables ---------- */
+.scroll{overflow:auto}
+table.proc,table.ports{width:100%;border-collapse:collapse;font:var(--fw-reg) var(--f-sm);font-variant-numeric:tabular-nums}
+table.proc th,table.proc td,table.ports th,table.ports td{padding:var(--sp-1) var(--sp-2);border-bottom:1px solid var(--edge);vertical-align:baseline}
+table.proc th:first-child,table.ports th:first-child,table.proc td:first-child,table.ports td:first-child{text-align:left}
+table.proc th,table.ports th{color:var(--t2);font-weight:var(--fw-med);font:var(--fw-med) var(--f-sm);text-align:left;cursor:pointer;user-select:none;white-space:nowrap}
+table.proc th:hover,table.ports th:hover{color:var(--t1)}
+table.proc tr:hover{background:var(--s3)}
+table.proc tr:last-child td,table.ports tr:last-child td{border-bottom:0}
+table.proc td.name{max-width:18ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+table.proc td.user{max-width:10ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+td.name{font-family:var(--font-mono)}
+td.cmd{font-family:var(--font-mono);color:var(--t2);max-width:34ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+td.state{font-family:var(--font-mono);width:4.5rem}
+.state.r{color:var(--ok)} .state.s{color:var(--t2)} .state.d{color:var(--bad)} .state.z{color:var(--t3)} .state.t{color:var(--warn)}
+td.user{color:var(--t2)}
+.act{display:flex;gap:var(--sp-1)}
+.btn.kill{color:var(--bad)}
+.btn.kill:hover:not(:disabled){background:var(--bad-tint);color:var(--bad)}
+.btn.kill.sure{background:var(--bad);color:var(--on-stop)}
+.btn.kill.sure:hover:not(:disabled){background:var(--stop-hover)}
+.btn.kill:disabled{opacity:1;color:var(--t3);cursor:default}
+
+/* ---------- mount list ---------- */
+.mount{display:flex;align-items:center;justify-content:space-between;gap:var(--sp-3);padding:var(--sp-1) 0;border-bottom:1px solid var(--edge)}
+.mount:last-child{border-bottom:0}
+.mount .l{min-width:14rem;flex:none}
+.mount .l b{color:var(--t1)}
+.mount .m{color:var(--t2);font:var(--fw-reg) var(--f-xs)}
+.mount .gauge{flex:1;min-width:12rem}
+
+/* ---------- toast ---------- */
+#toast{position:fixed;z-index:30;bottom:max(var(--sp-5),env(safe-area-inset-bottom));right:max(var(--sp-5),env(safe-area-inset-right));max-width:18rem;padding:var(--sp-3) var(--sp-4);border-radius:var(--r-lg);background:var(--s1);color:var(--t1);box-shadow:var(--shadow-pop);border:1px solid var(--edge);font:var(--fw-reg) var(--f-sm);opacity:0;transition:opacity var(--dur-1) var(--ease),transform var(--dur-1) var(--ease);transform:translateY(10px)}
+#toast.show{opacity:1;transform:translateY(0)}
+#toast.ok{color:var(--ok)}
+#toast.bad{color:var(--bad)}
+
+@media (max-width:560px){.live{margin-left:0;width:100%;justify-content:space-between;order:2}.dh h1{order:1;flex-basis:100%}.mount .l{min-width:10rem}}
+
+.kv{display:grid;grid-template-columns:1fr auto;gap:var(--sp-1) var(--sp-3)}
+.kv .k{color:var(--t2)}
+.kv .v{font-variant-numeric:tabular-nums;text-align:right}
+
+/* sort indicators on column headings */
+table.proc th.sort-desc::after,table.ports th.sort-desc::after{content:"";display:inline-block;width:0;height:0;margin-left:6px;border:4px solid transparent;border-bottom-color:currentColor}
+table.proc th.sort-asc::after,table.ports th.sort-asc::after{content:"";display:inline-block;width:0;height:0;margin-left:6px;border:4px solid transparent;border-top-color:currentColor}

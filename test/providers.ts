@@ -3,7 +3,7 @@ import { brainContext } from "../server/providers/brain.ts";
 import { codexTranslator, unwrapShell } from "../server/providers/codex.ts";
 import { parseEnv } from "../server/providers/env.ts";
 import { replayPreamble, threadToMarkdown, turnsOf } from "../server/export.ts";
-import { excerpt, needsLabel, parseLabels } from "../server/providers/label.ts";
+import { excerpt, needsLabel, parseLabels, mcpName, mcpSketch } from "../server/providers/label.ts";
 import { claudeAdvisorArgs, claudeConsoleSettingsArgs, claudeRoutingEnv, leanMcpArgs } from "../server/providers/claude.ts";
 import { cleanTitle, titleText, titleInput } from "../server/providers/title.ts";
 import { normTool, parsePiModels, piTranslator } from "../server/providers/pi.ts";
@@ -45,8 +45,12 @@ check("title: capped at 30 chars on a word boundary", cleanTitle("Refresh thread
 check("title: a whole sentence is not a title", cleanTitle("I'm sorry, but I cannot determine a title for this particular message because it is empty.") === undefined);
 check("title: empty / junk is rejected", cleanTitle("") === undefined && cleanTitle(undefined) === undefined && cleanTitle('""') === undefined);
 check("title input: media references dropped", titleText("look ![a](/x/y.png) at [Image #2] this data:image/png;base64,AAAA bug") === "look at this bug");
-check("title input: capped at 100 chars", titleText("x".repeat(500)).length === 100);
-check("title input: only the last two non-empty messages", titleInput(["a", "b", "![i](x)", "c"]).join("|") === "b|c");
+check("title input: a long message is kept whole", titleText("x".repeat(500)).length === 500);
+check("title input: every non-empty message, oldest first", titleInput(["a", "b", "![i](x)", "c"]).join("|") === "a|b|c");
+check("title input: newest messages fill the budget", titleInput(["old".repeat(100), "n".repeat(300), "m".repeat(300)], 700).join("|").startsWith("old") === false && titleInput(["old".repeat(100), "n".repeat(300), "m".repeat(300)], 700).length === 2);
+check("title input: overflow message is cut, not dropped", titleInput(["a".repeat(900), "b".repeat(300)], 700).map(m => m.length).join() === "400,300");
+check("title input: tiny remainder is not worth a fragment", titleInput(["a".repeat(900), "b".repeat(300)], 400).map(m => m.length).join() === "300");
+check("title input: 100000 chars by default", titleInput(["x".repeat(60_000), "y".repeat(60_000)]).reduce((n, m) => n + m.length, 0) === 100_000);
 
 // ---- tool labels
 check("labels: only a 100-char excerpt of a command is sent, with dots", excerpt("x".repeat(500)) === "x".repeat(100) + "..." && excerpt("ls  -la\n/tmp") === "ls -la /tmp");
@@ -59,6 +63,7 @@ check("labels: parses a clean JSON array", JSON.stringify(parseLabels('["Running
 check("labels: tolerates a code fence around the array", parseLabels('```json\n["Checking git status"]\n```', 1)?.[0] === "Checking git status");
 check("labels: wrong length is rejected", parseLabels('["a", "b"]', 3) === undefined);
 check("labels: prose / empty entries are rejected", parseLabels("Sure! Here you go", 1) === undefined && parseLabels('["ok", ""]', 2) === undefined && parseLabels("[1,", 1) === undefined);
+check("labels: MCP calls without a description need one, with a readable sketch", needsLabel("mcp__codegraph__codegraph_explore", { query: "x" }) && !needsLabel("mcp__a__b", { description: "d" }) && mcpName("mcp__codegraph__explore") === "codegraph/explore" && mcpSketch("mcp__a__b", { query: "find me" }) === "a/b: find me");
 check("labels: only description-less Bash needs one", needsLabel("Bash", { command: "ls" }) && !needsLabel("Bash", { command: "ls", description: "Lists files" }) && !needsLabel("Read", { file_path: "/a" }) && !needsLabel("Bash", { command: "  " }));
 
 // ---- export / fork replay
@@ -147,6 +152,16 @@ const o2 = run((emit) => piTranslator(emit), [
 ]);
 check("pi: rate-limit becomes a readable error + failed result", o2.some((e) => e.type === "console_error" && e.text.startsWith("Rate limit exceeded: free-models-per-day")) && o2.at(-1).is_error === true, JSON.stringify(o2));
 check("pi: error text is not raw JSON", !o2.find((e) => e.type === "console_error").text.includes("{"));
+// captured from a scheduled NVIDIA run: a 500 mid-turn, pi retried, the turn then finished normally
+const nv = `500: {"message":"Failed to generate completions","type":"Internal Server Error","code":500}`;
+const o2b = run((emit) => piTranslator(emit), [
+  { type: "agent_start" },
+  { type: "message_end", message: { role: "assistant", stopReason: "error", errorMessage: nv, content: [], usage: {} } },
+  { type: "auto_retry_start", attempt: 1, errorMessage: nv, delayMs: 2000 },
+  { type: "message_end", message: { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "Report done." }], usage: {} } },
+  { type: "agent_settled", aborted: false },
+]);
+check("pi: a retried provider error does not fail the finished turn", o2b.at(-1).subtype === "success" && !o2b.some((e) => e.type === "console_error"), JSON.stringify(o2b));
 const o3 = run((emit) => piTranslator(emit), [{ type: "response", command: "prompt", success: false, error: "No model selected" }]);
 check("pi: rejected prompt unlocks the thread (result emitted)", o3.at(-1)?.type === "result" && o3.at(-1).is_error);
 const o4 = run((emit) => piTranslator(emit), [{ type: "agent_start" }, { type: "agent_settled", aborted: true }]);
