@@ -3,6 +3,7 @@ import { spawnLines, parseJson } from "./proc.ts";
 import { childEnv } from "./env.ts";
 import { codexRouting } from "./codex-routing.ts";
 import { harnessInstructions } from "./brain.ts";
+import { consoleCodexMcpArgs } from "./console-mcp.mjs";
 import { retryEvent } from "../turn-timing.ts";
 import { cleanQuestions, IMAGE_ONLY_PROMPT, type Agent, type AgentCtx, type Attachment, type Question, type QuestionReply, type ThreadSpec } from "./types.ts";
 
@@ -108,8 +109,8 @@ export function startCodexApp(t: ThreadSpec, ctx: AgentCtx, translate: (row: any
     asks.clear();
   };
   const ask = process.env.AGENT_CONSOLE_CODEX_ASK === "0" ? [] : ["--enable", "default_mode_request_user_input"];
-  const routing = codexRouting(childEnv());
-  const p = spawnLines("codex", "codex", ["app-server", "-c", "analytics.enabled=false", "-c", "feedback.enabled=false", ...ask, ...routing.args], { cwd: t.cwd, env: routing.env }, {
+  const routing = codexRouting({ ...childEnv(), AGENT_CONSOLE_THREAD: t.id });
+  const p = spawnLines("codex", "codex", ["app-server", "-c", "analytics.enabled=false", "-c", "feedback.enabled=false", ...ask, ...routing.args, ...consoleCodexMcpArgs()], { cwd: t.cwd, env: routing.env }, {
     ...ctx,
     exited(info) {
       alive = false;

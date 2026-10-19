@@ -55,9 +55,9 @@ check("title input: 100000 chars by default", titleInput(["x".repeat(60_000), "y
 // ---- tool labels
 check("labels: only a 100-char excerpt of a command is sent, with dots", excerpt("x".repeat(500)) === "x".repeat(100) + "..." && excerpt("ls  -la\n/tmp") === "ls -la /tmp");
 process.env.AGENT_CONSOLE_MCP = "nonexistent";
-check("lean context: only named MCP servers load (strict), none when unknown", leanMcpArgs()[0] === "--strict-mcp-config" && JSON.parse(leanMcpArgs()[2]).mcpServers && Object.keys(JSON.parse(leanMcpArgs()[2]).mcpServers).length === 0);
+check("lean context: only named MCP servers load (strict), none when unknown", leanMcpArgs()[0] === "--strict-mcp-config" && JSON.parse(leanMcpArgs()[2]).mcpServers && Object.keys(JSON.parse(leanMcpArgs()[2]).mcpServers).length === (process.env.AGENT_CONSOLE_TOOL_URL && process.env.AGENT_CONSOLE_TOOL_TOKEN ? 1 : 0));
 process.env.AGENT_CONSOLE_MCP = "all";
-check("lean context: AGENT_CONSOLE_MCP=all restores every server", leanMcpArgs().length === 0);
+check("lean context: AGENT_CONSOLE_MCP=all restores every server", leanMcpArgs().length === (process.env.AGENT_CONSOLE_TOOL_URL && process.env.AGENT_CONSOLE_TOOL_TOKEN ? 2 : 0));
 delete process.env.AGENT_CONSOLE_MCP;
 check("labels: parses a clean JSON array", JSON.stringify(parseLabels('["Running the tests", "Listing files."]', 2)) === JSON.stringify(["Running the tests", "Listing files"]));
 check("labels: tolerates a code fence around the array", parseLabels('```json\n["Checking git status"]\n```', 1)?.[0] === "Checking git status");
