@@ -50,8 +50,10 @@ function spawnProxy() {
   const env = { ...process.env, ...privacyEnv, HEADROOM_WORKERS: "1", HEADROOM_COMPRESS_WORKERS: "1", HEADROOM_LOG_MESSAGES: "0",
     OMP_NUM_THREADS: "1", MKL_NUM_THREADS: "1", OPENBLAS_NUM_THREADS: "1", NUMEXPR_NUM_THREADS: "1", TOKENIZERS_PARALLELISM: "false" };
   if (env.ANTHROPIC_BASE_URL?.replace(/\/+$/, "") === URL_) delete env.ANTHROPIC_BASE_URL;
+  // Provider clients cannot call Headroom's injected retrieval tool. Keep compression,
+  // but never replace tool output with CCR markers that the agent cannot resolve.
   const p = spawn("nice", ["-n", "15", "headroom", "proxy", "--host", "127.0.0.1", "--port", String(PORT),
-    "--compression-max-workers", "1", "--no-code-aware", "--workers", "1",
+    "--compression-max-workers", "1", "--no-code-aware", "--no-ccr", "--workers", "1",
     "--disable-kompress", "--disable-kompress-fallback", "--anthropic-pre-upstream-concurrency", "1"], {
     env,
     stdio: ["ignore", "pipe", "pipe"],
