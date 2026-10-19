@@ -654,7 +654,7 @@ div.msg.foot{margin-top:calc(var(--sp-2) * -1)}
 .toolbar .spacer{flex:1}
 #send,#stop,#attach{width:var(--ctl-h);padding:0}
 /* attach: leading edge (adds content; Send keeps the trailing edge), extra space before the text chips */
-#attach{margin-right:var(--sp-1);color:var(--t2)}
+#attach{color:var(--t2)}
 /* one glyph size across the composer toolbar: attach, permission, send, stop and the context ring all draw at 18px */
 .toolbar{--ico:1.125rem}
 #attach:hover:not(:disabled){background:var(--hover);color:var(--t1)}
@@ -821,7 +821,7 @@ body.login{display:grid;place-items:center;overflow:auto;padding:var(--sp-4)}
 @media (max-width: 600px) {
   :root{--ctl-h:2.75rem;--ctl-h-sm:2.75rem;--item-h:2.75rem}
   #cbox{padding:var(--sp-3) var(--sp-3) var(--sp-2)}
-  #cbox .toolbar{flex-wrap:wrap;margin-left:calc(var(--sp-3) / -2);margin-right:calc(var(--sp-3) / -2);gap:var(--sp-1)}
+  #cbox .toolbar{flex-wrap:wrap;margin-left:calc(var(--sp-3) / -2);margin-right:calc(var(--sp-3) / -2);gap:0}
   /* settings stay one group at the leading edge (they shrink, never stretch); status and send own the trailing edge */
   #cbox .toolbar #model,#cbox .toolbar #effort{flex:1 1 2.75rem;max-width:max-content;min-width:2.75rem;padding:0 var(--sp-2);gap:var(--sp-1)}
   #model .compact-label,#effort .compact-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
