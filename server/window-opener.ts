@@ -45,8 +45,14 @@ export function inHours(ts: number, cfg: Pick<OpenerConfig, "from" | "to" | "tz"
   return a < b ? now >= a && now < b : now >= a || now < b;
 }
 
-/** No reading, or a reading whose reset time has passed, means no window is running. */
-export const needsOpen = (u: ProviderUsage | undefined, now: number) => !fiveHour(u, now);
+const FULL_WINDOW_MS = 5 * 3_600_000, IDLE_SLACK_MS = 2 * 60_000;
+/** No reading, a reading whose reset time has passed, or an idle account means no window is running. Codex reports an idle
+ *  account as 0% used with a reset a full five hours after the reading, so that window has not started. */
+export function needsOpen(u: ProviderUsage | undefined, now: number): boolean {
+  const w = fiveHour(u, now);
+  if (!w) return true;
+  return w.used === 0 && !!u && w.resetsAt - u.updatedAt >= FULL_WINDOW_MS - IDLE_SLACK_MS;
+}
 
 export function createOpener(opts: {
   usage: () => Record<string, ProviderUsage>;

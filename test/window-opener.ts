@@ -22,6 +22,11 @@ const w = (resetsAt: number) => ({ windows: [{ label: "5-hour", used: 5, limit: 
 assert.equal(needsOpen(undefined, night), true, "never seen");
 assert.equal(needsOpen(w(night - 1), night), true, "window already reset");
 assert.equal(needsOpen(w(night + 60_000), night), false);
+// Codex reports an idle account as 0% used with a reset five hours after the reading; that window has not started.
+const idle = (readAt: number, used = 0) => ({ windows: [{ label: "5-hour", used, limit: 100, resetsAt: readAt + 300 * 60_000 + 1_400 }], updatedAt: readAt });
+assert.equal(needsOpen(idle(night), night), true, "0% used and a reset a full 5h after the reading: not started");
+assert.equal(needsOpen({ windows: [{ label: "5-hour", used: 0, limit: 100, resetsAt: night + 285 * 60_000 }], updatedAt: night }, night), false, "0% used but the reset is 4h45 away: started 15 min ago");
+assert.equal(needsOpen(idle(night, 3), night), false, "any use means a real window");
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ac-opener-"));
 const cfg = path.join(dir, "window-dispatch.json");
