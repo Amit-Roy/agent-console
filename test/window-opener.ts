@@ -16,7 +16,11 @@ assert.equal(inHours(at("2026-10-20T22:00:00Z"), hours), true, "overnight range,
 assert.equal(inHours(noon, hours), false);
 assert.equal(inHours(at("2026-10-20T01:30:00Z"), hours), false, "07:00 IST is the first closed minute");
 assert.equal(inHours(noon, { from: "09:00", to: "17:00", tz: IST }), true, "same-day range");
-assert.equal(inHours(noon, { from: "09:00", to: "09:00", tz: IST }), false, "empty range");
+assert.equal(inHours(noon, { from: "09:00", to: "09:00", tz: IST }), true, "equal bounds mean all day");
+
+for (let hour = 0; hour < 24; hour++) {
+  assert.equal(inHours(noon + hour * 3_600_000, { from: "00:00", to: "00:00", tz: IST }), true, `all-day includes hour ${hour}`);
+}
 
 const w = (resetsAt: number) => ({ windows: [{ label: "5-hour", used: 5, limit: 100, resetsAt }], updatedAt: 0 });
 assert.equal(needsOpen(undefined, night), true, "never seen");
@@ -34,7 +38,10 @@ try {
   assert.equal(loadOpenerConfig(cfg).enabled, false);
   fs.writeFileSync(cfg, JSON.stringify({ opener: { enabled: true, from: "25:00", providers: ["claude", "evil"], tz: "Nowhere/Land" } }));
   const c = loadOpenerConfig(cfg);
-  assert.equal(c.from, "23:00", "bad time falls back"); assert.deepEqual(c.providers, ["claude"], "unknown providers dropped"); assert.equal(c.tz, IST); assert.equal(c.dryRun, true);
+  assert.equal(c.from, "00:00", "bad time falls back"); assert.deepEqual(c.providers, ["claude"], "unknown providers dropped"); assert.equal(c.tz, IST); assert.equal(c.dryRun, true);
+
+  assert.equal(inHours(noon, loadOpenerConfig(cfg)), true, "default opens during daytime");
+  assert.equal(inHours(night, loadOpenerConfig(cfg)), true, "default opens during nighttime");
 
   let t = night; const opened: string[] = []; let usage: any = {}; let refreshed = 0;
   const o = createOpener({ usage: () => usage, refresh: async () => { refreshed++; }, open: p => { opened.push(p); }, dir, now: () => t });
@@ -44,8 +51,8 @@ try {
   assert.deepEqual(await o.tick(), [], "not twice in ten minutes even if usage has not caught up");
   t += 10 * 60_000; usage = { claude: w(t + 3_600_000) };
   assert.deepEqual(await o.tick(), ["codex"], "claude has a live window now; codex still does not");
-  t = noon;
-  assert.deepEqual(await o.tick(), [], "outside the hours nothing is opened");
+  t = noon + 24 * 3_600_000;
+  assert.deepEqual(await o.tick(), ["claude", "codex"], "default opens during daytime too");
   const rows = fs.readFileSync(path.join(dir, "window-opener.jsonl"), "utf8").trim().split("\n").map(l => JSON.parse(l));
   assert.deepEqual(rows[0], { ts: night, dryRun: false, provider: "claude", ...OPENER_ROUTES.claude });
 
@@ -68,7 +75,7 @@ try {
   {
     const ev = createEventLog({ file: path.join(dir, "ev.jsonl"), now: () => t });
     fs.rmSync(path.join(dir, "window-opener.jsonl"), { force: true });
-    fs.writeFileSync(cfg, JSON.stringify({ opener: { enabled: true, dryRun: false, providers: ["claude"] } }));
+    fs.writeFileSync(cfg, JSON.stringify({ opener: { enabled: true, dryRun: false, providers: ["claude"], from: "23:00", to: "07:00" } }));
     const msgs = () => ev.read({ step: "opener" }).events.map(e => `${e.kind}:${e.msg}`);
     let usage2: any = {}; let boom = false;
     const o2 = createOpener({ usage: () => usage2, open: () => { if (boom) throw new Error("spawn failed"); }, dir, now: () => t, events: ev });
@@ -82,4 +89,4 @@ try {
     assert.ok(msgs().some(m => /^fail:claude: spawn failed/.test(m)), "a failed open is a failure on the dashboard");
   }
 } finally { fs.rmSync(dir, { recursive: true, force: true }); }
-console.log("PASS window opener: overnight hours, live-window check, ten-minute gap, config validation, dry run, failed open");
+console.log("PASS window opener: all-day defaults, custom overnight hours, live-window check, ten-minute gap, config validation, dry run, failed open");

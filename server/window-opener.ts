@@ -5,19 +5,19 @@ import { fiveHour } from "./window-dispatch.ts";
 import type { ProviderUsage } from "./usage.ts";
 import type { EventLog } from "./automation/events.ts";
 
-// A 5-hour window opens at the first message after the previous one ended. Overnight nothing opens one, so the quota that
-// window-dispatch could use never starts counting down. During the configured hours, send one tiny message to each provider
-// that has no live window; it ends five hours later, inside the hours when nobody is using it, which gives the dispatcher a slot.
+// A five-hour window starts with the first message after the previous window ends.
+// Open idle providers throughout the day so the dispatcher can use expiring quota.
+// Optional hour bounds restrict openings; equal bounds allow all day.
 
 export interface OpenerConfig {
   enabled: boolean;
   dryRun: boolean;
   from: string;        // HH:MM local: first minute windows may be opened
-  to: string;          // HH:MM local: windows are not opened from here on (may be earlier than `from`: overnight)
+  to: string;          // HH:MM local: exclusive end; equal to `from` means all day
   providers: string[]; // claude, codex
   tz: string;
 }
-export const OPENER_DEFAULTS: OpenerConfig = { enabled: false, dryRun: true, from: "23:00", to: "07:00", providers: ["claude", "codex"], tz: "Asia/Kolkata" };
+export const OPENER_DEFAULTS: OpenerConfig = { enabled: false, dryRun: true, from: "00:00", to: "00:00", providers: ["claude", "codex"], tz: "Asia/Kolkata" };
 export const OPENER_ROUTES: Record<string, { model: string; effort: string }> = {
   claude: { model: "sonnet", effort: "low" },
   codex: { model: "gpt-6.1-sol", effort: "low" },
@@ -41,7 +41,7 @@ export function localMinutes(ts: number, tz: string): number {
 export function inHours(ts: number, cfg: Pick<OpenerConfig, "from" | "to" | "tz">): boolean {
   const m = (s: string) => Number(s.slice(0, 2)) * 60 + Number(s.slice(3));
   const now = localMinutes(ts, cfg.tz), a = m(cfg.from), b = m(cfg.to);
-  if (a === b) return false;
+  if (a === b) return true;
   return a < b ? now >= a && now < b : now >= a || now < b;
 }
 
