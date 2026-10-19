@@ -5,6 +5,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 import { chromium } from "playwright";
 
 const data = fs.mkdtempSync(path.join(os.tmpdir(), "ac-automation-ui-"));
@@ -25,9 +26,15 @@ const gd = path.join(data, "main.git", "worktrees", "r-issue-5");
 fs.mkdirSync(path.join(gd, "ac-hooks"), { recursive: true }); fs.mkdirSync(path.join(wts, "r-issue-5"), { recursive: true });
 fs.writeFileSync(path.join(wts, "r-issue-5", ".git"), `gitdir: ${gd}\n`);
 fs.writeFileSync(path.join(gd, "ac-hooks", "pre-push"), `#!/bin/sh\nif [ "$remote_ref" = "refs/heads/main" ]; then exit 1; fi\n`);
+// a local agent-console checkout for the Debug button
+const g = (cwd: string, ...a: string[]) => execFileSync("git", ["-C", cwd, "-c", "user.name=t", "-c", "user.email=t@t", ...a], { stdio: "ignore" });
+const repos = path.join(data, "repos"), origin = path.join(data, "origin.git"), local = path.join(repos, "agent-console");
+fs.mkdirSync(origin); g(origin, "init", "-q", "--bare", "-b", "main"); fs.mkdirSync(repos);
+execFileSync("git", ["clone", "-q", origin, local], { stdio: "ignore" });
+fs.writeFileSync(path.join(local, "a"), "1"); g(local, "add", "a"); g(local, "commit", "-qm", "init"); g(local, "push", "-q", "origin", "HEAD:main"); g(local, "remote", "set-head", "origin", "main");
 process.env.AGENT_CONSOLE_DATA = data;
 const { makeToken } = await import("../server/auth.ts");
-const server = spawn(process.execPath, ["server/index.ts"], { env: { ...process.env, PORT: "17779", AGENT_CONSOLE_MOCK: "1", AGENT_CONSOLE_BRAIN: path.join(data, "no-brain"), AGENT_CONSOLE_WORKTREES: wts }, stdio: "ignore" });
+const server = spawn(process.execPath, ["server/index.ts"], { env: { ...process.env, PORT: "17779", AGENT_CONSOLE_MOCK: "1", AGENT_CONSOLE_BRAIN: path.join(data, "no-brain"), AGENT_CONSOLE_WORKTREES: wts, AGENT_CONSOLE_REPOS: repos }, stdio: "ignore" });
 const cookie = { name: "ac_session", value: makeToken(), url: base };
 const post = (body: object) => fetch(base + "/api/automation/_mock/event", { method: "POST", headers: { "content-type": "application/json", cookie: `ac_session=${cookie.value}` }, body: JSON.stringify(body) });
 let browser;
@@ -60,10 +67,11 @@ try {
     ok("Threads lane shows only the plain chat", (await page.locator("#threads li:not(.empty-list) .t").allInnerTexts()).join("|") === "Plain chat");
     await page.click("#lane-auto");
     ok("Auto lane is selected and visible", (await page.getAttribute("#lane-auto", "aria-selected")) === "true" && await page.locator("#pane-auto").isVisible());
-    const rows = await page.locator("#autos li[data-thread] .t").allInnerTexts();
+    const rows = (await page.locator("#autos li[data-thread] .t").allInnerTexts()).filter(t => !t.startsWith("ac:debug")); // a debug thread from an earlier viewport belongs here too
     ok("both runs of the issue are listed", rows.length === 2 && rows.includes("r:5 Fix the export") && rows.includes("r:5 review PR#9"), rows.join("|"));
     ok("rows are grouped by issue with a header", (await page.locator("#autos li.auto-group").allInnerTexts()).join("|").includes("o/r#5"));
-    ok("role chips", (await page.locator("#autos .role").allInnerTexts()).map(s => s.toLowerCase()).sort().join(",") === "review,work");
+    const page_roles = (await page.locator("#autos .role").allInnerTexts()).map(s => s.toLowerCase());
+    ok("role chips", ["review", "work"].every(r => (page_roles).includes(r)));
     ok("the lane tab has a dot for running work (hidden while all idle)", (await page.locator("#lane-auto-dot").count()) === 1 && !(await page.locator("#lane-auto-dot").isVisible()));
     ok("a link to the dashboard", (await page.getAttribute("#auto-link", "href")) === "/automation");
     await page.click('#autos li[data-thread="22222222-2222-4222-8222-222222222222"]');
@@ -102,6 +110,12 @@ try {
     await page.waitForFunction(() => document.querySelector('[data-step="merge"]')?.getAttribute("data-state") === "active", null, { timeout: 15_000 });
     await post({ step: "merge", kind: "ok", run: rid, ref: "o/r#5", msg: "PR #9 merged" });
     await page.waitForFunction(() => document.querySelector('[data-step="merge"]')?.getAttribute("data-state") === "ok", null, { timeout: 15_000 });
+    // Debug: opens the new thread in the console
+    await page.click('[data-step="worktree"]'); await page.waitForSelector("#drawer:not([hidden])");
+    page.on("dialog", d => { errors.push("dialog: " + d.message()); void d.dismiss(); });
+    await Promise.all([page.waitForURL(/#thread=/, { timeout: 15_000 }).catch(() => {}), page.click("#debug")]);
+    ok("Debug opens a thread", /#thread=[0-9a-f-]{36}/.test(page.url()), page.url() + " " + errors.join("|"));
+    await page.waitForSelector("#lane-auto", { state: "attached" });
     ok("no console errors, first-party only", errors.length === 0 && external.length === 0, errors.concat(external).join(" | ").slice(0, 300));
     await ctx.close();
   }

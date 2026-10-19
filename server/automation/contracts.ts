@@ -50,3 +50,6 @@ export interface Snapshot {
 
 export interface StepLogRequest { v?: number; step: StepId; limit?: number; before?: number }
 export interface StepLogResponse { v: typeof VERSION; step: StepId; entries: AutomationEvent[]; next?: number }
+
+export interface DebugRequest { v?: number; focus?: StepId; note?: string }
+export interface DebugResponse { v: typeof VERSION; thread: string; cwd: string; branch: string; route: { provider: string; model: string; effort: string }; why: string }

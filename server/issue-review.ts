@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { githubRequest, type GithubRequest } from "./github-triage.ts";
-import { installPrOnlyHook, topicOf, type IssueRun, type IssueRunner } from "./window-dispatch.ts";
+import { defaultDirs, installPrOnlyHook, topicOf, type IssueRun, type IssueRunner } from "./window-dispatch.ts";
 import { DIRECT_REPOS, isProtected } from "./automation/policy.ts";
 import { reviewPrompt } from "./automation/review-prompts.ts";
 import type { RouteResponse } from "./automation/router.ts";
@@ -31,7 +31,7 @@ type ThreadLike = { id: string; status?: string; issueRun?: IssueRun };
 
 export function createReviewer(deps: ReviewDeps) {
   const github = deps.github ?? githubRequest;
-  const dirs = deps.dirs ?? { repos: path.join(os.homedir(), "repos"), worktrees: path.join(os.homedir(), "worktrees") };
+  const dirs = deps.dirs ?? defaultDirs();
   const git = deps.git ?? ((cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", timeout: 60_000 }).trim());
   const applied = deps.applied ?? ((name: string, sha: string) => { try { git(path.join(dirs.repos, name), "merge-base", "--is-ancestor", sha, "HEAD"); return true; } catch { return false; } });
   const log = deps.log ?? (m => console.warn(m));
@@ -105,7 +105,7 @@ export function createReviewer(deps: ReviewDeps) {
   /** Called when an issue run's turn ends. */
   function turnEnded(t: ThreadLike, event: { is_error?: boolean }) {
     const run = t.issueRun;
-    if (!run) return;
+    if (!run || run.role === "debug") return; // a debugging thread is judged by a person, not by the review pipeline
     if (run.role === "review") { void reviewEnded(t, event); return; }
     const id = `work:${t.id}`;
     if (event?.is_error) { ev?.record({ step: "worker", kind: "fail", run: id, ref: run.key, msg: "turn ended with an error" }); return; }
