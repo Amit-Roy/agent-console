@@ -1,0 +1,59 @@
+# Unit and UI suites against a mock scratch server, then one Pi end-to-end smoke against a local model stub.
+# No secrets: nothing here calls a real model. A green run on main triggers the console's deploy hook
+# (workflow_run webhook → git pull → idle restart), so keep the workflow name in sync with that hook.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      AGENT_CONSOLE_PAGE: "12"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-triage.txt
+      - run: npm ci
+      - run: pip install -r requirements-triage.txt
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ hashFiles('package-lock.json') }}
+      - run: npx playwright install --with-deps chromium
+      - name: Install Pi
+        run: npm install -g @earendil-works/pi-coding-agent@1.2.0
+      - name: Start mock scratch server
+        run: |
+          mkdir -p test/tmp
+          data="$(mktemp -d)"
+          AGENT_CONSOLE_MOCK=1 AGENT_CONSOLE_DATA="$data" AGENT_CONSOLE_RUN="$data/run" AGENT_CONSOLE_BRAIN="$data/no-brain" \
+            PORT=7070 nohup node server/index.ts >"$RUNNER_TEMP/server.log" 2>&1 &
+          for _ in $(seq 60); do curl -s -o /dev/null http://127.0.0.1:7070/login && exit 0; sleep 0.5; done
+          cat "$RUNNER_TEMP/server.log"; exit 1
+      - run: npm test
+      - name: Pi end-to-end smoke
+        run: node test/pi-e2e-ui.ts
+      - name: Server log
+        if: failure()
+        run: tail -200 "$RUNNER_TEMP/server.log"
