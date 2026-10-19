@@ -13,7 +13,7 @@ import { piRateEnv } from "./pi-rate-env.ts";
 import { CODING_ROUTE, DIRECT_CODING } from "./pi-coding-route.mjs";
 import { defaultPiModel } from "./pi-model.ts";
 import { retryEvent } from "../turn-timing.ts";
-import { acquireModelRequest } from "./model-rate-limit.ts";
+import { acquireModelRequest } from "./model-rate-client.ts";
 import { clip, IMAGE_ONLY_PROMPT, type Agent, type AgentCtx, type Attachment, type Command, type Provider, type ThreadSpec } from "./types.ts";
 
 // pi (github.com/earendil-works/pi) in RPC mode: one long-lived process per thread, any model pi knows about
@@ -246,7 +246,7 @@ export const pi: Provider = {
           resending = new AbortController();
           const { signal } = resending, again = last;
           ctx.event(retryEvent({ attempt: 4, status: 429, message: String(r.finalError), delay: 0 }));
-          acquireModelRequest(signal).then(() => { if (!signal.aborted) write(JSON.stringify({ id: `p${++n}`, type: "prompt", ...body(again.text, again.images) })); }, () => {});
+          acquireModelRequest({ signal, provider: t.model.startsWith("nvidia/") ? "nvidia" : t.model.startsWith("openrouter/") ? "openrouter" : "other", priority: t.issueRun ? "automation" : "interactive" }).then(() => { if (!signal.aborted) write(JSON.stringify({ id: `p${++n}`, type: "prompt", ...body(again.text, again.images) })); }, () => {});
           return; // swallow the failure and the settle that follows it; the re-send continues the same turn
         }
         if (r.type === "agent_settled" && resending) {
