@@ -274,6 +274,7 @@ export class Schedules {
       "For anything current (news, releases, prices, docs) use your web search and fetch tools" +
       (t.provider === "pi" ? " (web_search_exa, then web_fetch_exa on the best URLs)" : "") +
       "; never scrape search engines with curl. Give every finding its source URL and date, and leave out what you could not verify. " +
+      "In shell commands, wrap anything slow in `timeout 60`, and never put a leading `.{0,N}` regex on a large or single-line file such as flattened HTML: it can run for many minutes. Find the text with `grep -boF 'anchor' file`, then cut context with `cut -c` or `head -c`. " +
       "End with a markdown report: a one-line summary, then the findings." +
       (t.saveOutput ? ` Your final message is saved to git as the report${t.provider === "pi" ? " (or call save_output with the full report)" : ""}, so do not write report files anywhere else.` : "");
   }
