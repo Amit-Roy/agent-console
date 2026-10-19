@@ -1,5 +1,6 @@
 import "./privacy.ts";
 import { usage, refreshRouterUsage, refreshUsage } from "./usage.ts";
+import { createDispatcher } from "./window-dispatch.ts";
 import express from "express";
 import fs from "node:fs";
 import crypto from "node:crypto";
@@ -61,6 +62,11 @@ try { latency = new LatencyStore(path.join(DATA_DIR, "latency.sqlite")); }
 catch { console.warn("Local latency storage is unavailable."); }
 usage.subscribe((provider, usage) => broadcast({ t: "usage", provider, usage }));
 setInterval(() => threads.sweep(), 60_000).unref();
+// Plan-only until ~/.config/agent-console/window-dispatch.json sets enabled (see docs/window-dispatch.md).
+if (process.env.AGENT_CONSOLE_MOCK !== "1") {
+  const dispatcher = createDispatcher({ usage: () => usage.all() });
+  setInterval(() => { dispatcher.tick().catch(() => {}); }, 5 * 60_000).unref();
+}
 
 const app = express();
 app.disable("x-powered-by");
