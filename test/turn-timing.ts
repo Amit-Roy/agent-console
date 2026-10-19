@@ -62,6 +62,13 @@ assert.deepEqual(row.timeline,{seg:[
  {k:'model',i:2,a:2000,d:200,f:100},{k:'tool',i:2,n:'AskUserQuestion',a:2200,d:2100},{k:'wait',a:2250,d:2000},
  {k:'model',i:3,a:4300,d:700,f:100}]});
 assert.equal(runFacts(row).timeline,undefined,'the timeline stays out of the per-update Run details facts');
+{ // events in one millisecond keep arrival order (fast hosts tie often)
+ const t=new TurnClock({provider:'claude',alias:'opus',start:5000,cold:false});
+ t.event({type:'system',subtype:'init',model:'m'},5000);t.event({type:'stream_event',event:{type:'message_start'}},5000);
+ t.event(asst([{type:'tool_use',id:'z',name:'Bash',input:{}}]),5000);t.event(result('z'),5000);
+ t.event({type:'system',subtype:'api_retry',attempt:1,error_status:529,error:'overloaded'},5000);
+ assert.deepEqual(t.finish({type:'result',subtype:'success',is_error:false},5000).timeline.seg.map((x:any)=>x.k),['model','tool','retry']);
+}
 // caps: a 200-step turn keeps the first MAX_SEGMENTS segments in time order and folds the rest into one tail summary
 {
  const L=new TurnClock({provider:'claude',alias:'opus',start:0,cold:false});
