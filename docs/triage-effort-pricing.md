@@ -41,6 +41,23 @@ Explicit zero-total observations retain an empirical point mass at zero instead 
 
 Effort tiers reflect predicted session-token usage, not human hours or pure implementation difficulty. Provider behavior, cached replay, follow-ups, and later scope changes influence the measured outcome. The initial request supplies the complexity evidence; the model learns its relationship to whole-session usage.
 
+## Request-shape features
+
+Most initial requests are short: the median is 90 characters. In the audited cohort the small model could extract breadth, complexity, uncertainty, and risk for only 14 of 120 training sessions, so the fit had almost nothing to learn from. The fitter now also uses four deterministic buckets (0–3) computed from the request text. They are always known and never come from a model call:
+
+| Feature | Buckets |
+| --- | --- |
+| `requestSize` | characters: <20, 20–119, 120–399, 400+ |
+| `requestLines` | non-blank lines: 1, 2–3, 4–7, 8+ |
+| `requestReferences` | URLs, file paths, and inline code spans: 0, 1, 2–3, 4+ |
+| `requestActions` | action verbs such as fix, add, deploy, audit: 0, 1, 2–3, 4+ |
+
+Weights stay nonnegative, so a longer or more structured request never prices lower. A dataset without these fields still fits the original four features, and four-feature artifacts remain valid.
+
+Estimator selection also changed. Session totals span five orders of magnitude, so raw-token MAE on 34 sessions is decided by a few extreme sessions. The fit minimizes log error, so selection now compares RMSLE against the training-median baseline. MAE stays in the report.
+
+When the model includes request-shape features, unknown model-extracted metrics no longer force the P95 routing policy. The out-of-fold residuals already contain the usual share of unknown metrics. Unknown shape features or extrapolation still select P95. Four-feature artifacts keep the original policy.
+
 ## Uncertainty and validation
 
 Quotes show P50, P80, and P95 model scenarios. The planning reserve is P80 total tokens minus P50 total tokens; generated-token reserve is also shown. Unknown or extrapolated scope routes effort and the recommended budget through P95 by policy. Complete, in-range scope routes effort through P50 and recommends P80.
@@ -80,3 +97,11 @@ npm run test:effort-fit
 Only credential-checked initial request text reaches the configured small-model providers. Suspect credentials are refused before inference; this is conservative filtering, not universal secret detection. Their measured session outcomes remain in training with explicitly unknown features. Failed feature extraction also retains known outcomes as unknown-feature samples. Feature extraction uses two bounded batches concurrently, caches completed results, and reuses a working configured fallback instead of repeatedly waiting for a timed-out route. Source requests, later conversation, and raw logs are never posted as calibration evidence.
 
 The host watchdog checks receiver health first and schedules daily fitting separately. Failed candidates retain the installed model. Scratch data directories do not scan production native transcripts unless native directories are explicitly supplied. The calibration pipeline validates each artifact before promotion. Existing GitHub comments are updated in place with session quotes and their measured limitations.
+
+## Snapshot: request-shape refit
+
+The refit on 122 training and 35 held-out sessions (33 thread groups) selected the learned estimator. Held-out RMSLE is 2.93 against 3.88 for the training median. Active weights: uncertainty 1.73, request size 0.93, references 0.46, risk 0.29, action verbs 0.19; the other features are zero.
+
+Intervals still under-cover. Observed hit rates on the held-out block are 63% at P80 and 80% at P95. The newest sessions run longer than older ones, so older residuals understate them. Status stays `experimental`, and the comment says so. A prediction is still wide: residual P95 is about four log units. Treat P50 as a typical session and P95 as the budget to watch.
+
+Chronological rolling-origin checks on all 162 sessions agree with the held-out result: nonnegative shape features reduce log error from 4.18 to 3.50 against the running median.

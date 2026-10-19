@@ -280,13 +280,16 @@ export function quoteEffort(metrics: ComplexityInput, loaded: LoadedEffortModel 
   const complete = (values: number[], round = true) => values.length === model.scenarios.length ? quantiles(values, round) : null;
   const input = complete(inputValues);
   const thresholds = model.workCutoffs;
-  const incomplete = unknowns.length > 0 || outOfRange.length > 0;
+  // Out-of-sample residuals already include the usual share of unknown model-extracted metrics, so
+  // when request-shape features exist only unknown shape features (never expected) or extrapolation force P95.
+  const required: readonly EffortFeature[] = model.featureNames.some(name => (SHAPE_FEATURES as readonly string[]).includes(name)) ? SHAPE_FEATURES : model.featureNames;
+  const incomplete = unknowns.some(name => required.includes(name)) || outOfRange.length > 0;
   const effortBasis = incomplete ? "p95" : "p50";
   const recommendedBudget = incomplete ? "p95" : "p80";
   const effort = thresholds.trivialMax === thresholds.deepMin ? "bau"
     : activity[effortBasis] <= thresholds.trivialMax ? "trivial" : activity[effortBasis] >= thresholds.deepMin ? "deep" : "bau";
   return {
-    status: "ready", confidence: unknowns.length || outOfRange.length ? "experimental" : model.validation.status,
+    status: "ready", confidence: incomplete ? "experimental" : model.validation.status,
     scope, tokenYieldBasis, workloadMetric, estimator, method: model.method, effort, effortBasis, recommendedBudget,
     activity, output, total: complete(totalValues), input, freshInput: complete(freshValues), cachedInput: complete(cachedValues), rounds: complete(roundValues, false),
     riskPremium: { work: activity.p80 - activity.p50, output: output.p80 - output.p50, input: input ? input.p80 - input.p50 : null },
