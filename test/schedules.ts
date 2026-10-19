@@ -39,7 +39,8 @@ try{
  // a follow-up in the run thread is a normal turn and leaves the run alone
  threads.send(rt.id,'Any more detail?');reply(rt.id,'Sure.');await tick();assert.equal(schedules.get(task.id)!.runs.find(r=>r.id===run.id)!.output!.path,done.output!.path);
  // a failed run is reported as failed, and saves nothing
- const bad=schedules.run(task.id);ctxs.get(bad.thread!).event({type:'result',subtype:'error',is_error:true,duration_ms:1});await tick();
+ assert.match(sent[0].text,/first run with a saved report/);
+ const bad=schedules.run(task.id);assert.ok(sent.at(-1)!.text.includes(`previous run's report is ${done.output!.path}`),'the next run is told where the last report is');ctxs.get(bad.thread!).event({type:'result',subtype:'error',is_error:true,duration_ms:1});await tick();
  assert.equal(schedules.get(task.id)!.runs.find(r=>r.id===bad.id)!.status,'failed');assert.equal(schedules.get(task.id)!.runs.find(r=>r.id===bad.id)!.output,undefined);
  // tools for agents: flat inputs, day names, titles as ids, explicit save_output wins over the fallback
  const caller=threads.create({provider:'fixture',cwd:dir,title:'Chat'});

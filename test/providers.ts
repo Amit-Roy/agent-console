@@ -147,6 +147,16 @@ const o2 = run((emit) => piTranslator(emit), [
 ]);
 check("pi: rate-limit becomes a readable error + failed result", o2.some((e) => e.type === "console_error" && e.text.startsWith("Rate limit exceeded: free-models-per-day")) && o2.at(-1).is_error === true, JSON.stringify(o2));
 check("pi: error text is not raw JSON", !o2.find((e) => e.type === "console_error").text.includes("{"));
+// captured from a scheduled NVIDIA run: a 500 mid-turn, pi retried, the turn then finished normally
+const nv = `500: {"message":"Failed to generate completions","type":"Internal Server Error","code":500}`;
+const o2b = run((emit) => piTranslator(emit), [
+  { type: "agent_start" },
+  { type: "message_end", message: { role: "assistant", stopReason: "error", errorMessage: nv, content: [], usage: {} } },
+  { type: "auto_retry_start", attempt: 1, errorMessage: nv, delayMs: 2000 },
+  { type: "message_end", message: { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "Report done." }], usage: {} } },
+  { type: "agent_settled", aborted: false },
+]);
+check("pi: a retried provider error does not fail the finished turn", o2b.at(-1).subtype === "success" && !o2b.some((e) => e.type === "console_error"), JSON.stringify(o2b));
 const o3 = run((emit) => piTranslator(emit), [{ type: "response", command: "prompt", success: false, error: "No model selected" }]);
 check("pi: rejected prompt unlocks the thread (result emitted)", o3.at(-1)?.type === "result" && o3.at(-1).is_error);
 const o4 = run((emit) => piTranslator(emit), [{ type: "agent_start" }, { type: "agent_settled", aborted: true }]);

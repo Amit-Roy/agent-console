@@ -138,7 +138,9 @@ export function piTranslator(emit: (ev: any) => void, onCommands?: (list: Comman
         if (u) usageModels.push({ model: m.model || "unknown", role: "agent", fresh: u.input, cacheWrite: u.cacheWrite, cacheRead: u.cacheRead, output: u.output, reasoning: u.reasoning, cost: u.cost?.total });
         const used = Number(u?.totalTokens) || (Number(u?.input) || 0) + (Number(u?.cacheRead) || 0) + (Number(u?.cacheWrite) || 0) + (Number(u?.output) || 0);
         if (used > 0) emit({ type: "context_usage", used, ...(contextWindow?.() ? { max: contextWindow() } : {}) });
+        // a provider error that pi retried successfully must not fail the whole turn: only the last reply counts
         if (m.stopReason === "error" && m.errorMessage) failure = friendlyError(m.errorMessage);
+        else if (m.stopReason !== "aborted") failure = undefined;
         const content = (m.content ?? [])
           .map((b: any) => {
             if (b.type === "text") return { type: "text", text: b.text };
