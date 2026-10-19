@@ -32,6 +32,8 @@ type Options = {
   // Called after the named CI workflow passes on a push to main of an allowed repository.
   deploy?: { workflow: string; run: (repo: string, sha: string) => void };
   log?: (metadata: Record<string, unknown>) => void;
+  // Called for each accepted issue or pull request webhook; failures are logged, never thrown (token telemetry comment).
+  onItem?: (item: { repo: string; number: number; kind: Kind }) => Promise<unknown> | void;
 };
 
 class GithubError extends Error {
@@ -427,6 +429,10 @@ export function createTriageService(options: Options) {
     if (event === "issues" && item.pull_request) { respond(res, 200, { ignored: true }); return; }
     const inserted = enqueue(repo, number, event === "issues" ? "issue" : "pull_request", payload.action === "unlabeled" ? "repair" : "webhook", delivery);
     respond(res, 202, { accepted: true, duplicate: !inserted });
+    if (options.onItem) {
+      try { void Promise.resolve(options.onItem({ repo, number, kind: event === "issues" ? "issue" : "pull_request" })).catch(() => log("on_item_failed")); }
+      catch { log("on_item_failed"); }
+    }
     schedule();
   }
 
