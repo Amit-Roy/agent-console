@@ -647,9 +647,9 @@ div.msg.foot{margin-top:calc(var(--sp-2) * -1)}
 #composer{flex:none;padding:var(--sp-2) max(var(--sp-3),calc((100% - var(--col))/2)) calc(var(--sp-3) + env(safe-area-inset-bottom))}
 .cwrap{position:relative}
 #cbox{background:var(--s2);border-radius:var(--r-lg);padding:var(--sp-3) var(--sp-3) var(--sp-2) var(--sp-4);box-shadow:inset 0 0 0 1px var(--edge),var(--shadow-card);transition:box-shadow var(--dur-2) var(--ease)}
-#input{display:block;width:100%;resize:none;min-height:1.5rem;max-height:40vh;padding:0;border:0;background:transparent;outline:none;font:var(--fw-text) var(--f-text);letter-spacing:-.003em;line-height:1.5;overflow-y:auto;scrollbar-width:thin}
-#input::placeholder{color:var(--t3);opacity:1}
-#input:disabled{opacity:.6}
+#input{display:block;white-space:pre-wrap;overflow-wrap:anywhere;width:100%;resize:none;min-height:1.5rem;max-height:40vh;padding:0;border:0;background:transparent;outline:none;font:var(--fw-text) var(--f-text);letter-spacing:-.003em;line-height:1.5;overflow-y:auto;scrollbar-width:thin}
+#input:empty::before{content:attr(data-placeholder);color:var(--t3);pointer-events:none}
+#input[contenteditable=false]{opacity:.6}
 /* toolbar pulled left so the paperclip glyph lines up with the text above it */
 .toolbar{display:flex;align-items:center;gap:var(--sp-1);margin-top:var(--sp-2);margin-left:calc((var(--ctl-h) - 1.125rem) / -2)}
 .toolbar .spacer{flex:1}

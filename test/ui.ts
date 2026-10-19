@@ -367,7 +367,7 @@ for (const scheme of ["dark", "light"] as const) {
   await page.waitForSelector("#threads li", { timeout: 8000 });
   // slash commands are per agent and the test expects Claude's: open a Claude thread (non-Claude rows carry an agent tag)
   await page.locator("#threads li").filter({ hasNotText: /Codex|Pi|Mock/ }).first().click();
-  await page.waitForFunction(() => !(document.getElementById("input") as HTMLTextAreaElement).disabled);
+  await page.waitForFunction(() => !(document.getElementById("input") as any).disabled);
   const input = page.locator("#input");
   const visible = () => page.locator("#slash").isVisible();
   const opts = () => page.locator("#slash [role=option]").count();
@@ -385,7 +385,7 @@ for (const scheme of ["dark", "light"] as const) {
   check("slash: arrow keys move selection", sel === 1);
   await input.press("ArrowUp");
   await input.press("Enter"); // partial query + Enter must accept, not send
-  const v = await input.inputValue();
+  const v = await input.evaluate((e:any)=>e.value);
   check("slash: Enter on partial completes instead of sending", /^\/caveman $/.test(v), JSON.stringify(v));
   check("slash: menu closes after accept", !(await visible()));
   await input.fill("");
@@ -396,7 +396,7 @@ for (const scheme of ["dark", "light"] as const) {
   await input.fill("");
   await input.pressSequentially("/apple");
   await page.locator("#slash [role=option]").first().click();
-  check("slash: click selects", /^\/apple-design $/.test(await input.inputValue()), JSON.stringify(await input.inputValue()));
+  check("slash: click selects", /^\/apple-design $/.test(await input.evaluate((e:any)=>e.value)), JSON.stringify(await input.evaluate((e:any)=>e.value)));
   const a11y = await page.evaluate(() => { const i = document.getElementById("input")!; return [i.getAttribute("role"), i.getAttribute("aria-controls")]; });
   check("slash: combobox aria wiring", a11y[0] === "combobox" && a11y[1] === "slash");
   await ctx.close();
@@ -421,7 +421,7 @@ for (const scheme of ["dark", "light"] as const) {
     await mockItem.click();
     await page.click("#d-ok");
     await page.waitForFunction((n) => document.querySelectorAll("#threads li").length === n + 1, before, { timeout: 5000 });
-    await page.waitForFunction(() => !(document.getElementById("input") as HTMLTextAreaElement).disabled);
+    await page.waitForFunction(() => !(document.getElementById("input") as any).disabled);
 
     // a real paste event whose clipboard holds the given files (and optionally text)
     type F = { name: string; type: string; w?: number; h?: number; body?: string };
@@ -453,10 +453,10 @@ for (const scheme of ["dark", "light"] as const) {
     await page.waitForFunction(() => document.querySelectorAll("#thumbs li").length === 1);
     await settled();
     check("paste: thumbnail shows, labelled, with a remove button", (await items()) === 1 && (await page.locator("#thumbs img").getAttribute("alt")) === "shot.png (Image 1)" && (await page.locator("#thumbs .rm").getAttribute("aria-label")) === "Remove shot.png");
-    check("image label: pasting drops [Image #1] into the message at the cursor, and the thumbnail wears the number", (await page.inputValue("#input")) === "[Image #1] " && (await page.locator("#thumbs .n").innerText()) === "1");
+    check("image label: pasting drops [Image #1] into the message at the cursor, and the thumbnail wears the number", (await page.locator('#input').evaluate((e:any)=>e.value)) === "[Image #1] " && (await page.locator("#thumbs .n").innerText()) === "1");
     check("paste: no console errors / CSP violations", errors.length === 0, errors.join(" | ").slice(0, 160));
     await page.locator("#thumbs .rm").click();
-    check("remove: clears it, and its [Image #1] label leaves the message", (await items()) === 0 && (await page.locator("#thumbs").isHidden()) && (await page.inputValue("#input")) === "");
+    check("remove: clears it, and its [Image #1] label leaves the message", (await items()) === 0 && (await page.locator("#thumbs").isHidden()) && (await page.locator('#input').evaluate((e:any)=>e.value)) === "");
     check("paste: picture beside real text is left to the text paste", !(await paste([png("shot.png", 50, 50)], "some cells")) && (await items()) === 0);
     check("paste: file copied in a file manager (text = its name) is still a file paste", await paste([png("copied.png", 40, 40)], "copied.png"));
     await settled();
@@ -581,7 +581,7 @@ for (const scheme of ["dark", "light"] as const) {
     await mockItem.click();
     await page.click("#d-ok");
     await page.waitForFunction((n) => document.querySelectorAll("#threads li").length === n + 1, before, { timeout: 5000 });
-    await page.waitForFunction(() => !(document.getElementById("input") as HTMLTextAreaElement).disabled);
+    await page.waitForFunction(() => !(document.getElementById("input") as any).disabled);
     await page.fill("#input", "tool please run it");
     await page.keyboard.press("Enter");
     await page.waitForSelector(".card .sum");
@@ -627,7 +627,7 @@ for (const scheme of ["dark", "light"] as const) {
     await mockItem.click();
     await page.click("#d-ok");
     await page.waitForFunction((n) => document.querySelectorAll("#threads li").length === n + 1, before, { timeout: 5000 });
-    await page.waitForFunction(() => !(document.getElementById("input") as HTMLTextAreaElement).disabled);
+    await page.waitForFunction(() => !(document.getElementById("input") as any).disabled);
     await page.fill("#input", "plan the weekend trip itinerary");
     await page.keyboard.press("Enter");
     await page.waitForSelector(".msg.asst");
@@ -810,14 +810,14 @@ for (const scheme of ["dark", "light"] as const) {
     await mockItem.click();
     await page.click("#d-ok");
     await page.waitForFunction((n) => document.querySelectorAll("#threads li").length === n + 1, before, { timeout: 5000 });
-    await page.waitForFunction(() => !(document.getElementById("input") as HTMLTextAreaElement).disabled);
-    const idleUi = await page.evaluate(() => ({ stop: document.getElementById("stop")!.hidden, send: document.getElementById("send")!.getAttribute("aria-label"), ph: (document.getElementById("input") as HTMLTextAreaElement).placeholder, ctx: document.getElementById("ctx")!.hidden }));
+    await page.waitForFunction(() => !(document.getElementById("input") as any).disabled);
+    const idleUi = await page.evaluate(() => ({ stop: document.getElementById("stop")!.hidden, send: document.getElementById("send")!.getAttribute("aria-label"), ph: (document.getElementById("input") as any).placeholder, ctx: document.getElementById("ctx")!.hidden }));
     check("idle composer: Send only, no Stop, no context ring before anything ran", idleUi.stop && idleUi.send === "Send" && idleUi.ph === "Message the agent" && idleUi.ctx, JSON.stringify(idleUi));
 
     await page.fill("#input", "slow burn please");
     await page.keyboard.press("Enter");
     await page.waitForFunction(() => !document.getElementById("stop")!.hidden);
-    const run = await page.evaluate(() => { const g = (id: string) => document.getElementById(id) as HTMLButtonElement; return { send: g("send").getAttribute("aria-label"), sendDisabled: g("send").disabled, sendHidden: g("send").hidden, stopBg: getComputedStyle(g("stop")).backgroundColor, stopFg: getComputedStyle(g("stop")).color, ph: (document.getElementById("input") as HTMLTextAreaElement).placeholder, inputDisabled: (document.getElementById("input") as HTMLTextAreaElement).disabled, state: document.getElementById("state-t")!.textContent }; });
+    const run = await page.evaluate(() => { const g = (id: string) => document.getElementById(id) as HTMLButtonElement; return { send: g("send").getAttribute("aria-label"), sendDisabled: g("send").disabled, sendHidden: g("send").hidden, stopBg: getComputedStyle(g("stop")).backgroundColor, stopFg: getComputedStyle(g("stop")).color, ph: (document.getElementById("input") as any).placeholder, inputDisabled: (document.getElementById("input") as HTMLTextAreaElement).disabled, state: document.getElementById("state-t")!.textContent }; });
     check("running composer: empty box shows only a red Stop; input stays live", run.stopBg === "rgb(220, 38, 38)" && run.stopFg === "rgb(255, 255, 255)" && run.sendHidden && !(await page.locator("#queue").count()) && /Queue a message/.test(run.ph) && !run.inputDisabled, JSON.stringify(run));
     await page.fill("#input", "x");
     check("running composer: typing swaps Stop for one Send button (queues)", (await page.locator("#stop").isHidden()) && (await page.getAttribute("#send", "aria-label")) === "Queue message");
@@ -831,7 +831,7 @@ for (const scheme of ["dark", "light"] as const) {
     check("queue: Enter mid-run queues first (nothing sent yet), with a Steer button on the card", (await page.locator("#queued .steer").isVisible()) && ![...(await page.locator(".msg.user .bubble").allInnerTexts())].some((t) => /turn left/.test(t)));
     await page.click("#queued .steer");
     await page.waitForFunction(() => [...document.querySelectorAll(".msg.user")].some((m) => /turn left/.test(m.textContent || "")));
-    const steered = await page.evaluate(() => { const m = [...document.querySelectorAll(".msg.user")].find((x) => /turn left/.test(x.textContent || ""))!; return { cap: m.querySelector(".delivery")?.textContent, box: (document.getElementById("input") as HTMLTextAreaElement).value, stillRunning: !document.getElementById("stop")!.hidden }; });
+    const steered = await page.evaluate(() => { const m = [...document.querySelectorAll(".msg.user")].find((x) => /turn left/.test(x.textContent || ""))!; return { cap: m.querySelector(".delivery")?.textContent, box: (document.getElementById("input") as any).value, stillRunning: !document.getElementById("stop")!.hidden }; });
     check("steer: Steer on the queued card sends it now, captioned, composer clears, the turn keeps going", steered.cap === "Sent while the agent was working" && steered.box === "" && steered.stillRunning, JSON.stringify(steered));
     await page.waitForFunction(() => /\[steered: turn left\]/.test(document.getElementById("chat")!.textContent || ""), null, { timeout: 4000 });
     check("steer: the agent received it (the mock folds it into its stream)", true);
@@ -839,7 +839,7 @@ for (const scheme of ["dark", "light"] as const) {
     await page.fill("#input", "after you are done");
     await page.keyboard.press("Enter");
     await page.waitForSelector("#queued li");
-    const q1 = await page.evaluate(() => ({ n: document.querySelectorAll("#queued li").length, tag: document.querySelector("#queued .tag")!.textContent, txt: document.querySelector("#queued .txt")!.textContent, rm: document.querySelector("#queued .rm")!.getAttribute("aria-label"), box: (document.getElementById("input") as HTMLTextAreaElement).value }));
+    const q1 = await page.evaluate(() => ({ n: document.querySelectorAll("#queued li").length, tag: document.querySelector("#queued .tag")!.textContent, txt: document.querySelector("#queued .txt")!.textContent, rm: document.querySelector("#queued .rm")!.getAttribute("aria-label"), box: (document.getElementById("input") as any).value }));
     check("queue: the Queue button holds it above the composer as a removable chip", q1.n === 1 && q1.tag === "Queued" && q1.txt === "after you are done" && q1.rm === "Remove queued message" && q1.box === "", JSON.stringify(q1));
     await page.screenshot({ path: `${OUT}/ui-queued.png` });
     await page.locator("#queued .rm").click();
@@ -862,7 +862,7 @@ for (const scheme of ["dark", "light"] as const) {
     await page.fill("#input", "/compact");
     await page.keyboard.press("Enter");
     await page.waitForSelector(".compact-card.running");
-    const cc = await page.evaluate(() => ({ title: document.querySelector(".compact-card .cc-title")!.textContent, bubble: [...document.querySelectorAll(".msg.user")].some((m) => /\/compact/.test(m.textContent || "")), spin: !!document.querySelector(".compact-card .cc-ico .spin"), ph: (document.getElementById("input") as HTMLTextAreaElement).placeholder, head: document.getElementById("state-t")!.textContent }));
+    const cc = await page.evaluate(() => ({ title: document.querySelector(".compact-card .cc-title")!.textContent, bubble: [...document.querySelectorAll(".msg.user")].some((m) => /\/compact/.test(m.textContent || "")), spin: !!document.querySelector(".compact-card .cc-ico .spin"), ph: (document.getElementById("input") as any).placeholder, head: document.getElementById("state-t")!.textContent }));
     check("compaction: a progress card with a spinner, no /compact message bubble, header says so, composer offers to queue", cc.title === "Compacting context" && !cc.bubble && cc.spin && /after compaction/.test(cc.ph) && cc.head === "Compacting context", JSON.stringify(cc));
     await page.screenshot({ path: `${OUT}/ui-compacting.png` });
     for (const t of ["queued one", "queued two"]) { await page.fill("#input", t); await page.keyboard.press("Enter"); await page.waitForFunction((n) => document.querySelectorAll("#queued li").length >= n, t === "queued one" ? 1 : 2); }
