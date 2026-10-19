@@ -26,6 +26,7 @@ import { providerInfo, refreshPiModels } from "./providers/index.ts";
 import { threadToMarkdown } from "./export.ts";
 import { Threads, turnTiming } from "./threads.ts";
 import { Schedules, describe } from "./schedules.ts";
+import { SessionSearch } from "./session-search.ts";
 import { Notifications } from "./notifications.ts";
 import { dashboard } from "./analytics.ts";
 import { pricing, rates } from "./api-pricing.ts";
@@ -62,6 +63,8 @@ const threads = new Threads(broadcast, notice => {
   void notifications?.notify(notice).catch(() => console.warn("Browser notification delivery failed."));
 });
 const schedules = new Schedules(threads, broadcast);
+const sessionSearch = new SessionSearch(DATA_DIR);
+void sessionSearch.warm().catch(() => console.warn("Session search index will retry on the next query."));
 // Agent tools (Pi extension providers/console-tools.mjs) call back over loopback with a per-process secret, never the session cookie
 const TOOL_TOKEN = crypto.randomBytes(24).toString("base64url");
 process.env.AGENT_CONSOLE_TOOL_URL = `http://${HOST}:${PORT}/api/agent-tools`;
@@ -142,11 +145,18 @@ app.use("/fonts", express.static(path.join(ROOT, "public", "fonts"), { maxAge: "
 app.get("/icon.svg", (_req, res) => res.sendFile(path.join(ROOT, "public", "icon.svg")));
 app.get("/manifest.webmanifest", (_req, res) => res.sendFile(path.join(ROOT, "public", "manifest.webmanifest")));
 
-app.post("/api/agent-tools/:name", express.json({ limit: "1mb" }), (req, res) => {
+app.post("/api/agent-tools/:name", express.json({ limit: "1mb" }), async (req, res) => {
   const given = Buffer.from(String(req.headers["x-agent-console-tool"] || ""));
   if (given.length !== TOOL_TOKEN.length || !crypto.timingSafeEqual(given, Buffer.from(TOOL_TOKEN))) return void res.status(401).json({ error: "Not an Agent Console tool call." });
   const thread = typeof req.headers["x-agent-console-thread"] === "string" ? req.headers["x-agent-console-thread"] : undefined;
-  try { res.json(schedules.tool(req.params.name, thread, req.body ?? {})); }
+  try {
+    const input = req.body ?? {};
+    const result = req.params.name === "session_search" ? await sessionSearch.search(input)
+      : req.params.name === "session_read" ? await sessionSearch.read(input)
+      : schedules.tool(req.params.name, thread, input);
+    res.setHeader("Cache-Control", "no-store");
+    res.json(result);
+  }
   catch (e: any) { res.status(400).json({ error: e?.message || String(e) }); }
 });
 
@@ -156,6 +166,18 @@ app.use((req, res, next) => {
   if (req.method === "GET" && String(req.headers.accept || "").includes("text/html")) return res.redirect("/login");
   res.status(401).end();
 });
+// Session transcripts stay behind the same authentication as the conversations.
+app.get("/api/sessions/search", async (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  try { res.json(await sessionSearch.search({ query: req.query.q, provider: req.query.provider, limit: req.query.limit === undefined ? undefined : Number(req.query.limit) } as any)); }
+  catch (e: any) { res.status(400).json({ error: e?.message || "Search failed." }); }
+});
+app.get("/api/sessions/:thread", async (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  try { res.json(await sessionSearch.read({ thread: req.params.thread, start: req.query.start === undefined ? undefined : Number(req.query.start), limit: req.query.limit === undefined ? undefined : Number(req.query.limit) } as any)); }
+  catch (e: any) { res.status(400).json({ error: e?.message || "Session unavailable." }); }
+});
+app.get("/sessions", (_req, res) => res.sendFile(path.join(ROOT, "public", "sessions.html")));
 app.get("/vendor/marked.js", (_req, res) => res.sendFile(path.join(ROOT, "node_modules/marked/lib/marked.esm.js")));
 app.get("/vendor/purify.js", (_req, res) => res.sendFile(path.join(ROOT, "node_modules/dompurify/dist/purify.es.mjs")));
 
