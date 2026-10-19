@@ -286,6 +286,17 @@ li.sel .dot{background:var(--press)}
   scrollbar-width:thin;scrollbar-color:var(--s3) transparent;
 }
 #chat>*{flex-shrink:0}
+#chat-search{display:flex;align-items:center;gap:var(--sp-1);padding:var(--sp-2) var(--sp-3) var(--sp-2) var(--sp-5);flex:none;border-bottom:1px solid var(--edge)}
+#chat-search[hidden]{display:none}
+.chat-search-field{flex:1;min-width:0;display:flex;flex-direction:column;gap:var(--sp-1)}
+#chat-search-input{width:100%;min-width:0;min-height:44px;padding:var(--sp-2) var(--sp-3);border:1px solid var(--edge-strong);border-radius:var(--r-sm);background:var(--s2);color:var(--t1);font:var(--fw-reg) var(--f-md);caret-color:var(--accent)}
+#chat-search-input::placeholder{color:var(--t2)}
+#chat-search-input:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+#chat-search-count{color:var(--t2);font:var(--fw-reg) var(--f-sm);font-variant-numeric:tabular-nums;min-height:1.25em}
+#chat-search .btn{flex:none;min-width:44px;min-height:44px}
+::highlight(chat-search){background-color:var(--sel);color:var(--t1)}
+::highlight(chat-search-active){background-color:var(--accent);color:var(--s1)}
+#chat .search-active{outline:2px solid var(--accent);outline-offset:2px}
 /* Edge fades as static overlays: a mask-image on the scroller forces offscreen compositing every frame. */
 #head,#composer{position:relative}
 #head::after,#composer::before{content:"";position:absolute;left:0;right:0;height:var(--sp-4);pointer-events:none;z-index:1}
