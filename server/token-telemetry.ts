@@ -181,13 +181,14 @@ export function createTelemetryService(options: TelemetryOptions) {
 
   /** Render and upsert the one telemetry comment for an issue or PR. Threads are matched by linkThread. */
   async function syncItem(req: { repo: string; number: number; head?: string; createOnly?: boolean }) {
-    if (!options.repos().includes(req.repo)) return { status: "skipped" as const };
+    const repos = options.repos(); // read once: the production source re-reads its config file on every call
+    if (!repos.includes(req.repo)) return { status: "skipped" as const };
     const existing = await findComment(req.repo, req.number);
     if (existing && req.createOnly) return { status: "unchanged" as const };
     const runs: TelemetryRun[] = [];
     for (const raw of threads()) {
       const { t, facts } = await prepared(raw);
-      if (!linkThread({ thread: facts, repos: options.repos(), item: req }).linked) continue;
+      if (!linkThread({ thread: facts, repos, item: req }).linked) continue;
       const log = readLog(t.id);
       runs.push({ thread: t.id, title: t.title, provider: t.provider, model: t.model, createdAt: t.createdAt,
         samples: log == null ? null : accountingSamples(log, { id: t.id, provider: t.provider, model: t.model, createdAt: t.createdAt }) });
