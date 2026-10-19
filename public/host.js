@@ -182,7 +182,7 @@ function procsPanel(list) {
     const tipRows = [["Command", r.cmd], ["PID", String(r.pid)], ["User", r.user], ["CPU", pct(r.cpu)], ["MEM", pct(r.mem)], ["RSS", bytes(r.rss)], ["Threads", String(r.threads)]];
     row.addEventListener("pointermove", e => showTip(e, r.name, tipRows));
     row.addEventListener("pointerleave", hideTip);
-    row.append(el("td", "name", r.name), el("td", "", String(r.pid)), el("td", "user", r.user),
+    row.append(el("td", "name", String(r.name || "—")), el("td", "", String(r.pid)), el("td", "user", r.user),
       el("td", "", pct(r.cpu)), el("td", "", pct(r.mem)), el("td", stateClass(r.state), r.state), el("td", "", String(r.threads)));
     row.firstChild.title = r.cmd;
     const act = el("div", "act");
@@ -224,12 +224,15 @@ function portsPanel(list) {
 
 function render(data) {
   const root = $("hm");
+  const saved = [...root.querySelectorAll(".scroll")].map(s => ({ l: s.scrollLeft, t: s.scrollTop }));
   const frag = document.createDocumentFragment();
   frag.append(kpiRow(data.metrics));
   const g1 = el("div", "grid2"); g1.append(cpuPanel(data.metrics), memPanel(data.metrics));
   const g2 = el("div", "grid2"); g2.append(diskPanel(data.metrics), loadPanel(data.metrics));
   frag.append(g1, g2, procsPanel(data.procs), portsPanel(data.ports));
   root.replaceChildren(frag);
+  const restored = root.querySelectorAll(".scroll");
+  saved.forEach((s, i) => { if (restored[i]) { restored[i].scrollLeft = s.l; restored[i].scrollTop = s.t; } });
 }
 
 async function load() {
