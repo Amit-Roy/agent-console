@@ -7,13 +7,12 @@ import { DatabaseSync } from "node:sqlite";
 import { verify } from "@octokit/webhooks-methods";
 import { childEnv } from "./providers/env.ts";
 import { classifyTriage, type TriageInput, type TriageDecision } from "./providers/triage-model.ts";
-import { METRIC_MAX, TRIAGE_RULES, TRIAGE_SCORECARD_VERSION } from "./providers/triage-scorecard.ts";
+import { assessmentRevision, calibrationHealth } from "./triage-calibration.ts";
+import { renderTriageComment, EFFORT_LABELS, PRIORITY_LABELS } from "./triage-comment.ts";
+export { renderTriageComment, EFFORT_LABELS, PRIORITY_LABELS, TRIAGE_COMMENT_MARKER, TRIAGE_COMMENT_VERSION_MARKER } from "./triage-comment.ts";
+import { TRIAGE_COMMENT_MARKER } from "./triage-comment.ts";
 
-export const EFFORT_LABELS = { trivial: "Eff: Trivial", bau: "Eff: BAU", deep: "Eff: Deep" } as const;
-export const PRIORITY_LABELS = { p0: "Pri: P0", p1: "Pri: P1", p2: "Pri: P2", p3: "Pri: P3" } as const;
 const MANAGED = new Set<string>([...Object.values(EFFORT_LABELS), ...Object.values(PRIORITY_LABELS)]);
-export const TRIAGE_COMMENT_MARKER = "<!-- agent-console-triage -->";
-export const TRIAGE_COMMENT_VERSION_MARKER = `<!-- agent-console-triage-version:${TRIAGE_SCORECARD_VERSION} -->`;
 const ACTIONS = {
   issues: new Set(["opened", "edited", "reopened", "unlabeled"]),
   pull_request: new Set(["opened", "edited", "reopened", "unlabeled", "synchronize", "ready_for_review"]),
@@ -29,6 +28,7 @@ type Options = {
   github?: GithubRequest;
   retryDelaysMs?: number[];
   maxBodyBytes?: number;
+  assessmentRevision?: () => string;
   log?: (metadata: Record<string, unknown>) => void;
 };
 
@@ -63,91 +63,9 @@ function labelNames(issue: any): string[] {
     .filter((label: unknown): label is string => typeof label === "string");
 }
 
-function completeLabels(issue: any): boolean {
-  const labels = labelNames(issue);
-  return Object.values(EFFORT_LABELS).filter(label => labels.includes(label)).length === 1
-    && Object.values(PRIORITY_LABELS).filter(label => labels.includes(label)).length === 1;
-}
-
 export function triageSourceMarker(issue: any, pr?: any): string {
   const source = JSON.stringify([issue.title ?? "", issue.body ?? "", pr?.head?.sha ?? null, Boolean(pr?.draft)]);
   return `<!-- agent-console-triage-source:${createHash("sha256").update(source).digest("hex")} -->`;
-}
-
-// Quotes and model text are escaped so issue content cannot add HTML, mentions, or headings.
-const safeText = (value: unknown) => String(value ?? "").replace(/[&<>@|`!*_#[\]\\\r\n]/g, char =>
-  char === "\r" || char === "\n" ? " " : `&#${char.charCodeAt(0)};`);
-
-export function renderTriageComment(decision: TriageDecision, sourceMarker: string): string {
-  const score = decision.scorecard;
-  const lines = [TRIAGE_COMMENT_MARKER, TRIAGE_COMMENT_VERSION_MARKER, sourceMarker,
-    "## Triage assessment", `${EFFORT_LABELS[decision.effort]} · ${PRIORITY_LABELS[decision.priority]}`,
-    safeText(decision.reason), "", "### Book of work"];
-  if (score) {
-    score.work.forEach((item, index) => lines.push(`${index + 1}. ${safeText(item.step)} — Check: ${safeText(item.check)}`));
-  } else lines.push("Assessment unavailable; re-triage with the current scorecard model.");
-  lines.push("", "### Estimated token usage");
-  if (score) {
-    const price = score.pricing;
-    const number = (value: number) => value.toLocaleString("en-US", { maximumFractionDigits: 1 });
-    const session = price.scope === "completed-session";
-    const totalTarget = price.workloadMetric === "totalTokens";
-    const workUnit = totalTarget ? "total session tokens" : "logged actions";
-    const unit = session ? "sessions" : "delivery runs";
-    lines.push(`**${totalTarget ? "Initial request → total session usage" : session ? "Initial request → estimated session work → whole-session token quote" : "Complexity → logged work → delivery-run token budget"}**. Model status: **${safeText(price.confidence)}**.`,
-      ...(price.estimator === "historical-baseline" ? ["The complexity fit failed the held-out baseline check. These quotes use the historical-session distribution and are not task-specific."] : []),
-      "P50 is the central scenario; P80 is the planning quote; P95 is the stretch reserve. These are empirical model scenarios, not coverage guarantees.",
-      "| Budget | P50 | P80 | P95 |", "| --- | ---: | ---: | ---: |");
-    for (const [name, values] of [...(totalTarget ? [] : [["Logged tool actions", price.activity] as const]), ["Generated tokens", price.output],
-      ["Non-cached input tokens", price.freshInput], ["Cached input replay tokens", price.cachedInput], ["Total input tokens", price.input],
-      [session ? "Total session tokens" : "Total delivery-run tokens", price.total]] as const) {
-      lines.push(values ? `| ${name} | ${number(values.p50)} | ${number(values.p80)} | ${number(values.p95)} |`
-        : `| ${name} | unavailable | unavailable | unavailable |`);
-    }
-    lines.push(`Planning risk premium: ${totalTarget && price.total ? `**+${number(price.total.p80 - price.total.p50)} total session tokens**; ` : ""}**+${number(price.riskPremium.output)} generated tokens** above P50 (P80 − P50).`,
-      `Recommended budget: **${price.recommendedBudget.toUpperCase()}**. Effort routing uses **${price.effortBasis.toUpperCase()}** ${workUnit}; unknown or extrapolated scope selects P95 by policy.`,
-      `Effort cutoffs: Trivial ≤${number(price.thresholds.trivialMax)} predicted ${workUnit}; Deep ≥${number(price.thresholds.deepMin)}; otherwise BAU.`,
-      `Training: ${safeText(price.training.sampleCount ?? price.training.sampleIds.length)} ${unit} in ${safeText(price.training.groupCount ?? "unknown")} thread groups.`,
-      session
-        ? "This prices the entire observed session/thread, including later follow-ups. Predictors use only the initial user request; later prompts are unseen and add variance. The quote does not isolate the original task from later requests. Human hours and unmeasured child agents are not priced."
-        : "This prices one observed direct-agent delivery run. Human hours, whole-issue iterations, and unmeasured child agents are not priced.");
-    if (price.unknowns.length || price.outOfRange.length) lines.push(`Scope warning: unknown features [${price.unknowns.map(safeText).join(", ")}]; outside training range [${price.outOfRange.map(safeText).join(", ")}]. Use the stretch reserve until scope is confirmed.`);
-    if (price.validation.hasLearnedComplexitySignal === false) lines.push("Initial-message features have not established predictive value. This historical quote does not claim task-specific accuracy.");
-    const metrics = price.validation as { sampleCount?: number; groupCount?: number; work?: { mae?: number }; baselineWork?: { mae?: number }; outputTokens?: { mae?: number }; baselineOutputTokens?: { mae?: number }; workCoverage?: { p80?: number; p95?: number }; outputCoverage?: { p80?: number; p95?: number };
-      activeWork?: { mae?: number }; activeOutputTokens?: { mae?: number };
-      activeCoverage?: { work?: { p80?: number; p95?: number }; output?: { p80?: number; p95?: number } } };
-    const selectedWork = typeof metrics.activeWork?.mae === "number" ? metrics.activeWork : metrics.work;
-    const selectedOutput = typeof metrics.activeOutputTokens?.mae === "number" ? metrics.activeOutputTokens : metrics.outputTokens;
-    const selectedWorkCoverage = metrics.activeCoverage?.work ?? metrics.workCoverage;
-    const selectedOutputCoverage = metrics.activeCoverage?.output ?? metrics.outputCoverage;
-    if (typeof metrics.sampleCount === "number" && typeof metrics.work?.mae === "number" && typeof metrics.baselineWork?.mae === "number") {
-      lines.push(`Held-out check: ${metrics.sampleCount} ${unit} in ${metrics.groupCount ?? "unknown"} thread groups; ${totalTarget ? "total-token" : "work"} MAE ${number(selectedWork!.mae!)} ${totalTarget ? "tokens" : "actions"} versus baseline ${number(metrics.baselineWork.mae)}.`);
-      if (price.estimator === "historical-baseline") lines.push(`Rejected complexity-fit total-token MAE: ${number(metrics.work.mae)}. The held-out data selected the fallback; they are not an independent test of that selection.`);
-      if (typeof selectedWorkCoverage?.p80 === "number") lines.push(`Observed P80 hit rate: ${number(selectedWorkCoverage.p80 * 100)}%. Small samples do not establish predictive accuracy.`);
-      if (typeof selectedOutput?.mae === "number" && typeof metrics.baselineOutputTokens?.mae === "number") lines.push(`Generated-token MAE: ${number(selectedOutput.mae)} versus baseline ${number(metrics.baselineOutputTokens.mae)}.`);
-      if (typeof selectedOutputCoverage?.p80 === "number" && typeof selectedOutputCoverage?.p95 === "number") lines.push(`Generated-token hit rates: P80 ${number(selectedOutputCoverage.p80 * 100)}%; P95 ${number(selectedOutputCoverage.p95 * 100)}%.`);
-      if ((selectedWorkCoverage?.p80 ?? 1) < 0.8 || (selectedWorkCoverage?.p95 ?? 1) < 0.95 || (selectedOutputCoverage?.p80 ?? 1) < 0.8 || (selectedOutputCoverage?.p95 ?? 1) < 0.95) lines.push("Intervals under-covered held-out outcomes. P80/P95 are model-scenario percentiles, not 80%/95% success probabilities.");
-    }
-    lines.push("", "<details><summary>Learned complexity contributions</summary>", "", ...price.contributions.map(item =>
-      `${safeText(item.feature)}: ${item.value ?? "unknown"}; log-work contribution ${item.logWork.toFixed(3)}, missingness contribution ${item.missingLogWork.toFixed(3)}.`),
-      "", safeText(price.formula), "", "</details>");
-  } else lines.push("Unavailable without a structured scorecard.");
-  lines.push("", "### Level of design");
-  if (score) lines.push(`**${safeText(score.design.level)}** — ${safeText(score.design.reason)}`, "Design and business priority use explicit policy rules; they are not inferred from past token usage.");
-  else lines.push("Unknown.");
-  lines.push("", "### Metric evidence", "| Metric | Score | Source evidence |", "| --- | --- | --- |");
-  if (score) {
-    for (const [metric, assessment] of Object.entries(score.metrics)) {
-      lines.push(`| ${safeText(metric)} | ${assessment.value === null ? "unknown" : `${assessment.value}/${METRIC_MAX[metric as keyof typeof METRIC_MAX]}`} | ${assessment.evidence ? safeText(assessment.evidence) : "Not stated; needs confirmation"} |`);
-    }
-    if (score.unknowns.length) lines.push("", `Unknowns: ${score.unknowns.map(safeText).join(", ")}.`);
-    if (score.facts && Object.keys(score.facts).length) {
-      lines.push("", `PR facts: ${Object.entries(score.facts).map(([key, value]) => `${safeText(key)}=${value}`).join(", ")}.`);
-    }
-  }
-  if (score) lines.push("", "<details><summary>Scoring rules</summary>", "", ...Object.values(TRIAGE_RULES).map(rule => safeText(rule)), "", "</details>");
-  lines.push("", `Model: ${safeText(decision.model)}. Automated estimate; maintainers can revise scope and priority.`);
-  return lines.join("\n");
 }
 
 function managedLabels(issue: any): string {
@@ -162,6 +80,7 @@ export function createTriageService(options: Options) {
   const repos = new Set(options.repos);
   const github = options.github ?? githubRequest;
   const classify = options.classify ?? classifyTriage;
+  const revision = options.assessmentRevision ?? assessmentRevision;
   const retries = options.retryDelaysMs ?? [30_000, 120_000];
   const log = (event: string, fields: Record<string, unknown> = {}) => {
     try { options.log?.({ event, ...fields }); } catch {}
@@ -175,7 +94,12 @@ export function createTriageService(options: Options) {
       kind TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0,
       next_attempt INTEGER NOT NULL DEFAULT 0, updated INTEGER NOT NULL, model TEXT
     );
-    UPDATE github_triage SET status='queued' WHERE status='running';`);
+    UPDATE github_triage SET status='queued' WHERE status='running';
+    CREATE TABLE IF NOT EXISTS github_triage_assessments (
+      repo TEXT NOT NULL, number INTEGER NOT NULL, source TEXT NOT NULL, revision TEXT NOT NULL,
+      body TEXT NOT NULL, effort TEXT NOT NULL, priority TEXT NOT NULL, model TEXT NOT NULL,
+      updated INTEGER NOT NULL, PRIMARY KEY(repo, number)
+    );`);
   if (!(db.prepare("PRAGMA table_info(github_triage)").all() as any[]).some(column => column.name === "reason")) {
     db.exec("ALTER TABLE github_triage ADD COLUMN reason TEXT NOT NULL DEFAULT 'webhook'");
   }
@@ -196,7 +120,9 @@ export function createTriageService(options: Options) {
       if (row.status in counts) counts[row.status as keyof typeof counts] = row.count;
     }
     const last = db.prepare("SELECT model FROM github_triage WHERE model IS NOT NULL ORDER BY updated DESC LIMIT 1").get() as any;
-    return { ...counts, lastModel: last?.model ?? null };
+    const drift = db.prepare("SELECT count(*) AS detected FROM github_triage WHERE reason='reconcile'").get() as { detected: number };
+    const repaired = db.prepare("SELECT count(*) AS repaired FROM github_triage WHERE reason IN ('reconcile','repair') AND status='done'").get() as { repaired: number };
+    return { ...counts, lastModel: last?.model ?? null, drift: { detected: drift.detected, repaired: repaired.repaired }, calibration: calibrationHealth() };
   }
 
   function signalIdle() {
@@ -244,6 +170,20 @@ export function createTriageService(options: Options) {
     return inserted.changes > 0;
   }
 
+  type CachedAssessment = { body: string; effort: keyof typeof EFFORT_LABELS; priority: keyof typeof PRIORITY_LABELS; model: string };
+  function cachedAssessment(repo: string, number: number, source: string, currentRevision: string): CachedAssessment | undefined {
+    const row = db.prepare("SELECT body,effort,priority,model FROM github_triage_assessments WHERE repo=? AND number=? AND source=? AND revision=?")
+      .get(repo, number, source, currentRevision) as CachedAssessment | undefined;
+    if (!row || !Object.hasOwn(EFFORT_LABELS, row.effort) || !Object.hasOwn(PRIORITY_LABELS, row.priority)
+      || typeof row.body !== "string" || row.body.length > 65_000 || typeof row.model !== "string" || row.model.length > 200) return;
+    return row;
+  }
+  function matchesAssessment(issue: any, comment: any, assessment: CachedAssessment | undefined): boolean {
+    if (!assessment || comment?.body !== assessment.body) return false;
+    const wanted = [EFFORT_LABELS[assessment.effort], PRIORITY_LABELS[assessment.priority]].sort().join("\n");
+    return managedLabels(issue) === wanted;
+  }
+
   const reconciling = new Map<string, Promise<{ scanned: number; queued: number }>>();
   async function scan(selectedRepo?: string) {
     let scanned = 0;
@@ -257,11 +197,10 @@ export function createTriageService(options: Options) {
           scanned++;
           if (db.prepare("SELECT 1 FROM github_triage WHERE repo=? AND number=? AND status IN ('queued','running') LIMIT 1").get(repo, issue.number)) continue;
           const kind = issue.pull_request ? "pull_request" : "issue";
-          if (completeLabels(issue)) {
-            const pr = kind === "pull_request" ? await github("GET", `repos/${repo}/pulls/${issue.number}`) : undefined;
-            const comment = await findComment(repo, issue.number);
-            if (comment?.body.includes(TRIAGE_COMMENT_VERSION_MARKER) && comment.body.includes(triageSourceMarker(issue, pr))) continue;
-          }
+          const pr = kind === "pull_request" ? await github("GET", `repos/${repo}/pulls/${issue.number}`) : undefined;
+          const assessment = cachedAssessment(repo, issue.number, triageSourceMarker(issue, pr), revision());
+          const comment = await findComment(repo, issue.number);
+          if (matchesAssessment(issue, comment, assessment)) continue;
           if (enqueue(repo, issue.number, kind, "reconcile")) queued++;
         }
         if (items.length < 100) break;
@@ -287,7 +226,6 @@ export function createTriageService(options: Options) {
     const issue = await github("GET", endpoint);
     if (issue.state !== "open") return { status: "skipped" };
     if ((job.kind === "pull_request") !== Boolean(issue.pull_request)) return { status: "skipped" };
-    if (job.reason === "repair" && job.attempts === 0 && completeLabels(issue)) return { status: "skipped" };
     const files: string[] = [];
     let pr: any;
     let draft = false;
@@ -306,16 +244,23 @@ export function createTriageService(options: Options) {
     }
     const sourceMarker = triageSourceMarker(issue, pr);
     let existingComment = await findComment(job.repo, job.number);
-    if (job.reason === "reconcile" && completeLabels(issue) && existingComment?.body.includes(TRIAGE_COMMENT_VERSION_MARKER) && existingComment.body.includes(sourceMarker)) return { status: "skipped" };
-    const decision = await classify({
-      repo: job.repo, number: job.number, kind: job.kind,
-      title: typeof issue.title === "string" ? issue.title : "",
-      body: typeof issue.body === "string" ? issue.body : "", files, draft,
-      changedFiles: pr?.changed_files, additions: pr?.additions, deletions: pr?.deletions,
-    });
-    if (!Object.hasOwn(EFFORT_LABELS, decision.effort) || !Object.hasOwn(PRIORITY_LABELS, decision.priority)
-      || typeof decision.model !== "string" || !decision.model.length || decision.model.length > 200) {
-      throw new Error("Invalid triage decision");
+    const currentRevision = revision();
+    let assessment = cachedAssessment(job.repo, job.number, sourceMarker, currentRevision);
+    if (matchesAssessment(issue, existingComment, assessment)) return { status: "skipped" };
+    if (!assessment) {
+      const decision = await classify({
+        repo: job.repo, number: job.number, kind: job.kind,
+        title: typeof issue.title === "string" ? issue.title : "",
+        body: typeof issue.body === "string" ? issue.body : "", files, draft,
+        changedFiles: pr?.changed_files, additions: pr?.additions, deletions: pr?.deletions,
+      });
+      if (!Object.hasOwn(EFFORT_LABELS, decision.effort) || !Object.hasOwn(PRIORITY_LABELS, decision.priority)
+        || typeof decision.model !== "string" || !decision.model.length || decision.model.length > 200) {
+        throw new Error("Invalid triage decision");
+      }
+      if (revision() !== currentRevision) throw new Error("Effort model changed during classification");
+      assessment = { body: renderTriageComment(decision, sourceMarker), effort: decision.effort, priority: decision.priority, model: decision.model };
+      if (assessment.body.length > 65_000) throw new Error("Triage comment exceeds size limit");
     }
     const current = await github("GET", endpoint);
     if (current.state !== "open") return { status: "skipped" };
@@ -327,23 +272,28 @@ export function createTriageService(options: Options) {
       if (currentPr.state !== "open") return { status: "skipped" };
       if (currentPr.head?.sha !== head || Boolean(currentPr.draft) !== draft) throw new Error("Pull request changed during classification");
     }
-    const desired = [EFFORT_LABELS[decision.effort], PRIORITY_LABELS[decision.priority]];
+    const desired = [EFFORT_LABELS[assessment.effort], PRIORITY_LABELS[assessment.priority]];
+    // Persist before external writes so retries and restarts repair the same assessment.
+    db.prepare(`INSERT INTO github_triage_assessments(repo,number,source,revision,body,effort,priority,model,updated)
+      VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(repo,number) DO UPDATE SET source=excluded.source,revision=excluded.revision,
+      body=excluded.body,effort=excluded.effort,priority=excluded.priority,model=excluded.model,updated=excluded.updated`)
+      .run(job.repo, job.number, sourceMarker, currentRevision, assessment.body, assessment.effort, assessment.priority, assessment.model, Date.now());
     for (const label of desired) await ensureLabel(job.repo, label);
     // Add first so a failed retry never leaves an item without its selected labels.
-    await github("POST", `${endpoint}/labels`, { labels: desired });
+    if (!desired.every(label => labelNames(current).includes(label))) await github("POST", `${endpoint}/labels`, { labels: desired });
     for (const label of labelNames(current)) {
       if (MANAGED.has(label) && !desired.includes(label as any)) {
         try { await github("DELETE", `${endpoint}/labels/${encodeURIComponent(label)}`); }
         catch (error) { if ((error as any)?.status !== 404) throw error; }
       }
     }
-    const body = renderTriageComment(decision, sourceMarker);
+    const body = assessment.body;
     // Re-read after label writes: a previous POST may have succeeded before its response was lost.
     existingComment = await findComment(job.repo, job.number);
     if (existingComment) {
       if (existingComment.body !== body) await github("PATCH", `repos/${job.repo}/issues/comments/${existingComment.id}`, { body });
     } else await github("POST", `${endpoint}/comments`, { body });
-    return { status: "done", model: decision.model };
+    return { status: "done", model: assessment.model };
   }
 
   function schedule() {
