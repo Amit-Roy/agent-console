@@ -652,7 +652,7 @@ for (const scheme of ["dark", "light"] as const) {
     await other.locator(".row-more").click();
     check("row menu: opens from any row without switching to it", (await page.locator(".menu[role=menu]").count()) === 1 && (await page.locator("#threads li.sel .t").innerText()).trim() === title);
     const its = await items();
-    check("row menu: grouped thread actions", its.join("|") === "Rename|Compaction|Economy settings|Fork|Download|Share|Run details|Archive", (await items()).join("|"));
+    check("row menu: grouped thread actions", its.join("|") === "Search in chat|Rename|Compaction|Economy settings|Fork|Download|Share|Run details|Archive", (await items()).join("|"));
     check("row menu: destructive actions stay inside Archive", (await page.locator(".menu [data-tone=danger]").count()) === 0);
     await page.screenshot({ path: `${OUT}/ui-row-menu.png` });
     await page.keyboard.press("Escape");
@@ -682,7 +682,7 @@ for (const scheme of ["dark", "light"] as const) {
 
     // download, from the header menu (the same actions live there too)
     await page.click("#more");
-    check("header menu: same thread actions", (await items()).join("|") === "Rename|Compaction|Economy settings|Fork|Download|Share|Run details|Archive", (await items()).join("|"));
+    check("header menu: same thread actions", (await items()).join("|") === "Search in chat|Rename|Compaction|Economy settings|Fork|Download|Share|Run details|Archive", (await items()).join("|"));
     const dl = page.waitForEvent("download");
     await page.locator(".menu [role=menuitem]", { hasText: "Download" }).click();
     const file = await dl;
