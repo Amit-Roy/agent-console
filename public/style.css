@@ -503,7 +503,7 @@ details[open]>summary .chev{transform:rotate(90deg)}
 .card pre{margin:0;max-height:20rem;overflow:auto;white-space:pre-wrap;word-break:break-word;background:var(--code-bg);border-radius:var(--r-sm);padding:var(--sp-3);font:var(--fw-reg) var(--fm-sm);font-variant-ligatures:none;letter-spacing:0;scrollbar-width:thin;scrollbar-color:var(--s3) transparent}
 .card .body pre+pre{margin-top:var(--sp-2)}
 /* open card: the row wraps to show the whole label (said once, not repeated in the body) */
-.card[open]>summary .sum{white-space:normal;overflow-wrap:anywhere;padding-block:var(--sp-1)}
+.card[open]>summary .sum{white-space:normal;overflow-wrap:break-word;word-break:normal;padding-block:var(--sp-1)}
 /* an open agent card puts its task on a line of its own: beside the name and status chip it squeezes to a letter per line */
 .card.agent[open]>summary{flex-wrap:wrap;row-gap:0}
 .card.agent[open]>summary .sum{order:1;flex-basis:100%;overflow-wrap:break-word;padding:0 0 var(--sp-1) calc(var(--ico) + var(--sp-2))}
@@ -589,7 +589,7 @@ details[open]>summary .chev{transform:rotate(90deg)}
 #queued .txt{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--t1)}
 #queued :is(.rm,.queue-edit){flex:none;width:1.75rem;min-height:1.75rem;padding:0;background:transparent;color:var(--t2)}
 #queued :is(.rm,.queue-edit):hover{background:var(--hover);color:var(--t1)}
-@media (pointer:coarse){#queued li{min-height:2.75rem}#queued :is(.rm,.queue-edit){width:2.75rem;min-height:2.75rem}}
+@media (pointer:coarse){#queued li{min-height:2.75rem}#queued :is(.rm,.queue-edit){width:2.25rem;min-height:2.75rem}}
 .user .delivery{margin-top:var(--sp-1);color:var(--t3);font:var(--fw-reg) var(--f-xs);letter-spacing:var(--ls-xs)}
 
 /* context meter: ring + percentage, details on hover/focus */
@@ -992,7 +992,7 @@ body.login{display:grid;place-items:center;overflow:auto;padding:var(--sp-4)}
 .side-actions .btn:hover:not(:disabled){color:var(--t1)}
 #queued .steer{flex:none;width:1.75rem;min-height:1.75rem;padding:0;background:transparent;color:var(--accent)}
 #queued .steer:hover:not(:disabled){background:var(--accent-tint)}
-@media (pointer:coarse){#queued .steer{width:2.75rem;min-height:2.75rem}}   /* 44px touch target, same as the row's edit/remove */
+@media (pointer:coarse){#queued .steer{width:2.25rem;min-height:2.75rem}}   /* 36x44 touch target, same as the row's edit/remove */
 
 
 /* An agent's question stays in the conversation, with a deliberate hand-off back to the user. */
