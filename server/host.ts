@@ -288,6 +288,85 @@ export function hostPorts(req: express.Request, res: express.Response) {
   } catch { res.status(503).json({ error: "Port information is unavailable." }); }
 }
 
+export async function hostProcessDetail(req: express.Request, res: express.Response) {
+  res.setHeader("Cache-Control", "no-store");
+  const pid = Number(req.params.pid);
+  if (!Number.isInteger(pid) || pid <= 0) return res.status(400).json({ error: "Invalid pid." });
+  try {
+    const p = readProcStat(String(pid), 0);
+    if (!p) return res.status(404).json({ error: "Process not found." });
+    const mem = readMeminfo();
+    const memTotal = mem.MemTotal ?? 0;
+    const uptimeSec = readUptime();
+    const startedMs = uptimeSec > 0 && p.starttime > 0
+      ? Date.now() - (uptimeSec * 1000 - p.starttime / CLK_TCK * 1000)
+      : 0;
+    const upSec = startedMs > 0 ? Math.max(0, (Date.now() - startedMs) / 1000) : 0;
+    const h = Math.floor(upSec / 3600), min = Math.floor((upSec % 3600) / 60), s = Math.floor(upSec % 60);
+    const status: Record<string, string> = {};
+    try {
+      for (const line of fs.readFileSync(path.join(PROC, String(pid), "status"), "utf8").split("\n")) {
+        const m = /^([A-Z]+):\s+(.*)$/.exec(line);
+        if (m) status[m[1]] = m[2];
+      }
+    } catch {}
+    let children: { pid: number; name: string; cmd: string }[] = [];
+    try {
+      for (const entry of fs.readdirSync(PROC, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue;
+        const cpid = Number(entry.name);
+        if (!Number.isFinite(cpid) || cpid === pid) continue;
+        try {
+          const cl = fs.readFileSync(path.join(PROC, entry.name, "stat"), "utf8");
+          const end = cl.lastIndexOf(")");
+          const rest = cl.slice(end + 2).trim().split(/\s+/);
+          if (Number(rest[1]) === pid) {
+            const cname = cl.slice(cl.indexOf("(") + 1, end).replace(/\s+/g, " ");
+            let ccmd = "";
+            try { ccmd = fs.readFileSync(path.join(PROC, entry.name, "cmdline"), "utf8").replace(/\0/g, " ").trim(); } catch {}
+            children.push({ pid: cpid, name: cname || `pid ${cpid}`, cmd: ccmd || `(${cname})` });
+          }
+        } catch {}
+      }
+    } catch {}
+    let ports: number[] = [];
+    try {
+      const fds = fs.readdirSync(path.join(PROC, String(pid), "fd"));
+      const inodes = new Set<number>();
+      for (const fd of fds) {
+        let target = "";
+        try { target = fs.readlinkSync(path.join(PROC, String(pid), "fd", fd)); } catch { continue; }
+        const m = /^socket:\[(\d+)\]$/.exec(target);
+        if (m) inodes.add(Number(m[1]));
+      }
+      if (inodes.size) {
+        for (const proto of ["tcp", "tcp6"]) {
+          try {
+            const text = fs.readFileSync(path.join(PROC, `net/${proto}`), "utf8");
+            for (const line of text.trim().split("\n").slice(1)) {
+              const f = line.trim().split(/\s+/);
+              if (f[3] !== "0A") continue;
+              const inode = Number(f[11]) || 0;
+              if (inode && inodes.has(inode)) {
+                const port = Number.parseInt(f[1].split(":")[1] ?? "", 16);
+                if (Number.isFinite(port)) ports.push(port);
+              }
+            }
+          } catch {}
+        }
+      }
+    } catch {}
+    res.json({
+      pid: p.pid, ppid: p.ppid, name: p.name, state: p.state, uid: p.uid,
+      user: userOf(p.uid), cmd: p.cmd, threads: p.threads, nice: p.nice,
+      cpu: p.cpu ?? 0, memPct: p.memPct ?? 0, rss: p.rssPages * PAGE_SIZE,
+      starttime: p.starttime, uptime: `${h}h ${min}m ${s}s`, startedMs,
+      tgid: status.Tgid ?? "", ngid: status.Ngid ?? "", pidns: status.PidNS ?? "",
+      children, ports: [...new Set(ports)].sort((a, b) => a - b),
+    });
+  } catch { res.status(503).json({ error: "Process detail is unavailable." }); }
+}
+
 export function hostKill(req: express.Request, res: express.Response) {
   const pid = Number(req.params.pid);
   if (!Number.isInteger(pid) || pid <= 1) return res.status(400).json({ error: "Invalid pid." });

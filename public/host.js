@@ -40,6 +40,85 @@ function toast(text, tone) {
   setTimeout(() => { t.classList.remove("show"); }, 2500);
 }
 
+function closeProcModal() {
+  const m = $("proc-modal");
+  if (m) { m.hidden = true; m.setAttribute("aria-hidden", "true"); }
+}
+
+function openProcModal(pid) {
+  const m = $("proc-modal");
+  if (!m) return;
+  m.hidden = false; m.setAttribute("aria-hidden", "false");
+  const body = $("proc-modal-body");
+  body.replaceChildren(el("div", "muted", "Loading…"));
+  getJSON(`/api/host/processes/${pid}/detail`).then(d => {
+    body.replaceChildren(renderProcModal(d));
+  }).catch(e => {
+    body.replaceChildren(el("div", "muted", `Could not load details: ${e.message}`));
+  });
+}
+
+function bytes2(b) {
+  if (!Number.isFinite(b)) return "—";
+  const u = ["B","KB","MB","GB","TB"]; let i = 0;
+  while (b >= 1024 && i < u.length - 1) { b /= 1024; i++; }
+  return (i === 0 ? String(Math.round(b)) : b.toFixed(1)) + " " + u[i];
+}
+
+function renderProcModal(d) {
+  const card = el("div", "proc-detail");
+  const hdr = el("div", "detail-head");
+  hdr.append(el("h2", "", `PID ${d.pid}`), el("p", "sub", d.name));
+  card.append(hdr);
+
+  const grid = el("div", "detail-grid");
+  const row = (label, value) => {
+    const r = el("div", "detail-row");
+    r.append(el("span", "k", label), el("span", "v", value));
+    return r;
+  };
+  grid.append(
+    row("State", d.state),
+    row("User", d.user),
+    row("UID", String(d.uid)),
+    row("Command", d.cmd),
+    row("CPU", pct(d.cpu)),
+    row("RAM", pct(d.memPct)),
+    row("RSS", bytes2(d.rss)),
+    row("Threads", String(d.threads)),
+    row("Nice", String(d.nice)),
+    row("Uptime", d.uptime),
+    row("PPID", String(d.ppid)),
+  );
+  card.append(grid);
+
+  if (d.children && d.children.length) {
+    const sec = el("div", "detail-sec");
+    sec.append(el("h3", "", "Child processes"));
+    const list = el("div", "detail-list");
+    for (const c of d.children) {
+      const r = el("div", "detail-row");
+      r.append(el("span", "k", `${c.name} (PID ${c.pid})`), el("span", "v", c.cmd || "—"));
+      list.append(r);
+    }
+    sec.append(list); card.append(sec);
+  }
+
+  if (d.ports && d.ports.length) {
+    const sec = el("div", "detail-sec");
+    sec.append(el("h3", "", "Listening ports"));
+    const list = el("div", "detail-list");
+    for (const port of d.ports) {
+      const r = el("div", "detail-row");
+      r.append(el("span", "k", `Port ${port}`), el("span", "v", "tcp"));
+      list.append(r);
+    }
+    sec.append(list); card.append(sec);
+  }
+
+  return card;
+}
+
 async function getJSON(path) {
   const r = await fetch(path);
   if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `HTTP ${r.status}`);
@@ -207,6 +286,10 @@ function procsPanel(list) {
     if (confirming.has(r.pid)) act.append(mk("btn sm kill sure", "Sure?", "sure"), mk("btn sm ghost", "Cancel", "cancel"));
     else { act.append(mk("btn sm kill", "Kill", "kill")); const cb = mk("btn sm ghost", "Cancel", "cancel"); cb.hidden = true; act.append(cb); }
     const actTd = el("td"); actTd.append(act); row.append(actTd);
+    row.addEventListener("click", (e) => {
+      if (e.target.closest("button")) return;
+      openProcModal(r.pid);
+    });
     tbody.append(row);
   }
   table.append(tbody); wrap.append(table);
@@ -293,6 +376,9 @@ function setPaused(p) {
   $("live").classList.toggle("paused", p);
   if (!p) schedule();
 }
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") closeProcModal();
+});
 $("pause").onclick = () => setPaused(!paused);
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) { if (timer) { clearTimeout(timer); timer = null; } }
