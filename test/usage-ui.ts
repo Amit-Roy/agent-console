@@ -29,13 +29,20 @@ try {
       });
     });
     await page.goto(base);
-    await page.waitForSelector("#usage [role=tab]", { state: "attached" });
+    await page.waitForSelector("#usage-provider", { state: "attached" });
     if (width === 390) await page.locator("#menu").click();
-    assert.deepEqual(await page.locator("#usage [role=tab]").allTextContents(), ["Sunny", "Nefro", "OpenRouter", "Codex"]);
+    const selector = page.locator("#usage-provider");
+    const selectUsage = async (label: string) => {
+      await selector.click();
+      await page.getByRole("listbox", { name: "Usage account", exact: true }).getByRole("option", { name: new RegExp(`^${label}`) }).click();
+    };
+    await selector.click();
+    assert.deepEqual(await page.getByRole("listbox", { name: "Usage account", exact: true }).locator(".m-label").allTextContents(), ["Claude · Sunny", "Claude · Nefro", "OpenRouter", "Codex"]);
+    await page.keyboard.press("Escape");
     const color = async () => page.locator("#usage .bar i").first().evaluate(e => getComputedStyle(e).backgroundColor);
-    await page.getByRole("tab", { name: "Sunny", exact: true }).click(); const red = await color();
+    await selectUsage("Claude · Sunny"); const red = await color();
     assert.match(await page.locator("#usage").innerText(), /Claude · Sunny/);
-    await page.getByRole("tab", { name: "Codex", exact: true }).click(); const green = await color();
+    await selectUsage("Codex"); const green = await color();
     const info = page.locator("#usage-ctx-info");
     assert.equal(await info.getAttribute("aria-haspopup"), "dialog");
     await info.click();
@@ -44,16 +51,22 @@ try {
     assert.match(await forecast.innerText(), /Context: continue or compact\?/);
     await page.keyboard.press("Escape");
     await forecast.waitFor({ state: "detached" });
-    const tabNode = await page.locator("#usage-tab-codex").elementHandle();
+    const selectorNode = await selector.elementHandle();
+    await selector.click();
+    const menuNode = await page.getByRole("listbox", { name: "Usage account", exact: true }).elementHandle();
     const refreshThread = hello.threads.find((t: any) => t.provider === "codex");
     client.send(JSON.stringify({ t: "thread", thread: { ...refreshThread, title: refreshThread.title + " usage refresh" } }));
     await page.waitForFunction(() => [...document.querySelectorAll("#threads .t")].some(t => t.textContent?.includes(" usage refresh")));
-    assert.ok(await tabNode!.evaluate(e => e.isConnected), "background telemetry retains tab nodes and focus/click targets");
-    await page.getByRole("tab", { name: "OpenRouter", exact: true }).click(); const amber = await color();
+    assert.ok(await selectorNode!.evaluate(e => e.isConnected), "background telemetry retains the usage selector");
+    assert.ok(await menuNode!.evaluate(e => e.isConnected), "background telemetry retains the open usage menu");
+    await page.keyboard.press("Escape");
+    await selectUsage("OpenRouter"); const amber = await color();
     assert.equal(new Set([red, green, amber]).size, 3, JSON.stringify({ red, green, amber }));
     assert.match(await page.locator("#usage").innerText(), /40 \/ 50/);
-    await page.getByRole("tab", { name: "OpenRouter", exact: true }).press("ArrowRight");
-    assert.equal(await page.getByRole("tab", { name: "Codex", exact: true }).getAttribute("aria-selected"), "true");
+    await selector.press("ArrowDown");
+    await page.keyboard.press("End");
+    await page.keyboard.press("Enter");
+    assert.equal(await selector.innerText(), "Codex");
     const claude = hello.threads.find((t: any) => t.provider === "claude");
     if (claude) {
       await page.locator("#threads li", { has: page.locator(".t", { hasText: claude.title }) }).first().click();
@@ -79,7 +92,7 @@ try {
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
     assert.deepEqual(errors, []);
     await page.screenshot({ path: `/tmp/ac-provider-usage-${width}.png` });
-    console.log(`PASS ${width}px provider tabs, real context migration, green/amber/red meters, keyboard navigation, composer effort, no overflow`);
+    console.log(`PASS ${width}px usage dropdown, real context migration, green/amber/red meters, keyboard navigation, composer effort, no overflow`);
     await ctx.close();
   }
 } finally { await browser.close(); }

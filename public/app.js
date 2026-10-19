@@ -2066,6 +2066,7 @@ function usageMeter(label, used, limit, unit = "%", resetsAt) {
   return row;
 }
 const usageName = (p) => p?.id === "claude" ? "Claude" : p?.id === "pi" ? "OpenRouter" : p?.label || "";
+let usagePicker;
 function renderUsage() {
   const providers = [...state.providers.values()].filter(p => p.id !== "mock").flatMap(p => p.id === "claude"
     ? claudeAccounts().map(a => ({ id: a.id === "sunny" ? "claude" : `claude:${a.id}`, label: a.label, email: a.email, claude: true, ready: a.ready }))
@@ -2073,24 +2074,26 @@ function renderUsage() {
   if (!providers.length) return;
   if (!providers.some(p => p.id === state.usageTab)) state.usageTab = providers[0].id;
   const root = $("usage");
-  const focusedTab = root.contains(document.activeElement) ? document.activeElement.id : null;
-  const tabKey = providers.map(p => `${p.id}:${p.label}`).join(",");
-  let tabs = root.querySelector(".usage-tabs");
-  const rebuildTabs = !tabs || tabs.dataset.providers !== tabKey;
-  if (rebuildTabs) { tabs = el("div", "usage-tabs"); tabs.dataset.providers = tabKey; tabs.setAttribute("role", "tablist"); tabs.setAttribute("aria-label", "Provider usage"); }
-  const pane = el("div", "usage-pane"); pane.id = "usage-panel"; pane.setAttribute("role", "tabpanel"); pane.setAttribute("aria-labelledby", `usage-tab-${state.usageTab}`);
-  if (rebuildTabs) providers.forEach((p, i) => {
-    const btn = el("button", "usage-tab", p.claude ? p.label : usageName(p));
-    btn.title = p.claude ? `Claude · ${p.email || p.label}` : usageName(p);
-    btn.id = `usage-tab-${p.id}`; btn.type = "button"; btn.setAttribute("role", "tab"); btn.setAttribute("aria-selected", String(p.id === state.usageTab)); btn.setAttribute("aria-controls", pane.id); btn.tabIndex = p.id === state.usageTab ? 0 : -1;
-    btn.onclick = () => { state.usageTab = p.id; renderUsage(); $(btn.id)?.focus(); };
-    btn.onkeydown = e => { if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) return; e.preventDefault(); const n = e.key === "Home" ? 0 : e.key === "End" ? providers.length - 1 : (i + (e.key === "ArrowRight" ? 1 : -1) + providers.length) % providers.length; state.usageTab = providers[n].id; renderUsage(); $(`usage-tab-${state.usageTab}`).focus(); };
-    tabs.append(btn);
-  });
-  for (const btn of tabs.children) {
-    const selected = btn.id === `usage-tab-${state.usageTab}`;
-    btn.setAttribute("aria-selected", String(selected)); btn.tabIndex = selected ? 0 : -1;
+  const focusedControl = root.contains(document.activeElement) ? document.activeElement.id : null;
+  let picker = root.querySelector("#usage-provider");
+  if (!picker) {
+    picker = el("button", "btn field usage-picker");
+    picker.id = "usage-provider"; picker.type = "button";
+    usagePicker = createMenu({
+      trigger: picker, label: "Usage account", side: "top",
+      renderTrigger: (item, button) => {
+        fieldTrigger(item, button);
+        button.setAttribute("aria-label", `Usage account: ${item?.label || ""}`);
+      },
+      onSelect: value => { state.usageTab = value; renderUsage(); },
+    });
   }
+  usagePicker.setItems(providers.map(p => ({
+    value: p.id, label: p.claude ? `Claude · ${p.label}` : usageName(p),
+    ...(p.email ? { desc: p.email } : {}),
+  })), state.usageTab);
+  const pane = el("div", "usage-pane");
+  pane.id = "usage-panel"; pane.setAttribute("role", "region"); pane.setAttribute("aria-labelledby", picker.id);
   const sample = state.usage[state.usageTab];
   const head = el("div", "usage-head", "");
   const refresh = iconButton("refresh", "Refresh usage", "btn icon sm ghost usage-refresh");
@@ -2098,7 +2101,7 @@ function renderUsage() {
   const stamp = sample?.updatedAt ? el("span", "usage-stamp", new Date(sample.updatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })) : null;
   if (stamp) { stamp.title = `Updated ${new Date(sample.updatedAt).toLocaleString()}`; refresh.setAttribute("aria-label", `Refresh usage (updated ${stamp.textContent})`); }
   const selectedAccount = providers.find(p => p.id === state.usageTab);
-  head.append(el("span", "usage-label", selectedAccount?.claude ? `Claude · ${selectedAccount.label}` : "Allowance"), ...(stamp ? [stamp] : []), refresh);
+  head.append(el("span", "usage-label", "Allowance"), ...(stamp ? [stamp] : []), refresh);
   pane.append(head);
   if (sample?.windows?.length) {
     for (const w of sample.windows) pane.append(usageMeter(w.label, w.used, w.limit, w.unit || "requests", w.resetsAt));
@@ -2134,9 +2137,9 @@ function renderUsage() {
     }
     pane.append(note);
   }
-  if (rebuildTabs) root.replaceChildren(tabs, pane);
+  if (!picker.isConnected) root.replaceChildren(picker, pane);
   else root.querySelector(".usage-pane").replaceWith(pane);
-  if (focusedTab) $(focusedTab)?.focus({ preventScroll: true });
+  if (focusedControl) $(focusedControl)?.focus({ preventScroll: true });
 }
 
 // ---------- controls ----------
