@@ -43,12 +43,13 @@ export function fiveHour(u: ProviderUsage | undefined, now: number): (UsageWindo
   return w && w.resetsAt! > now ? w as UsageWindow & { resetsAt: number } : undefined;
 }
 
-// A provider has expiring quota when its window ends within the lead time and still has meaningful room.
+// A provider has expiring quota when its window ends within the lead time. `full` marks a window at or above maxUsedPct:
+// big work skips it, but trivial work (small, reviewed) does not need the room check.
 export function expiring(u: ProviderUsage | undefined, now: number, cfg: Config) {
   const w = fiveHour(u, now);
   if (!w || w.resetsAt - now > cfg.leadMinutes * 60_000) return undefined;
   const pct = w.limit ? w.used / w.limit * 100 : 100;
-  return pct < cfg.maxUsedPct ? { resetsAt: w.resetsAt, used: pct } : undefined;
+  return { resetsAt: w.resetsAt, used: pct, full: pct >= cfg.maxUsedPct };
 }
 
 /** Pure: which open issues to start now. `done` holds keys already assigned (any window). */
@@ -57,7 +58,7 @@ export function plan(input: { now: number; usage: Record<string, ProviderUsage>;
   const open = input.issues
     .filter(i => !input.done.has(issueKey(i)) && effortOf(i.labels))
     .sort((a, b) => rank(a.labels) - rank(b.labels) || a.number - b.number);
-  const room = new Map<string, { resetsAt: number; used: number; left: number }>();
+  const room = new Map<string, { resetsAt: number; used: number; full: boolean; left: number }>();
   for (const p of ["claude", "codex"]) {
     const e = expiring(input.usage[p], input.now, cfg);
     if (e) room.set(p, { ...e, left: cfg.perWindow });
@@ -68,7 +69,7 @@ export function plan(input: { now: number; usage: Record<string, ProviderUsage>;
     for (const issue of open.filter(i => effortOf(i.labels) === effort)) {
       // Trivial work runs on Pi but needs a Sonnet/Sol reviewer, so it also draws on an expiring window.
       const pool = effort === "trivial" ? REVIEWERS : ROUTES[effort];
-      const route = pool.find(r => (room.get(r.provider)?.left ?? 0) > 0);
+      const route = pool.find(r => { const w = room.get(r.provider); return !!w && w.left > 0 && (effort === "trivial" || !w.full); });
       if (!route) continue;
       const w = room.get(route.provider)!;
       w.left--;

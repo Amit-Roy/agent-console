@@ -16,9 +16,9 @@ assert.equal(historyRows("claude", a, { ...a, updatedAt: now + 1 }).length, 0);
 assert.equal(historyRows("claude", a, win(11, 200)).length, 1);
 
 // lead window: only the last 90 minutes, only with room left
-assert.ok(!expiring(win(10, 120), now, { ...loadConfig("/nonexistent") }));
-assert.ok(expiring(win(10, 89), now, loadConfig("/nonexistent")));
-assert.ok(!expiring(win(95, 30), now, loadConfig("/nonexistent")), "a full window wastes nothing");
+assert.ok(!expiring(win(10, 120), now, loadConfig("/nonexistent")));
+assert.equal(expiring(win(10, 89), now, loadConfig("/nonexistent"))?.full, false);
+assert.equal(expiring(win(95, 30), now, loadConfig("/nonexistent"))?.full, true);
 assert.ok(!expiring({ windows: [{ label: "5-hour", used: 0, limit: 100, resetsAt: now - 1 }], updatedAt: now }, now, loadConfig("/nonexistent")), "an already-reset window is stale");
 assert.equal(effortOf(["Eff: Deep", "x"]), "deep");
 assert.equal(effortOf(["Eff: Deep", "Eff: BAU"]), undefined);
@@ -41,6 +41,11 @@ assert.equal(both.length, 3);
 const trivial = plan({ now, usage: { codex: win(10, 60) }, issues: [issue(3, "Trivial")], done: new Set() });
 assert.equal(trivial[0].route.provider, "pi");
 assert.match(trivial[0].reason, /reviewer gpt-6.1-sol/);
+// a nearly full window wastes nothing: deep/BAU skip it, trivial does not check
+const full = { claude: win(95, 30) };
+assert.deepEqual(plan({ now, usage: full, issues: [issue(1, "Deep"), issue(2, "BAU")], done: new Set() }), []);
+assert.deepEqual(plan({ now, usage: full, issues: [issue(1, "Deep"), issue(3, "Trivial")], done: new Set() }).map(d => d.key), ["o/r#3"]);
+assert.deepEqual(plan({ now, usage: { claude: win(95, 30), codex: win(10, 30) }, issues: [issue(1, "Deep")], done: new Set() }).map(d => d.route.provider), ["codex"], "deep falls through to the provider with room");
 assert.deepEqual(plan({ now, usage: { claude: win(10, 60) }, issues, done: new Set(["o/r#1", "o/r#2", "o/r#3", "o/r#4", "o/r#5"]) }), []);
 assert.deepEqual(plan({ now, usage: { claude: win(10, 60) }, issues: [{ ...issue(9, "BAU"), labels: ["bug"] }], done: new Set() }), [], "unlabelled issues wait for triage");
 
