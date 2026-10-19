@@ -1086,9 +1086,10 @@ export class Threads {
     delete t.idleCompactionDueAt;
     this.persist();
     if (this.queues.delete(id)) this.emitQueue(id); // Stop means stop: nothing queued behind it runs
-    if (!live) { this.touch(t); return; }
+    if (!live) { delete t.background; this.touch(t); return; }
     this.endTiming(t, { subtype: "aborted", is_error: true });
-    if (!t.operation && live.agent.interrupt && live.agent.alive && !live.held) {
+    // interrupt keeps the process, and with it any background subagents: stop with subagents working must kill the agent
+    if (!t.operation && !t.background && live.agent.interrupt && live.agent.alive && !live.held) {
       // keep the process: the harness ends the turn itself; restart only if it does not within 3 s
       live.interrupting = setTimeout(() => { if (this.live.get(id) === live && live.interrupting) this.kill(id, "stop", true); }, 3000);
       live.interrupting.unref();
@@ -1102,6 +1103,7 @@ export class Threads {
     }
     t.status = "idle";
     delete t.operation;
+    delete t.background;
     this.publish(id, { type: "aborted", ts: Date.now() });
     this.touch(t);
   }
