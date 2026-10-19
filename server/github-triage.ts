@@ -32,7 +32,8 @@ type Options = {
   // Called after the named CI workflow passes on a push to main of an allowed repository.
   deploy?: { workflow: string; run: (repo: string, sha: string) => void };
   log?: (metadata: Record<string, unknown>) => void;
-  // Called for each accepted issue or pull request webhook; failures are logged, never thrown (token telemetry comment).
+  // Called for each accepted webhook, each finished non-webhook job (queued, repair, reconcile) and each reconciled item
+  // that looks like it has no telemetry comment. Must be idempotent; failures are logged, never thrown (token telemetry comment).
   onItem?: (item: { repo: string; number: number; kind: Kind }) => Promise<unknown> | void;
 };
 
@@ -214,6 +215,12 @@ export function createTriageService(options: Options) {
     return cached?.text ?? "";
   }
 
+  async function notifyItem(repo: string, number: number, kind: Kind) {
+    if (!options.onItem) return;
+    try { await options.onItem({ repo, number, kind }); }
+    catch { log("on_item_failed"); }
+  }
+
   const reconciling = new Map<string, Promise<{ scanned: number; queued: number }>>();
   async function scan(selectedRepo?: string) {
     let scanned = 0;
@@ -230,7 +237,11 @@ export function createTriageService(options: Options) {
           const pr = kind === "pull_request" ? await github("GET", `repos/${repo}/pulls/${issue.number}`) : undefined;
           const assessment = cachedAssessment(repo, issue.number, triageSourceMarker(issue, pr, await repoContext(repo)), revision());
           const comment = await findComment(repo, issue.number);
-          if (matchesAssessment(issue, comment, assessment)) continue;
+          if (matchesAssessment(issue, comment, assessment)) {
+            // Triage comment present; fewer than two comments means no telemetry comment yet (cheap check, no extra API call).
+            if (typeof issue.comments === "number" && issue.comments < 2) await notifyItem(repo, issue.number, kind);
+            continue;
+          }
           if (enqueue(repo, issue.number, kind, "reconcile")) queued++;
         }
         if (items.length < 100) break;
@@ -342,6 +353,8 @@ export function createTriageService(options: Options) {
       active = (async () => {
         try {
           const result = await processJob(job);
+          // Webhook jobs already notified on receipt; every other path (lost webhook, reconcile, repair) must not skip it.
+          if (result.status === "done" && job.reason !== "webhook") await notifyItem(job.repo, job.number, job.kind);
           db.prepare("UPDATE github_triage SET status=?,model=?,updated=? WHERE delivery=?")
             .run(result.status, result.model ?? null, Date.now(), job.delivery);
           log(result.status, { repo: job.repo, number: job.number, model: result.model ?? null });
