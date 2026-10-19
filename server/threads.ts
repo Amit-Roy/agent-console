@@ -58,6 +58,7 @@ export interface Thread {
   lastCompactedAt?: number;
   archived?: number; // when it was archived: it leaves the working list until unarchived or sent to again
   schedule?: { task: string; run: string }; // a scheduled task's run: the sidebar files it under its task
+  issueRun?: { key: string; repo: string; number: number; effort: string; role: "work" | "review"; branch?: string; base?: string; pr?: number; reviewedAt?: number }; // started by window-dispatch for a GitHub issue
   cost: number;
   costMeasured?: boolean;
   createdAt: number;
@@ -156,6 +157,7 @@ export class Threads {
   private labeler: Labeler; // plain-English labels for shell commands that arrive without a description
   private commands: Record<string, Command[]> = {}; // per provider: each harness has its own slash commands and skills
   onTurnEnd?: (t: Thread, ev: any) => void; // a scheduled run's turn ended (Schedules records the run)
+  onIssueTurnEnd?: (t: Thread, ev: any) => void; // an issue run's turn ended (window-dispatch starts the review of trivial work)
   constructor(emit: Emit, onNotification?: (notice: ThreadNotice) => void) {
     this.onNotification = onNotification;
     this.emit = emit;
@@ -318,7 +320,7 @@ export class Threads {
     this.emit({ t: "thread", thread: t });
   }
 
-  create(opts: { provider?: string; cwd: string; mode?: Mode; model?: string; effort?: string; title?: string; schedule?: Thread["schedule"] }): Thread {
+  create(opts: { provider?: string; cwd: string; mode?: Mode; model?: string; effort?: string; title?: string; schedule?: Thread["schedule"]; issueRun?: Thread["issueRun"] }): Thread {
     const prov = PROVIDERS.get(opts.provider || DEFAULT_PROVIDER);
     if (!prov) throw new Error("Unknown provider.");
     const st = prov.status();
@@ -338,6 +340,7 @@ export class Threads {
       model,
       effort: this.validEffort(prov, model, opts.effort),
       ...(opts.schedule ? { schedule: opts.schedule } : {}),
+      ...(opts.issueRun ? { issueRun: opts.issueRun } : {}),
       status: "idle",
       cost: 0,
       createdAt: now,
@@ -708,6 +711,7 @@ export class Threads {
     }
     this.publish(t.id, ev, ev.type !== "stream_event");
     if (ev.type === "result" && t.schedule && t.status === "idle") try { this.onTurnEnd?.(t, ev); } catch {}
+    if (ev.type === "result" && t.issueRun && t.status === "idle") try { this.onIssueTurnEnd?.(t, ev); } catch {}
     if (ev.type === "assistant") {
       for (const b of ev.message?.content ?? []) {
         if (b?.type === "tool_use" && needsLabel(b.name, b.input)) this.labeler.request({ thread: t.id, id: b.id, command: b.input.command, cwd: t.cwd });
@@ -1010,6 +1014,14 @@ export class Threads {
   }
 
   // Every typed user message of the thread, oldest first. The log is read only for its user_input lines.
+  /** Record progress on an issue run (its PR, that its review has started). */
+  setIssueRun(id: string, patch: Partial<NonNullable<Thread["issueRun"]>>) {
+    const t = this.threads.get(id);
+    if (!t?.issueRun) return;
+    t.issueRun = { ...t.issueRun, ...patch };
+    this.touch(t);
+  }
+
   private userTexts(id: string): string[] {
     try {
       return fs.readFileSync(path.join(LOG_DIR, `${id}.jsonl`), "utf8").split("\n")

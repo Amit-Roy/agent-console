@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { historyRows } from "../server/usage.ts";
 import { execFileSync } from "node:child_process";
-import { plan, effortOf, expiring, loadConfig, createDispatcher, ROUTES, threadTitle, issuePrompt, startIssue, type Issue } from "../server/window-dispatch.ts";
+import { plan, effortOf, expiring, loadConfig, createDispatcher, ROUTES, threadTitle, topicOf, issuePrompt, startIssue, type Issue } from "../server/window-dispatch.ts";
 
 const now = 1_800_000_000_000, min = 60_000;
 const win = (used: number, endsInMin: number) => ({ windows: [{ label: "5-hour", used, limit: 100, unit: "%", resetsAt: now + endsInMin * min }, { label: "7-day", used: 5, limit: 100 }], updatedAt: now });
@@ -50,10 +50,12 @@ assert.deepEqual(plan({ now, usage: { claude: win(95, 30), codex: win(10, 30) },
 assert.deepEqual(plan({ now, usage: { claude: win(10, 60) }, issues, done: new Set(["o/r#1", "o/r#2", "o/r#3", "o/r#4", "o/r#5"]) }), []);
 assert.deepEqual(plan({ now, usage: { claude: win(10, 60) }, issues: [{ ...issue(9, "BAU"), labels: ["bug"] }], done: new Set() }), [], "unlabelled issues wait for triage");
 
-// thread names: <repo>:<issue#> <short desc>
-assert.equal(threadTitle({ repo: "Amit-Roy/agent-console", number: 10, title: "Identify unused reset windows" }), "agent-console:10 Identify unused reset windows");
-assert.equal(threadTitle({ repo: "o/brain", number: 3, title: "[Bug] feat: " + "word ".repeat(20) }).length <= "brain:3 ".length + 32, true);
-assert.equal(threadTitle({ repo: "o/r", number: 7, title: "x".repeat(80) }), "r:7 " + "x".repeat(32));
+// thread names: <repo>:<issue#> <short desc>, at most 30 characters (issue #11: Android width)
+assert.equal(topicOf("Amit-Roy/agent-console"), "ac");
+assert.equal(topicOf("o/brain"), "brain"); assert.equal(topicOf("o/portfolio-lab"), "pl"); assert.equal(topicOf("o/abcdefghijklmnop"), "abcdefghij");
+assert.equal(threadTitle({ repo: "Amit-Roy/agent-console", number: 10, title: "Identify unused reset windows" }), "ac:10 Identify unused reset");
+assert.equal(threadTitle({ repo: "o/brain", number: 3, title: "[Bug] feat: " + "word ".repeat(20) }).length <= 30, true);
+assert.equal(threadTitle({ repo: "o/r", number: 7, title: "x".repeat(80) }), "r:7 " + "x".repeat(26));
 assert.equal(threadTitle({ repo: "o/r", number: 7, title: "" }), "r:7 issue");
 
 // prompts: PRs everywhere except the local-apply repos; trivial always needs a reviewer
@@ -78,7 +80,7 @@ assert.match(issuePrompt(dec("o/agent-console", "trivial"), "b", "main"), /pull 
     const res = startIssue({ ...dec("o/webapp", "bau"), issue: { repo: "o/webapp", number: 42, title: "Fix the export totals", labels: [] } }, runner, { repos, worktrees: path.join(root, "wt") });
     assert.equal(res.cwd, path.join(root, "wt", "webapp-issue-42")); assert.equal(res.branch, "issue-42-fix-the-export-totals");
     assert.equal(g(res.cwd, "rev-parse", "--abbrev-ref", "HEAD"), res.branch);
-    assert.equal(made[0].title, "webapp:42 Fix the export totals"); assert.equal(made[0].cwd, res.cwd); assert.equal(made[0].provider, "claude");
+    assert.equal(made[0].title, "webapp:42 Fix the export"); assert.equal(made[0].cwd, res.cwd); assert.equal(made[0].provider, "claude");
     assert.equal(sentTo.length, 1); assert.match(sentTo[0].text, /gh issue view 42 --repo o\/webapp/);
     assert.throws(() => startIssue(dec("o/missing", "bau"), runner, { repos, worktrees: path.join(root, "wt") }), /No local checkout/);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
