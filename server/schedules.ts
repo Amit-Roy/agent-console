@@ -260,11 +260,17 @@ export class Schedules {
     return run;
   }
 
+  // Weaker models need the playbook spelled out: where the last report is, how to research, where output goes.
   private instructions(t: Task, trigger: Run["trigger"], when: { date: string; time: string }) {
+    const prev = t.runs.findLast(r => r.output?.path && fs.existsSync(r.output.path))?.output!.path;
     return `Scheduled task "${t.title}", ${trigger === "catch-up" ? "catch-up run for a missed time" : "run"} at ${when.date} ${when.time} (${t.tz}). ` +
       "Nobody is watching this run, so do not ask questions: make sensible assumptions and state them. " +
+      (prev ? `The previous run's report is ${prev}: read it first and build on it. ` : "This is the first run with a saved report, so there is no previous report. ") +
+      "For anything current (news, releases, prices, docs) use your web search and fetch tools" +
+      (t.provider === "pi" ? " (web_search_exa, then web_fetch_exa on the best URLs)" : "") +
+      "; never scrape search engines with curl. Give every finding its source URL and date, and leave out what you could not verify. " +
       "End with a markdown report: a one-line summary, then the findings." +
-      (t.saveOutput ? ` Your final message is saved to git as the report${t.provider === "pi" ? " (or call save_output with the full report)" : ""}.` : "");
+      (t.saveOutput ? ` Your final message is saved to git as the report${t.provider === "pi" ? " (or call save_output with the full report)" : ""}, so do not write report files anywhere else.` : "");
   }
 
   private findRun(thread: string): { task: Task; run: Run } | undefined {
