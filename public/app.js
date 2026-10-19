@@ -1078,12 +1078,16 @@ function renderQueue() {
       const edit = iconButton("pencil", "Edit queued message", "btn queue-edit");
       edit.hidden = !state.features.queueEditing;
       edit.onclick = () => editQueuedMessage(q.id);
-      const steer = el("button", "btn sm steer", "Steer");
-      steer.type = "button";
-      steer.title = "Give this to the agent now, instead of after the turn";
+      const steer = iconButton("steer", "Steer", "btn steer");
+      steer.title = "Steer: give this to the agent now, instead of after the turn";
       steer.hidden = q.editing || cur()?.status !== "running" || !!cur()?.operation || !prov(cur()?.provider)?.steer;
       steer.onclick = () => send({ t: "steer_queued", thread: state.current, id: q.id });
-      li.append(el("span", "tag", q.editing ? "Editing" : "Queued"), el("span", "txt", q.text), steer, edit, rm);
+      const tag = el("span", "tag");
+      tag.title = q.editing ? "Editing: delivery paused" : "Queued: sent after this turn";
+      tag.append(icon(q.editing ? "pencil" : "queued"), el("span", "sr-only", q.editing ? "Editing" : "Queued"));
+      const actions = el("span", "q-actions");
+      actions.append(steer, edit, rm);
+      li.append(tag, el("span", "txt", q.text), actions);
       return li;
     }),
   );
