@@ -4,10 +4,20 @@ import http from "node:http";
 const originalFetch = globalThis.fetch.bind(globalThis);
 const installed = Symbol.for("agent-console.pi-rate-preload");
 
+export function modelProvider(input) {
+  try {
+    const host = new URL(typeof input === "string" || input instanceof URL ? input : input.url).hostname.toLowerCase();
+    if (host === "integrate.api.nvidia.com") return "nvidia";
+    if (host === "openrouter.ai") return "openrouter";
+  } catch {}
+  return "other";
+}
+
 export async function isModelRequest(input, init = {}) {
   const url = new URL(typeof input === "string" || input instanceof URL ? input : input.url);
   const method = String(init.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
   if (method !== "POST") return false;
+  if (process.env.AGENT_CONSOLE_RATE_URL && url.href === new URL(process.env.AGENT_CONSOLE_RATE_URL).href) return false;
   const tools = process.env.AGENT_CONSOLE_TOOL_URL;
   if (tools) {
     const base = new URL(tools);
@@ -27,24 +37,24 @@ export async function isModelRequest(input, init = {}) {
   } catch { return false; }
 }
 
-async function gate(action, signal, retryAfter) {
+async function gate(action, provider, signal, retryAfter) {
   signal?.throwIfAborted();
-  const url = process.env.AGENT_CONSOLE_TOOL_URL;
-  const token = process.env.AGENT_CONSOLE_TOOL_TOKEN;
-  if (url || token) {
-    if (!url || !token) throw new Error("Pi model rate-limit broker is not configured.");
-    const response = await originalFetch(url.replace(/\/$/, "") + "/model_request", {
-      method: "POST", headers: { "Content-Type": "application/json", "x-agent-console-tool": token },
-      body: JSON.stringify({ action, ...(retryAfter != null ? { retryAfter } : {}) }), signal,
-    });
-    if (!response.ok) throw new Error(`Pi model rate-limit broker failed (${response.status}).`);
-    await response.arrayBuffer();
-    signal?.throwIfAborted();
-    return;
+  const url = process.env.AGENT_CONSOLE_RATE_URL;
+  const token = process.env.AGENT_CONSOLE_RATE_TOKEN;
+  if (!url || !token) throw new Error("Pi model rate-limit broker is not configured.");
+  const response = await originalFetch(url, {
+    method: "POST", headers: { "Content-Type": "application/json", "x-agent-console-tool": token },
+    body: JSON.stringify({ action, provider, priority: process.env.AGENT_CONSOLE_MODEL_PRIORITY || "interactive", ...(retryAfter != null ? { retryAfter } : {}) }), signal,
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    const error = new Error(payload.error?.message || payload.message || `Pi model rate-limit broker failed (${response.status}).`);
+    error.code = payload.error?.code || payload.code || "MODEL_RATE_BROKER_FAILED";
+    error.status = response.status;
+    throw error;
   }
-  const limiter = await import("./model-rate-limit.ts");
-  if (action === "acquire") await limiter.acquireModelRequest(signal);
-  else await limiter.reportModel429(retryAfter);
+  await response.arrayBuffer();
+  signal?.throwIfAborted();
 }
 
 export function installPiRateLimit() {
@@ -61,9 +71,9 @@ export function installPiRateLimit() {
     const controller = new AbortController();
     request.once("close", () => controller.abort());
     request.prependOnceListener("response", response => {
-      if (response.statusCode === 429) void gate("cooldown", undefined, response.headers["retry-after"]).catch(error => request.destroy(error));
+      if (response.statusCode === 429) void gate("cooldown", modelProvider(url), undefined, response.headers["retry-after"]).catch(error => request.destroy(error));
     });
-    void gate("acquire", controller.signal).then(() => {
+    void gate("acquire", modelProvider(url), controller.signal).then(() => {
       if (!request.destroyed) addRequest.call(this, request, options);
     }).catch(error => request.destroy(error));
   };
@@ -86,7 +96,7 @@ export function installPiRateLimit() {
           try { message = typeof event.data === "string" ? JSON.parse(event.data) : undefined; } catch {}
           const error = message?.error ?? message?.response?.error;
           if (message?.status === 429 || error?.status === 429 || error?.code === 429 || /rate_limit|too_many_requests/i.test(String(error?.code ?? ""))) {
-            void gate("cooldown", undefined, error?.retry_after ?? message?.retry_after).catch(() => {
+            void gate("cooldown", modelProvider(this.url), undefined, error?.retry_after ?? message?.retry_after).catch(() => {
               if (this.readyState === websocket.OPEN) this.close(4001, "Model rate-limit admission failed.");
             });
           }
@@ -97,7 +107,7 @@ export function installPiRateLimit() {
       this.addEventListener("close", closed, { once: true });
       const pending = (tails.get(this) ?? Promise.resolve()).then(async () => {
         if (this.readyState !== websocket.OPEN) return;
-        await gate("acquire", controller.signal);
+        await gate("acquire", modelProvider(this.url), controller.signal);
         if (this.readyState === websocket.OPEN) send.call(this, data);
       }).catch(() => {
         if (this.readyState === websocket.OPEN) this.close(4001, "Model rate-limit admission failed.");
@@ -108,10 +118,21 @@ export function installPiRateLimit() {
   globalThis.fetch = async function rateLimitedFetch(input, init) {
     if (!await isModelRequest(input, init)) return originalFetch(input, init);
     const signal = init?.signal ?? (input instanceof Request ? input.signal : undefined);
-    await gate("acquire", signal);
+    try {
+      await gate("acquire", modelProvider(input), signal);
+    } catch (error) {
+      // A terminal admission decision is a client error, not a transport failure.
+      // Compatible SDKs therefore surface its code without their 429 retry loop.
+      if (/QUOTA|EXHAUSTED/.test(String(error.code || ""))) {
+        return new Response(JSON.stringify({ error: { message: error.message, code: error.code, type: "rate_limit_admission_error" } }), {
+          status: 400, headers: { "Content-Type": "application/json" },
+        });
+      }
+      throw error;
+    }
     signal?.throwIfAborted();
     const response = await originalFetch(input, init);
-    if (response.status === 429) await gate("cooldown", undefined, response.headers.get("retry-after"));
+    if (response.status === 429) await gate("cooldown", modelProvider(input), undefined, response.headers.get("retry-after"));
     return response;
   };
 }
