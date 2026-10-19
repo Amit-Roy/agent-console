@@ -6,6 +6,7 @@ import { createQuestions } from "/questions.js";
 import { openContextEconomics } from "/context-economics.js";
 import { openBreakdown, closeBreakdown } from "/turn-breakdown.js";
 import { setupNotifications } from "/notifications.js";
+import { createChatSearch } from "/chat-search.js";
 
 const MODE_META = {
   plan: { label: "Plan", desc: "Read-only. Plans without editing.", icon: "eye" },
@@ -26,6 +27,13 @@ const state = {
 };
 setFileScope(() => state.current); // local image/video refs in markdown resolve against this thread's folder
 const views = new Map(); // five most recently visited threads; stale snapshots remain visible during revalidation
+const chatSearch = createChatSearch({
+  current: () => state.current,
+  history: () => ({ older: state.start > 0, busy: !!(state.loading || state.rendering || state.loadingEarlier || state.revalidating && !state.deferredRefresh) }),
+  loadEarlier: () => requestEarlier(state.current),
+  prepare: () => { for (const card of $("chat").querySelectorAll(".card")) materializeTool(card); },
+  navigate: () => { releaseHistoryAnchor(); state.stick = false; },
+});
 let ws, retry = 0, reconnectTimer = 0, probeTimer = 0;
 
 // ---------- connection ----------
@@ -419,6 +427,7 @@ const threadActions = (id) => {
   });
   const action = (value) => items.find((item) => item.value === value);
   return [
+    action("search"),
     action("rename"),
     { value: "compaction-menu", label: "Compaction", desc: "Reduce context or manage automatic compaction", icon: "sparkle", children: [action("compact"), action("idle-compaction")] },
     action("economy"),
@@ -428,6 +437,7 @@ const threadActions = (id) => {
   ];
 };
 const THREAD_ACTIONS = [
+  { value: "search", label: "Search in chat", icon: "search" },
   { value: "rename", label: "Rename", icon: "pencil" },
   { value: "compact", label: "Compact context", desc: "Reduce context; keep the transcript", icon: "sparkle" },
   { value: "idle-compaction", label: "Automatic compaction", icon: "sparkle" },
@@ -451,7 +461,11 @@ function toast(msg) {
 async function runThreadAction(id, action) {
   const t = state.threads.get(id);
   if (!t) return;
-  if (action === "rename") {
+  if (action === "search") {
+    setNav(false);
+    if (state.current !== id) openThread(id);
+    chatSearch.open();
+  } else if (action === "rename") {
     setNav(false);
     if (state.current !== id) openThread(id);
     startRename();
@@ -659,6 +673,7 @@ document.addEventListener("visibilitychange", () => { if (document.hidden) saveD
 
 function openThread(id) {
   const switching = state.current !== id;
+  if (switching) chatSearch.close(false);
   if (switching) saveDraft();
   if (state.measurement) latency.record({ kind: "cancelled", thread: state.measurement.thread, total_ms: performance.now() - state.measurement.at, hidden: state.measurement.hidden });
   state.measurement = null;
@@ -868,6 +883,7 @@ function historyDone(m, refreshing, cachedMetrics) {
   else showLoad(`Loaded in ${fmtMs(metrics.total_ms)}`, detail);
   console.debug("Agent Console history", metrics);
   warmFileViewer();
+  chatSearch.refresh();
 }
 function earlierButton() {
   const b = el("button", "btn earlier", "Show earlier messages");
@@ -952,6 +968,7 @@ async function showEarlier(m) {
   for (const e of state.pendingLive.splice(0)) onEvent(e, true);
   latency.record({ kind: "page", thread: m.thread, total_ms: performance.now() - pageAt, wait_ms: m.receivedAt - pageAt, server_ms: m.server_ms, render_ms: performance.now() - m.receivedAt, events: m.events.length, bytes: m.bytes, wire_bytes: m.wire_bytes, prepare_ms: Math.max(0, m.receivedAt - m.roundtrip_ms - (state.measurement?.at || 0)), roundtrip_ms: m.roundtrip_ms, decode_ms: m.decode_ms, hidden: state.measurement?.hidden });
   state.measurement = null;
+  chatSearch.refresh();
   if (fetchMore) return requestEarlier(m.thread);
   if (state.deferredRefresh && nearBottom()) refreshConversation();
 }
@@ -998,6 +1015,7 @@ function renderHead() {
   menus.model.setDisabled(!t || running);
   menus.mode.setDisabled(!t || running);
   $("more").disabled = !t;
+  $("chat-search-toggle").disabled = !t;
   $("state").hidden = !running && !t?.background && !questions.count(state.current);
   $("input").disabled = !t;
   $("attach").disabled = !t;
@@ -1371,7 +1389,7 @@ $("chat").addEventListener("scroll", () => {
 // follows the bottom: on Android a scrollTop write during a drag snaps the list back under the finger.
 const gesture = { touching: false, at: 0, idle: 0 };
 function readerScrolling() { return gesture.touching || performance.now() - gesture.at < 160; }
-function following() { return state.stick && !readerScrolling(); }
+function following() { return state.stick && !readerScrolling() && !chatSearch.isOpen(); }
 function markGesture(touching) {
   if (touching != null) gesture.touching = touching;
   gesture.at = performance.now();
@@ -1514,6 +1532,14 @@ function toolBody(name, input) {
     box.append(codePre(JSON.stringify(input, null, 2), "json"));
   }
   return box;
+}
+
+function materializeTool(card) {
+  if (!card.toolInput) return;
+  const body = card.querySelector(".body");
+  const { name, input } = card.toolInput;
+  body.replaceChildren(...toolBody(name, input).childNodes, ...body.querySelectorAll(".tool-result"));
+  card.toolInput = null;
 }
 
 // What a tool returned: a labelled section ("Output" or "Error", line count, wrap + copy), clamped to a
@@ -1877,12 +1903,7 @@ function onEvent(e, live) {
           card.append(sum, el("div", "body")); // the open row wraps to show the whole label, so it is not repeated below
           card.addEventListener("toggle", () => {
             if (!card.open) return;
-            if (card.toolInput) {
-              const body = card.querySelector(".body");
-              const { name, input } = card.toolInput;
-              body.replaceChildren(...toolBody(name, input).childNodes, ...body.querySelectorAll(".tool-result"));
-              card.toolInput = null;
-            }
+            materializeTool(card);
             for (const code of card.querySelectorAll("code[data-highlight-pending]")) {
               highlightInto(code, code.textContent, code.dataset.highlightPending);
               delete code.dataset.highlightPending;
