@@ -17,22 +17,21 @@
 .file-viewer-code:focus-visible{outline-offset:-2px}
 .file-line{display:flex;min-width:100%;width:max-content;min-height:var(--file-line-height)}
 .file-line.is-selected{background:var(--accent-tint);box-shadow:inset 3px 0 var(--accent)}
-.file-line-number{position:sticky;left:0;flex:none;width:4.5rem;padding:0 var(--sp-3) 0 var(--sp-2);color:var(--t3);text-align:right;user-select:none;background:var(--code-bg);border-right:1px solid var(--edge)}
+.file-line-number{position:sticky;left:0;flex:none;width:calc(var(--gutter-ch,3)*1ch + var(--sp-2) + var(--sp-2) + 1px);padding:0 var(--sp-2);color:var(--t3);text-align:right;user-select:none;background:var(--code-bg);border-right:1px solid var(--edge)}
 .is-selected>.file-line-number{color:var(--accent);background:var(--sel)}
-.file-line-text{display:block;white-space:pre;padding:0 var(--sp-4);min-width:0;background:none!important}
+.file-line-text{display:block;white-space:pre;padding:0 var(--sp-3);min-width:0;background:none!important}
 .is-wrapped .file-line{width:100%}
 .is-wrapped .file-line-text{white-space:pre-wrap;overflow-wrap:anywhere}
 .file-viewer-error{padding:var(--sp-5)}
 .file-viewer-code.is-plain{display:flex;align-items:flex-start;padding:0}
-.file-plain-gutter,.file-plain-text{font:inherit;line-height:var(--file-line-height);margin:0;padding:0 var(--sp-4);white-space:pre}
-.file-plain-gutter{position:sticky;left:0;z-index:1;flex-shrink:0;min-width:4.5rem;text-align:right;user-select:none;color:var(--t3);background:var(--code-bg);border-right:1px solid var(--edge)}
+.file-plain-gutter,.file-plain-text{font:inherit;line-height:var(--file-line-height);margin:0;padding:0 var(--sp-2);white-space:pre}
+.file-plain-gutter{position:sticky;left:0;z-index:1;flex-shrink:0;min-width:calc(var(--gutter-ch,3)*1ch + var(--sp-2) + var(--sp-2) + 1px);text-align:right;user-select:none;color:var(--t3);background:var(--code-bg);border-right:1px solid var(--edge)}
 .file-plain-text{flex:1;isolation:isolate}
 .file-plain-text code{font:inherit;background:none;padding:0;color:inherit}
 .file-plain-selection{position:absolute;left:0;width:100%;background:var(--accent-tint);box-shadow:inset 3px 0 var(--accent);pointer-events:none}
 @media(max-width:640px){
   #file-viewer{width:100%;height:calc(var(--viewport-height,100dvh) - var(--sp-3));margin:auto auto 0;border-radius:var(--r-lg) var(--r-lg) 0 0;padding-bottom:env(safe-area-inset-bottom)}
   .file-viewer-head{padding:var(--sp-4)}
-  .file-line-number{width:3.5rem}
 }
 
 .file-viewer-workspace{display:flex;flex:1;min-height:0;min-width:0;overflow:hidden}
