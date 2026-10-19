@@ -59,6 +59,19 @@ for (const raw of [
 ]) assert.equal(parseTriageReply(raw, input), undefined);
 // Old opinion-only answers must fail and cause model fallback.
 assert.equal(parseTriageReply('{"effort":"deep","priority":"p0","reason":"Trust me"}', input), undefined);
+// A shaped model prices the request text itself; the extracted metrics stay unchanged.
+const shapedModel = structuredClone(fixtureEffortModel.model) as any;
+shapedModel.featureNames = [...shapedModel.featureNames, "requestSize", "requestLines", "requestReferences", "requestActions"];
+shapedModel.workload = { ...shapedModel.workload, coefficients: [...shapedModel.workload.coefficients, 0.6, 0, 0, 0],
+  missingCoefficients: Array(8).fill(0), imputation: Array(8).fill(1), scale: Array(8).fill(1),
+  featureRanges: Array.from({ length: 8 }, () => ({ min: 0, max: 3, known: 3, missing: 0 })) };
+const shapedReply = (value: TriageInput) => parseRealReply(valid, value, { status: "ready", model: shapedModel })!;
+const shortRequest = shapedReply(input);
+const longRequest = shapedReply({ ...input, body: input.body + "\n" + "More detail. ".repeat(60) });
+assert.ok(longRequest.scorecard!.pricing.activity.p50 > shortRequest.scorecard!.pricing.activity.p50, "A longer initial request prices higher");
+assert.deepEqual(longRequest.scorecard!.metrics, shortRequest.scorecard!.metrics, "Request shape never rewrites the evidence table");
+assert.equal(longRequest.scorecard!.pricing.contributions.find(item => item.feature === "requestSize")!.value, 3);
+assert.equal(longRequest.scorecard!.pricing.unknowns.length, 0, "Request shape is always known");
 const unknown = structuredClone(assessment);
 for (const name of Object.keys(unknown.metrics)) unknown.metrics[name] = { value: null, evidence: null };
 const sparse = parseTriageReply(JSON.stringify(unknown), { ...input, title: "Feature", body: "", changedFiles: -1, additions: Infinity, deletions: 0 })!;

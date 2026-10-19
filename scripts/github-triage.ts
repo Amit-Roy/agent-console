@@ -9,7 +9,7 @@ import { execFile, spawn } from "node:child_process";
 import { sign } from "@octokit/webhooks-methods";
 import { childEnv } from "../server/providers/env.ts";
 import { createTriageService } from "../server/github-triage.ts";
-import { effortModelPath, loadEffortModel, quoteEffort } from "../server/providers/triage-effort.ts";
+import { effortModelPath, loadEffortModel, quoteEffort, requestShape } from "../server/providers/triage-effort.ts";
 
 const SCRIPT = fileURLToPath(import.meta.url);
 const ROOT = path.resolve(path.dirname(SCRIPT), "..");
@@ -145,7 +145,7 @@ async function calibrate() {
     await run(python, [path.join(ROOT, "scripts/triage-effort-fit.py"), "--dataset", dataset,
       "--output", artifact, "--report", report], 120_000);
     const model = loadEffortModel(artifact);
-    const quote = quoteEffort({ breadth: { value: null }, complexity: { value: null }, uncertainty: { value: null }, risk: { value: null } }, model);
+    const quote = quoteEffort({ breadth: { value: null }, complexity: { value: null }, uncertainty: { value: null }, risk: { value: null }, ...requestShape("") }, model);
     if (model.status !== "ready" || quote.status !== "ready") throw Error("The learned effort model failed validation; previous calibration retained.");
     fs.renameSync(history, path.join(path.dirname(destination), "triage-session-history.json"));
     fs.renameSync(dataset, path.join(path.dirname(destination), "triage-effort-training.json"));

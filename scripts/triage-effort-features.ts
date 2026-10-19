@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { childEnv } from "../server/providers/env.ts";
 import { defaultTriageEngines } from "../server/providers/triage-model.ts";
 import { createLabelCompletion, type LabelEngine } from "../server/providers/small-model.ts";
+import { requestShape } from "../server/providers/triage-effort.ts";
 
 export const EFFORT_FEATURE_VERSION = "effort-session-initial-v1";
 export const FEATURE_NAMES = ["breadth", "complexity", "uncertainty", "risk"] as const;
@@ -127,7 +128,9 @@ export function effortDataset(tasks: Source[], records: FeatureRecord[], discove
     const feature = records.find(row => row.sourceId === task.id && row.requestHash === requestHash(task.request) && row.featureVersion === EFFORT_FEATURE_VERSION);
     return [{ sampleId: task.id, groupId: task.group, startedAt: task.startedAt, completedAt: task.completedAt,
       featureStatus: feature ? "evaluated" : "unavailable",
-      features: Object.fromEntries(FEATURE_NAMES.map(name => [name, feature?.metrics[name].value ?? null])),
+      // Request shape is exact for every session; the model-extracted metrics stay null when unknown.
+      features: { ...Object.fromEntries(FEATURE_NAMES.map(name => [name, feature?.metrics[name].value ?? null])),
+        ...Object.fromEntries(Object.entries(requestShape(task.request)).map(([name, metric]) => [name, metric.value])) },
       outcomes: { toolCalls: task.toolCalls ?? null, toolRounds: task.toolRounds ?? null, inputTokens: task.inputTokens ?? null,
         outputTokens: task.outputTokens ?? null, cachedInputTokens: task.cacheReadTokens ?? null, nonCachedInputTokens: task.nonCachedInputTokens ?? null }, provider: task.provider }];
   });
