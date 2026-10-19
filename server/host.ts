@@ -142,6 +142,7 @@ export async function hostSnapshot(): Promise<{ cpu: CpuStat | null; procs: Proc
 }
 
 export interface DiskRow { source: string; fstype: string; size: number; used: number; avail: number; pcent: number; target: string }
+export interface DirSize { path: string; size: number }
 
 export function diskRows(): DiskRow[] {
   const out: DiskRow[] = [];
@@ -154,6 +155,20 @@ export function diskRows(): DiskRow[] {
     }
   } catch {}
   return out.sort((a, b) => b.pcent - a.pcent);
+}
+
+/* Top-level directory sizes under a mount point, via du. Limited to 15 entries. */
+export function dirSizes(target: string): DirSize[] {
+  const out: DirSize[] = [];
+  try {
+    const txt = execFileSync("du", ["-sh", target + "/*"], { encoding: "utf8", maxBuffer: 4 << 20, timeout: 10000 });
+    for (const line of txt.trim().split("\n")) {
+      const m = /^(\d+)\s+(.+)$/.exec(line);
+      if (!m) continue;
+      out.push({ path: m[2], size: Number(m[1]) * 1024 });
+    }
+  } catch {}
+  return out.sort((a, b) => b.size - a.size).slice(0, 15);
 }
 
 function sameOrigin(req: express.Request, res: express.Response, next: express.NextFunction) {
@@ -195,7 +210,9 @@ export function hostMetrics(req: express.Request, res: express.Response) {
       cpu: { total: cpuTotal, cores: cpuCores, n: cpuCores.length },
       load,
       mem: { total: memTotal, available: memAvailable, used: memUsed, pct: memTotal > 0 ? memUsed / memTotal * 100 : 0, swapTotal: mem.SwapTotal ?? 0, swapFree: mem.SwapFree ?? 0 },
-      disk, uptime: uptimeSec, boot: Date.now() - uptimeSec * 1000,
+      disk,
+      dirs: { root: dirSizes("/"), home: dirSizes("/home/coder") },
+      uptime: uptimeSec, boot: Date.now() - uptimeSec * 1000,
       platform: process.platform, arch: process.arch,
     });
   })().catch(() => res.status(503).json({ error: "Host metrics are unavailable." }));

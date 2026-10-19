@@ -125,6 +125,23 @@ function diskPanel(m) {
     row.append(l, g, v);
     body.append(row);
   }
+  for (const label of ["root", "home"]) {
+    const dirs = m.dirs?.[label] || [];
+    if (!dirs.length) continue;
+    const title = label === "root" ? "/" : "/home/coder";
+    const sec = el("div", "dirsec");
+    sec.append(el("div", "l", el("b", "", title), el("div", "m", `Top directories`)));
+    for (const d of dirs) {
+      const row = el("div", "dirrow");
+      const l2 = el("div", "l"); l2.append(el("b", "", d.path.replace(title + "/", "") || title), el("div", "m", bytes(d.size)));
+      const g = el("div", "gauge"); const pctV = m.disk.length ? Math.round((d.size / m.disk[0].size) * 100) : 0; const cls = tier(pctV); if (cls) g.classList.add(cls);
+      const fill = el("i"); fill.style.width = `${Math.min(100, pctV)}%`; g.append(fill);
+      const v = el("div", "v"); v.textContent = pct(pctV);
+      row.append(l2, g, v);
+      sec.append(row);
+    }
+    body.append(sec);
+  }
   p.append(body);
   return p;
 }
@@ -188,7 +205,7 @@ function procsPanel(list) {
     const act = el("div", "act");
     const mk = (cls, label, action) => { const b = el("button", cls, label); b.type = "button"; b.dataset.pid = String(r.pid); b.dataset.action = action; return b; };
     if (confirming.has(r.pid)) act.append(mk("btn sm kill sure", "Sure?", "sure"), mk("btn sm ghost", "Cancel", "cancel"));
-    else act.append(mk("btn sm kill", "Kill", "kill"), mk("btn sm ghost", "Cancel", "cancel").hidden = true);
+    else { act.append(mk("btn sm kill", "Kill", "kill")); const cb = mk("btn sm ghost", "Cancel", "cancel"); cb.hidden = true; act.append(cb); }
     const actTd = el("td"); actTd.append(act); row.append(actTd);
     tbody.append(row);
   }
