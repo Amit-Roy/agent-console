@@ -23,6 +23,40 @@ function git(repo: string, args: string[]) {
   return execFileSync("git", ["-C", repo, ...args], { encoding: "utf8", timeout: 15_000, maxBuffer: 16 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] }).trim();
 }
 
+/** Observed root-process instrumentation, not a prework complexity predictor. */
+export function observedActivity(events: Json[]) {
+  const calls = new Set<string>(), rounds = new Set<string>();
+  for (const e of events) {
+    if (e.type !== "assistant") continue;
+    const ids = content(e).filter(b => b.type === "tool_use" && typeof b.id === "string" && b.id).map(b => b.id);
+    const fresh = ids.filter(id => !calls.has(id));
+    if (!fresh.length) continue;
+    for (const id of fresh) calls.add(id);
+    const messageId = e.message?.id ?? e.uuid;
+    rounds.add(typeof messageId === "string" && messageId ? `message:${messageId}` : `batch:${ids.slice().sort().join(",")}`);
+  }
+  return { toolCalls: calls.size, toolRounds: rounds.size };
+}
+
+/** Only conversation available before the current request; never this run's results. */
+export function preworkContext(events: Json[], beforeIndex: number) {
+  const messages: { role: "user" | "assistant"; text: string }[] = [];
+  for (const event of events.slice(0, beforeIndex)) {
+    const role = event.type === "user_input" ? "user" : event.type === "assistant" ? "assistant" : undefined;
+    if (!role) continue;
+    const raw = role === "user" ? event.text : content(event).filter(block => block.type === "text" && typeof block.text === "string").map(block => block.text).join("\n");
+    if (typeof raw !== "string") continue;
+    const text = raw.split("\n").filter(line => !/\bcommit(?:ted|s)?\b|\b[0-9a-f]{7,40}\b|\b(?:input|output|cache|generated|used)\s+tokens?\b|\b\d[\d,]*\s+tokens?\b/i.test(line)).join("\n").trim();
+    if (text) messages.push({ role, text });
+  }
+  let remaining = 8000;
+  return messages.slice(-4).reverse().map(message => {
+    const text = remaining > 0 ? message.text.slice(-remaining) : "";
+    remaining -= text.length;
+    return { ...message, text };
+  }).filter(message => message.text).reverse();
+}
+
 /** Availability is a conservative training cutoff, never measured runtime. */
 export function completionAvailability(events: Json[], resultIndex: number, thread: Json, startedAt: number) {
   const result = events[resultIndex];
@@ -110,10 +144,14 @@ export function buildTriageHistory(opts: { dataDir: string; repoDir: string; rep
       if (!verified.length) { exclude("noSuccessfulCommitToolProof"); continue; }
       if (verified.some(c => !finite(c.at) || c.at < input.ts - 1000 || c.at > completion.at + 1000)) { exclude("commitOutsideRun"); continue; }
       usedLedger.add(match);
+      const activity = observedActivity(eventsForRun);
+      const cacheReadTokens = finite(match.cache) && match.cache <= match.in ? match.cache : null;
       tasks.push({
         id: `${thread.id}:${input.ts}`, group: thread.id,
         startedAt: new Date(input.ts).toISOString(), completedAt: new Date(completion.at).toISOString(),
         request: input.text.slice(0, 12_000), provider: match.provider, inputTokens: match.in, outputTokens: match.out,
+        preworkContext: preworkContext(events, lineStart - 1),
+        ...activity, cacheReadTokens, nonCachedInputTokens: cacheReadTokens === null ? null : match.in - cacheReadTokens,
         commits: verified.map(({ at, ...c }) => c),
         provenance: {
           scope: "delivery-turn", usageScope: "direct root process; child usage unproven", wholeTask: false,
@@ -122,6 +160,8 @@ export function buildTriageHistory(opts: { dataDir: string; repoDir: string; rep
           completionBound: completion.bound, completionTimeExact: completion.exact,
           completionNote: completion.exact ? "Observed result timestamp." : "Completed no later than this availability bound; this is not runtime.",
           cacheReadTokens: match.cache, inputIncludesCache: true, activeMs: null,
+          activityNote: "Root-log distinct tool_use IDs; tool rounds are distinct assistant message IDs or deduplicated tool-call batches when IDs are absent. Missing child-agent activity is not imputed. These are outcome targets, never prework predictors.",
+          preworkContextNote: "At most four conversational user/assistant text messages before the current user input, bounded to 8000 characters. Tool/results/thinking and commit/hash/token-report lines are excluded. Current-run outcome text is never included.",
           timingNote: "Result durations are not a reliable whole-task active-time measurement.",
         },
       });

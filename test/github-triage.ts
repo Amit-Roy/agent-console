@@ -7,17 +7,20 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { createTriageService, TRIAGE_COMMENT_MARKER, TRIAGE_COMMENT_VERSION_MARKER, triageSourceMarker, type GithubRequest } from "../server/github-triage.ts";
 
-import { fixtureHistory } from "./fixtures/triage-history.ts";
+import { fixtureEffortModel } from "./fixtures/triage-effort.ts";
+import { quoteEffort } from "../server/providers/triage-effort.ts";
+const fixtureQuote = quoteEffort({ breadth: { value: 1 }, complexity: { value: 1 }, uncertainty: { value: 1 }, risk: { value: 1 } }, fixtureEffortModel);
+if (fixtureQuote.status !== "ready") throw Error("Invalid fixture pricing");
 
 const secret = "test-only-webhook-secret-never-used-live";
 const repo = "Amit-Roy/agent-console";
 const directory = fs.mkdtempSync(path.join(os.tmpdir(), "ac-github-triage-"));
 let sequence = 0;
 const decision = { effort: "bau", priority: "p1", reason: "Fixture", model: "fixture/small", scorecard: {
-  version: 3, history: fixtureHistory, metrics: { breadth: { value: 1, evidence: "Fixture title" } }, unknowns: [],
+  version: 4, pricing: fixtureQuote, metrics: { breadth: { value: 1, evidence: "Fixture title" } }, unknowns: [],
   work: [{ step: "Implement fixture", check: "Fixture passes" }],
   design: { level: "light", reason: "One known surface" },
-  tokens: { input: [8000, 20000], output: [2000, 5000], formula: fixtureHistory.formula, confidence: "low" },
+  tokens: { input: [8000, 20000], output: [2000, 5000], formula: fixtureQuote.formula, confidence: "experimental" },
 } } as const;
 const payload = (number = 1, kind = "issues", action = "opened") => ({
   action, repository: { full_name: repo }, [kind === "issues" ? "issue" : "pull_request"]: { number },

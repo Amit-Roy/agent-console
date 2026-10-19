@@ -5,7 +5,7 @@ import path from "node:path";
 import { childEnv } from "./env.ts";
 import { createLabelCompletion, type LabelEngine } from "./small-model.ts";
 import { deriveAssessment, parseAssessment, type TriageScorecard } from "./triage-scorecard.ts";
-import { estimateHistory, type HistoryEstimate, type HistoryInsufficient } from "./triage-history.ts";
+import { loadEffortModel, type LoadedEffortModel } from "./triage-effort.ts";
 export { TRIAGE_SCORECARD_VERSION } from "./triage-scorecard.ts";
 
 export interface TriageInput {
@@ -51,14 +51,10 @@ export function triagePrompt(input: TriageInput): string {
   });
 }
 
-export function parseTriageReply(raw: string | undefined, input: TriageInput, history: HistoryEstimate | HistoryInsufficient = historyForInput(input)): Omit<TriageDecision, "model"> | undefined {
-  if (history.status !== "ready") return;
+export function parseTriageReply(raw: string | undefined, input: TriageInput, model: LoadedEffortModel = loadEffortModel()): Omit<TriageDecision, "model"> | undefined {
+  if (model.status !== "ready") return;
   const extracted = parseAssessment(raw, input);
-  return extracted ? deriveAssessment(extracted, input, history) : undefined;
-}
-
-function historyForInput(input: TriageInput) {
-  return estimateHistory(`${input.title.slice(0, 500)}\n${input.body.slice(0, 12_000)}`);
+  return extracted ? deriveAssessment(extracted, input, model) : undefined;
 }
 
 /** Pi can exit zero after an API error; only a completed assistant message counts. */
@@ -211,14 +207,14 @@ export function defaultTriageEngines(): LabelEngine[] {
   ];
 }
 
-export function createTriageClassifier(engines: LabelEngine[] = defaultTriageEngines(), historyFor: (input: TriageInput) => HistoryEstimate | HistoryInsufficient = historyForInput) {
+export function createTriageClassifier(engines: LabelEngine[] = defaultTriageEngines(), modelFor: () => LoadedEffortModel = loadEffortModel) {
   const complete = createLabelCompletion(engines.map(engine => ({ ...engine, call: async (prompt: string, system: string) => {
     const input = JSON.parse(prompt.slice(prompt.indexOf("{"))) as TriageInput;
-    const decision = parseTriageReply(await engine.call(prompt, system), input, historyFor(input));
+    const decision = parseTriageReply(await engine.call(prompt, system), input, modelFor());
     return decision ? JSON.stringify({ ...decision, model: engine.id }) : undefined;
   } })));
   return async (input: TriageInput): Promise<TriageDecision> => {
-    if (historyFor(input).status !== "ready") throw Error("Completed-work history is unavailable. Run bin/github-triage calibrate.");
+    if (modelFor().status !== "ready") throw Error("Effort-pricing model is unavailable. Run bin/github-triage calibrate.");
     const decision = await complete(triagePrompt(input), TRIAGE_SYSTEM, raw => {
       if (!raw) return;
       return JSON.parse(raw) as TriageDecision;
