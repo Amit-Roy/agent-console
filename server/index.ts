@@ -520,7 +520,9 @@ wss.on("connection", (ws) => {
         case "unqueue":
           return threads.unqueue(m.thread, String(m.id));
         case "fork":
-          return reply({ t: "created", thread: threads.fork(m.thread, typeof m.provider === "string" ? m.provider : undefined, m.context === "recent") });
+          return reply({ t: "created", thread: threads.fork(m.thread, typeof m.provider === "string" ? m.provider : undefined, m.context === "recent", {
+            ...Object.fromEntries(["model", "effort", "mode", "claudeAccount"].filter(k => typeof m[k] === "string").map(k => [k, m[k]])),
+          }) });
         case "abort":
           if (typeof m.cid === "string" && !firstDelivery(m.cid)) return reply({ t: "ack", cid: m.cid });
           threads.abort(m.thread);
