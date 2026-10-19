@@ -1,4 +1,4 @@
-import { quoteEffort, type EffortQuote, type LoadedEffortModel } from "./triage-effort.ts";
+import { quoteEffort, requestShape, type EffortQuote, type LoadedEffortModel } from "./triage-effort.ts";
 
 /** Initial-request complexity predicts observed session usage; later outcomes are not features. */
 export const TRIAGE_SCORECARD_VERSION = 7;
@@ -141,7 +141,8 @@ export function deriveUrgency(scores: Record<MetricName, number>, timing: number
 }
 
 export function deriveAssessment(extracted: ExtractedAssessment, input: AssessmentInput, model: LoadedEffortModel) {
-  const pricing = quoteEffort(extracted.metrics, model);
+  // Request shape is computed from the initial request itself; it is never model-written.
+  const pricing = quoteEffort({ ...extracted.metrics, ...requestShape(input.body.trim() ? `${input.title}\n${input.body}` : input.title) }, model);
   if (pricing.status !== "ready") return;
   const names = Object.keys(METRIC_MAX) as MetricName[];
   const planning = extracted.planningMetrics ?? extracted.metrics;

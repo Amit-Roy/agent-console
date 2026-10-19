@@ -3,13 +3,31 @@ import os from "node:os";
 import path from "node:path";
 
 /** Only pre-work task characteristics enter the effort equation. */
-export const EFFORT_FEATURES = ["breadth", "complexity", "uncertainty", "risk"] as const;
+export const LEGACY_EFFORT_FEATURES = ["breadth", "complexity", "uncertainty", "risk"] as const;
+/** Deterministic request-shape buckets (0..3). They are always known, so they never depend on a model call. */
+export const SHAPE_FEATURES = ["requestSize", "requestLines", "requestReferences", "requestActions"] as const;
+export const EFFORT_FEATURES = [...LEGACY_EFFORT_FEATURES, ...SHAPE_FEATURES] as const;
 export type EffortFeature = typeof EFFORT_FEATURES[number];
+
+const bucket = (value: number, cuts: number[]) => cuts.filter(cut => value >= cut).length;
+const ACTION_VERBS = /\b(fix|add|build|implement|create|make|set ?up|write|support|deploy|restart|audit|review|investigate|research|compare|test|remove|update|change|label|merge|push|commit)\b/gi;
+/** Size and structure of the initial request. Longer, more structured requests have measurably longer sessions. */
+export function requestShape(text: string): Record<typeof SHAPE_FEATURES[number], { value: number }> {
+  const lines = text.split("\n").filter(line => line.trim()).length;
+  const references = (text.match(/https?:\/\/|[/~][\w.-]+\/[\w.-]+|`[^`]+`/g) ?? []).length;
+  const actions = (text.match(ACTION_VERBS) ?? []).length;
+  return {
+    requestSize: { value: bucket(text.length, [20, 120, 400]) },
+    requestLines: { value: bucket(lines, [2, 4, 8]) },
+    requestReferences: { value: bucket(references, [1, 2, 4]) },
+    requestActions: { value: bucket(actions, [1, 2, 4]) },
+  };
+}
 export type EffortScope = "completed-delivery-run" | "completed-session";
 export type TokenYieldBasis = "actions" | "actions-plus-one" | "workload";
 export type EffortWorkloadMetric = "toolCalls" | "totalTokens";
 export type EffortEstimator = "complexity" | "historical-baseline";
-export type ComplexityInput = Record<EffortFeature, { value: number | null }>;
+export type ComplexityInput = Partial<Record<EffortFeature, { value: number | null }>>;
 export interface EffortQuantiles { p50: number; p80: number; p95: number }
 export interface FeatureRange { min: number | null; max: number | null; known: number; missing: number }
 export interface EffortScenario {
@@ -32,7 +50,7 @@ export interface EffortModel {
   workloadMetric?: EffortWorkloadMetric;
   estimator?: EffortEstimator;
   method: "nonnegative-ridge-log-work-v1";
-  featureNames: typeof EFFORT_FEATURES;
+  featureNames: readonly EffortFeature[];
   workload: {
     intercept: number;
     coefficients: number[];
@@ -86,7 +104,7 @@ const record = (value: unknown): value is Record<string, unknown> => !!value && 
 const finite = (value: unknown, min = -1e12, max = 1e12): value is number => typeof value === "number" && Number.isFinite(value) && value >= min && value <= max;
 const count = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0 && (value as number) <= MAX_ROWS;
 const identifier = (value: unknown): value is string => typeof value === "string" && value.length > 0 && value.length <= 200 && !/[\u0000-\u001f\u007f]/.test(value);
-const vector = (value: unknown, min: number, max: number): value is number[] => Array.isArray(value) && value.length === 4 && value.every(item => finite(item, min, max));
+const vector = (value: unknown, min: number, max: number, size = 4): value is number[] => Array.isArray(value) && value.length === size && value.every(item => finite(item, min, max));
 /** Metadata is retained for audit, but cannot inject unbounded or executable data. */
 function boundedMetadata(value: unknown, depth = 0): boolean {
   if (depth > 6) return false;
@@ -106,11 +124,12 @@ export function validateEffortModel(value: unknown): LoadedEffortModel {
     || (value.workloadMetric !== undefined && !["toolCalls", "totalTokens"].includes(value.workloadMetric as string))
     || (value.estimator !== undefined && !["complexity", "historical-baseline"].includes(value.estimator as string))
     || ((value.workloadMetric === "totalTokens") !== (value.tokenYieldBasis === "workload"))
-    || JSON.stringify(value.featureNames) !== JSON.stringify(EFFORT_FEATURES) || !record(value.workload)) return invalid();
+    || ![LEGACY_EFFORT_FEATURES, EFFORT_FEATURES].some(names => JSON.stringify(value.featureNames) === JSON.stringify(names)) || !record(value.workload)) return invalid();
   const work = value.workload;
-  if (!finite(work.intercept, -40, 40) || !vector(work.coefficients, 0, 40) || !vector(work.missingCoefficients, -40, 40)
-    || !vector(work.imputation, 0, 3) || !vector(work.scale, 1e-9, 100)
-    || !Array.isArray(work.featureRanges) || work.featureRanges.length !== 4 || !record(work.residualQuantiles)) return invalid();
+  const size = (value.featureNames as string[]).length;
+  if (!finite(work.intercept, -40, 40) || !vector(work.coefficients, 0, 40, size) || !vector(work.missingCoefficients, -40, 40, size)
+    || !vector(work.imputation, 0, 3, size) || !vector(work.scale, 1e-9, 100, size)
+    || !Array.isArray(work.featureRanges) || work.featureRanges.length !== size || !record(work.residualQuantiles)) return invalid();
   if (value.estimator === "historical-baseline" && (value.workloadMetric !== "totalTokens"
     || (work.coefficients as number[]).some(n => n !== 0) || (work.missingCoefficients as number[]).some(n => n !== 0))) return invalid();
   if (!work.featureRanges.every(range => record(range) && count(range.known) && count(range.missing)
@@ -209,8 +228,8 @@ export function quoteEffort(metrics: ComplexityInput, loaded: LoadedEffortModel 
   const outOfRange: EffortFeature[] = [];
   const contributions: EffortQuote["contributions"] = [];
   let logWork = model.workload.intercept;
-  for (let index = 0; index < EFFORT_FEATURES.length; index++) {
-    const feature = EFFORT_FEATURES[index];
+  for (let index = 0; index < model.featureNames.length; index++) {
+    const feature = model.featureNames[index];
     const metric = metrics[feature];
     if (!record(metric) || (metric.value !== null && (!Number.isInteger(metric.value) || !finite(metric.value, 0, 3)))) return unavailable("Pre-work complexity features are invalid.");
     const value = metric.value as number | null;
@@ -275,7 +294,7 @@ export function quoteEffort(metrics: ComplexityInput, loaded: LoadedEffortModel 
     formula: estimator === "historical-baseline"
       ? "The complexity fit did not beat the training-median baseline on held-out session totals. This quote uses the empirical training-session usage distribution and paired observed token shares. It does not claim task-specific predictive accuracy. All measured zero-usage sessions remain in that distribution. Total input includes cached replay once; input plus generated output defines total session usage. Initial requests remain the only candidate predictors. Unknown scope selects the P95 reserve by policy. These are historical session snapshots, including later follow-ups, not human hours or guarantees about future resumption."
       : workloadMetric === "totalTokens"
-      ? "Initial-request breadth, complexity, uncertainty, and risk predict log(1 + total session tokens) with nonnegative ridge coefficients. Total session tokens are recorded input plus generated output, including cached replay once. Chronological out-of-fold residuals produce usage scenarios; paired observed input/output/cache shares split those scenarios. Explicitly measured zero-total sessions retain an empirical point mass at zero. Tool counts are optional diagnostics, never the fitted target. Effort tiers compare predicted session tokens against training-session terciles. P50 routes complete in-range scope; unknown or extrapolated scope routes through P95 by policy. Only initial user messages supply predictors; later follow-ups are part of the outcome and add unexplained variance. Raw usage and later conversation never enter complexity features. Unknowns use training-only imputation and remain flagged. These are observed session snapshots, not human hours or guarantees about future resumption."
+      ? `Initial-request ${model.featureNames.length > 4 ? "breadth, complexity, uncertainty, risk, and request shape (size, lines, references, action verbs)" : "breadth, complexity, uncertainty, and risk"} predict log(1 + total session tokens) with nonnegative ridge coefficients. Total session tokens are recorded input plus generated output, including cached replay once. Chronological out-of-fold residuals produce usage scenarios; paired observed input/output/cache shares split those scenarios. Explicitly measured zero-total sessions retain an empirical point mass at zero. Tool counts are optional diagnostics, never the fitted target. Effort tiers compare predicted session tokens against training-session terciles. P50 routes complete in-range scope; unknown or extrapolated scope routes through P95 by policy. Only initial user messages supply predictors; later follow-ups are part of the outcome and add unexplained variance. Raw usage and later conversation never enter complexity features. Unknowns use training-only imputation and remain flagged. These are observed session snapshots, not human hours or guarantees about future resumption.`
       : `Initial-request breadth, complexity, uncertainty, and risk predict log(1 + tool calls) with nonnegative ridge coefficients. Tool calls are an observed, agent-style-dependent work proxy. Chronological out-of-fold work residuals and observed usage divided by ${tokenYieldBasis === "actions-plus-one" ? "(1 + tool calls)" : "tool calls"} produce P50/P80/P95 budgets. Effort compares predicted tool calls against training ${scope === "completed-session" ? "session" : "delivery-run"} lower/upper terciles; equal cutoffs mean BAU. Explicit routing policy uses P50 effort and P80 planning for complete in-range features, or P95 effort and planning when any feature is unknown or outside training ranges. This policy does not change model budgets or confidence. Input context replay never sets effort. Unknowns use learned imputation and are flagged. ${scope === "completed-session" ? "Scope is one entire completed session/thread, including later follow-ups. Only initial user requests supply predictors; later prompts are unseen at prediction time and add variance. Human hours and unmeasured child agents are not priced." : "Scope is one completed logged delivery run, not a whole issue or human hours."}`,
   };
 }

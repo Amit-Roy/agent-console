@@ -213,7 +213,7 @@ class EffortFitTests(unittest.TestCase):
         self.assertEqual(report["candidateWorkload"], artifact["candidateWorkload"])
         self.assertNotIn("sampleIds", report["candidateValidation"])
         self.assertNotIn("candidateScenarios", report)
-        self.assertEqual(report["selectionReason"], "Candidate total-token MAE did not beat training-median baseline on held-out sessions.")
+        self.assertEqual(report["selectionReason"], "Candidate total-token log error (RMSLE) did not beat the training-median baseline on held-out sessions.")
         queries = [copy.deepcopy(fixture["samples"][0]) for _ in range(2)]
         queries[0]["features"] = dict.fromkeys(fit.FEATURES, 0)
         queries[1]["features"] = dict.fromkeys(fit.FEATURES, 3)
@@ -243,6 +243,27 @@ class EffortFitTests(unittest.TestCase):
         self.assertEqual(first["training"]["sampleIds"], second["training"]["sampleIds"])
         self.assertNotEqual(first["workload"], second["workload"])
 
+    def test_request_shape_features_are_fitted_when_present_and_selected_by_log_error(self):
+        fixture = dataset()
+        fixture["scope"] = "completed-session"
+        for index, sample in enumerate(fixture["samples"]):
+            level = index % 4
+            # Shape is always known; model-extracted metrics are mostly unknown.
+            sample["features"] = {**dict.fromkeys(fit.LEGACY_FEATURES), **dict.fromkeys(fit.SHAPE_FEATURES, level)}
+            tokens = 5000 * 4 ** level
+            sample["outcomes"].update(inputTokens=tokens * 0.9, outputTokens=tokens * 0.1)
+        # One enormous session must not decide estimator selection through raw-token MAE.
+        fixture["samples"][-1]["outcomes"].update(inputTokens=9e9, outputTokens=1e9)
+        artifact, report = fit.build_artifact(fixture)
+        self.assertEqual(artifact["featureNames"], fit.LEGACY_FEATURES + fit.SHAPE_FEATURES)
+        self.assertEqual(len(artifact["workload"]["coefficients"]), 8)
+        self.assertEqual(len(artifact["workload"]["featureRanges"]), 8)
+        self.assertTrue(any(weight > 0 for weight in artifact["workload"]["coefficients"][4:]))
+        self.assertEqual(artifact["estimator"], "complexity")
+        self.assertLess(artifact["validation"]["work"]["rmsle"], artifact["validation"]["baselineWork"]["rmsle"])
+        fit.use_features({"samples": []})
+        self.assertEqual(fit.FEATURES, fit.LEGACY_FEATURES)
+
     def test_nonfinite_candidate_metric_selects_json_safe_baseline(self):
         fixture = dataset()
         fixture["scope"] = "completed-session"
@@ -252,7 +273,7 @@ class EffortFitTests(unittest.TestCase):
             nonlocal calls
             calls += 1
             result = original(actual, predicted)
-            return {**result, "mae": float("nan")} if calls == 1 else result
+            return {**result, "mae": float("nan"), "rmsle": float("nan")} if calls == 1 else result
         with mock.patch.object(fit, "errors", side_effect=metrics):
             artifact, report = fit.build_artifact(fixture)
         self.assertEqual(artifact["estimator"], "historical-baseline")
