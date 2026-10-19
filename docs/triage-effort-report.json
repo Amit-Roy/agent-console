@@ -1,8 +1,149 @@
 {
   "schemaVersion": 1,
   "method": "nonnegative-ridge-log-work-v1",
-  "workUnit": "observed_logged_tool_calls",
-  "formula": "log1p(work)=intercept+sum(nonnegative_weight*feature/scale)+sum(missing_weight*is_missing)",
+  "workUnit": "observed_session_total_tokens",
+  "workloadMetric": "totalTokens",
+  "scope": "completed-session",
+  "tokenYieldBasis": "workload",
+  "cohortAudit": {
+    "sourceSamples": 162,
+    "acceptedSamples": 162,
+    "rejectedSamples": 0,
+    "rejectedByReason": {},
+    "trainingSamples": 120,
+    "heldoutSamples": 34,
+    "temporalPurgedSamples": 8,
+    "oofSamples": 116,
+    "trainingSamplesWithoutOof": 4,
+    "acceptedZeroActionSamples": 63,
+    "acceptedZeroUsageSamples": 6,
+    "oofZeroUsageScenarios": 6,
+    "optionalAccountingMissing": {
+      "toolCalls": 0,
+      "toolRounds": 35,
+      "nonCachedInputTokens": 0,
+      "cachedInputTokens": 0
+    },
+    "discovery": {
+      "console": {
+        "totalSessions": 56,
+        "metadataSessions": 52,
+        "logFiles": 49,
+        "logsRead": 49,
+        "ledgerRows": 423,
+        "normalizedLedgerRows": 423,
+        "ledgerDuplicateRows": 0,
+        "ledgerExplicitDuplicateRows": 0,
+        "ledgerInvalidThreadRows": 0,
+        "orphanLedgerSessions": 4,
+        "orphanLogSessions": 1,
+        "selectedSessions": 28,
+        "excludedSessions": 28,
+        "exclusions": {
+          "activeOrUnconfirmedIdle": 2,
+          "conflictingLogAndLedgerUsage": 4,
+          "incompleteSessionAccounting": 13,
+          "missingSessionLog": 4,
+          "missingInitiatingUserInput": 1,
+          "missingThreadMetadata": 4
+        },
+        "providers": {
+          "codex": {
+            "total": 14,
+            "selected": 3,
+            "excluded": {
+              "activeOrUnconfirmedIdle": 1,
+              "incompleteSessionAccounting": 8,
+              "missingSessionLog": 1,
+              "missingThreadMetadata": 1
+            }
+          },
+          "claude": {
+            "total": 25,
+            "selected": 17,
+            "excluded": {
+              "conflictingLogAndLedgerUsage": 4,
+              "incompleteSessionAccounting": 1,
+              "missingInitiatingUserInput": 1,
+              "missingSessionLog": 1,
+              "missingThreadMetadata": 1
+            }
+          },
+          "pi": {
+            "total": 17,
+            "selected": 8,
+            "excluded": {
+              "incompleteSessionAccounting": 4,
+              "missingSessionLog": 2,
+              "missingThreadMetadata": 2,
+              "activeOrUnconfirmedIdle": 1
+            }
+          }
+        },
+        "linkedNativeSessions": 37,
+        "selectedLedgerRows": 166,
+        "matchedResults": 166,
+        "reconstructedResults": 19,
+        "selectedFailureRows": 10,
+        "observedRootResults": 383
+      },
+      "native": {
+        "files": 342,
+        "roots": 177,
+        "children": 165,
+        "included": 153,
+        "includedChildren": 112,
+        "orphanChildren": 3,
+        "duplicateSessions": 0,
+        "excluded": {
+          "orphan-child": 3,
+          "missing-initial-user-request": 9,
+          "active-session": 2,
+          "missing-usage-telemetry": 13
+        },
+        "copiedRowsIgnored": 0,
+        "duplicateUsageRecords": 5165,
+        "rolledUpDuplicateUsageRecords": 0,
+        "rolledUpDuplicateToolCalls": 0,
+        "sources": {
+          "claude": 201,
+          "codex": 129,
+          "pi": 12
+        }
+      },
+      "canonical": {
+        "identityComponents": 177,
+        "selectedSessions": 162,
+        "activeComponents": 2,
+        "unavailableComponents": 13,
+        "nativeCanonicalSessions": 153,
+        "consoleFallbackSessions": 9,
+        "duplicateConsoleMirrors": 19,
+        "mergedNativeRoots": 0,
+        "firstRequestTruncated": 1
+      },
+      "selectedSessions": 162,
+      "independentGroups": 159,
+      "features": {
+        "sourceRuns": 162,
+        "reused": 138,
+        "extracted": 8,
+        "privacySkipped": 12,
+        "invalidSource": 0,
+        "failed": 4,
+        "evaluatedSessions": 146
+      },
+      "featureCoverage": {
+        "sourceSessions": 162,
+        "includedSessions": 162,
+        "evaluatedSessions": 146,
+        "unavailableFeatureSessions": 16
+      }
+    },
+    "activeScenarios": 120,
+    "activeZeroUsageScenarios": 6
+  },
+  "formula": "log1p(totalTokens)=intercept+sum(nonnegative_weight*feature/scale)+sum(missing_weight*is_missing)",
   "featureNames": [
     "breadth",
     "complexity",
@@ -10,153 +151,387 @@
     "risk"
   ],
   "workload": {
-    "intercept": 2.6870085280508547,
+    "intercept": 10.263118124300494,
     "coefficients": [
-      0.2806957581528574,
-      0.06622982696212484,
-      1.4405625017423739e-22,
-      0.04833790075354387
+      0.0,
+      0.0,
+      0.0,
+      0.0
     ],
     "missingCoefficients": [
-      -0.2635633564203082,
-      -0.11650760935216974,
-      -0.00793196302764114,
-      -0.07738396356696833
+      0.0,
+      0.0,
+      0.0,
+      0.0
     ],
     "imputation": [
-      1,
-      1,
-      2,
-      1
+      0.0,
+      0.0,
+      0.0,
+      0.0
     ],
     "scale": [
-      1,
-      1,
-      1,
-      1
+      1.0,
+      1.0,
+      1.0,
+      1.0
     ],
     "residualQuantiles": {
-      "p50": -0.2878095617471148,
-      "p80": 0.33959772790303683,
-      "p95": 0.8169893719019364
+      "p50": -5.480011999736689e-09,
+      "p80": 1.2880506658320605,
+      "p95": 5.794687254243792
     },
     "featureRanges": [
       {
         "min": 0,
         "max": 2,
+        "known": 14,
+        "missing": 106
+      },
+      {
+        "min": 0,
+        "max": 2,
         "known": 15,
-        "missing": 7
-      },
-      {
-        "min": 0,
-        "max": 3,
-        "known": 13,
-        "missing": 9
+        "missing": 105
       },
       {
         "min": 0,
         "max": 2,
-        "known": 18,
-        "missing": 4
+        "known": 14,
+        "missing": 106
       },
       {
         "min": 0,
-        "max": 2,
+        "max": 1,
         "known": 9,
-        "missing": 13
+        "missing": 111
       }
     ]
   },
   "workCutoffs": {
-    "trivialMax": 12,
-    "deepMin": 26
+    "trivialMax": 15262.333333333334,
+    "deepMin": 56986.33333333333
   },
   "training": {
-    "sampleCount": 22,
-    "groupCount": 11,
-    "asOf": "2026-10-18T19:01:23.251Z",
-    "alpha": 10,
-    "featureVersion": "effort-prework-v2",
+    "sampleCount": 120,
+    "groupCount": 120,
+    "asOf": "2026-10-18T02:42:53.716Z",
+    "alpha": 1.0,
+    "featureVersion": "effort-session-initial-v1",
     "fittingLibraries": {
       "numpy": "2.5.4",
       "scipy": "1.18.1",
       "scikit-learn": "1.9.1"
     },
-    "oofSampleCount": 19,
-    "oofGroupCount": 8,
+    "oofSampleCount": 116,
+    "oofGroupCount": 116,
     "providers": {
-      "claude": 9,
-      "codex": 13
-    }
+      "claude": 93,
+      "codex": 18,
+      "pi": 9
+    },
+    "scenarioCount": 120,
+    "calibration": "empirical-training-distribution"
   },
   "validation": {
     "status": "experimental",
-    "scope": "one measured root-agent run; not whole issues or human hours",
-    "sampleCount": 4,
-    "groupCount": 3,
-    "purgedSampleCount": 0,
+    "scope": "one inactive observed session snapshot, including interruptions and recorded errors; not human hours",
+    "sampleCount": 34,
+    "groupCount": 32,
+    "purgedSampleCount": 8,
     "splitPolicy": "newest 20% thread groups by earliest run start; every training group completed before earliest target start",
+    "workloadMetric": "totalTokens",
     "work": {
-      "mae": 66.88816978238525,
-      "rmsle": 1.3448590568224241
+      "mae": 1937335120.4134054,
+      "rmsle": 4.845675803551988
     },
     "baselineWork": {
-      "mae": 71.5,
-      "rmsle": 1.5472327820699459
+      "mae": 6997938.94117647,
+      "rmsle": 3.8414515330298227
     },
     "outputTokens": {
-      "mae": 9568.752173696981,
-      "rmsle": 0.7660423473158429
+      "mae": 7098809.797440399,
+      "rmsle": 4.794149162868755
     },
     "baselineOutputTokens": {
-      "mae": 11853.25,
-      "rmsle": 1.1172631805735656
+      "mae": 31272.617647058825,
+      "rmsle": 4.3218100698988335
     },
     "workCoverage": {
-      "p50": 0.25,
-      "p80": 0.25,
-      "p95": 0.5
+      "p50": 0.11764705882352941,
+      "p80": 0.23529411764705882,
+      "p95": 0.7352941176470589
     },
-    "beatsWorkBaseline": true,
+    "beatsWorkBaseline": false,
     "outputCoverage": {
-      "p50": 0.25,
-      "p80": 0.5,
-      "p95": 0.75
+      "p50": 0.11764705882352941,
+      "p80": 0.4411764705882353,
+      "p95": 0.9117647058823529
     },
-    "hasLearnedComplexitySignal": true,
+    "hasLearnedComplexitySignal": false,
     "providers": {
-      "codex": 3,
-      "claude": 1
+      "codex": 13,
+      "claude": 15,
+      "pi": 6
     },
     "limitations": [
-      "Observational root-run outcomes omit unlogged child-agent work and human time.",
+      "Observed logged session snapshots include later conversation changes, interruptions, and errors, not just initial intent; unlogged work and human time remain unobserved.",
       "Prework feature extraction uncertainty is not identified by this sample.",
       "Empirical OOF intervals are not coverage guarantees or risk-neutral prices.",
       "Alpha selection and residual calibration share older-group folds; newest groups remain untouched.",
-      "Token yields reflect historical provider, tool, and context policy mixtures."
+      "Token yields reflect historical provider, tool, and context policy mixtures.",
+      "Observed zero-usage calibration sessions contribute a fixed empirical point mass at zero, with zero component fractions; its frequency is not learned from request features.",
+      "The held-out block selected the active estimator; its active metrics are validation-selection results, not independent test performance."
     ],
     "selection": [
       {
         "alpha": 0.01,
-        "oofLogMse": 2.5550561824745737
+        "oofLogMse": 10.84943824623751
       },
       {
         "alpha": 0.1,
-        "oofLogMse": 2.263707107895472
+        "oofLogMse": 10.523262035505535
       },
       {
-        "alpha": 1,
-        "oofLogMse": 1.3655044039993782
+        "alpha": 1.0,
+        "oofLogMse": 10.154167939939798
       },
       {
-        "alpha": 10,
-        "oofLogMse": 0.7712707105402683
+        "alpha": 10.0,
+        "oofLogMse": 10.383481875145865
       },
       {
-        "alpha": 100,
-        "oofLogMse": 0.7717919618469576
+        "alpha": 100.0,
+        "oofLogMse": 10.904717619310796
       }
     ],
-    "rejected": {}
-  }
+    "rejected": {},
+    "inputTokens": {
+      "mae": 1934790257.9432673,
+      "rmsle": 4.868657043845091
+    },
+    "baselineInputTokens": {
+      "mae": 6966888.735294118,
+      "rmsle": 3.8406936543014587
+    },
+    "inputCoverage": {
+      "p50": 0.11764705882352941,
+      "p80": 0.23529411764705882,
+      "p95": 0.7352941176470589
+    },
+    "totalTokens": {
+      "mae": 1937335120.4134054,
+      "rmsle": 4.845675803551988
+    },
+    "baselineTotalTokens": {
+      "mae": 6997938.94117647,
+      "rmsle": 3.8414515330298227
+    },
+    "totalCoverage": {
+      "p50": 0.11764705882352941,
+      "p80": 0.23529411764705882,
+      "p95": 0.7352941176470589
+    },
+    "candidateHasLearnedComplexitySignal": true,
+    "candidateMetricsNonfinite": false,
+    "activeCoverage": {
+      "work": {
+        "p50": 0.058823529411764705,
+        "p80": 0.35294117647058826,
+        "p95": 0.8823529411764706
+      },
+      "output": {
+        "p50": 0.11764705882352941,
+        "p80": 0.4117647058823529,
+        "p95": 0.9117647058823529
+      },
+      "input": {
+        "p50": 0.058823529411764705,
+        "p80": 0.3235294117647059,
+        "p95": 0.8823529411764706
+      },
+      "total": {
+        "p50": 0.058823529411764705,
+        "p80": 0.35294117647058826,
+        "p95": 0.8823529411764706
+      }
+    },
+    "activeWork": {
+      "mae": 6997938.94117647,
+      "rmsle": 3.8414515330298244
+    },
+    "activeOutputTokens": {
+      "mae": 31272.617647058825,
+      "rmsle": 4.321810069898833
+    },
+    "activeInputTokens": {
+      "mae": 6966888.735294118,
+      "rmsle": 3.8406936543014587
+    },
+    "activeTotalTokens": {
+      "mae": 6997938.94117647,
+      "rmsle": 3.8414515330298244
+    },
+    "selectionReason": "Candidate total-token MAE did not beat training-median baseline on held-out sessions."
+  },
+  "estimator": "historical-baseline",
+  "selectionReason": "Candidate total-token MAE did not beat training-median baseline on held-out sessions.",
+  "candidateWorkload": {
+    "intercept": 10.877460198051768,
+    "coefficients": [
+      0.36420250000843485,
+      1.4120362676813472,
+      1.8374936138536668,
+      2.255947754493982
+    ],
+    "missingCoefficients": [
+      2.0657537988932635,
+      -0.500533581417936,
+      -1.1089317356030388,
+      -1.1770610581540282
+    ],
+    "imputation": [
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "scale": [
+      1.0,
+      1.0,
+      1.0,
+      1.0
+    ],
+    "residualQuantiles": {
+      "p50": -0.3305883512211736,
+      "p80": 1.0890306428049321,
+      "p95": 5.353801764561286
+    },
+    "featureRanges": [
+      {
+        "min": 0,
+        "max": 2,
+        "known": 14,
+        "missing": 106
+      },
+      {
+        "min": 0,
+        "max": 2,
+        "known": 15,
+        "missing": 105
+      },
+      {
+        "min": 0,
+        "max": 2,
+        "known": 14,
+        "missing": 106
+      },
+      {
+        "min": 0,
+        "max": 1,
+        "known": 9,
+        "missing": 111
+      }
+    ]
+  },
+  "candidateValidation": {
+    "status": "experimental",
+    "scope": "one inactive observed session snapshot, including interruptions and recorded errors; not human hours",
+    "sampleCount": 34,
+    "groupCount": 32,
+    "purgedSampleCount": 8,
+    "splitPolicy": "newest 20% thread groups by earliest run start; every training group completed before earliest target start",
+    "workloadMetric": "totalTokens",
+    "work": {
+      "mae": 1937335120.4134054,
+      "rmsle": 4.845675803551988
+    },
+    "baselineWork": {
+      "mae": 6997938.94117647,
+      "rmsle": 3.8414515330298227
+    },
+    "outputTokens": {
+      "mae": 7098809.797440399,
+      "rmsle": 4.794149162868755
+    },
+    "baselineOutputTokens": {
+      "mae": 31272.617647058825,
+      "rmsle": 4.3218100698988335
+    },
+    "workCoverage": {
+      "p50": 0.11764705882352941,
+      "p80": 0.23529411764705882,
+      "p95": 0.7352941176470589
+    },
+    "beatsWorkBaseline": false,
+    "outputCoverage": {
+      "p50": 0.11764705882352941,
+      "p80": 0.4411764705882353,
+      "p95": 0.9117647058823529
+    },
+    "hasLearnedComplexitySignal": true,
+    "providers": {
+      "codex": 13,
+      "claude": 15,
+      "pi": 6
+    },
+    "limitations": [
+      "Observed logged session snapshots include later conversation changes, interruptions, and errors, not just initial intent; unlogged work and human time remain unobserved.",
+      "Prework feature extraction uncertainty is not identified by this sample.",
+      "Empirical OOF intervals are not coverage guarantees or risk-neutral prices.",
+      "Alpha selection and residual calibration share older-group folds; newest groups remain untouched.",
+      "Token yields reflect historical provider, tool, and context policy mixtures.",
+      "Observed zero-usage calibration sessions contribute a fixed empirical point mass at zero, with zero component fractions; its frequency is not learned from request features."
+    ],
+    "selection": [
+      {
+        "alpha": 0.01,
+        "oofLogMse": 10.84943824623751
+      },
+      {
+        "alpha": 0.1,
+        "oofLogMse": 10.523262035505535
+      },
+      {
+        "alpha": 1.0,
+        "oofLogMse": 10.154167939939798
+      },
+      {
+        "alpha": 10.0,
+        "oofLogMse": 10.383481875145865
+      },
+      {
+        "alpha": 100.0,
+        "oofLogMse": 10.904717619310796
+      }
+    ],
+    "rejected": {},
+    "inputTokens": {
+      "mae": 1934790257.9432673,
+      "rmsle": 4.868657043845091
+    },
+    "baselineInputTokens": {
+      "mae": 6966888.735294118,
+      "rmsle": 3.8406936543014587
+    },
+    "inputCoverage": {
+      "p50": 0.11764705882352941,
+      "p80": 0.23529411764705882,
+      "p95": 0.7352941176470589
+    },
+    "totalTokens": {
+      "mae": 1937335120.4134054,
+      "rmsle": 4.845675803551988
+    },
+    "baselineTotalTokens": {
+      "mae": 6997938.94117647,
+      "rmsle": 3.8414515330298227
+    },
+    "totalCoverage": {
+      "p50": 0.11764705882352941,
+      "p80": 0.23529411764705882,
+      "p95": 0.7352941176470589
+    }
+  },
+  "candidateScenarioCount": 116
 }

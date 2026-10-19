@@ -34,7 +34,7 @@ assert.ok(!JSON.stringify(preworkContext(contextEvents, 2)).includes("POST OUTCO
 assert.equal(preworkContext([{ type: "user_input", text: "x".repeat(9000) }, { type: "user_input", text: "y".repeat(9000) }], 2).reduce((sum, item) => sum + item.text.length, 0), 8000);
 assert.notEqual(requestHash(request), requestHash(request, [{ role: "assistant", text: "Applicable prior plan." }]));
 const contextual = metrics(); contextual.complexity = { value: 2, evidence: "asynchronous recovery" };
-assert.equal(parseFeatureBatch(JSON.stringify({ records: [{ id: "0", metrics: contextual }] }), [{ id: "0", request, preworkContext: [{ role: "assistant", text: "Plan: implement asynchronous recovery." }] }])?.[0].metrics.complexity.value, 2);
+assert.equal(parseFeatureBatch(JSON.stringify({ records: [{ id: "0", metrics: contextual }] }), [{ id: "0", request, preworkContext: [{ role: "assistant", text: "Plan: implement asynchronous recovery." }] }]), undefined, "Assistant plans cannot become initial-request evidence");
 
 const source = { id: "s1", request, group: "g1", startedAt: "2025-12-31T00:00:00.000Z", completedAt: "2026-01-01T00:00:00.000Z", provider: "fixture", commits: [{ title: "POST OUTCOME SECRET" }], toolCalls: 10, toolRounds: 5, inputTokens: 1000, cacheReadTokens: 800, nonCachedInputTokens: 200, outputTokens: 300 };
 let calls = 0;
@@ -48,17 +48,23 @@ assert.equal(result.records[0].model, "good");
 const cached = await extractEffortFeatures([source], result.records, engines);
 assert.equal(cached.audit.reused, 1); assert.equal(calls, 1);
 const refused = await extractEffortFeatures([{ ...source, preworkContext: [{ role: "user", text: "password=secret" }] }], result.records, engines);
-assert.equal(refused.audit.privacySkipped, 1); assert.equal(calls, 1, "Unsafe context must never reach any model");
+assert.equal(refused.audit.invalidSource, 1); assert.equal(calls, 1, "Later conversation must never reach any model");
 const changed = await extractEffortFeatures([{ ...source, request: request + " More." }], result.records, engines);
 assert.equal(changed.audit.extracted, 1); assert.equal(calls, 2);
 const dataset = effortDataset([source], result.records);
+assert.equal(dataset.scope, "completed-session");
+assert.equal(effortDataset([{ ...source, preworkContext: [{ role: "assistant", text: "Later plan" }] }], result.records).samples.length, 0);
 assert.deepEqual(dataset.samples[0].features, { breadth: 1, complexity: null, uncertainty: null, risk: 1 });
 assert.equal(dataset.samples[0].outcomes.cachedInputTokens, 800);
 assert.equal(dataset.samples[0].outcomes.nonCachedInputTokens, 200);
 assert.equal(dataset.samples[0].startedAt, source.startedAt);
 assert.equal(effortDataset([{ ...source, startedAt: undefined }], result.records).samples.length, 0, "Missing start times must never be imputed");
 assert.ok(!JSON.stringify(dataset).includes(request));
-assert.equal(effortDataset([{ ...source, request: "changed" }], result.records).samples.length, 0);
+const unknownFeatures = effortDataset([{ ...source, request: "changed" }], result.records);
+assert.equal(unknownFeatures.samples.length, 1, "Missing feature annotations must not discard known session outcomes");
+assert.equal(unknownFeatures.samples[0].featureStatus, "unavailable");
+assert.deepEqual(unknownFeatures.samples[0].features, { breadth: null, complexity: null, uncertainty: null, risk: null });
+assert.equal(unknownFeatures.samples[0].outcomes.outputTokens, source.outputTokens);
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "effort-feature-fixture-"));
 try { const output = path.join(dir, "cache.json"); writePrivateJson(output, result); assert.equal(fs.statSync(output).mode & 0o777, 0o600); }
 finally { fs.rmSync(dir, { recursive: true, force: true }); }

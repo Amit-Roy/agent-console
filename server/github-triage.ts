@@ -90,28 +90,43 @@ export function renderTriageComment(decision: TriageDecision, sourceMarker: stri
   if (score) {
     const price = score.pricing;
     const number = (value: number) => value.toLocaleString("en-US", { maximumFractionDigits: 1 });
-    lines.push(`**Complexity → logged work → token budget**. Model status: **${safeText(price.confidence)}**.`,
+    const session = price.scope === "completed-session";
+    const totalTarget = price.workloadMetric === "totalTokens";
+    const workUnit = totalTarget ? "total session tokens" : "logged actions";
+    const unit = session ? "sessions" : "delivery runs";
+    lines.push(`**${totalTarget ? "Initial request → total session usage" : session ? "Initial request → estimated session work → whole-session token quote" : "Complexity → logged work → delivery-run token budget"}**. Model status: **${safeText(price.confidence)}**.`,
+      ...(price.estimator === "historical-baseline" ? ["The complexity fit failed the held-out baseline check. These quotes use the historical-session distribution and are not task-specific."] : []),
       "P50 is the central scenario; P80 is the planning quote; P95 is the stretch reserve. These are empirical model scenarios, not coverage guarantees.",
       "| Budget | P50 | P80 | P95 |", "| --- | ---: | ---: | ---: |");
-    for (const [name, values] of [["Logged tool actions", price.activity], ["Generated tokens", price.output],
-      ["Non-cached input tokens", price.freshInput], ["Cached input replay tokens", price.cachedInput], ["Total input tokens", price.input]] as const) {
+    for (const [name, values] of [...(totalTarget ? [] : [["Logged tool actions", price.activity] as const]), ["Generated tokens", price.output],
+      ["Non-cached input tokens", price.freshInput], ["Cached input replay tokens", price.cachedInput], ["Total input tokens", price.input],
+      [session ? "Total session tokens" : "Total delivery-run tokens", price.total]] as const) {
       lines.push(values ? `| ${name} | ${number(values.p50)} | ${number(values.p80)} | ${number(values.p95)} |`
         : `| ${name} | unavailable | unavailable | unavailable |`);
     }
-    lines.push(`Planning risk premium: **+${number(price.riskPremium.output)} generated tokens** above P50 (P80 − P50).`,
-      `Recommended budget: **${price.recommendedBudget.toUpperCase()}**. Effort routing uses **${price.effortBasis.toUpperCase()}** logged actions; unknown or extrapolated scope selects P95 by policy.`,
-      `Effort cutoffs: Trivial ≤${number(price.thresholds.trivialMax)} predicted logged actions; Deep ≥${number(price.thresholds.deepMin)}; otherwise BAU.`,
-      `Training: ${safeText(price.training.sampleCount ?? price.training.sampleIds.length)} runs in ${safeText(price.training.groupCount ?? "unknown")} thread groups.`,
-      "This prices one observed direct-agent delivery run. Human hours, whole-issue iterations, and unmeasured child agents are not priced.");
+    lines.push(`Planning risk premium: ${totalTarget && price.total ? `**+${number(price.total.p80 - price.total.p50)} total session tokens**; ` : ""}**+${number(price.riskPremium.output)} generated tokens** above P50 (P80 − P50).`,
+      `Recommended budget: **${price.recommendedBudget.toUpperCase()}**. Effort routing uses **${price.effortBasis.toUpperCase()}** ${workUnit}; unknown or extrapolated scope selects P95 by policy.`,
+      `Effort cutoffs: Trivial ≤${number(price.thresholds.trivialMax)} predicted ${workUnit}; Deep ≥${number(price.thresholds.deepMin)}; otherwise BAU.`,
+      `Training: ${safeText(price.training.sampleCount ?? price.training.sampleIds.length)} ${unit} in ${safeText(price.training.groupCount ?? "unknown")} thread groups.`,
+      session
+        ? "This prices the entire observed session/thread, including later follow-ups. Predictors use only the initial user request; later prompts are unseen and add variance. The quote does not isolate the original task from later requests. Human hours and unmeasured child agents are not priced."
+        : "This prices one observed direct-agent delivery run. Human hours, whole-issue iterations, and unmeasured child agents are not priced.");
     if (price.unknowns.length || price.outOfRange.length) lines.push(`Scope warning: unknown features [${price.unknowns.map(safeText).join(", ")}]; outside training range [${price.outOfRange.map(safeText).join(", ")}]. Use the stretch reserve until scope is confirmed.`);
-    if (price.validation.hasLearnedComplexitySignal === false) lines.push("The current fit has not identified a complexity signal. This quote is prior-driven and must not be treated as task-specific accuracy.");
-    const metrics = price.validation as { sampleCount?: number; groupCount?: number; work?: { mae?: number }; baselineWork?: { mae?: number }; outputTokens?: { mae?: number }; baselineOutputTokens?: { mae?: number }; workCoverage?: { p80?: number; p95?: number }; outputCoverage?: { p80?: number; p95?: number } };
+    if (price.validation.hasLearnedComplexitySignal === false) lines.push("Initial-message features have not established predictive value. This historical quote does not claim task-specific accuracy.");
+    const metrics = price.validation as { sampleCount?: number; groupCount?: number; work?: { mae?: number }; baselineWork?: { mae?: number }; outputTokens?: { mae?: number }; baselineOutputTokens?: { mae?: number }; workCoverage?: { p80?: number; p95?: number }; outputCoverage?: { p80?: number; p95?: number };
+      activeWork?: { mae?: number }; activeOutputTokens?: { mae?: number };
+      activeCoverage?: { work?: { p80?: number; p95?: number }; output?: { p80?: number; p95?: number } } };
+    const selectedWork = typeof metrics.activeWork?.mae === "number" ? metrics.activeWork : metrics.work;
+    const selectedOutput = typeof metrics.activeOutputTokens?.mae === "number" ? metrics.activeOutputTokens : metrics.outputTokens;
+    const selectedWorkCoverage = metrics.activeCoverage?.work ?? metrics.workCoverage;
+    const selectedOutputCoverage = metrics.activeCoverage?.output ?? metrics.outputCoverage;
     if (typeof metrics.sampleCount === "number" && typeof metrics.work?.mae === "number" && typeof metrics.baselineWork?.mae === "number") {
-      lines.push(`Held-out check: ${metrics.sampleCount} runs in ${metrics.groupCount ?? "unknown"} thread groups; work MAE ${number(metrics.work.mae)} actions versus baseline ${number(metrics.baselineWork.mae)}.`);
-      if (typeof metrics.workCoverage?.p80 === "number") lines.push(`Observed P80 hit rate: ${number(metrics.workCoverage.p80 * 100)}%. Small samples do not establish predictive accuracy.`);
-      if (typeof metrics.outputTokens?.mae === "number" && typeof metrics.baselineOutputTokens?.mae === "number") lines.push(`Generated-token MAE: ${number(metrics.outputTokens.mae)} versus baseline ${number(metrics.baselineOutputTokens.mae)}.`);
-      if (typeof metrics.outputCoverage?.p80 === "number" && typeof metrics.outputCoverage?.p95 === "number") lines.push(`Generated-token hit rates: P80 ${number(metrics.outputCoverage.p80 * 100)}%; P95 ${number(metrics.outputCoverage.p95 * 100)}%.`);
-      if ((metrics.workCoverage?.p80 ?? 1) < 0.8 || (metrics.workCoverage?.p95 ?? 1) < 0.95 || (metrics.outputCoverage?.p80 ?? 1) < 0.8 || (metrics.outputCoverage?.p95 ?? 1) < 0.95) lines.push("Intervals under-covered held-out outcomes. P80/P95 are model-scenario percentiles, not 80%/95% success probabilities.");
+      lines.push(`Held-out check: ${metrics.sampleCount} ${unit} in ${metrics.groupCount ?? "unknown"} thread groups; ${totalTarget ? "total-token" : "work"} MAE ${number(selectedWork!.mae!)} ${totalTarget ? "tokens" : "actions"} versus baseline ${number(metrics.baselineWork.mae)}.`);
+      if (price.estimator === "historical-baseline") lines.push(`Rejected complexity-fit total-token MAE: ${number(metrics.work.mae)}. The held-out data selected the fallback; they are not an independent test of that selection.`);
+      if (typeof selectedWorkCoverage?.p80 === "number") lines.push(`Observed P80 hit rate: ${number(selectedWorkCoverage.p80 * 100)}%. Small samples do not establish predictive accuracy.`);
+      if (typeof selectedOutput?.mae === "number" && typeof metrics.baselineOutputTokens?.mae === "number") lines.push(`Generated-token MAE: ${number(selectedOutput.mae)} versus baseline ${number(metrics.baselineOutputTokens.mae)}.`);
+      if (typeof selectedOutputCoverage?.p80 === "number" && typeof selectedOutputCoverage?.p95 === "number") lines.push(`Generated-token hit rates: P80 ${number(selectedOutputCoverage.p80 * 100)}%; P95 ${number(selectedOutputCoverage.p95 * 100)}%.`);
+      if ((selectedWorkCoverage?.p80 ?? 1) < 0.8 || (selectedWorkCoverage?.p95 ?? 1) < 0.95 || (selectedOutputCoverage?.p80 ?? 1) < 0.8 || (selectedOutputCoverage?.p95 ?? 1) < 0.95) lines.push("Intervals under-covered held-out outcomes. P80/P95 are model-scenario percentiles, not 80%/95% success probabilities.");
     }
     lines.push("", "<details><summary>Learned complexity contributions</summary>", "", ...price.contributions.map(item =>
       `${safeText(item.feature)}: ${item.value ?? "unknown"}; log-work contribution ${item.logWork.toFixed(3)}, missingness contribution ${item.missingLogWork.toFixed(3)}.`),

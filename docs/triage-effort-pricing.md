@@ -1,86 +1,71 @@
-# Complexity-based effort pricing
+# Session effort pricing
 
-Task facts determine estimated work. Estimated work then determines the token quote. Historical token totals never determine task complexity.
+The input is the initial user message, or consecutive initial user messages before the first agent response. The outputs are recorded totals for the entire inactive session, including later follow-ups, retries, and measured failures. Later conversation, assistant plans, tools, commits, and realized usage never enter the input features.
 
-The model quotes one observed direct-agent delivery run. It does not establish human hours, full-issue iterations, subscription charges, or complete child-agent usage.
+The previous delivery-run model selected only commit-backed turns. Its 26-run cohort and four held-out runs did not represent the requested session-level problem. That selection is superseded.
 
-## Learned work equation
+## Dataset and identity
 
-The small model extracts four pre-work features, each from 0 to 3 with an exact supporting quote: breadth, behavior complexity, uncertainty, and risk. Unsupported features remain unknown. Historical extraction can use bounded conversation context that existed before the run; it excludes current-run answers, tools, results, realized diffs, commit titles, and usage.
+The collector inventories Console threads and retained native Claude, Codex, and Pi transcripts. A transcript file is not necessarily an independent user session. Child sessions attach to their traceable parent. Backend resumptions within one Console session share an identity. A native transcript and its Console accounting mirror are never added together.
 
-The offline fit learns nonnegative complexity weights against observed logged tool actions:
+Complete native records take precedence when they cover the linked session. Complete Console accounting is a fallback when native coverage is missing. Unknown token usage remains unknown, never zero. Active sessions are excluded from training. Historical errors and zero-tool conversations remain valid when their actual usage is recorded.
+
+The private audit records discovered files, roots, children, duplicate identities, accounting coverage, excluded sessions, privacy refusals, feature failures, temporal purges, and final train/test counts. A session is an observed snapshot: resuming it can change its eventual total. Child usage without a reliable identity or counter is not invented.
+
+## Learned equation
+
+The small model extracts four evidence-backed initial-request features: breadth, behavior complexity, uncertainty, and risk. Each is an ordinal value from 0 to 3, or unknown. An exact quote must support every known value. Request length and token consumption do not define task complexity. Initial request text is bounded to 12,000 characters, with truncation recorded in provenance.
+
+The supervised target is total recorded session tokens: input plus generated output. Cached input is included once in input. Tool counts are optional diagnostics and do not determine sample eligibility or the fitted target.
+
+The offline fit learns nonnegative complexity weights:
 
 ```text
 z(x) = intercept + Σ beta[j] * feature[j] / scale[j]
                  + Σ missingBeta[j] * isUnknown[j]
-predicted actions = max(0, exp(z(x)) - 1)
+predicted total tokens = max(0, exp(z(x)) - 1)
 ```
 
-Missing values use training-only medians. Missingness has separate learned coefficients. Nonnegative feature coefficients make increasing known complexity monotone. The regularization strength is selected using older completed thread groups. No fitted target uses request length, cached-input totals, generated-token totals, or old effort labels as task complexity.
+Training-only medians fill unknown feature values. Missingness has separate coefficients. Regularization uses strictly older completed groups. Increasing a known feature cannot reduce predicted usage. Raw token usage is the output target, never an input feature.
 
-The initial context-v2 fit learned:
+Chronological out-of-fold residuals generate paired scenarios:
 
 ```text
-log1p(actions) = 2.687009
-              + 0.280696 * breadth
-              + 0.066230 * behavior_complexity
-              + approximately 0 * uncertainty
-              + 0.048338 * risk
-              + learned missingness terms
+r_i = log1p(observed_total_tokens_i) - log1p(out_of_fold_prediction_i)
+scenario_total_i(x) = max(0, exp(z(x) + r_i) - 1)
+scenario_output_i(x) = scenario_total_i(x) * observed_output_i / observed_total_i
+scenario_input_i(x) = scenario_total_i(x) * observed_input_i / observed_total_i
 ```
 
-The feature scales are 1 for this fit. The effectively zero uncertainty coefficient means this small sample did not identify an independent effect. It does not establish that uncertainty is free.
+Explicit zero-total observations retain an empirical point mass at zero instead of dividing by zero. Their usage still trains the regression. Other scenarios preserve paired input/output shares that sum to one. Cache/fresh shares are optional; unknown cache splits do not erase known input totals. Grand-total quantiles use paired input-plus-output scenarios, not sums of marginal quantiles.
 
-## Token quote and uncertainty reserve
+Effort tiers reflect predicted session-token usage, not human hours or pure implementation difficulty. Provider behavior, cached replay, follow-ups, and later scope changes influence the measured outcome. The initial request supplies the complexity evidence; the model learns its relationship to whole-session usage.
 
-Older-group, out-of-fold predictions provide paired residual scenarios. For historical run `i`:
+## Uncertainty and validation
 
-```text
-r_i = log1p(observed_actions_i) - log1p(out_of_fold_prediction_i)
-scenario_actions_i(x) = max(0, exp(z(x) + r_i) - 1)
-scenario_output_i(x) = scenario_actions_i(x) * observed_output_i / observed_actions_i
-```
+Quotes show P50, P80, and P95 model scenarios. The planning reserve is P80 total tokens minus P50 total tokens; generated-token reserve is also shown. Unknown or extrapolated scope routes effort and the recommended budget through P95 by policy. Complete, in-range scope routes effort through P50 and recommends P80.
 
-Non-cached input and cached replay use separate observed per-action yields from the same scenarios. Total input adds these paired channels before taking quantiles, so cache reads are never added twice. A channel with incomplete telemetry remains unavailable.
+This resembles an uncertainty reserve in pricing. It is not an options-market valuation. Initial messages cannot fully explain later scope changes, so whole-session usage can have substantial unexplained variance. Percentile names do not establish completion probabilities.
 
-Each quote shows P50, P80, and P95 scenarios. The P80 risk premium is `P80(output) - P50(output)`. This resembles a reserve for uncertain overruns; it is an empirical effort quote rather than an options-market valuation. Percentile names describe model scenarios, not guaranteed completion probabilities.
+Newest thread groups remain held out. Training outcomes must be available before a target request starts; forks and related sessions share groups. Validation reports total-token, generated-token, and input-token error against a median baseline, plus observed interval coverage. Counts are derived from the audited cohort, not fixed at four held-out cases.
 
-Effort routing uses historical action terciles. Complete, in-range scope uses P50 activity. Unknown or extrapolated scope uses P95 activity and recommends the P95 token reserve. This conservative routing is an explicit policy, not an invented model coefficient or a claim of better accuracy.
+The [aggregate report](triage-effort-report.json) records the reviewed frozen snapshot below. The private live report can change after daily calibration. Source requests and session identities remain private. The model stays experimental unless its held-out evidence meets the stated validation checks. A complexity candidate that fails to beat the training-median baseline on held-out total-token error serves the historical-session distribution instead. Candidate metrics and coefficients remain visible. This fallback is not task-specific, and the data that selected it are not an independent test of that selection.
 
-## Initial evidence: 2026-10-19
+## Audited snapshot: 2026-10-19
 
-The source contained 27 verified delivery runs. One credential-suspect request was refused before external feature extraction. The resulting dataset has 26 runs in 14 thread groups. Pre-work features were known in 18 runs for breadth, 16 for behavior complexity, 20 for uncertainty, and 10 for risk.
+The frozen inventory contains 342 native transcript files: 177 roots and 165 child logs. Complete native snapshots contribute 153 sessions, including 112 traceable child logs. Nine Console accounting fallbacks bring the canonical cohort to 162 observed sessions in 159 related-session groups. Nineteen Console mirrors are not counted twice. One initial request was truncated at the 12,000-character limit.
 
-The fit uses 22 runs in 11 groups. Four runs in three newer groups remain held out. Nineteen older-group out-of-fold scenarios calibrate the quote. Training outcomes must complete before target requests start; no group crosses a split. The context-v2 feature definition was chosen to recover available pre-work plans before inspecting its held-out outcomes.
+Initial-request features were evaluated for 146 sessions. Twelve credential-suspect requests were not transmitted, and four requests lacked a valid model annotation. All 16 retain measured outcomes with unknown features. The fitter rejects none of the 162 complete outcomes. Sixty-three sessions have zero observed tool calls; six have explicitly measured zero usage.
 
-| Check | Complexity model | Global-median baseline |
-| --- | ---: | ---: |
-| Held-out work MAE, logged actions | 66.89 | 71.50 |
-| Held-out generated-token MAE | 9,568.75 | 11,853.25 |
-| Generated-token P80 hit rate | 50% | Not applicable |
-| Generated-token P95 hit rate | 75% | Not applicable |
-| Work P80 hit rate | 25% | Not applicable |
-| Work P95 hit rate | 50% | Not applicable |
+The chronological split has 120 training sessions, 34 held-out sessions in 32 groups, and eight sessions purged because their outcomes overlapped the test start. The former four-case holdout is superseded.
 
-The model is **experimental**. Four held-out runs are insufficient to establish accuracy. The intervals under-cover held-out outcomes; P80/P95 must not be read as 80%/95% completion probabilities.
+The complexity candidate has total-token MAE 1,937,335,120, versus 6,997,939 for the training-median baseline. It fails the quality gate. The active estimator is the empirical historical-session baseline, with candidate coefficients and errors retained for inspection. It does not provide proven task-specific pricing.
 
-For illustration, the fitted model produces these fully specified feature scenarios. They are model outputs, not additional historical observations:
-
-| All four feature levels | P50 logged actions | P50 generated tokens | P80 generated tokens |
-| --- | ---: | ---: | ---: |
-| 0 | 10.01 | 4,092 | 5,561 |
-| 1 | 15.35 | 6,142 | 8,393 |
-| 3 | 35.05 | 13,705 | 18,976 |
-
-Initial effort cutoffs are 12 and 26 logged actions. These are relative routing tiers, not universal definitions of software difficulty. Tool wrappers, batching, provider behavior, retries, and context policy influence observed activity and token yields.
-
-The [aggregate fitted report](triage-effort-report.json) records the fixed initial cohort's coefficients, feature coverage, versions, selection diagnostics, and held-out checks. It contains no source requests or scenario identities. The reviewed initial model uses this fixed cohort; later daily fits can change the cohort and diagnostics as work completes. The preceding [historical usage baseline](triage-calibration.md) remains an audit reference and is no longer the active effort equation.
+The active distribution's held-out P80 hit rate is 35.3%; P95 is 88.2%. These intervals under-cover. Session usage changed substantially across the chronological split; the quoted percentiles are historical scenarios, not 80% or 95% completion guarantees. The test selected the fallback and is not an independent test of that selection.
 
 ## Operation and reproduction
 
-Calibration uses maintained numerical libraries: SciPy bounded least squares for nonnegative ridge, with NumPy preprocessing and quantiles. See [SciPy's bounded solver](https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.lsq_linear.html). Runtime inference uses the exported coefficients and scenarios in Node; it needs no Python process.
-
-Install the pinned offline environment once:
+The runtime loads a private Node artifact. Python runs only for offline fitting. The numerical implementation uses NumPy and [SciPy bounded least squares](https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.lsq_linear.html).
 
 ```sh
 uv venv --managed-python --python 3.13 ~/.local/share/agent-console/triage-venv
@@ -90,10 +75,8 @@ npm run test:triage
 npm run test:effort-fit
 ```
 
-`AGENT_CONSOLE_TRIAGE_PYTHON` overrides the fitter interpreter. `AGENT_CONSOLE_TRIAGE_EFFORT_MODEL` overrides the private artifact path. The default artifact is `~/.config/agent-console/triage-effort-model.json`, mode 0600. Source history, contextual feature cache, and calibration reports remain private local files. Credential refusal is conservative pattern-based filtering, not universal secret detection.
+`AGENT_CONSOLE_TRIAGE_PYTHON` selects the fitter. `AGENT_CONSOLE_TRIAGE_EFFORT_MODEL` selects the artifact, defaulting to `~/.config/agent-console/triage-effort-model.json`. The matching numerical training snapshot and report live beside it. Private files use mode 0600. The feature cache is versioned for initial-session requests and does not reuse the prior context-based feature definition.
 
-The matching numerical training snapshot is retained as `~/.config/agent-console/triage-effort-training.json`, mode 0600. Refit that snapshot with `scripts/triage-effort-fit.py --dataset ... --output ... --report ...` to reproduce an installed model without collecting a different cohort. A full `calibrate` command intentionally refreshes source history and can include newly completed work.
+Only credential-checked initial request text reaches the configured small-model providers. Suspect credentials are refused before inference; this is conservative filtering, not universal secret detection. Their measured session outcomes remain in training with explicitly unknown features. Failed feature extraction also retains known outcomes as unknown-feature samples. Feature extraction uses two bounded batches concurrently, caches completed results, and reuses a working configured fallback instead of repeatedly waiting for a timed-out route. Source requests, later conversation, and raw logs are never posted as calibration evidence.
 
-The production watchdog checks receiver health before scheduling offline work. Daily calibration runs detached, with an exclusive process lock and cached feature extraction. Failed attempts retain the last usable model and retry at most hourly. Scratch instances do not scan production history. A missing model fails before any triage model call.
-
-GitHub comments keep their existing identity. They show scope evidence, work quantiles, generated-token quotes, cached replay separately, risk premium, selected routing quantile, model status, and measured coverage.
+The host watchdog checks receiver health first and schedules daily fitting separately. Failed candidates retain the installed model. Scratch data directories do not scan production native transcripts unless native directories are explicitly supplied. The calibration pipeline validates each artifact before promotion. Existing GitHub comments are updated in place with session quotes and their measured limitations.

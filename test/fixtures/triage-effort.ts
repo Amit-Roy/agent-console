@@ -3,6 +3,7 @@ import { validateEffortModel } from "../../server/providers/triage-effort.ts";
 // Synthetic coefficients test inference; production fitting never reads this file.
 const fixture = validateEffortModel({
   schemaVersion: 1, method: "nonnegative-ridge-log-work-v1",
+  scope: "completed-session", tokenYieldBasis: "actions-plus-one",
   featureNames: ["breadth", "complexity", "uncertainty", "risk"],
   workload: { intercept: Math.log(2), coefficients: [0.1, 0.2, 0.3, 0.4], missingCoefficients: [0, 0, 0, 0],
     imputation: [1, 1, 1, 1], scale: [1, 1, 1, 1],

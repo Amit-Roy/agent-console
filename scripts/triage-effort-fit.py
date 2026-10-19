@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Fit a private, chronological complexity -> work -> token budget model.
+"""Fit initial-request complexity to chronological observed session usage.
 
 Requests and credentials are never copied to artifacts. The CLI does not read
 production logs; it accepts the audited, prework-feature dataset explicitly.
+Legacy delivery-run datasets retain their tool-call target and token yields.
 """
 import argparse
+import copy
 from collections import Counter
 from datetime import datetime
 import json
@@ -21,6 +23,51 @@ from sklearn.metrics import mean_absolute_error, mean_squared_log_error
 FEATURES = ["breadth", "complexity", "uncertainty", "risk"]
 ALPHAS = [0.01, 0.1, 1.0, 10.0, 100.0]
 QUANTILES = {"p50": 0.5, "p80": 0.8, "p95": 0.95}
+
+
+def dataset_scope(dataset):
+    scope = dataset.get("scope", "completed-delivery-run")
+    if scope == "successful-direct-logged-delivery-run":
+        scope = "completed-delivery-run"
+    if scope not in ("completed-session", "completed-delivery-run"):
+        raise ValueError("Unsupported dataset scope")
+    return scope
+
+
+def count_tree(value):
+    """Carry aggregate source counts without copying paths, IDs, or text."""
+    if not isinstance(value, dict):
+        return {}
+    result = {}
+    for name, child in value.items():
+        if not isinstance(name, str) or not name.replace("_", "").replace("-", "").isalnum() or len(name) > 80:
+            continue
+        if isinstance(child, dict):
+            nested = count_tree(child)
+            if nested:
+                result[name] = nested
+        elif finite(child) and child >= 0 and child == int(child):
+            result[name] = int(child)
+    return result
+
+
+def public_metadata(value):
+    """Remove record identities and scenario rows at every report depth."""
+    if isinstance(value, dict):
+        private_keys = {"sampleId", "sampleIds", "groupId", "groupIds", "sourceId", "sourceIds", "scenarios", "candidateScenarios"}
+        return {key: public_metadata(child) for key, child in value.items() if key not in private_keys}
+    if isinstance(value, list):
+        return [public_metadata(child) for child in value]
+    return value
+
+
+def finite_metadata(value):
+    """Keep failed metric diagnostics JSON-safe without inventing a value."""
+    if isinstance(value, dict):
+        return {key: finite_metadata(child) for key, child in value.items()}
+    if isinstance(value, list):
+        return [finite_metadata(child) for child in value]
+    return None if isinstance(value, float) and not math.isfinite(value) else value
 
 
 def finite(value):
@@ -42,6 +89,7 @@ def timestamp(value, field="completedAt"):
 def validate_dataset(dataset):
     if not isinstance(dataset, dict) or dataset.get("schemaVersion") != 1 or not isinstance(dataset.get("samples"), list):
         raise ValueError("Expected schemaVersion=1 and samples array")
+    scope = dataset_scope(dataset)
     accepted, rejected, ids = [], Counter(), set()
     for sample in dataset["samples"]:
         if not isinstance(sample, dict):
@@ -65,24 +113,37 @@ def validate_dataset(dataset):
                 raise ValueError(f"Feature {name} must be 0..3 or null")
         if not isinstance(outcomes, dict):
             raise ValueError("Missing outcomes object")
-        for name, value in outcomes.items():
-            if value is not None and (not finite(value) or value < 0):
-                raise ValueError(f"Invalid outcome {name}")
-        # Zero/missing activity does not mean a zero-effort task. It cannot
-        # support a token-per-action yield or observed work target.
-        if not finite(outcomes.get("toolCalls")) or outcomes["toolCalls"] <= 0:
-            rejected["missingOrZeroToolCalls"] += 1
-            continue
-        if not finite(outcomes.get("outputTokens")) or outcomes["outputTokens"] <= 0:
-            rejected["missingOrZeroOutputTokens"] += 1
-            continue
-        if not finite(outcomes.get("toolRounds")) or outcomes["toolRounds"] <= 0:
-            rejected["missingOrZeroToolRounds"] += 1
-            continue
-        if outcomes["toolRounds"] > outcomes["toolCalls"]:
-            rejected["roundsExceedCalls"] += 1
-            continue
-        accepted.append({**sample, "_time": stamp, "_start": started})
+        if scope == "completed-session":
+            # Full-session input and output define the supervised target.
+            # Action counters, cache splits, and rounds are optional diagnostics.
+            invalid = next((name for name in ("inputTokens", "outputTokens")
+                            if not finite(outcomes.get(name)) or outcomes[name] < 0), None)
+            if invalid:
+                rejected[f"missingOrInvalid{invalid[0].upper()}{invalid[1:]}"] += 1
+                continue
+            outcomes = {**outcomes}
+            for name in ("toolCalls", "toolRounds", "nonCachedInputTokens", "cachedInputTokens"):
+                if not finite(outcomes.get(name)) or outcomes[name] < 0:
+                    outcomes[name] = None
+        else:
+            for name, value in outcomes.items():
+                if value is not None and (not finite(value) or value < 0):
+                    raise ValueError(f"Invalid outcome {name}")
+            # Legacy artifacts retain their original positive-action cohort
+            # and per-action yields for numerical compatibility.
+            if not finite(outcomes.get("toolCalls")) or outcomes["toolCalls"] <= 0:
+                rejected["missingOrZeroToolCalls"] += 1
+                continue
+            if not finite(outcomes.get("outputTokens")) or outcomes["outputTokens"] <= 0:
+                rejected["missingOrZeroOutputTokens"] += 1
+                continue
+            if not finite(outcomes.get("toolRounds")) or outcomes["toolRounds"] <= 0:
+                rejected["missingOrZeroToolRounds"] += 1
+                continue
+            if outcomes["toolRounds"] > outcomes["toolCalls"]:
+                rejected["roundsExceedCalls"] += 1
+                continue
+        accepted.append({**sample, "outcomes": outcomes, "_time": stamp, "_start": started})
     if len(accepted) < 6:
         raise ValueError("Need at least six valid measured runs")
     return accepted, dict(rejected)
@@ -121,9 +182,14 @@ def design(samples, imputation=None, scale=None):
     return np.column_stack([np.ones(len(samples)), filled / scale, missing.astype(float)]), np.asarray(imputation), np.asarray(scale)
 
 
-def fit_model(samples, alpha):
+def observed_work(sample, workload_metric="toolCalls"):
+    outcomes = sample["outcomes"]
+    return outcomes["inputTokens"] + outcomes["outputTokens"] if workload_metric == "totalTokens" else outcomes["toolCalls"]
+
+
+def fit_model(samples, alpha, workload_metric="toolCalls"):
     matrix, imputation, scale = design(samples)
-    target = np.log1p([s["outcomes"]["toolCalls"] for s in samples])
+    target = np.log1p([observed_work(s, workload_metric) for s in samples])
     # Intercept is not penalized. Only true complexity coefficients must be
     # nonnegative. Missingness is a separate signed data-quality indicator.
     penalty = np.diag([0.0] + [math.sqrt(alpha)] * 8)
@@ -157,28 +223,52 @@ def quantiles(values):
     return {name: float(np.quantile(values, q)) for name, q in QUANTILES.items()}
 
 
-def scenario(sample, prediction):
+def scenario(sample, prediction, token_yield_basis="actions"):
     observed = sample["outcomes"]
-    work = observed["toolCalls"]
+    work = observed_work(sample, "totalTokens" if token_yield_basis == "workload" else "toolCalls")
+    denominator = work + (1 if token_yield_basis == "actions-plus-one" else 0)
+    # A measured zero-token session is valid. Its component fractions are zero,
+    # while optional measurements remain unavailable when absent.
+    ratio = lambda value: value / denominator if denominator else 0.0
     fresh = observed.get("nonCachedInputTokens")
     # Never infer fresh input by subtracting a cache counter: provider
     # accounting conventions differ and counters may overlap.
-    return {"sampleId": sample["sampleId"], "logResidual": float(np.log1p(work) - np.log1p(prediction)),
-            "outputPerWork": observed["outputTokens"] / work,
-            "freshInputPerWork": fresh / work if finite(fresh) else None,
-            "cachedInputPerWork": observed.get("cachedInputTokens") / work if finite(observed.get("cachedInputTokens")) else None,
-            "roundsPerWork": observed["toolRounds"] / work}
+    result = {"sampleId": sample["sampleId"], "logResidual": float(np.log1p(work) - np.log1p(prediction)),
+            "outputPerWork": ratio(observed["outputTokens"]),
+            "freshInputPerWork": ratio(fresh) if finite(fresh) else None,
+            "cachedInputPerWork": ratio(observed.get("cachedInputTokens")) if finite(observed.get("cachedInputTokens")) else None,
+            "roundsPerWork": ratio(observed.get("toolRounds")) if finite(observed.get("toolRounds")) else None}
+    if token_yield_basis in ("actions-plus-one", "workload"):
+        result["inputPerWork"] = ratio(observed["inputTokens"])
+    if token_yield_basis == "workload" and work == 0:
+        result["zeroWork"] = True
+    return result
 
 
-def quote(model, scenarios, samples):
+def quote(model, scenarios, samples, token_yield_basis="actions"):
     result = []
     for work in predict_work(model, samples):
         row = {}
-        adjusted = [max(0, math.expm1(min(30, math.log1p(float(work)) + s["logResidual"]))) for s in scenarios]
+        # Preserve the empirical mass at zero without assigning positive usage
+        # to zero-fraction scenarios when predicting a different request.
+        adjusted = [0.0 if token_yield_basis == "workload" and s.get("zeroWork") else
+                    max(0, math.expm1(min(30, math.log1p(float(work)) + s["logResidual"]))) for s in scenarios]
         row["work"] = quantiles(adjusted)
         for channel, field in [("outputTokens", "outputPerWork"), ("freshInputTokens", "freshInputPerWork"), ("cachedInputTokens", "cachedInputPerWork")]:
-            values = [w * s[field] for w, s in zip(adjusted, scenarios) if s[field] is not None]
+            values = [(w + (1 if token_yield_basis == "actions-plus-one" else 0)) * s[field]
+                      for w, s in zip(adjusted, scenarios) if s[field] is not None]
             row[channel] = quantiles(values) if len(values) == len(scenarios) else None
+        input_yields = [s.get("inputPerWork") if s.get("inputPerWork") is not None else
+                        (s["freshInputPerWork"] + s["cachedInputPerWork"]
+                         if s["freshInputPerWork"] is not None and s["cachedInputPerWork"] is not None else None)
+                        for s in scenarios]
+        if all(value is not None for value in input_yields):
+            units = [w + (1 if token_yield_basis == "actions-plus-one" else 0) for w in adjusted]
+            row["inputTokens"] = quantiles([w * y for w, y in zip(units, input_yields)])
+            row["totalTokens"] = (row["work"] if token_yield_basis == "workload" else
+                                  quantiles([w * (y + s["outputPerWork"]) for w, y, s in zip(units, input_yields, scenarios)]))
+        else:
+            row["inputTokens"] = row["totalTokens"] = None
         row["riskPremiumOutputTokens"] = row["outputTokens"]["p80"] - row["outputTokens"]["p50"]
         result.append(row)
     return result
@@ -191,6 +281,9 @@ def errors(actual, predicted):
 
 def build_artifact(dataset):
     samples, rejected = validate_dataset(dataset)
+    scope = dataset_scope(dataset)
+    token_yield_basis = "workload" if scope == "completed-session" else "actions"
+    workload_metric = "totalTokens" if scope == "completed-session" else "toolCalls"
     train, heldout, purged = frozen_split(samples)
     cv = list(folds(train))
     if not cv:
@@ -199,31 +292,31 @@ def build_artifact(dataset):
     for alpha in ALPHAS:
         residuals = []
         for older, validation in cv:
-            prediction = predict_work(fit_model(older, alpha), validation)
+            prediction = predict_work(fit_model(older, alpha, workload_metric), validation)
             residuals.extend((s, float(p)) for s, p in zip(validation, prediction))
-        mse = float(np.mean([(math.log1p(s["outcomes"]["toolCalls"]) - math.log1p(p)) ** 2 for s, p in residuals]))
+        mse = float(np.mean([(math.log1p(observed_work(s, workload_metric)) - math.log1p(p)) ** 2 for s, p in residuals]))
         scores.append({"alpha": alpha, "oofLogMse": mse})
         residuals_by_alpha[alpha] = residuals
     alpha = min(scores, key=lambda score: (score["oofLogMse"], -score["alpha"]))["alpha"]
-    model = fit_model(train, alpha)
-    scenarios = [scenario(s, p) for s, p in residuals_by_alpha[alpha]]
+    model = fit_model(train, alpha, workload_metric)
+    scenarios = [scenario(s, p, token_yield_basis) for s, p in residuals_by_alpha[alpha]]
     model["residualQuantiles"] = quantiles([s["logResidual"] for s in scenarios])
     model["featureRanges"] = []
     for name in FEATURES:
         values = [s["features"][name] for s in train if s["features"][name] is not None]
         model["featureRanges"].append({"min": min(values) if values else None, "max": max(values) if values else None,
                                        "known": len(values), "missing": len(train) - len(values)})
-    work = [s["outcomes"]["toolCalls"] for s in train]
-    observed = [s["outcomes"]["toolCalls"] for s in heldout]
+    work = [observed_work(s, workload_metric) for s in train]
+    observed = [observed_work(s, workload_metric) for s in heldout]
     output = [s["outcomes"]["outputTokens"] for s in heldout]
-    quotes = quote(model, scenarios, heldout)
+    quotes = quote(model, scenarios, heldout, token_yield_basis)
     predicted = [q["work"]["p50"] for q in quotes]
     predicted_output = [q["outputTokens"]["p50"] for q in quotes]
     baseline_work = float(np.median(work))
     baseline_output = float(np.median([s["outcomes"]["outputTokens"] for s in train]))
     model_error = errors(observed, predicted)
     baseline_error = errors(observed, [baseline_work] * len(heldout))
-    coverage = {name: float(np.mean([s["outcomes"]["toolCalls"] <= q["work"][name] for s, q in zip(heldout, quotes)])) for name in QUANTILES}
+    coverage = {name: float(np.mean([observed_work(s, workload_metric) <= q["work"][name] for s, q in zip(heldout, quotes)])) for name in QUANTILES}
     output_coverage = {name: float(np.mean([s["outcomes"]["outputTokens"] <= q["outputTokens"][name] for s, q in zip(heldout, quotes)])) for name in QUANTILES}
     improves = model_error["mae"] < baseline_error["mae"]
     has_signal = any(weight > 1e-8 for weight in model["coefficients"])
@@ -237,33 +330,112 @@ def build_artifact(dataset):
                 "fittingLibraries": {"numpy": np.__version__, "scipy": scipy.__version__, "scikit-learn": sklearn.__version__},
                 "oofSampleCount": len(scenarios), "oofGroupCount": len({s["groupId"] for s, _ in residuals_by_alpha[alpha]}),
                 "providers": dict(Counter(str(s.get("provider", "unknown")) for s in train))}
-    validation = {"status": status, "scope": "one measured root-agent run; not whole issues or human hours",
+    scope_description = ("one inactive observed session snapshot, including interruptions and recorded errors; not human hours"
+                         if scope == "completed-session" else "one measured root-agent run; not whole issues or human hours")
+    validation = {"status": status, "scope": scope_description,
                   "sampleCount": len(heldout), "groupCount": len(groups(heldout)),
                   "sampleIds": [s["sampleId"] for s in heldout], "purgedSampleCount": len(purged),
                   "splitPolicy": "newest 20% thread groups by earliest run start; every training group completed before earliest target start",
-                  "work": model_error, "baselineWork": baseline_error,
+                  "workloadMetric": workload_metric, "work": model_error, "baselineWork": baseline_error,
                   "outputTokens": errors(output, predicted_output), "baselineOutputTokens": errors(output, [baseline_output] * len(heldout)),
                   "workCoverage": coverage, "beatsWorkBaseline": improves,
                   "outputCoverage": output_coverage,
                   "hasLearnedComplexitySignal": has_signal,
                   "providers": dict(Counter(str(s.get("provider", "unknown")) for s in heldout)),
-                  "limitations": ["Observational root-run outcomes omit unlogged child-agent work and human time.",
+                  "limitations": [("Observed logged session snapshots include later conversation changes, interruptions, and errors, not just initial intent; unlogged work and human time remain unobserved."
+                                   if scope == "completed-session" else "Observational root-run outcomes omit unlogged child-agent work and human time."),
                                   "Prework feature extraction uncertainty is not identified by this sample.",
                                   "Empirical OOF intervals are not coverage guarantees or risk-neutral prices.",
                                   "Alpha selection and residual calibration share older-group folds; newest groups remain untouched.",
                                   "Token yields reflect historical provider, tool, and context policy mixtures."],
                   "selection": scores, "rejected": rejected}
-    artifact = {"schemaVersion": 1, "method": "nonnegative-ridge-log-work-v1", "workUnit": "observed_logged_tool_calls",
+    if scope == "completed-session":
+        validation["limitations"].append("Observed zero-usage calibration sessions contribute a fixed empirical point mass at zero, with zero component fractions; its frequency is not learned from request features.")
+        for channel, outcome in [("inputTokens", lambda s: s["outcomes"]["inputTokens"]),
+                                 ("totalTokens", lambda s: s["outcomes"]["inputTokens"] + s["outcomes"]["outputTokens"])]:
+            observed_channel = [outcome(s) for s in heldout]
+            baseline_channel = float(np.median([outcome(s) for s in train]))
+            validation[channel] = errors(observed_channel, [q[channel]["p50"] for q in quotes])
+            validation[f"baseline{channel[0].upper()}{channel[1:]}"] = errors(observed_channel, [baseline_channel] * len(heldout))
+            validation[f"{channel.removesuffix('Tokens')}Coverage"] = {
+                name: float(np.mean([value <= q[channel][name] for value, q in zip(observed_channel, quotes)]))
+                for name in QUANTILES}
+    oof_ids = {s["sampleId"] for s, _ in residuals_by_alpha[alpha]}
+    cohort_audit = {"sourceSamples": len(dataset["samples"]), "acceptedSamples": len(samples),
+                    "rejectedSamples": sum(rejected.values()), "rejectedByReason": rejected,
+                    "trainingSamples": len(train), "heldoutSamples": len(heldout), "temporalPurgedSamples": len(purged),
+                    "oofSamples": len(oof_ids), "trainingSamplesWithoutOof": len(train) - len(oof_ids),
+                    "acceptedZeroActionSamples": sum(s["outcomes"].get("toolCalls") == 0 for s in samples),
+                    "acceptedZeroUsageSamples": sum(s["outcomes"]["inputTokens"] + s["outcomes"]["outputTokens"] == 0 for s in samples
+                                                    if finite(s["outcomes"].get("inputTokens")) and finite(s["outcomes"].get("outputTokens"))),
+                    "oofZeroUsageScenarios": sum(bool(s.get("zeroWork")) for s in scenarios),
+                    "optionalAccountingMissing": {name: sum(s["outcomes"].get(name) is None for s in samples)
+                                                  for name in ("toolCalls", "toolRounds", "nonCachedInputTokens", "cachedInputTokens")}}
+    source_counts = count_tree(dataset.get("audit", {}).get("discovery")) if isinstance(dataset.get("audit"), dict) else {}
+    if source_counts:
+        cohort_audit["discovery"] = source_counts
+    candidate_workload = candidate_validation = candidate_scenarios = None
+    estimator = "complexity"
+    selection_reason = None
+    if scope == "completed-session":
+        # The held-out block selects the serving estimator. It is therefore a
+        # validation selection set, not an independent test of that selection.
+        candidate_workload = copy.deepcopy(model)
+        candidate_validation = copy.deepcopy(validation)
+        candidate_scenarios = copy.deepcopy(scenarios)
+        validation["candidateHasLearnedComplexitySignal"] = has_signal
+        validation["candidateMetricsNonfinite"] = not math.isfinite(model_error["mae"])
+        if not math.isfinite(model_error["mae"]) or not improves:
+            estimator = "historical-baseline"
+            selection_reason = "Candidate total-token MAE did not beat training-median baseline on held-out sessions."
+            model = {**model, "intercept": float(math.log1p(baseline_work)),
+                     "coefficients": [0.0] * 4, "missingCoefficients": [0.0] * 4}
+            # Rebuild the full empirical training distribution. Candidate OOF
+            # residuals must never distort a constant historical baseline.
+            scenarios = [scenario(s, baseline_work, token_yield_basis) for s in train]
+            model["residualQuantiles"] = quantiles([s["logResidual"] for s in scenarios])
+            validation["hasLearnedComplexitySignal"] = False
+            validation["status"] = "experimental"
+        training["scenarioCount"] = len(scenarios)
+        training["calibration"] = ("empirical-training-distribution" if estimator == "historical-baseline"
+                                   else "chronological-out-of-fold")
+        cohort_audit["activeScenarios"] = len(scenarios)
+        cohort_audit["activeZeroUsageScenarios"] = sum(bool(s.get("zeroWork")) for s in scenarios)
+        active_quotes = quote(model, scenarios, heldout, token_yield_basis)
+        active_channels = [("Work", "work", observed), ("OutputTokens", "outputTokens", output),
+                           ("InputTokens", "inputTokens", [s["outcomes"]["inputTokens"] for s in heldout]),
+                           ("TotalTokens", "totalTokens", observed)]
+        validation["activeCoverage"] = {}
+        for label, channel, actual in active_channels:
+            validation[f"active{label}"] = errors(actual, [q[channel]["p50"] for q in active_quotes])
+            key = channel.removesuffix("Tokens")
+            validation["activeCoverage"][key] = {
+                name: float(np.mean([value <= q[channel][name] for value, q in zip(actual, active_quotes)]))
+                for name in QUANTILES}
+        validation["selectionReason"] = selection_reason
+        validation["limitations"].append("The held-out block selected the active estimator; its active metrics are validation-selection results, not independent test performance.")
+    artifact = {"schemaVersion": 1, "method": "nonnegative-ridge-log-work-v1", "workUnit": "observed_session_total_tokens" if scope == "completed-session" else "observed_logged_tool_calls",
+                "workloadMetric": workload_metric,
+                "scope": scope, "tokenYieldBasis": token_yield_basis, "cohortAudit": cohort_audit,
                 "featureNames": FEATURES, "workload": model, "scenarios": scenarios,
                 "workCutoffs": {"trivialMax": float(np.quantile(work, 1/3)), "deepMin": float(np.quantile(work, 2/3))},
                 "training": training, "validation": validation}
     # Safe aggregate report deliberately omits sample IDs and raw features.
-    report = {"schemaVersion": 1, "method": artifact["method"], "workUnit": artifact["workUnit"],
-              "formula": "log1p(work)=intercept+sum(nonnegative_weight*feature/scale)+sum(missing_weight*is_missing)",
+    report = {"schemaVersion": 1, "method": artifact["method"], "workUnit": artifact["workUnit"], "workloadMetric": workload_metric,
+              "scope": scope, "tokenYieldBasis": token_yield_basis, "cohortAudit": cohort_audit,
+              "formula": f"log1p({workload_metric})=intercept+sum(nonnegative_weight*feature/scale)+sum(missing_weight*is_missing)",
               "featureNames": FEATURES, "workload": model, "workCutoffs": artifact["workCutoffs"],
               "training": {k: v for k, v in training.items() if k != "sampleIds"},
               "validation": {k: v for k, v in validation.items() if k != "sampleIds"}}
-    return artifact, report
+    if scope == "completed-session":
+        artifact.update(estimator=estimator, selectionReason=selection_reason,
+                        candidateWorkload=candidate_workload, candidateValidation=candidate_validation,
+                        candidateScenarios=candidate_scenarios)
+        report.update(estimator=estimator, selectionReason=selection_reason,
+                      candidateWorkload=candidate_workload,
+                      candidateValidation={k: v for k, v in candidate_validation.items() if k != "sampleIds"},
+                      candidateScenarioCount=len(candidate_scenarios))
+    return finite_metadata(artifact), finite_metadata(public_metadata(report))
 
 
 def private_write(path, value):
@@ -288,7 +460,8 @@ def main():
     private_write(args.output, artifact)
     private_write(args.report, report)
     print(json.dumps({"status": artifact["validation"]["status"], "trainingSamples": artifact["training"]["sampleCount"],
-                      "heldoutSamples": artifact["validation"]["sampleCount"], "oofSamples": len(artifact["scenarios"])}))
+                      "heldoutSamples": artifact["validation"]["sampleCount"], "oofSamples": artifact["training"]["oofSampleCount"],
+                      "scenarioCount": len(artifact["scenarios"]), "estimator": artifact.get("estimator", "complexity")}))
 
 
 if __name__ == "__main__":

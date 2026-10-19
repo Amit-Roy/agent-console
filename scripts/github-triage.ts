@@ -9,7 +9,6 @@ import { execFile, spawn } from "node:child_process";
 import { sign } from "@octokit/webhooks-methods";
 import { childEnv } from "../server/providers/env.ts";
 import { createTriageService } from "../server/github-triage.ts";
-import { historyPath } from "../server/providers/triage-history.ts";
 import { effortModelPath, loadEffortModel, quoteEffort } from "../server/providers/triage-effort.ts";
 
 const SCRIPT = fileURLToPath(import.meta.url);
@@ -138,7 +137,7 @@ async function calibrate() {
     const destination = effortModelPath();
     fs.mkdirSync(path.dirname(destination), { recursive: true, mode: 0o700 });
     const features = path.join(path.dirname(destination), "triage-effort-features.json");
-    await run(process.execPath, [path.join(ROOT, "scripts/triage-history-build.ts"), "--repo-dir", ROOT,
+    await run(process.execPath, [path.join(ROOT, "scripts/triage-session-build.ts"),
       "--data", process.env.AGENT_CONSOLE_DATA || path.join(os.homedir(), ".config/agent-console"), "--output", history], 120_000);
     await run(process.execPath, [path.join(ROOT, "scripts/triage-effort-features.ts"), "--history", history,
       "--output", features, "--dataset", dataset], 30 * 60_000);
@@ -148,8 +147,7 @@ async function calibrate() {
     const model = loadEffortModel(artifact);
     const quote = quoteEffort({ breadth: { value: null }, complexity: { value: null }, uncertainty: { value: null }, risk: { value: null } }, model);
     if (model.status !== "ready" || quote.status !== "ready") throw Error("The learned effort model failed validation; previous calibration retained.");
-    fs.mkdirSync(path.dirname(historyPath()), { recursive: true, mode: 0o700 });
-    fs.renameSync(history, historyPath());
+    fs.renameSync(history, path.join(path.dirname(destination), "triage-session-history.json"));
     fs.renameSync(dataset, path.join(path.dirname(destination), "triage-effort-training.json"));
     fs.renameSync(report, path.join(path.dirname(destination), "triage-effort-report.json"));
     fs.renameSync(artifact, destination);

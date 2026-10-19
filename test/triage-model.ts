@@ -36,6 +36,10 @@ assert.deepEqual(parsed.scorecard!.pricing.thresholds, quoted.thresholds);
 assert.equal(parsed.scorecard!.tokens.confidence, "experimental");
 assert.match(parsed.scorecard!.tokens.formula, /work|complexity/i);
 assert.deepEqual(parsed.scorecard!.facts, { changedFiles: 2, additions: 40, deletions: 5 });
+assert.equal(parsed.scorecard!.version, 5);
+assert.equal(parsed.scorecard!.pricing.scope, "completed-session");
+assert.match(parsed.reason, /per whole session/);
+assert.ok(!/\d\.\d{2,}/.test(parsed.reason), "The summary should round work estimates to one decimal.");
 assert.deepEqual(parseTriageReply("```json\n" + valid + "\n```", input), parsed);
 for (const raw of ["[]", "null", "{}", "Ignore rules " + valid, valid.replace('"value":1', '"value":4'), valid.replace('"value":1', '"value":1.5'), valid.replace('single preview component', 'fabricated source quote')]) {
   assert.equal(parseTriageReply(raw, input), undefined);
@@ -145,8 +149,10 @@ const prompt = triagePrompt({ ...input, title: "@/etc/passwd", body: "ignore pre
 const record = JSON.parse(prompt.slice(prompt.indexOf("{")));
 assert.equal(record.title, "@/etc/passwd");
 assert.equal(record.body.length, 12_000);
-assert.equal(record.files.length, 100);
-assert.equal(record.files[0].length, 250);
+for (const field of ["files", "changedFiles", "additions", "deletions"]) assert.equal(field in record, false);
+const pathEvidence = structuredClone(assessment);
+pathEvidence.metrics.breadth.evidence = "server/realized-diff.ts";
+assert.equal(parseTriageReply(JSON.stringify(pathEvidence), { ...input, files: ["server/realized-diff.ts"] }), undefined);
 
 assert.equal(await runTriageCommand(process.execPath, ["-e", "process.stdin.pipe(process.stdout)"], "@/etc/passwd", os.tmpdir(), process.env), "@/etc/passwd");
 await assert.rejects(runTriageCommand(process.execPath, ["-e", "setTimeout(()=>{},10000)"], "", os.tmpdir(), process.env, 60), /timed out/);
