@@ -9,7 +9,7 @@ import { childEnv } from "../server/providers/env.ts";
 import { defaultTriageEngines } from "../server/providers/triage-model.ts";
 import { createLabelCompletion, type LabelEngine } from "../server/providers/small-model.ts";
 
-export const EFFORT_FEATURE_VERSION = "effort-prework-v2";
+export const EFFORT_FEATURE_VERSION = "effort-session-initial-v1";
 export const FEATURE_NAMES = ["breadth", "complexity", "uncertainty", "risk"] as const;
 type FeatureName = typeof FEATURE_NAMES[number];
 type Metric = { value: number | null; evidence: string | null };
@@ -38,7 +38,7 @@ breadth: 0 isolated text/config change; 1 one component explicitly bounded; 2 mu
 complexity: 0 mechanical edit; 1 standard implementation; 2 state, concurrency, asynchronous recovery; 3 new architecture/protocol.
 uncertainty: 0 explicit implementation and acceptance checks; 1 bounded implementation choices; 2 investigation needed; 3 unresolved dependencies or feasibility.
 risk: 0 explicitly cosmetic-only; 1 reversible functional change; 2 authentication, persisted data, deployment; 3 irreversible change or active security exposure.
-Optional preworkContext contains only conversation available BEFORE the current request. Use it only when the current request adopts or refers to that prior plan. Estimate scope of CURRENT requested work; do not combine unrelated prior tasks. Evidence may quote the request or applicable prior context verbatim. Never treat prior work status or usage as complexity evidence.
+The request contains only the initial user message or consecutive initial user messages before the first agent response. Never use later conversation, assistant plans, outcomes, usage, or implementation results as complexity evidence. Evidence must quote the initial request verbatim.
 Sparse requests may have all null metrics. Do not infer unstated facts. Give one record per supplied ID.`;
 
 export function parseFeatureBatch(raw: string | undefined, inputs: { id: string; request: string; preworkContext?: Context[] }[]): { id: string; metrics: Metrics }[] | undefined {
@@ -59,7 +59,7 @@ export function parseFeatureBatch(raw: string | undefined, inputs: { id: string;
         if (metric.value === null && metric.evidence === null) { metrics[name] = { value: null, evidence: null }; continue; }
         if (!Number.isInteger(metric.value) || metric.value < 0 || metric.value > 3 || typeof metric.evidence !== "string"
           || metric.evidence.trim().length < 4 || metric.evidence.length > 240 || /[\u0000-\u001f\u007f]/.test(metric.evidence)
-          || ![source.request, ...(source.preworkContext || []).map(message => message.text)].some(text => text.includes(metric.evidence))) return;
+          || !source.request.includes(metric.evidence)) return;
         metrics[name] = { value: metric.value, evidence: metric.evidence };
       }
       records.push({ id: row.id, metrics });
@@ -75,27 +75,35 @@ export async function extractEffortFeatures(tasks: Source[], cached: FeatureReco
   for (const task of tasks) {
     if (typeof task.id !== "string" || typeof task.request !== "string") { audit.invalidSource++; continue; }
     const request = safePreworkRequest(task.request);
-    const context = Array.isArray(task.preworkContext) ? task.preworkContext : [];
-    if (!request || context.length > 4 || context.some(message => !message || typeof message !== "object" || !["user", "assistant"].includes(message.role) || !safePreworkRequest(message.text)) || context.reduce((sum, message) => sum + message.text.length, 0) > 8000) { audit.privacySkipped++; continue; }
-    const hash = requestHash(task.request, context);
+    if (Array.isArray(task.preworkContext) && task.preworkContext.length) { audit.invalidSource++; continue; }
+    const context: Context[] = [];
+    if (!request) { audit.privacySkipped++; continue; }
+    const hash = requestHash(task.request);
     const existing = cached.find(row => row.sourceId === task.id && row.requestHash === hash && row.featureVersion === EFFORT_FEATURE_VERSION);
     if (existing && parseFeatureBatch(JSON.stringify({ records: [{ id: "0", metrics: existing.metrics }] }), [{ id: "0", request, preworkContext: context }])) {
       records.push(existing); audit.reused++;
     } else pending.push({ task, request, context, hash });
   }
-  const complete = createLabelCompletion(engines.map(engine => ({ ...engine, call: async (prompt: string, system: string) => {
+  const latest = records.at(-1);
+  let preferred: string | undefined = latest && Date.now() - Date.parse(latest.extractedAt) < 30 * 60_000 ? latest.model : undefined;
+  const completions = engines.map(engine => ({ id: engine.id, complete: createLabelCompletion([{ ...engine,
+    cooldownMs: Math.max(engine.cooldownMs ?? 300_000, 300_000), call: async (prompt: string, system: string) => {
     const result = await engine.call(prompt, system);
     if (!result) return;
     return JSON.stringify({ model: engine.id, raw: result });
-  } })));
-  for (let at = 0; at < pending.length; at += 4) {
-    const batch = pending.slice(at, at + 4);
+  } }]) }));
+  const extractBatch = async (batch: typeof pending) => {
     const inputs = batch.map((row, index) => ({ id: String(index), request: row.request, preworkContext: row.context }));
-    const reply = await complete("Extract only prework features from these requests:\n" + JSON.stringify({ records: inputs }), FEATURE_SYSTEM, raw => {
-      if (!raw) return;
-      try { const wrapper = JSON.parse(raw); const rows = parseFeatureBatch(wrapper.raw, inputs); return rows ? { model: wrapper.model, rows } : undefined; } catch { return; }
-    });
-    if (!reply) { audit.failed += batch.length; continue; }
+    let reply: { model: string; rows: { id: string; metrics: Metrics }[] } | undefined;
+    const ordered = [...completions].sort((a, b) => Number(b.id === preferred) - Number(a.id === preferred));
+    for (const engine of ordered) {
+      reply = await engine.complete("Extract only prework features from these requests:\n" + JSON.stringify({ records: inputs }), FEATURE_SYSTEM, raw => {
+        if (!raw) return;
+        try { const wrapper = JSON.parse(raw); const rows = parseFeatureBatch(wrapper.raw, inputs); return rows ? { model: wrapper.model, rows } : undefined; } catch { return; }
+      });
+      if (reply) { preferred = engine.id; break; }
+    }
+    if (!reply) { audit.failed += batch.length; return; }
     for (const row of reply.rows) {
       const source = batch[Number(row.id)];
       records.push({ sourceId: source.task.id, requestHash: source.hash, featureVersion: EFFORT_FEATURE_VERSION,
@@ -103,23 +111,33 @@ export async function extractEffortFeatures(tasks: Source[], cached: FeatureReco
       audit.extracted++;
     }
     save?.(records);
+  };
+  for (let at = 0; at < pending.length; at += 8) {
+    await Promise.all([pending.slice(at, at + 4), pending.slice(at + 4, at + 8)].filter(batch => batch.length).map(extractBatch));
   }
+  records.sort((a, b) => tasks.findIndex(task => task.id === a.sourceId) - tasks.findIndex(task => task.id === b.sourceId));
   return { version: 1, featureVersion: EFFORT_FEATURE_VERSION, records, audit };
 }
 
-export function effortDataset(tasks: Source[], records: FeatureRecord[]) {
+export function effortDataset(tasks: Source[], records: FeatureRecord[], discovery: Record<string, unknown> = {}) {
   const samples = tasks.flatMap(task => {
+    if (typeof task.id !== "string" || typeof task.group !== "string" || typeof task.request !== "string") return [];
     if (typeof task.startedAt !== "string" || !Number.isFinite(Date.parse(task.startedAt)) || !Number.isFinite(Date.parse(task.completedAt)) || Date.parse(task.startedAt) > Date.parse(task.completedAt)) return [];
-    const feature = records.find(row => row.sourceId === task.id && row.requestHash === requestHash(task.request, task.preworkContext || []) && row.featureVersion === EFFORT_FEATURE_VERSION);
-    if (!feature) return [];
+    if (Array.isArray(task.preworkContext) && task.preworkContext.length) return [];
+    const feature = records.find(row => row.sourceId === task.id && row.requestHash === requestHash(task.request) && row.featureVersion === EFFORT_FEATURE_VERSION);
     return [{ sampleId: task.id, groupId: task.group, startedAt: task.startedAt, completedAt: task.completedAt,
-      features: Object.fromEntries(FEATURE_NAMES.map(name => [name, feature.metrics[name].value])),
+      featureStatus: feature ? "evaluated" : "unavailable",
+      features: Object.fromEntries(FEATURE_NAMES.map(name => [name, feature?.metrics[name].value ?? null])),
       outcomes: { toolCalls: task.toolCalls ?? null, toolRounds: task.toolRounds ?? null, inputTokens: task.inputTokens ?? null,
         outputTokens: task.outputTokens ?? null, cachedInputTokens: task.cacheReadTokens ?? null, nonCachedInputTokens: task.nonCachedInputTokens ?? null }, provider: task.provider }];
   });
-  return { schemaVersion: 1, featureVersion: EFFORT_FEATURE_VERSION, scope: "successful-direct-logged-delivery-run", samples,
+  return { schemaVersion: 1, featureVersion: EFFORT_FEATURE_VERSION, scope: "completed-session", samples,
     audit: { sourceRuns: tasks.length, selectedRuns: samples.length, groups: new Set(samples.map(row => row.groupId)).size,
-      limitations: "Feature extraction sees only sanitized original requests and bounded conversation before that request; null means unknown. Activity targets are observed root logs only; missing child activity is never imputed. Successful run scope is not a whole issue or human effort." } };
+      unknownFeatureSessions: samples.filter(row => row.featureStatus === "unavailable").length,
+      discovery: { ...discovery, featureCoverage: { sourceSessions: tasks.length, includedSessions: samples.length,
+        evaluatedSessions: samples.filter(row => row.featureStatus === "evaluated").length,
+        unavailableFeatureSessions: samples.filter(row => row.featureStatus === "unavailable").length } },
+      limitations: "Each sample is one inactive observed session. Predictors use only its initial user messages before the first agent response; null means unknown. Outcomes sum recorded session usage, including later follow-ups and traceable child sessions. Missing telemetry is never imputed. These are session snapshots, not human hours or a guarantee that a session will never resume." } };
 }
 
 export function writePrivateJson(file: string, value: unknown) {
@@ -138,11 +156,12 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   if (!sourcePath || !cachePath || !datasetPath) throw Error("Use --history, --output, and --dataset with private absolute paths");
   const source = JSON.parse(fs.readFileSync(sourcePath, "utf8"));
   if (!Array.isArray(source.tasks)) throw Error("Expected historical source tasks");
+  if (source.scope !== "completed-session") throw Error("Expected session-level history with initial user messages only");
   let cached: FeatureRecord[] = [];
   try { cached = JSON.parse(fs.readFileSync(cachePath, "utf8")).records || []; } catch {}
   const result = await extractEffortFeatures(source.tasks, cached, undefined, records => writePrivateJson(cachePath, { version: 1, featureVersion: EFFORT_FEATURE_VERSION, records }));
   writePrivateJson(cachePath, result);
-  const dataset = effortDataset(source.tasks, result.records);
+  const dataset = effortDataset(source.tasks, result.records, { ...source.audit, features: { ...result.audit, evaluatedSessions: result.records.length } });
   writePrivateJson(datasetPath, dataset);
   console.log(JSON.stringify({ ...result.audit, selectedRuns: dataset.samples.length, groups: dataset.audit.groups }));
 }
