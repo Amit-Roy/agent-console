@@ -391,9 +391,52 @@ function syncDialogAccount() {
   const visible = menus.dProv.value === "claude" && dialogTask === null;
   $("account-field").hidden = !visible;
   const account = claudeAccount(menus.dAccount.value);
-  $("d-account-note").textContent = account.ready ? "This account supplies the allowance for this thread." : "Sign in to this account on the server before creating a thread.";
+  $("d-account-note").textContent = account.ready ? "This account supplies the allowance for this thread." : "Sign in to this account before creating a thread.";
   $("d-ok").disabled = visible ? !account.ready : !prov(menus.dProv.value)?.ok;
+  $("d-signin").hidden = !visible || !!account.ready;
+  if (signingIn !== account.id) $("d-signin-code").hidden = true;
 }
+const accountItems = () => claudeAccounts().map(a => ({ value: a.id, label: a.label, desc: a.email || (a.ready ? "Signed in" : "Sign-in required") }));
+// Claude sign-in from the dialog: the server runs `claude auth login`; Anthropic's page shows a code the user pastes back here.
+let signingIn = null;
+async function claudeLogin(account, body) {
+  const r = await apiFetch(`/api/claude-login/${account}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error || "Sign-in failed.");
+  return data;
+}
+$("d-signin-go").onclick = async () => {
+  const account = menus.dAccount.value, note = $("d-account-note");
+  const tab = window.open("", "_blank"); // open now, inside the tap, so the browser does not block it as a popup
+  $("d-signin-go").disabled = true;
+  note.textContent = "Opening Claude sign-in…";
+  try {
+    const { url } = await claudeLogin(account, {});
+    if (tab) { tab.opener = null; tab.location.href = url; } else window.open(url, "_blank", "noopener");
+    signingIn = account;
+    $("d-code").value = "";
+    $("d-signin-code").hidden = false;
+    note.textContent = `Sign in as ${claudeAccount(account).email}, then paste the code Claude shows.`;
+    $("d-code").focus();
+  } catch (e) { tab?.close(); note.textContent = e.message; }
+  $("d-signin-go").disabled = false;
+};
+async function finishSignIn() {
+  const account = signingIn, note = $("d-account-note");
+  if (!account) return;
+  $("d-signin-finish").disabled = true;
+  note.textContent = "Checking the code…";
+  try {
+    const { providers } = await claudeLogin(account, { code: $("d-code").value });
+    state.providers = new Map(providers.map((p) => [p.id, p]));
+    signingIn = null;
+    menus.dAccount.setItems(accountItems(), account);
+    syncDialogAccount();
+  } catch (e) { note.textContent = e.message; }
+  $("d-signin-finish").disabled = false;
+}
+$("d-signin-finish").onclick = finishSignIn;
+$("d-code").onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); finishSignIn(); } };
 function fillDialog(id) {
   const p = prov(id);
   if (!p) return;
@@ -403,7 +446,7 @@ function fillDialog(id) {
   $("d-warn").hidden = p.defaultMode !== "bypassPermissions";
   $("d-note").hidden = !p.note;
   $("d-note").textContent = p.note || "";
-  menus.dAccount.setItems(claudeAccounts().map(a => ({ value: a.id, label: a.label, desc: a.email || (a.ready ? "Signed in" : "Sign-in required") })), menus.dAccount.value || "sunny");
+  menus.dAccount.setItems(accountItems(), menus.dAccount.value || "sunny");
   syncDialogAccount();
 }
 const modeItems = (modes) => modes.map((v) => ({ value: v, label: MODE_META[v]?.label || v, desc: MODE_META[v]?.desc, icon: MODE_META[v]?.icon, tone: MODE_META[v]?.tone }));

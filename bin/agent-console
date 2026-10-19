@@ -4,6 +4,8 @@ set -u
 DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
 RUN="${AGENT_CONSOLE_RUN:-$HOME/.cache/agent-console}"; mkdir -p "$RUN"; export AGENT_CONSOLE_RUN="$RUN"; PORT="${PORT:-7070}"
 export PATH="$HOME/.local/bin:$PATH"
+# A restart issued from a Nefro thread inherits its profile; Sunny must keep the default Claude login.
+[ "${CLAUDE_CONFIG_DIR:-}" = "$HOME/.claude-nefro" ] && unset CLAUDE_CONFIG_DIR
 # the pid file survives a workspace restart, when its pid may belong to an unrelated process: check it is our server
 running() { [ -f "$RUN/pid" ] && grep -qa "server/index.ts" "/proc/$(cat "$RUN/pid")/cmdline" 2>/dev/null; }
 # the supervisor restarts the server whenever it exits, unless `stop` killed the supervisor first
