@@ -334,7 +334,7 @@ function handle(m) {
         renderThreads(); updateWorking();
       }
       if (views.has(m.thread)) views.get(m.thread).stale = true;
-      if (m.event.type === "rate_limit_event") setUsage(m.event, state.threads.get(m.thread)?.provider || "claude");
+      if (m.event.type === "rate_limit_event") setUsage(m.event, threadUsageKey(state.threads.get(m.thread)));
       if (m.thread !== state.current) break;
       if (state.revalidating && (!state.rendering || state.deferredRefresh)) {
         // Durable events before the history reply are already in its snapshot; deltas are never persisted.
@@ -384,6 +384,16 @@ function dialogEffort(model = menus.dModel.value, id = menus.dProv.value) {
 }
 const prov = (id) => state.providers.get(id);
 const provLabel = (id) => prov(id)?.label || id || "";
+const claudeAccounts = () => prov("claude")?.accounts || [{ id: "sunny", label: "Sunny", ready: !!prov("claude")?.ok }];
+const threadUsageKey = (t) => t?.provider === "claude" && t.claudeAccount === "nefro" ? "claude:nefro" : t?.provider || "claude";
+const claudeAccount = (id = "sunny") => claudeAccounts().find(a => a.id === id) || { id, label: cap(id) };
+function syncDialogAccount() {
+  const visible = menus.dProv.value === "claude" && dialogTask === null;
+  $("account-field").hidden = !visible;
+  const account = claudeAccount(menus.dAccount.value);
+  $("d-account-note").textContent = account.ready ? "This account supplies the allowance for this thread." : "Sign in to this account on the server before creating a thread.";
+  $("d-ok").disabled = visible ? !account.ready : !prov(menus.dProv.value)?.ok;
+}
 function fillDialog(id) {
   const p = prov(id);
   if (!p) return;
@@ -393,7 +403,8 @@ function fillDialog(id) {
   $("d-warn").hidden = p.defaultMode !== "bypassPermissions";
   $("d-note").hidden = !p.note;
   $("d-note").textContent = p.note || "";
-  $("d-ok").disabled = !p.ok;
+  menus.dAccount.setItems(claudeAccounts().map(a => ({ value: a.id, label: a.label, desc: a.email || (a.ready ? "Signed in" : "Sign-in required") })), menus.dAccount.value || "sunny");
+  syncDialogAccount();
 }
 const modeItems = (modes) => modes.map((v) => ({ value: v, label: MODE_META[v]?.label || v, desc: MODE_META[v]?.desc, icon: MODE_META[v]?.icon, tone: MODE_META[v]?.tone }));
 
@@ -556,7 +567,8 @@ const menus = {
     items: THREAD_ACTIONS, getItems: () => threadActions(state.current),
     onSelect: (v) => state.current && runThreadAction(state.current, v),
   }),
-  dProv: createMenu({ trigger: $("d-prov"), label: "Agent", renderTrigger: fieldTrigger, onSelect: (v) => fillDialog(v) }),
+  dProv: createMenu({ trigger: $("d-prov"), label: "Agent", renderTrigger: fieldTrigger, onSelect: (v) => { fillDialog(v); queueMicrotask(syncDialogAccount); } }),
+  dAccount: createMenu({ trigger: $("d-account"), label: "Claude account", renderTrigger: fieldTrigger, value: "sunny", onSelect: () => queueMicrotask(syncDialogAccount) }),
   dCwd: createMenu({ trigger: $("d-cwd"), label: "Folder", renderTrigger: fieldTrigger }),
   dModel: createMenu({ trigger: $("d-model"), label: "Model", renderTrigger: fieldTrigger, onSelect: v => dialogEffort(v) }),
   dMode: createMenu({ trigger: $("d-mode"), label: "Permission mode", renderTrigger: fieldTrigger, onSelect: (v) => { $("d-warn").hidden = v !== "bypassPermissions"; } }),
@@ -726,7 +738,7 @@ function openThread(id) {
   state.current = id;
   history.replaceState(null, "", `${location.pathname}${location.search}#thread=${encodeURIComponent(id)}`);
   if (switching) restoreDraft(id);
-  state.usageTab = state.threads.get(id)?.provider || "claude";
+  state.usageTab = threadUsageKey(state.threads.get(id));
   try { localStorage.setItem("ac_thread", id); } catch {}
   state.stick = true;
   state.renderToken++; // any history still being drawn belongs to the thread we are leaving
@@ -1002,6 +1014,9 @@ function renderHead() {
   const t = cur();
   if (!$("ttl-edit")) $("ttl").textContent = t ? t.title : state.ready ? "No thread" : "";
   $("cwd").hidden = !t;
+  $("thread-account").hidden = t?.provider !== "claude";
+  $("thread-account").textContent = t?.provider === "claude" ? `${claudeAccount(t.claudeAccount).label} ·` : "";
+  $("thread-account").title = t?.provider === "claude" ? `Claude account: ${claudeAccount(t.claudeAccount).email || claudeAccount(t.claudeAccount).label}` : "";
   $("cwd-t").textContent = t ? t.cwd.replace(/^\/home\/[^/]+/, "~") : "";
   $("cwd").title = t ? t.cwd : "";
   if (t) {
@@ -2029,7 +2044,7 @@ function onEvent(e, live) {
 }
 
 function meterColor(pct) { return pct >= 90 ? "var(--bad)" : pct >= 70 ? "var(--warn)" : "var(--ok)"; }
-function setUsage(e, provider = cur()?.provider || "claude") {
+function setUsage(e, provider = threadUsageKey(cur())) {
   const w = e.rate_limit_info?.unifiedWindows;
   if (!w) return;
   state.usage[provider] = { updatedAt: Date.now(), windows: [["5-hour", w.five_hour], ["7-day", w.seven_day]].filter(([,x]) => Number.isFinite(x?.utilization)).map(([label,x]) => ({ label, used: x.utilization * 100, limit: 100, unit: "%", ...((x.resetsAt || x.resets_at) ? { resetsAt: (x.resetsAt || x.resets_at) * 1000 } : {}) })) };
@@ -2052,18 +2067,21 @@ function usageMeter(label, used, limit, unit = "%", resetsAt) {
 }
 const usageName = (p) => p?.id === "claude" ? "Claude" : p?.id === "pi" ? "OpenRouter" : p?.label || "";
 function renderUsage() {
-  const providers = [...state.providers.values()].filter(p => p.id !== "mock");
+  const providers = [...state.providers.values()].filter(p => p.id !== "mock").flatMap(p => p.id === "claude"
+    ? claudeAccounts().map(a => ({ id: a.id === "sunny" ? "claude" : `claude:${a.id}`, label: a.label, email: a.email, claude: true, ready: a.ready }))
+    : [p]);
   if (!providers.length) return;
   if (!providers.some(p => p.id === state.usageTab)) state.usageTab = providers[0].id;
   const root = $("usage");
   const focusedTab = root.contains(document.activeElement) ? document.activeElement.id : null;
-  const tabKey = providers.map(p => p.id).join(",");
+  const tabKey = providers.map(p => `${p.id}:${p.label}`).join(",");
   let tabs = root.querySelector(".usage-tabs");
   const rebuildTabs = !tabs || tabs.dataset.providers !== tabKey;
   if (rebuildTabs) { tabs = el("div", "usage-tabs"); tabs.dataset.providers = tabKey; tabs.setAttribute("role", "tablist"); tabs.setAttribute("aria-label", "Provider usage"); }
   const pane = el("div", "usage-pane"); pane.id = "usage-panel"; pane.setAttribute("role", "tabpanel"); pane.setAttribute("aria-labelledby", `usage-tab-${state.usageTab}`);
   if (rebuildTabs) providers.forEach((p, i) => {
-    const btn = el("button", "usage-tab", usageName(p));
+    const btn = el("button", "usage-tab", p.claude ? p.label : usageName(p));
+    btn.title = p.claude ? `Claude · ${p.email || p.label}` : usageName(p);
     btn.id = `usage-tab-${p.id}`; btn.type = "button"; btn.setAttribute("role", "tab"); btn.setAttribute("aria-selected", String(p.id === state.usageTab)); btn.setAttribute("aria-controls", pane.id); btn.tabIndex = p.id === state.usageTab ? 0 : -1;
     btn.onclick = () => { state.usageTab = p.id; renderUsage(); $(btn.id)?.focus(); };
     btn.onkeydown = e => { if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) return; e.preventDefault(); const n = e.key === "Home" ? 0 : e.key === "End" ? providers.length - 1 : (i + (e.key === "ArrowRight" ? 1 : -1) + providers.length) % providers.length; state.usageTab = providers[n].id; renderUsage(); $(`usage-tab-${state.usageTab}`).focus(); };
@@ -2079,14 +2097,15 @@ function renderUsage() {
   refresh.onclick = () => { refresh.classList.add("spinning"); refresh.disabled = true; send({ t: "refresh_usage" }); setTimeout(() => { refresh.classList.remove("spinning"); refresh.disabled = false; }, 4000); };
   const stamp = sample?.updatedAt ? el("span", "usage-stamp", new Date(sample.updatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })) : null;
   if (stamp) { stamp.title = `Updated ${new Date(sample.updatedAt).toLocaleString()}`; refresh.setAttribute("aria-label", `Refresh usage (updated ${stamp.textContent})`); }
-  head.append(el("span", "usage-label", "Allowance"), ...(stamp ? [stamp] : []), refresh);
+  const selectedAccount = providers.find(p => p.id === state.usageTab);
+  head.append(el("span", "usage-label", selectedAccount?.claude ? `Claude · ${selectedAccount.label}` : "Allowance"), ...(stamp ? [stamp] : []), refresh);
   pane.append(head);
   if (sample?.windows?.length) {
     for (const w of sample.windows) pane.append(usageMeter(w.label, w.used, w.limit, w.unit || "requests", w.resetsAt));
-  } else pane.append(el("div", "usage-note", sample?.note || (state.usageTab === "claude" ? "Claude reports its allowance after each turn." : "No allowance telemetry yet. Tap refresh.")));
+  } else pane.append(el("div", "usage-note", sample?.note || (selectedAccount?.claude ? selectedAccount.ready ? "Claude reports this account’s allowance after each turn." : "Sign in to this account on the server to see its allowance." : "No allowance telemetry yet. Tap refresh.")));
   if (sample?.windows?.some(w => w.resetsAt && w.resetsAt < Date.now())) pane.append(el("div", "usage-note", "Last reported usage · reset passed; awaiting refresh."));
   if (sample?.spendToday != null) pane.append(el("div", "usage-note", `$${sample.spendToday.toFixed(4)} spent today`));
-  const t = cur()?.provider === state.usageTab ? cur() : [...state.threads.values()].filter(t => t.provider === state.usageTab).sort((a,b) => b.updatedAt-a.updatedAt)[0];
+  const t = cur() && threadUsageKey(cur()) === state.usageTab ? cur() : [...state.threads.values()].filter(t => threadUsageKey(t) === state.usageTab).sort((a,b) => b.updatedAt-a.updatedAt)[0];
   const hasCtx = t?.context?.used != null && t.context.max;
   const detail = hasCtx ? `${fmtTok(t.context.used)} of ${fmtTok(t.context.max)} tokens`
     : t?.context?.used != null ? `${fmtTok(t.context.used)} tokens · window not reported`
@@ -2569,7 +2588,7 @@ function setDialogKind(task) {
     if (first) { menus.dProv.setValue(first); fillDialog(first); }
   }
   $("d-ok").textContent = editing ? "Save task" : isTask ? "Schedule task" : "Create thread";
-  if (isTask && !prov(menus.dProv.value)?.ok) $("d-ok").disabled = true;
+  syncDialogAccount();
 }
 function syncWhen() {
   const r = menus.dRepeat.value;
@@ -2582,6 +2601,8 @@ function syncWhen() {
 function openNewDialog() {
   setNav(false);
   setDialogKind(null);
+  menus.dAccount.setValue("sunny");
+  syncDialogAccount();
   $("dlg").showModal();
 }
 function openTaskDialog(task) {
@@ -2647,7 +2668,7 @@ $("restart").onclick = async () => {
 $("dform").addEventListener("submit", (e) => {
   if (e.submitter?.value !== "ok") return;
   const settings = { provider: menus.dProv.value, cwd: menus.dCwd.value, model: menus.dModel.value, effort: menus.dEffort.value, mode: menus.dMode.value };
-  if (dialogTask === null) return void send({ t: "create", ...settings });
+  if (dialogTask === null) return void send({ t: "create", ...settings, ...(settings.provider === "claude" ? { claudeAccount: menus.dAccount.value || "sunny" } : {}) });
   send({
     t: "task_save", ...(dialogTask !== "new" ? { id: dialogTask.id } : {}), ...settings,
     title: $("d-title").value, prompt: $("d-prompt").value, repeat: menus.dRepeat.value, day: Number(menus.dDay.value), time: $("d-time").value || "09:00",

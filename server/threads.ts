@@ -1,3 +1,4 @@
+import { normalizeClaudeAccount, requireClaudeAccount, claudeUsageKey, type ClaudeAccount } from "./providers/claude-accounts.ts";
 import type { ThreadNotice } from "./notifications.ts";
 import { IdleCompactionTimers, idleCompactionPolicy, idleCompactionDeadline } from "./idle-compaction.ts";
 import { HistoryIndex } from "./history.ts";
@@ -35,6 +36,7 @@ export interface Thread {
   model: string;
   effort?: string;
   advisor?: string;
+  claudeAccount?: ClaudeAccount;
   idleCompaction?: boolean;
   idleCompactionTtlMs?: number;
   idleCompactionSource?: string;
@@ -175,11 +177,15 @@ export class Threads {
         delete t.operation;
         delete t.background;
         t.provider ||= DEFAULT_PROVIDER;
+        if (t.provider === "claude") {
+          try { t.claudeAccount = normalizeClaudeAccount(t.claudeAccount); }
+          catch { console.warn("Skipped a thread with an unknown Claude account."); continue; }
+        }
         if (t.provider === "codex" && t.context?.source !== "codex/last_request") delete t.context;
         try {
           if (t.provider === "claude") {
             const last = this.historyIndex.read(path.join(LOG_DIR, `${t.id}.jsonl`), undefined, 100).events.findLast(e => claudeWindows(e).length);
-            if (last) usage.record("claude", { windows: claudeWindows(last) }, t.updatedAt);
+            if (last) usage.record(claudeUsageKey(t.claudeAccount), { windows: claudeWindows(last) }, t.updatedAt);
           }
           if (t.provider === "codex") {
             const samples = t.sessionId ? new CodexTelemetry(t.sessionId).read() : [];
@@ -320,7 +326,7 @@ export class Threads {
     this.emit({ t: "thread", thread: t });
   }
 
-  create(opts: { provider?: string; cwd: string; mode?: Mode; model?: string; effort?: string; title?: string; schedule?: Thread["schedule"]; issueRun?: Thread["issueRun"] }): Thread {
+  create(opts: { claudeAccount?: string; provider?: string; cwd: string; mode?: Mode; model?: string; effort?: string; title?: string; schedule?: Thread["schedule"]; issueRun?: Thread["issueRun"] }): Thread {
     const prov = PROVIDERS.get(opts.provider || DEFAULT_PROVIDER);
     if (!prov) throw new Error("Unknown provider.");
     const st = prov.status();
@@ -332,6 +338,7 @@ export class Threads {
     const t: Thread = {
       id: crypto.randomUUID(),
       provider: prov.id,
+      ...(prov.id === "claude" ? { claudeAccount: requireClaudeAccount(opts.claudeAccount) } : {}),
       title: opts.title?.trim() || path.basename(opts.cwd) || "thread",
       autoTitle: !opts.title?.trim(),
       ...(opts.title?.trim() ? { titleLocked: true } : {}),
@@ -371,16 +378,27 @@ export class Threads {
     this.emit({ t: "thread", thread: t });
   }
 
-  update(id: string, patch: { mode?: Mode; model?: string; effort?: string; advisor?: string; title?: string; idleCompaction?: boolean }) {
+  update(id: string, patch: { claudeAccount?: string; mode?: Mode; model?: string; effort?: string; advisor?: string; title?: string; idleCompaction?: boolean }) {
     const t = this.threads.get(id);
     if (!t) return;
     const prov = PROVIDERS.get(t.provider);
+    let accountChanged = false;
+    let selectedAccount: ClaudeAccount | undefined;
+    if (patch.claudeAccount !== undefined) {
+      if (t.provider !== "claude") throw new Error("Account selection is available only for Claude threads.");
+      const account = normalizeClaudeAccount(patch.claudeAccount);
+      accountChanged = account !== normalizeClaudeAccount(t.claudeAccount);
+      if (accountChanged && (t.status === "running" || t.sessionId || t.forkFrom)) throw new Error("Choose the Claude account in a new thread. Existing sessions keep their original account.");
+      requireClaudeAccount(account);
+      selectedAccount = account;
+    }
     if (patch.mode && !prov?.modes.includes(patch.mode)) patch.mode = undefined;
     if (patch.model && !prov?.models().includes(patch.model)) patch.model = undefined;
     if (patch.advisor && patch.advisor !== "default" && !prov?.advisors?.includes(patch.advisor)) patch.advisor = undefined;
     const effort = patch.model || patch.effort ? this.validEffort(prov, patch.model || t.model, patch.effort || "default") : t.effort;
     if (t.status === "running" && (patch.mode || patch.model || patch.effort || patch.advisor)) throw new Error("Stop the running turn before changing mode, model or effort.");
     const before = { mode: t.mode, model: t.model, effort: t.effort, advisor: t.advisor };
+    if (selectedAccount) t.claudeAccount = selectedAccount;
     if (patch.mode) t.mode = patch.mode;
     if (patch.model && patch.model !== t.model) { delete t.context; delete t.resolvedModel; } // the old model's window is no longer authoritative
     if (patch.model) t.model = patch.model;
@@ -392,6 +410,7 @@ export class Threads {
       t.autoTitle = false;
       t.titleLocked = true;
     }
+    if (accountChanged) this.kill(id, "settings", true);
     if (patch.mode || patch.model || patch.effort || patch.advisor) {
       const live = this.live.get(id), after = { mode: t.mode, model: t.model, effort: t.effort, advisor: t.advisor };
       // the idle process takes the new settings in place, or restarts with new flags (history kept via the harness's session)
@@ -424,6 +443,7 @@ export class Threads {
       model: target ? target.defaultModel() : src.model,
       effort: target ? "default" : src.effort,
       advisor: target ? undefined : src.advisor,
+      ...(!target && src.provider === "claude" ? { claudeAccount: normalizeClaudeAccount(src.claudeAccount) } : target?.id === "claude" ? { claudeAccount: "sunny" as const } : {}),
       context: target || recent ? undefined : src.context,
       status: "idle",
       cost: 0,
@@ -571,7 +591,7 @@ export class Threads {
         if (parseCommand(this.queues.get(t.id)?.[0]?.text || "")?.name === "compact") this.drain(t.id);
       },
     };
-    live.agent = prov.start({ id: t.id, cwd: t.cwd, mode: t.mode, model: t.model, effort: t.effort, advisor: t.advisor, sessionId: t.sessionId, forkFrom: t.sessionId ? undefined : t.forkFrom }, ctx);
+    live.agent = prov.start({ id: t.id, cwd: t.cwd, mode: t.mode, model: t.model, effort: t.effort, advisor: t.advisor, claudeAccount: t.claudeAccount, sessionId: t.sessionId, forkFrom: t.sessionId ? undefined : t.forkFrom }, ctx);
     this.live.set(t.id, live);
     if (!warm) this.release(t, live);
     return live;
@@ -641,7 +661,7 @@ export class Threads {
     }
     if (ev.type === "rate_limit_event") {
       const windows = claudeWindows(ev);
-      if (windows.length) usage.record(t.provider, { windows });
+      if (windows.length) usage.record(t.provider === "claude" ? claudeUsageKey(t.claudeAccount) : t.provider, { windows });
     }
     if (ev.type === "token_usage") { const turn = this.turns.get(t.id); if (turn) turn.usage = ev; }
     if (ev.type === "run_settings" || ev.type === "token_usage") {

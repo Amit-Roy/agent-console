@@ -1,3 +1,4 @@
+import { claudeConfigDir } from "./providers/claude-accounts.ts";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -129,10 +130,10 @@ export function buildContextAllocation(thread: Pick<Thread, "context" | "provide
 const locations = new Map<string, string>();
 async function sessionFile(thread: Thread): Promise<string | undefined> {
   if (!thread.sessionId || !/^[\w-]+$/.test(thread.sessionId)) return;
-  const key = `${thread.provider}:${thread.sessionId}`;
+  const key = `${thread.provider}:${thread.claudeAccount || "sunny"}:${thread.sessionId}`;
   if (locations.has(key)) return locations.get(key);
   const root = thread.provider === "codex" ? path.join(process.env.CODEX_HOME || path.join(os.homedir(), ".codex"), "sessions") :
-    thread.provider === "claude" ? path.join(process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude"), "projects") : undefined;
+    thread.provider === "claude" ? path.join(claudeConfigDir(thread.claudeAccount), "projects") : undefined;
   if (!root) return;
   for await (const relative of fs.glob(`**/*${thread.sessionId}.jsonl`, { cwd: root })) {
     // Claude subagent logs are nested under a session; select only the session itself.

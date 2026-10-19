@@ -441,7 +441,7 @@ wss.on("connection", (ws) => {
           if (m.foregroundOnly === true && threads.get(m.thread)) subscriptions.set(ws, m.thread);
           return reply({ t: "history", thread: m.thread, request: m.request, before: Number.isInteger(m.before) ? m.before : null, ...threads.page(m.thread, Number.isInteger(m.before) ? m.before : undefined, Number.isInteger(m.since) && m.since >= 0 ? m.since : undefined, m.small === true) });
         case "create": {
-          const t = threads.create({ provider: m.provider, cwd: safeCwd(m.cwd), mode: m.mode, model: m.model, effort: m.effort, title: m.title });
+          const t = threads.create({ provider: m.provider, claudeAccount: typeof m.claudeAccount === "string" ? m.claudeAccount : undefined, cwd: safeCwd(m.cwd), mode: m.mode, model: m.model, effort: m.effort, title: m.title });
           return reply({ t: "created", thread: t });
         }
         case "send":
@@ -470,6 +470,7 @@ wss.on("connection", (ws) => {
             mode: typeof m.mode === "string" ? m.mode : undefined,
             model: typeof m.model === "string" ? m.model : undefined,
             effort: typeof m.effort === "string" ? m.effort : undefined,
+            claudeAccount: typeof m.claudeAccount === "string" ? m.claudeAccount : undefined,
             advisor: typeof m.advisor === "string" ? m.advisor : undefined,
             idleCompaction: typeof m.idleCompaction === "boolean" ? m.idleCompaction : undefined,
             title: typeof m.title === "string" ? m.title : undefined,
