@@ -38,10 +38,18 @@ try {
   const economical = (await wait(m => m.t === "thread" && m.thread.id === original.id && m.thread.effort === "medium")).thread;
   assert.equal(economical.model, "sonnet"); assert.equal(economical.advisor, "off");
   await page.locator("#more").click();
-  await page.getByText("Fork", { exact: true }).click();
-  await page.getByText("Fork with recent context", { exact: true }).click();
+  await page.getByText("Fork…", { exact: true }).click();
+  await page.locator("#dlg").waitFor({ state: "visible" });
+  assert.equal(await page.locator("#dlg-title").innerText(), "Fork thread");
+  assert.equal(await page.locator("#cwd-field").isVisible(), false, "A fork keeps the source folder.");
+  assert.match(await page.locator("#d-model").innerText(), /Sonnet/i, "The fork starts from the source model.");
+  assert.match(await page.locator("#d-effort").innerText(), /Medium/, "The fork starts from the source effort.");
+  await page.locator("#d-context").click();
+  await page.getByRole("option", { name: /Recent context only/ }).click();
+  await page.locator("#d-ok").click();
   const fork = (await wait(m => m.t === "thread" && m.thread.id !== original.id && m.thread.title === original.title + " (fork)")).thread;
   assert.equal(fork.provider, "claude"); assert.equal(fork.sessionId, undefined);
+  assert.equal(fork.model, "sonnet"); assert.equal(fork.effort, "medium"); assert.equal(fork.forkFrom, undefined, "Recent context never resumes the native session.");
   assert.ok(!messages.some(m => m.t === "event" && m.event.type === "user_input"));
   const day = new Date().toISOString().slice(0, 10);
   await page.route("**/api/dashboard?*", route => route.fulfill({ contentType: "application/json", body: JSON.stringify({

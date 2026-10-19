@@ -36,6 +36,11 @@ try {
   assert.equal(fork.claudeAccount,"nefro");
   assert.equal(fork.forkFrom,second.sessionId);
   assert.throws(() => threads.update(fork.id,{claudeAccount:"sunny"}),/original account/);
+  const crossed = threads.fork(second.id,undefined,false,{claudeAccount:"sunny",mode:"plan"});
+  assert.equal(crossed.claudeAccount,"sunny","A fork can move to another account.");
+  assert.equal(crossed.forkFrom,undefined,"Another account cannot resume this account's native session.");
+  assert.equal(crossed.mode,"plan");
+  threads.remove(crossed.id);
   assert.throws(() => threads.create({cwd:home,claudeAccount:"../sunny"}),/Unknown Claude account/);
   for (const t of [sunny,second,fork]) {
     await new Promise<void>((resolve,reject) => {

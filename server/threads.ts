@@ -428,7 +428,9 @@ export class Threads {
   // A new thread that carries on from this one. Claude forks its session, Pi gets a copy of its session directory, and agents with
   // no fork (Codex) replay the earlier conversation as text in the first message. The history and uploads are copied so the fork reads whole.
   // With `provider` set to another agent the fork switches harness: its native session cannot carry over, so it always replays text.
-  fork(id: string, provider?: string, recent = false): Thread {
+  // The same holds for another Claude account, whose profile cannot read this account's sessions. `pick` sets the fork's model,
+  // effort, permission mode and Claude account; anything left out keeps the source's choice.
+  fork(id: string, provider?: string, recent = false, pick: { model?: string; effort?: string; mode?: string; claudeAccount?: string } = {}): Thread {
     const src = this.threads.get(id);
     if (!src) throw new Error("Unknown thread");
     const target = provider && provider !== src.provider ? PROVIDERS.get(provider) : undefined;
@@ -456,13 +458,20 @@ export class Threads {
       createdAt: now,
       updatedAt: now,
     };
+    const prov = target ?? PROVIDERS.get(src.provider);
+    if (pick.model && prov?.models().includes(pick.model)) t.model = pick.model;
+    if (pick.effort || t.model !== src.model) t.effort = this.validEffort(prov, t.model, pick.effort ?? t.effort);
+    if (pick.mode && prov?.modes.includes(pick.mode as Mode)) t.mode = pick.mode as Mode;
+    if (t.provider === "claude" && pick.claudeAccount !== undefined) t.claudeAccount = requireClaudeAccount(pick.claudeAccount);
+    const otherAccount = !target && src.provider === "claude" && t.claudeAccount !== normalizeClaudeAccount(src.claudeAccount);
+    if (otherAccount) t.context = undefined;
     const log = (x: string) => path.join(LOG_DIR, `${x}.jsonl`);
     const hasHistory = fs.existsSync(log(src.id));
     if (hasHistory) fs.copyFileSync(log(src.id), log(t.id));
     if (fs.existsSync(threadDir(src.id))) fs.cpSync(threadDir(src.id), threadDir(t.id), { recursive: true });
     if (recent) {
       if (hasHistory) { t.replay = true; t.replayLimit = 6000; }
-    } else if (target) {
+    } else if (target || otherAccount) {
       if (hasHistory) t.replay = true;
     } else if (src.provider === "claude") {
       if (src.sessionId) t.forkFrom = src.sessionId;
