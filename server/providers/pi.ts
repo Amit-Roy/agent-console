@@ -12,6 +12,7 @@ import { piQuestions } from "./pi-questions.ts";
 import { piRateEnv } from "./pi-rate-env.ts";
 import { defaultPiModel } from "./pi-model.ts";
 import { retryEvent } from "../turn-timing.ts";
+import { acquireModelRequest } from "./model-rate-limit.ts";
 import { clip, IMAGE_ONLY_PROMPT, type Agent, type AgentCtx, type Attachment, type Command, type Provider, type ThreadSpec } from "./types.ts";
 
 // pi (github.com/earendil-works/pi) in RPC mode: one long-lived process per thread, any model pi knows about
@@ -219,6 +220,9 @@ export const pi: Provider = {
     let p: Proc | undefined, dead = false;
     const queued: string[] = [];
     const write = (line: string) => (p ? p.write(line) : void queued.push(line));
+    // A 429 that outlives pi's own 3 retries: wait out the shared cooldown, re-send the prompt once per user turn.
+    // Only when the failed reply made no tool call, so no side effect can run twice.
+    let last: { text: string; images: Attachment[] } | undefined, retried = false, hadTools = false, resending: AbortController | undefined;
     const questions = piQuestions(msg => write(JSON.stringify(msg)), ctx.event);
     void harnessInstructions().then((brain) => {
       if (dead) return;
@@ -229,7 +233,23 @@ export const pi: Provider = {
         exited(info) { questions.cancelAll(); ctx.exited(info); },
       }, (line) => {
         const r = parseJson(line);
-        if (r && !questions.handle(r)) translate(r);
+        if (!r || questions.handle(r)) return;
+        if (r.type === "message_end" && r.message?.role === "assistant") hadTools = (r.message.content ?? []).some((b: any) => b?.type === "toolCall");
+        if (r.type === "auto_retry_end" && r.success === false && !retried && !hadTools && last && /\b429\b/.test(String(r.finalError ?? ""))) {
+          retried = true;
+          resending = new AbortController();
+          const { signal } = resending, again = last;
+          ctx.event(retryEvent({ attempt: 4, status: 429, message: String(r.finalError), delay: 0 }));
+          acquireModelRequest(signal).then(() => { if (!signal.aborted) write(JSON.stringify({ id: `p${++n}`, type: "prompt", ...body(again.text, again.images) })); }, () => {});
+          return; // swallow the failure and the settle that follows it; the re-send continues the same turn
+        }
+        if (r.type === "agent_settled" && resending) {
+          const aborted = resending.signal.aborted;
+          resending = undefined;
+          if (!aborted && !r.aborted) return;
+          return translate({ ...r, aborted: true });
+        }
+        translate(r);
       });
       for (const line of queued.splice(0)) p.write(line);
     }).catch(error => {
@@ -238,6 +258,7 @@ export const pi: Provider = {
       ctx.exited({ code: 78, signal: null, stderr: String(error?.message || error), aborted: false });
     });
     const stop = (how: "abort" | "kill") => {
+      resending?.abort();
       questions.cancelAll();
       if (p) return p[how]();
       if (dead) return;
@@ -256,7 +277,7 @@ export const pi: Provider = {
         return !dead && (!p || p.alive());
       },
       compact: (instructions = "") => write(JSON.stringify({ id: `compact${++n}`, type: "compact", ...(instructions ? { customInstructions: instructions } : {}) })),
-      send: (text, images = []) => write(JSON.stringify({ id: `p${++n}`, type: "prompt", ...body(text, images) })),
+      send: (text, images = []) => (last = { text, images }, retried = false, hadTools = false, resending = undefined, write(JSON.stringify({ id: `p${++n}`, type: "prompt", ...body(text, images) }))),
       // Pi's `steer` is delivered after the current assistant turn finishes its tool calls, before the next model call
       steer: (text, images = []) => write(JSON.stringify({ id: `p${++n}`, type: "steer", ...body(text, images) })),
       answer: (id, reply) => questions.answer(id, reply),
