@@ -64,7 +64,7 @@ check("labels: tolerates a code fence around the array", parseLabels('```json\n[
 check("labels: wrong length is rejected", parseLabels('["a", "b"]', 3) === undefined);
 check("labels: prose / empty entries are rejected", parseLabels("Sure! Here you go", 1) === undefined && parseLabels('["ok", ""]', 2) === undefined && parseLabels("[1,", 1) === undefined);
 check("labels: MCP calls without a description need one, with a readable sketch", needsLabel("mcp__codegraph__codegraph_explore", { query: "x" }) && !needsLabel("mcp__a__b", { description: "d" }) && mcpName("mcp__codegraph__explore") === "codegraph/explore" && mcpSketch("mcp__a__b", { query: "find me" }) === "a/b: find me");
-check("labels: only description-less Bash needs one", needsLabel("Bash", { command: "ls" }) && !needsLabel("Bash", { command: "ls", description: "Lists files" }) && !needsLabel("Read", { file_path: "/a" }) && !needsLabel("Bash", { command: "  " }));
+check("labels: Bash and Read need labels without descriptions", needsLabel("Bash", { command: "ls" }) && !needsLabel("Bash", { command: "ls", description: "Lists files" }) && needsLabel("Read", { file_path: "/a" }) && !needsLabel("Read", { file_path: "/a", description: "Reads a file" }) && !needsLabel("Read", { file_path: "  " }) && !needsLabel("Bash", { command: "  " }));
 
 // ---- export / fork replay
 const log = [
