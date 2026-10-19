@@ -10,9 +10,10 @@ import { childEnv } from "./env.ts";
 import { parseJson, spawnLines, type Proc } from "./proc.ts";
 import { piQuestions } from "./pi-questions.ts";
 import { piRateEnv } from "./pi-rate-env.ts";
+import { CODING_ROUTE, DIRECT_CODING } from "./pi-coding-route.mjs";
 import { defaultPiModel } from "./pi-model.ts";
 import { retryEvent } from "../turn-timing.ts";
-import { acquireModelRequest } from "./model-rate-limit.ts";
+import { acquireModelRequest } from "./model-rate-client.ts";
 import { clip, IMAGE_ONLY_PROMPT, type Agent, type AgentCtx, type Attachment, type Command, type Provider, type ThreadSpec } from "./types.ts";
 
 // pi (github.com/earendil-works/pi) in RPC mode: one long-lived process per thread, any model pi knows about
@@ -22,6 +23,7 @@ const SESSIONS = path.join(DATA_DIR, "pi-sessions");
 const READ_ONLY_TOOLS = "read,grep,find,ls,ask_user,schedule_list,save_output";
 const QUESTIONS_EXTENSION = fileURLToPath(new URL("./pi-questions-extension.mjs", import.meta.url));
 const TOOLS_EXTENSION = fileURLToPath(new URL("./console-tools.mjs", import.meta.url)); // scheduled tasks + save_output
+const CODING_ROUTE_EXTENSION = fileURLToPath(new URL("./pi-coding-route.mjs", import.meta.url));
 
 let cached: string[] = [];
 const thinking = new Set<string>();
@@ -212,7 +214,11 @@ export const pi: Provider = {
   start(t: ThreadSpec, ctx: AgentCtx): Agent {
     const dir = path.join(SESSIONS, t.id);
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-    const args = ["--mode", "rpc", "--model", t.model, "--session-dir", dir, "--extension", QUESTIONS_EXTENSION, "--extension", TOOLS_EXTENSION];
+    // Only unattended NVIDIA coding runs use the host router. Manual model
+    // choices and explicit OpenRouter selections retain their exact provider.
+    const routed = !!t.issueRun && t.model === `nvidia/${DIRECT_CODING}`;
+    const args = ["--mode", "rpc", "--model", routed ? CODING_ROUTE : t.model, "--session-dir", dir, "--extension", QUESTIONS_EXTENSION, "--extension", TOOLS_EXTENSION];
+    if (routed) args.push("--extension", CODING_ROUTE_EXTENSION);
     if (fs.readdirSync(dir).length) args.push("--continue");
     if (t.mode === "plan") args.push("--tools", READ_ONLY_TOOLS);
     const translate = piTranslator((ev) => ctx.event(ev), (list) => ctx.commands(list), () => contexts.get(t.model));
@@ -227,7 +233,7 @@ export const pi: Provider = {
     void harnessInstructions().then((brain) => {
       if (dead) return;
       if (brain) args.push("--append-system-prompt", brain); // style preamble + shared memory index
-      const launch = sandboxLaunch(t, "pi", args, piRateEnv({ ...childEnv(), AGENT_CONSOLE_THREAD: t.id }));
+      const launch = sandboxLaunch(t, "pi", args, piRateEnv({ ...childEnv(), AGENT_CONSOLE_THREAD: t.id }, t.issueRun ? "automation" : "interactive"));
       p = spawnLines("pi", launch.command, launch.args, { cwd: t.cwd, env: launch.env }, {
         ...ctx,
         exited(info) { questions.cancelAll(); ctx.exited(info); },
@@ -240,7 +246,7 @@ export const pi: Provider = {
           resending = new AbortController();
           const { signal } = resending, again = last;
           ctx.event(retryEvent({ attempt: 4, status: 429, message: String(r.finalError), delay: 0 }));
-          acquireModelRequest(signal).then(() => { if (!signal.aborted) write(JSON.stringify({ id: `p${++n}`, type: "prompt", ...body(again.text, again.images) })); }, () => {});
+          acquireModelRequest({ signal, provider: t.model.startsWith("nvidia/") ? "nvidia" : t.model.startsWith("openrouter/") ? "openrouter" : "other", priority: t.issueRun ? "automation" : "interactive" }).then(() => { if (!signal.aborted) write(JSON.stringify({ id: `p${++n}`, type: "prompt", ...body(again.text, again.images) })); }, () => {});
           return; // swallow the failure and the settle that follows it; the re-send continues the same turn
         }
         if (r.type === "agent_settled" && resending) {

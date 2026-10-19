@@ -7,12 +7,11 @@ import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-const environment = piRateEnv({ NODE_OPTIONS: "--no-warnings", AGENT_CONSOLE_TOOL_URL: "http://example.test/gate", AGENT_CONSOLE_TOOL_TOKEN: "fixture" });
+const environment = piRateEnv({ NODE_OPTIONS: "--no-warnings", AGENT_CONSOLE_RATE_URL: "http://127.0.0.1:1/api/model-request", AGENT_CONSOLE_RATE_TOKEN: "fixture-token-0123456789" }, "triage");
 assert.match(environment.NODE_OPTIONS!, /--no-warnings --import=file:/);
-assert.equal(environment.AGENT_CONSOLE_TOOL_TOKEN, "fixture");
-const standalone = piRateEnv(environment, false);
-assert.equal(standalone.AGENT_CONSOLE_TOOL_URL, undefined);
-assert.equal(standalone.AGENT_CONSOLE_TOOL_TOKEN, undefined);
+assert.equal(environment.AGENT_CONSOLE_RATE_TOKEN, "fixture-token-0123456789");
+assert.equal(environment.AGENT_CONSOLE_MODEL_PRIORITY, "triage");
+assert.throws(() => piRateEnv({ AGENT_CONSOLE_RATE_URL: "http://example.test/x", AGENT_CONSOLE_RATE_TOKEN: "fixture-token-0123456789" }), /Invalid local model admission broker/);
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const preload = pathToFileURL(path.join(root, "server/providers/pi-rate-preload.mjs")).href;
@@ -39,6 +38,11 @@ const server = http.createServer(async (req, res) => {
     return;
   }
   if (req.url === "/failed/model_request") { res.writeHead(503).end(); return; }
+  if (req.url === "/quota/model_request") {
+    actions.push(JSON.parse(body));
+    res.writeHead(429, { "Content-Type": "application/json" }).end(JSON.stringify({ error: { code: "MODEL_PROVIDER_QUOTA_EXHAUSTED", message: "Daily quota exhausted." } }));
+    return;
+  }
   upstream.push(req.url!);
   if (req.url === "/v1/chat/completions" && ++sdkAttempts === 1) {
     res.writeHead(429, { "Content-Type": "application/json", "retry-after": "0" }).end(JSON.stringify({ error: { message: "fixture rate limit" } }));
@@ -80,7 +84,7 @@ ${sdk ? `const {default: OpenAI} = await import(${JSON.stringify(sdk)});
 const client = new OpenAI({apiKey:'fixture-only',baseURL:base+'/v1',maxRetries:1});
 const answer = await client.chat.completions.create({model:'fixture',messages:[]});
 assert.equal(answer.choices[0].message.content,'OK');` : ""}
-process.env.AGENT_CONSOLE_TOOL_URL = base+'/failed';
+process.env.AGENT_CONSOLE_RATE_URL = base+'/failed/model_request';
 const rejectedSocket = new WebSocket(base.replace('http:','ws:')+'/ws-failure');
 await new Promise(resolve=>rejectedSocket.addEventListener('open',resolve,{once:true}));
 const closed = new Promise(resolve=>rejectedSocket.addEventListener('close',resolve,{once:true}));
@@ -90,7 +94,7 @@ await assert.rejects(fetch(base+'/must-not-send',{method:'POST',body:JSON.string
 `;
 try {
   const child = spawn(process.execPath, ["--import", preload, "--input-type=module", "--eval", childScript], {
-    env: { ...process.env, NODE_OPTIONS: "", AGENT_CONSOLE_TOOL_URL: base + "/gate", AGENT_CONSOLE_TOOL_TOKEN: "fixture-only" }, stdio: ["ignore", "pipe", "pipe"],
+    env: { ...process.env, NODE_OPTIONS: "", AGENT_CONSOLE_TOOL_URL: base + "/gate", AGENT_CONSOLE_TOOL_TOKEN: "fixture-only", AGENT_CONSOLE_RATE_URL: base + "/gate/model_request", AGENT_CONSOLE_RATE_TOKEN: "fixture-only", AGENT_CONSOLE_MODEL_PRIORITY: "automation" }, stdio: ["ignore", "pipe", "pipe"],
   });
   let stderr = "";
   child.stderr.on("data", chunk => stderr += chunk);
@@ -103,14 +107,71 @@ try {
   assert.equal(upstream.filter(url => url === "/v1/responses").length, 1, "aborted queue never sends upstream");
   assert.equal(upstream.includes("/must-not-send"), false, "broker failure blocks upstream");
   assert.equal(actions.filter(action => action.action === "acquire").length, 15 + (sdk ? 2 : 0));
+  assert.equal(actions.every(action => action.provider === "other" && action.priority === "automation"), true, "every transport carries provider and priority");
   assert.equal(websocketMessages, 4, "reused WebSocket model messages each acquire a slot");
   assert.deepEqual(websocketOrder, [-1, -1, 1, 2], "queued WebSocket sends preserve order");
   assert.equal(actions.some(action => action.action === "cooldown" && action.retryAfter === undefined), true, "WebSocket rate limits update shared cooldown");
   assert.equal(upstream.includes("/model/test/converse-stream"), true);
   if (sdk) {
     assert.equal(sdkAttempts, 2, "installed Pi OpenAI SDK retry reaches the global gate again");
-    assert.deepEqual(actions.filter(action => action.action === "cooldown" && action.retryAfter === "0"), [{ action: "cooldown", retryAfter: "0" }]);
+    assert.deepEqual(actions.filter(action => action.action === "cooldown" && action.retryAfter === "0"), [{ action: "cooldown", provider: "other", priority: "automation", retryAfter: "0" }]);
   }
+  const metadataScript = `
+import assert from 'node:assert/strict';
+import http from 'node:http';
+const base = ${JSON.stringify(base)};
+const nativeFetch = globalThis.fetch;
+globalThis.fetch = (input, init) => {
+ const url = new URL(typeof input === 'string' || input instanceof URL ? input : input.url);
+ if (url.hostname === 'integrate.api.nvidia.com' || url.hostname === 'openrouter.ai') return nativeFetch(base + '/metadata' + url.pathname, init);
+ return nativeFetch(input, init);
+};
+class FakeSocket extends EventTarget {
+ static OPEN=1; readyState=1;
+ constructor(url){super();this.url=url;}
+ send(){this.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({error:{code:'rate_limit_exceeded',retry_after:'2'}})}));}
+ close(){this.readyState=3;this.dispatchEvent(new Event('close'));}
+}
+globalThis.WebSocket=FakeSocket;
+const {modelProvider} = await import(${JSON.stringify(preload)});
+assert.equal(modelProvider('https://integrate.api.nvidia.com/v1/chat/completions'),'nvidia');
+assert.equal(modelProvider('https://openrouter.ai/api/v1/chat/completions'),'openrouter');
+assert.equal(modelProvider('https://openrouter.ai.attacker.test/v1/responses'),'other');
+assert.equal(modelProvider('not-a-url'),'other');
+for(const host of ['integrate.api.nvidia.com','openrouter.ai']) {
+ await fetch('https://'+host+'/v1/responses',{method:'POST',body:'{}'});
+ await new Promise((resolve,reject)=>{
+  const req=http.request({hostname:host,port:new URL(base).port,path:'/metadata/v1/messages',method:'POST',lookup:(hostname,options,cb)=>cb(null,[{address:'127.0.0.1',family:4}])},res=>{res.resume();res.on('end',resolve)});
+  req.on('error',reject);req.end('{}');
+ });
+ const ws=new WebSocket('wss://'+host+'/v1/responses');
+ await new Promise(resolve=>{ws.addEventListener('message',resolve,{once:true});ws.send(JSON.stringify({type:'response.create',input:[]}));});
+}
+${sdk ? `process.env.AGENT_CONSOLE_RATE_URL = base+'/quota/model_request';
+const {default:OpenAI}=await import(${JSON.stringify(sdk)});
+const client=new OpenAI({apiKey:'fixture-only',baseURL:'https://openrouter.ai/v1',maxRetries:3});
+await assert.rejects(client.chat.completions.create({model:'fixture',messages:[]}),error=>error.status===400 && error.code==='MODEL_PROVIDER_QUOTA_EXHAUSTED');` : ''}
+delete process.env.AGENT_CONSOLE_RATE_URL;
+await assert.rejects(fetch('https://openrouter.ai/v1/responses',{method:'POST'}),/not configured/);
+`;
+  const metadataStart = actions.length;
+  const metadataChild = spawn(process.execPath, ["--input-type=module", "--eval", metadataScript], {
+    env: { ...process.env, NODE_OPTIONS: "", AGENT_CONSOLE_RATE_URL: base + "/gate/model_request", AGENT_CONSOLE_RATE_TOKEN: "fixture-only", AGENT_CONSOLE_MODEL_PRIORITY: "triage" }, stdio: ["ignore", "ignore", "pipe"],
+  });
+  let metadataError = "";
+  metadataChild.stderr.on("data", chunk => metadataError += chunk);
+  const metadataCode = await new Promise<number | null>((resolve, reject) => {
+    const timer = setTimeout(() => { metadataChild.kill(); reject(new Error("Pi metadata test timed out")); }, 12_000);
+    metadataChild.on("error", error => { clearTimeout(timer); reject(error); });
+    metadataChild.on("close", code => { clearTimeout(timer); resolve(code); });
+  });
+  assert.equal(metadataCode, 0, metadataError);
+  const metadataActions = actions.slice(metadataStart);
+  for (const provider of ["nvidia", "openrouter"]) {
+    assert.equal(metadataActions.filter(action => action.provider === provider && action.action === "acquire").length, 3 + (provider === "openrouter" && sdk ? 1 : 0), "fetch, HTTP, and WebSocket identify their provider");
+    assert.equal(metadataActions.some(action => action.provider === provider && action.action === "cooldown" && action.retryAfter === "2"), true);
+  }
+  assert.equal(metadataActions.every(action => action.priority === "triage"), true);
   console.log(`pi-rate-preload: provider paths, custom endpoints, cancellation, fail-closed broker${sdk ? ", installed Pi SDK retries" : " (Pi SDK not installed)"} passed`);
 } finally {
   for (const client of wss.clients) client.terminate();
