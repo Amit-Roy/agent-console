@@ -8,6 +8,10 @@ Claude and Codex subscriptions reset every 5 hours whether or not the quota was 
 
 `usage.json` keeps only the latest sample. `usage-history.jsonl` in the Console data directory now gets one row each time a window's used percentage, limit or reset time changes: `{ts, provider, label, used, limit, resetsAt}`. The last row before a `resetsAt` shows how much of that window went unused.
 
+### Backfill
+
+`node scripts/usage-backfill.ts [--dry]` rebuilds history from readings already on disk: Claude `rate_limit_event`s in the Console thread logs (timed by the turn that triggered them) and Codex rollout `token_count` events. It is idempotent and prints the peak use of every finished 5-hour window. Run it after Console has been down for long, or when logs from older sessions appear.
+
 ## Planner
 
 `server/window-dispatch.ts` runs every 5 minutes inside the Console. It does nothing unless `~/.config/agent-console/window-dispatch.json` sets `"enabled": true`.
