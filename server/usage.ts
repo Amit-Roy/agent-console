@@ -3,6 +3,7 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { DATA_DIR } from "./auth.ts";
 import { childEnv } from "./providers/env.ts";
+import { syncModelQuota } from "./providers/model-rate-client.ts";
 
 export interface UsageWindow { label: string; used: number; limit: number; unit?: string; resetsAt?: number }
 export interface ProviderUsage { windows: UsageWindow[]; note?: string; updatedAt: number; spendToday?: number }
@@ -65,7 +66,13 @@ async function readRouterUsage() {
   if (!key) return;
   try {
     const r = await fetch("https://openrouter.ai/api/v1/key", { headers: { Authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(8000) });
-    if (r.ok) usage.record("pi", routerUsage((await r.json() as any).data));
+    if (r.ok) {
+      const data = (await r.json() as any).data;
+      usage.record("pi", routerUsage(data));
+      // The queue enforces OpenRouter's own free-tier daily count, not just what this Console sent.
+      const free = data?.free_model_daily_requests;
+      if (Number.isFinite(free?.used) && free.limit > 0) syncModelQuota({ used: free.used, limit: free.limit });
+    }
   } catch {} // retain the last successful sample, with its timestamp
 }
 

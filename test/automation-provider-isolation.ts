@@ -46,6 +46,8 @@ process.env.AGENT_CONSOLE_PI_MODELS = `${vision},${coding}`;
 process.env.PATH = `${bin}${path.delimiter}${process.env.PATH}`;
 const { Threads } = await import("../server/threads.ts");
 const { pi, refreshPiModels } = await import("../server/providers/pi.ts");
+const { startModelRateBroker } = await import("../server/providers/model-rate-client.ts");
+startModelRateBroker(1, data); // Pi children receive the loopback admission broker; the fake Pi never calls it
 await refreshPiModels();
 // Exercise the real Pi adapter without credentials or any model API request.
 pi.status = () => ({ ok: true });

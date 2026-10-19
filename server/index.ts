@@ -1,4 +1,5 @@
-import { acquireModelRequest, reportModel429 } from "./providers/model-rate-limit.ts";
+import { acquireModelRequest, reportModel429, startModelRateBroker } from "./providers/model-rate-client.ts";
+import { MODEL_REQUEST_PRIORITIES } from "./providers/model-rate-limit.ts";
 import "./privacy.ts";
 import { usage, refreshRouterUsage, refreshUsage, readCodexUsage } from "./usage.ts";
 import { hostMetrics, hostProcesses, hostKill, hostPorts, hostProcessDetail } from "./host.ts";
@@ -159,23 +160,31 @@ app.use("/fonts", express.static(path.join(ROOT, "public", "fonts"), { maxAge: "
 app.get("/icon.svg", (_req, res) => res.sendFile(path.join(ROOT, "public", "icon.svg")));
 app.get("/manifest.webmanifest", (_req, res) => res.sendFile(path.join(ROOT, "public", "manifest.webmanifest")));
 
+// Loopback broker for the single model queue. Pi, the triage worker and the label helpers all admit through here.
+const MODEL_RATE_TOKEN_HEADER = "x-agent-console-tool";
+app.post("/api/model-request", express.json({ limit: "4kb" }), async (req, res) => {
+  const given = Buffer.from(String(req.headers[MODEL_RATE_TOKEN_HEADER] || ""));
+  const expected = Buffer.from(String(process.env.AGENT_CONSOLE_RATE_TOKEN || ""));
+  if (!expected.length || given.length !== expected.length || !crypto.timingSafeEqual(given, expected)) return void res.status(401).json({ error: "Not an Agent Console model request." });
+  const provider = req.body?.provider === "nvidia" || req.body?.provider === "openrouter" ? req.body.provider : "other";
+  const priority = typeof req.body?.priority === "string" && req.body.priority in MODEL_REQUEST_PRIORITIES ? req.body.priority : "interactive";
+  const abort = new AbortController();
+  const disconnected = () => abort.abort();
+  res.once("close", disconnected);
+  try {
+    if (req.body?.action === "acquire") await acquireModelRequest({ provider, priority, signal: abort.signal });
+    else if (req.body?.action === "cooldown") await reportModel429(typeof req.body.retryAfter === "string" || typeof req.body.retryAfter === "number" ? req.body.retryAfter : null, provider);
+    else return void res.status(400).json({ error: "Unknown model admission action." });
+    if (!res.destroyed) res.json({ ok: true });
+  } catch (error: any) {
+    const message = error?.code === "MODEL_PROVIDER_QUOTA_EXHAUSTED" ? error.message : "Model admission unavailable.";
+    if (!res.destroyed) res.status(503).json({ error: message, message, code: error?.code, retryAt: error?.retryAt, provider: error?.provider });
+  } finally { res.removeListener("close", disconnected); }
+});
+
 app.post("/api/agent-tools/:name", express.json({ limit: "1mb" }), async (req, res) => {
   const given = Buffer.from(String(req.headers["x-agent-console-tool"] || ""));
   if (given.length !== TOOL_TOKEN.length || !crypto.timingSafeEqual(given, Buffer.from(TOOL_TOKEN))) return void res.status(401).json({ error: "Not an Agent Console tool call." });
-  if (req.params.name === "model_request") {
-    const abort = new AbortController();
-    const disconnected = () => abort.abort();
-    res.once("close", disconnected);
-    try {
-      if (req.body?.action === "acquire") await acquireModelRequest(abort.signal);
-      else if (req.body?.action === "cooldown") reportModel429(typeof req.body.retryAfter === "string" || typeof req.body.retryAfter === "number" ? req.body.retryAfter : null);
-      else return void res.status(400).json({ error: "Unknown model admission action." });
-      if (!res.destroyed) res.json({ ok: true });
-    } catch {
-      if (!res.destroyed) res.status(503).json({ error: "Model admission unavailable." });
-    } finally { res.removeListener("close", disconnected); }
-    return;
-  }
   const thread = typeof req.headers["x-agent-console-thread"] === "string" ? req.headers["x-agent-console-thread"] : undefined;
   try {
     if (thread && threads.get(thread)?.issueRun && !["session_search", "session_read"].includes(req.params.name)) {
@@ -576,6 +585,7 @@ if (acodeSettings) {
 
 server.listen(PORT, HOST, () => {
   if (PID_FILE) fs.writeFileSync(PID_FILE, String(process.pid)); // only the process that holds the port may claim it
+  startModelRateBroker(PORT); // same rule: a scratch server that lost the port must not repoint the live broker
   console.log(`agent-console listening on http://${HOST}:${PORT}`);
   console.log(CODER_HOSTS.length ? `auth: Coder SSO for ${CODER_HOSTS.join(", ")} (password cookie still works elsewhere)` : "auth: password only");
   if (process.env.AGENT_CONSOLE_SHOW_PASSWORD) console.log(`password: ${PASSWORD}`);
