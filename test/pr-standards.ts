@@ -34,10 +34,10 @@ assert.match(block, /failed first/); assert.match(block, /## Self-review/); asse
 assert.ok(work.length < 8000, `worker prompt is ${work.length} chars (about ${Math.round(work.length / 4)} tokens)`);
 assert.ok(block.length < 2000);
 
-// the reviewer: fix-ups are capped, protected PRs are not merged, local repos are applied
+// The reviewer cannot apply changes to shared checkouts; deployment belongs to the host.
 const normal = reviewPrompt(run, 7, "main", { protected: false });
 assert.match(normal, /gh pr merge 7 --repo o\/agent-console --squash/); assert.match(normal, /at most 20 changed lines/); assert.match(normal, /git push origin HEAD:refs\/heads\/issue-9-x/);
-assert.match(normal, /restart-when-idle/); assert.match(normal, /Self-review/); assert.ok(normal.includes(skillDir()));
+assert.match(normal, /host-side application/); assert.match(normal, /read-only/); assert.doesNotMatch(normal, /git merge --ff-only|restart-when-idle/); assert.match(normal, /Self-review/); assert.ok(normal.includes(skillDir()));
 const guarded = reviewPrompt(run, 7, "main", { protected: true });
 assert.doesNotMatch(guarded, /gh pr merge 7/); assert.match(guarded, /Do not merge/); assert.match(guarded, /protected path/i);
 assert.match(reviewPrompt({ ...run, repo: "o/webapp" }, 7, "main", { protected: false }), /Nothing else to apply/);

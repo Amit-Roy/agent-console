@@ -1,3 +1,4 @@
+import { launch as sandboxLaunch } from "../automation/sandbox.ts";
 import { randomUUID } from "node:crypto";
 import { spawnLines, parseJson } from "./proc.ts";
 import { childEnv } from "./env.ts";
@@ -110,7 +111,8 @@ export function startCodexApp(t: ThreadSpec, ctx: AgentCtx, translate: (row: any
   };
   const ask = process.env.AGENT_CONSOLE_CODEX_ASK === "0" ? [] : ["--enable", "default_mode_request_user_input"];
   const routing = codexRouting({ ...childEnv(), AGENT_CONSOLE_THREAD: t.id });
-  const p = spawnLines("codex", "codex", ["app-server", "-c", "analytics.enabled=false", "-c", "feedback.enabled=false", ...ask, ...routing.args, ...consoleCodexMcpArgs()], { cwd: t.cwd, env: routing.env }, {
+  const launch = sandboxLaunch(t, "codex", ["app-server", "-c", "analytics.enabled=false", "-c", "feedback.enabled=false", ...ask, ...routing.args, ...consoleCodexMcpArgs()], routing.env);
+  const p = spawnLines("codex", launch.command, launch.args, { cwd: t.cwd, env: launch.env }, {
     ...ctx,
     exited(info) {
       alive = false;

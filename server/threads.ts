@@ -1,3 +1,5 @@
+import { selectAutomationPiModel } from "./providers/pi-model.ts";
+import { assertAutomationSandbox } from "./automation/sandbox.ts";
 import { normalizeClaudeAccount, requireClaudeAccount, claudeUsageKey, type ClaudeAccount } from "./providers/claude-accounts.ts";
 import type { ThreadNotice } from "./notifications.ts";
 import { IdleCompactionTimers, idleCompactionPolicy, idleCompactionDeadline } from "./idle-compaction.ts";
@@ -332,8 +334,11 @@ export class Threads {
     const st = prov.status();
     if (!st.ok) throw new Error(`${prov.label} is not ready. ${st.hint ?? ""}`.trim());
     const mode = opts.mode && prov.modes.includes(opts.mode) ? opts.mode : prov.defaultMode;
-    const model = opts.model && prov.models().includes(opts.model) ? opts.model : prov.defaultModel();
+    const model = opts.issueRun && prov.id === "pi"
+      ? selectAutomationPiModel(prov.models(), opts.model === "default" ? undefined : opts.model)
+      : opts.model && prov.models().includes(opts.model) ? opts.model : prov.defaultModel();
     if (!model) throw new Error(`${prov.label} has no models available.`);
+    if (opts.issueRun) assertAutomationSandbox({ id: "preflight", cwd: opts.cwd, issueRun: opts.issueRun });
     const now = Date.now();
     const t: Thread = {
       id: crypto.randomUUID(),
@@ -554,6 +559,10 @@ export class Threads {
   private start(t: Thread, warm = false): Live {
     const prov = PROVIDERS.get(t.provider);
     if (!prov) throw new Error(`Unknown provider "${t.provider}".`);
+    if (t.issueRun) {
+      assertAutomationSandbox(t);
+      if (t.provider === "pi") t.model = selectAutomationPiModel(prov.models(), t.model);
+    }
     const live: Live = { agent: undefined as unknown as Agent, aborted: false, spawnAt: Date.now(), warm, held: [] };
     const ready = () => {
       if (live.readyAt != null) return;
@@ -591,7 +600,7 @@ export class Threads {
         if (parseCommand(this.queues.get(t.id)?.[0]?.text || "")?.name === "compact") this.drain(t.id);
       },
     };
-    live.agent = prov.start({ id: t.id, cwd: t.cwd, mode: t.mode, model: t.model, effort: t.effort, advisor: t.advisor, claudeAccount: t.claudeAccount, sessionId: t.sessionId, forkFrom: t.sessionId ? undefined : t.forkFrom }, ctx);
+    live.agent = prov.start({ id: t.id, cwd: t.cwd, mode: t.mode, model: t.model, effort: t.effort, advisor: t.advisor, claudeAccount: t.claudeAccount, sessionId: t.sessionId, forkFrom: t.sessionId ? undefined : t.forkFrom, issueRun: t.issueRun }, ctx);
     this.live.set(t.id, live);
     if (!warm) this.release(t, live);
     return live;

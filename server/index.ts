@@ -150,6 +150,9 @@ app.post("/api/agent-tools/:name", express.json({ limit: "1mb" }), async (req, r
   if (given.length !== TOOL_TOKEN.length || !crypto.timingSafeEqual(given, Buffer.from(TOOL_TOKEN))) return void res.status(401).json({ error: "Not an Agent Console tool call." });
   const thread = typeof req.headers["x-agent-console-thread"] === "string" ? req.headers["x-agent-console-thread"] : undefined;
   try {
+    if (thread && threads.get(thread)?.issueRun && !["session_search", "session_read"].includes(req.params.name)) {
+      throw new Error("Unattended issue runs may only use read-only session tools.");
+    }
     const input = req.body ?? {};
     const result = req.params.name === "session_search" ? await sessionSearch.search(input)
       : req.params.name === "session_read" ? await sessionSearch.read(input)
@@ -410,7 +413,7 @@ wss.on("connection", (ws) => {
   clients.add(ws);
   void refreshRouterUsage(); // quota refresh only on demand; no idle network polling
   const reply = (m: unknown) => ws.readyState === ws.OPEN && ws.send(JSON.stringify(m));
-  reply({ t: "hello", build: BUILD, features: { acks: true, queueEditing: true, questions: true, latency: !!latency, selectiveEvents: true }, questions: threads.getQuestions(), tasks: schedules.list(), usage: usage.all(), commands: threads.getCommands(), threads: threads.list(), queues: threads.getQueues(), dirs: dirs(), providers: providerInfo() });
+  reply({ t: "hello", build: BUILD, features: { autoIsolation: 1, acks: true, queueEditing: true, questions: true, latency: !!latency, selectiveEvents: true }, questions: threads.getQuestions(), tasks: schedules.list(), usage: usage.all(), commands: threads.getCommands(), threads: threads.list(), queues: threads.getQueues(), dirs: dirs(), providers: providerInfo() });
   let metricsWindow = Date.now(), metricsCount = 0;
   // A socket that misses a whole ping interval is dead (phone slept, network changed): drop it so its client reconnects cleanly.
   let isAlive = true;

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { DATA_DIR } from "./auth.ts";
 import { EFFORT_LABELS, PRIORITY_LABELS, githubRequest, type GithubRequest } from "./github-triage.ts";
 import type { ProviderUsage, UsageWindow } from "./usage.ts";
@@ -127,7 +128,7 @@ export function issuePrompt(d: Decision, branch: string, base: string): string {
   return [
     `Work GitHub issue ${issue.repo}#${issue.number}: ${issue.title}`,
     `Read it first: gh issue view ${issue.number} --repo ${issue.repo} --comments. The triage comment holds the book of work.`,
-    `You are in your own git worktree on branch ${branch} (from ${base}). Never touch the main checkout.`,
+    `You are in your own private Git checkout on branch ${branch} (from ${base}). Never touch the main checkout.`,
     direct
       ? `When done and verified, commit, rebase onto origin/${base} and push to ${base}. Reference the issue (Refs #${issue.number}).`
       : `When done and verified, push the branch and open a pull request into ${base} that references the issue. Do not merge it.${effort !== "deep" ? " A Sonnet or Sol review must approve it before merge: say so in the PR body and stop." : ""}`,
@@ -164,24 +165,51 @@ type Git = (cwd: string, ...args: string[]) => string;
 export const defaultGit: Git = (cwd, ...args) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", timeout: 60_000 }).trim();
 export const defaultDirs = () => ({ repos: process.env.AGENT_CONSOLE_REPOS || path.join(os.homedir(), "repos"), worktrees: process.env.AGENT_CONSOLE_WORKTREES || path.join(os.homedir(), "worktrees") });
 
-/** A worktree of a local checkout on a new branch off the default branch (reused if it already exists). */
+/** Create a private clone with its own Git metadata. Shared worktrees are never reused. */
 export function addWorktree(o: { repo: string; dirs: { repos: string; worktrees: string }; dirName: string; branch: string; git?: Git }) {
   const git = o.git ?? defaultGit;
   const main = path.join(o.dirs.repos, o.repo);
   if (!fs.existsSync(path.join(main, ".git"))) throw new Error(`No local checkout of ${o.repo} at ${main}`);
+  if (path.basename(o.dirName) !== o.dirName || o.dirName === "." || o.dirName === "..") throw new Error("Invalid private checkout name");
   git(main, "fetch", "-q", "origin");
   const base = git(main, "symbolic-ref", "--short", "refs/remotes/origin/HEAD").replace(/^origin\//, "");
-  const cwd = path.join(o.dirs.worktrees, o.dirName);
+  const remote = git(main, "remote", "get-url", "origin");
   fs.mkdirSync(o.dirs.worktrees, { recursive: true });
-  const created = !fs.existsSync(cwd);
-  if (created) git(main, "worktree", "add", "-q", "-b", o.branch, cwd, `origin/${base}`);
-  return { cwd, base, branch: o.branch, created, remove: () => { try { git(main, "worktree", "remove", "--force", cwd); git(main, "branch", "-D", o.branch); } catch {} } };
+  const cwd = path.join(fs.realpathSync(o.dirs.worktrees), o.dirName);
+  const exists = (() => { try { fs.lstatSync(cwd); return true; } catch { return false; } })();
+  const privateCheckout = (checkBranch = true) => {
+    const metadata = path.join(cwd, ".git");
+    if (fs.lstatSync(cwd).isSymbolicLink() || !fs.lstatSync(metadata).isDirectory() || fs.lstatSync(metadata).isSymbolicLink()) throw new Error(`Refusing non-private checkout at ${cwd}`);
+    if (fs.realpathSync(git(cwd, "rev-parse", "--show-toplevel")) !== cwd || fs.realpathSync(git(cwd, "rev-parse", "--path-format=absolute", "--git-common-dir")) !== metadata) throw new Error(`Refusing shared Git metadata at ${cwd}`);
+    if ((checkBranch && git(cwd, "rev-parse", "--abbrev-ref", "HEAD") !== o.branch) || git(cwd, "remote", "get-url", "origin") !== remote) throw new Error(`Refusing stale checkout at ${cwd}`);
+  };
+  if (exists) {
+    try { privateCheckout(); } catch (e: any) { throw new Error(`Refusing existing checkout: ${e.message}`); }
+  } else {
+    // Transport cloning copies committed objects only, with no hardlinks or alternates to the live repository.
+    git(main, "clone", "-q", "--no-local", "--no-hardlinks", "--no-checkout", main, cwd);
+    try {
+      git(cwd, "remote", "set-url", "origin", remote);
+      git(cwd, "fetch", "-q", "origin");
+      git(cwd, "checkout", "-q", "-b", o.branch, `origin/${base}`);
+      privateCheckout();
+    } catch (e) { fs.rmSync(cwd, { recursive: true, force: true }); throw e; }
+  }
+  const marker = path.join(cwd, ".git", "agent-console-auto");
+  if (!exists) fs.writeFileSync(marker, "private-checkout-v1\n", { mode: 0o600, flag: "wx" });
+  else if (!fs.lstatSync(marker).isFile() || fs.lstatSync(marker).isSymbolicLink() || fs.readFileSync(marker, "utf8") !== "private-checkout-v1\n") throw new Error("Refusing unowned private checkout");
+  const created = !exists;
+  return { cwd, base, branch: o.branch, created, remove: () => {
+    if (!created) return;
+    try { privateCheckout(false); fs.rmSync(cwd, { recursive: true, force: true }); } catch {}
+  } };
 }
 
 /** Start one decision: a worktree on a new branch, then a thread titled for the issue working in it. */
 export function startIssue(d: Decision, runner: IssueRunner, dirs = defaultDirs(), git: Git = defaultGit) {
   const name = d.issue.repo.split("/")[1];
-  const { cwd, base, branch } = addWorktree({ repo: name, dirs, dirName: `${name}-issue-${d.issue.number}`, branch: `issue-${d.issue.number}-${slug(d.issue.title)}`, git });
+  const attempt = randomUUID().slice(0, 8);
+  const { cwd, base, branch } = addWorktree({ repo: name, dirs, dirName: `${name}-issue-${d.issue.number}-${attempt}`, branch: `issue-${d.issue.number}-${slug(d.issue.title)}-${attempt}`, git });
   if (!(d.effort === "deep" && DIRECT_REPOS.includes(name))) installPrOnlyHook(cwd, base, git);
   const thread = runner.create({ ...d.route, cwd, mode: "bypassPermissions", title: threadTitle(d.issue), issueRun: { key: d.key, repo: d.issue.repo, number: d.issue.number, effort: d.effort, role: "work", branch, base } });
   runner.send(thread.id, issuePrompt(d, branch, base));

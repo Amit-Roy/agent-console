@@ -1,9 +1,8 @@
-import fs from "node:fs";
-import os from "node:os";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { githubRequest, type GithubRequest } from "./github-triage.ts";
-import { defaultDirs, installPrOnlyHook, topicOf, type IssueRun, type IssueRunner } from "./window-dispatch.ts";
+import { addWorktree, defaultDirs, installPrOnlyHook, topicOf, type IssueRun, type IssueRunner } from "./window-dispatch.ts";
 import { DIRECT_REPOS, isProtected } from "./automation/policy.ts";
 import { reviewPrompt } from "./automation/review-prompts.ts";
 import type { RouteResponse } from "./automation/router.ts";
@@ -27,7 +26,7 @@ export interface ReviewDeps {
   log?: (msg: string) => void;
   now?: () => number;
 }
-type ThreadLike = { id: string; status?: string; issueRun?: IssueRun };
+type ThreadLike = { id: string; status?: string; archived?: number; issueRun?: IssueRun };
 
 export function createReviewer(deps: ReviewDeps) {
   const github = deps.github ?? githubRequest;
@@ -58,14 +57,13 @@ export function createReviewer(deps: ReviewDeps) {
     const files = await github("GET", `repos/${run.repo}/pulls/${pr.number}/files?per_page=100`);
     const names: string[] = Array.isArray(files) ? files.map((f: any) => String(f.filename)) : [];
     const guarded = !Array.isArray(files) || names.length >= 100 || isProtected(names); // too many files to list: treat as protected
-    const main = path.join(dirs.repos, name);
-    git(main, "fetch", "-q", "origin", run.branch!);
-    const cwd = path.join(dirs.worktrees, `${name}-review-${run.number}`);
-    fs.mkdirSync(dirs.worktrees, { recursive: true });
-    if (!fs.existsSync(cwd)) git(main, "worktree", "add", "-q", "--detach", cwd, `origin/${run.branch}`);
-    else git(cwd, "checkout", "-q", "--detach", `origin/${run.branch}`);
-    const base = run.base ?? "main";
-    installPrOnlyHook(cwd, base, git); // the reviewer may push fix-ups to the PR branch, never to the default branch
+    const attempt = randomUUID().slice(0, 8);
+    const wt = addWorktree({ repo: name, dirs, dirName: `${name}-review-${run.number}-${attempt}`, branch: `review-${run.number}-${attempt}`, git });
+    const { cwd } = wt;
+    git(cwd, "fetch", "-q", "origin", run.branch!);
+    git(cwd, "checkout", "-q", "--detach", `origin/${run.branch}`);
+    const base = run.base ?? wt.base;
+    installPrOnlyHook(cwd, base, git); // Review fixes target the PR branch, never the default branch.
     const made = deps.runner.create({ ...answer.route, cwd, mode: "bypassPermissions", title: `${topicOf(run.repo)}:${run.number} review PR#${pr.number}`, issueRun: { ...run, role: "review", pr: pr.number, reviewedAt: undefined, finishedAt: undefined } });
     deps.runner.mark(t.id, { pr: pr.number, reviewedAt: now() });
     ev?.record({ step: "review", kind: "start", run: `review:${made.id}`, ref: run.key, msg: `${answer.route.provider}/${answer.route.model}${guarded ? " (protected paths: no merge)" : ""}`, data: { thread: made.id, pr: pr.number } });
@@ -75,7 +73,7 @@ export function createReviewer(deps: ReviewDeps) {
 
   async function attempt(t: ThreadLike) {
     const run = t.issueRun;
-    if (!run || run.role !== "work" || run.effort === "deep" || run.reviewedAt || !run.branch || claimed.has(t.id)) return;
+    if (t.archived || !run || run.role !== "work" || run.effort === "deep" || run.reviewedAt || !run.branch || claimed.has(t.id)) return;
     claimed.add(t.id); // a second turn ending while the first review is being set up must not start another
     try { if (!(await review({ id: t.id, issueRun: run }))) claimed.delete(t.id); }
     catch (e: any) {
@@ -118,7 +116,7 @@ export function createReviewer(deps: ReviewDeps) {
   async function sweep(threads: ThreadLike[]) {
     for (const t of threads) {
       const run = t.issueRun;
-      if (run?.role === "work" && run.finishedAt && !run.reviewedAt && t.status !== "running") await attempt(t);
+      if (!t.archived && run?.role === "work" && run.finishedAt && !run.reviewedAt && t.status !== "running") await attempt(t);
     }
   }
   return { turnEnded, sweep };

@@ -1,3 +1,4 @@
+import { launch as sandboxLaunch } from "../automation/sandbox.ts";
 import { claudeConfigDir, requireClaudeAccount } from "./claude-accounts.ts";
 import { headroom } from "../headroom.ts";
 import fs from "node:fs";
@@ -168,7 +169,8 @@ export const claude: Provider = {
     if (account === "nefro") env.CLAUDE_CONFIG_DIR = claudeConfigDir(account);
     for (const k of SCRUBBED_ENV) delete env[k];
     const control = claudeControl((msg) => p.write(JSON.stringify(msg)), ctx.event, t.mode);
-    const p = spawnLines("claude", "claude", args, { cwd: t.cwd, env }, {
+    const launch = sandboxLaunch(t, "claude", args, env);
+    const p = spawnLines("claude", launch.command, launch.args, { cwd: t.cwd, env: launch.env }, {
       ...ctx,
       exited(info) { control.cancelAll(); ctx.exited(info); },
     }, (line) => {
