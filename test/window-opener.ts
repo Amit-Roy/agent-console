@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createEventLog } from "../server/automation/events.ts";
 import { inHours, localMinutes, needsOpen, loadOpenerConfig, createOpener, OPENER_ROUTES } from "../server/window-opener.ts";
 
 const IST = "Asia/Kolkata";
@@ -57,5 +58,23 @@ try {
   const f = createOpener({ usage: () => ({}), open: () => { if (fail) throw new Error("down"); }, dir, now: () => t });
   t = night; assert.deepEqual(await f.tick(), []); fail = false; t += 60_000; assert.deepEqual(await f.tick(), ["codex"]);
   assert.match(fs.readFileSync(path.join(dir, "window-opener.jsonl"), "utf8"), /"error":"down"/);
+
+  // every tick leaves a trace saying what happened and why: the dashboard's only view of an idle opener
+  {
+    const ev = createEventLog({ file: path.join(dir, "ev.jsonl"), now: () => t });
+    fs.rmSync(path.join(dir, "window-opener.jsonl"), { force: true });
+    fs.writeFileSync(cfg, JSON.stringify({ opener: { enabled: true, dryRun: false, providers: ["claude"] } }));
+    const msgs = () => ev.read({ step: "opener" }).events.map(e => `${e.kind}:${e.msg}`);
+    let usage2: any = {}; let boom = false;
+    const o2 = createOpener({ usage: () => usage2, open: () => { if (boom) throw new Error("spawn failed"); }, dir, now: () => t, events: ev });
+    t = noon; await o2.tick();
+    assert.match(msgs()[0], /^info:nothing to do: outside 23:00–07:00/);
+    t = night; await o2.tick();
+    assert.ok(msgs().some(m => m === "ok:opened claude"), "opening is recorded");
+    t += 20 * 60_000; usage2 = { claude: w(t + 3_600_000) }; await o2.tick();
+    assert.match(msgs()[0], /^info:nothing to do: every window is live/);
+    usage2 = {}; boom = true; t += 20 * 60_000; await o2.tick();
+    assert.ok(msgs().some(m => /^fail:claude: spawn failed/.test(m)), "a failed open is a failure on the dashboard");
+  }
 } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 console.log("PASS window opener: overnight hours, live-window check, ten-minute gap, config validation, dry run, failed open");

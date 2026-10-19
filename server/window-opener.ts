@@ -3,6 +3,7 @@ import path from "node:path";
 import { DATA_DIR } from "./auth.ts";
 import { fiveHour } from "./window-dispatch.ts";
 import type { ProviderUsage } from "./usage.ts";
+import type { EventLog } from "./automation/events.ts";
 
 // A 5-hour window opens at the first message after the previous one ended. Overnight nothing opens one, so the quota that
 // window-dispatch could use never starts counting down. During the configured hours, send one tiny message to each provider
@@ -53,6 +54,7 @@ export function createOpener(opts: {
   open?: (provider: string, route: { model: string; effort: string }) => Promise<void> | void;
   dir?: string;
   now?: () => number;
+  events?: EventLog;
 }) {
   const dir = opts.dir ?? DATA_DIR;
   const ledger = path.join(dir, "window-opener.jsonl");
@@ -61,7 +63,9 @@ export function createOpener(opts: {
   try { for (const l of fs.readFileSync(ledger, "utf8").split("\n").filter(Boolean)) { const r = JSON.parse(l); if (!r.dryRun && !r.error) lastOpened.set(r.provider, r.ts); } } catch {}
   async function tick() {
     const cfg = loadOpenerConfig(path.join(dir, "window-dispatch.json"));
-    if (!cfg.enabled || !inHours(now(), cfg)) return [];
+    if (!cfg.enabled) return [];
+    const ev = opts.events;
+    if (!inHours(now(), cfg)) { ev?.record({ step: "opener", kind: "info", msg: `nothing to do: outside ${cfg.from}–${cfg.to} ${cfg.tz}` }); return []; }
     await opts.refresh?.().catch(() => {});
     const live = !cfg.dryRun && !!opts.open;
     const opened: string[] = [];
@@ -73,13 +77,19 @@ export function createOpener(opts: {
       const row = { ts: now(), dryRun: !live, provider, ...OPENER_ROUTES[provider] };
       fs.appendFileSync(ledger, JSON.stringify(row) + "\n", { mode: 0o600 });
       lastOpened.set(live ? provider : "dry:" + provider, now());
+      const run = `open:${provider}:${now()}`;
+      ev?.record({ step: "opener", kind: "start", run, ref: provider });
       if (live) try { await opts.open!(provider, OPENER_ROUTES[provider]); } catch (e: any) {
         lastOpened.delete(provider); // a failed open does not count; the next tick may try again
-        fs.appendFileSync(ledger, JSON.stringify({ ...row, error: String(e?.message ?? e).slice(0, 300) }) + "\n", { mode: 0o600 });
+        const error = String(e?.message ?? e).slice(0, 300);
+        fs.appendFileSync(ledger, JSON.stringify({ ...row, error }) + "\n", { mode: 0o600 });
+        ev?.record({ step: "opener", kind: "fail", run, ref: provider, msg: `${provider}: ${error}` });
         continue;
       }
+      ev?.record({ step: "opener", kind: "ok", run, ref: provider, msg: live ? `opened ${provider}` : `would open ${provider} (dry run)` });
       opened.push(provider);
     }
+    if (!opened.length) ev?.record({ step: "opener", kind: "info", msg: `nothing to do: ${cfg.providers.every(p => !needsOpen(opts.usage()[p], now())) ? "every window is live" : "an open was tried in the last 10 minutes"}` });
     return opened;
   }
   return { tick };

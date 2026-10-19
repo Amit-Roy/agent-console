@@ -80,7 +80,11 @@ const automation = automationApi({
 });
 // Plan-only until ~/.config/agent-console/window-dispatch.json sets enabled (see docs/window-dispatch.md).
 if (process.env.AGENT_CONSOLE_MOCK !== "1") {
-  const dispatcher = createDispatcher({ usage: () => usage.all(), start: d => { startIssue(d, { create: o => threads.create(o), send: (id, text) => threads.send(id, text) }); } });
+  const dispatcher = createDispatcher({
+    usage: () => usage.all(), events: automationLog,
+    active: () => threads.list().filter(t => t.issueRun && t.status === "running").map(t => ({ provider: t.provider, role: t.issueRun!.role })),
+    start: d => startIssue(d, { create: o => threads.create(o), send: (id, text) => threads.send(id, text) }),
+  });
   const reviewer = createReviewer({
     runner: { create: o => threads.create(o), send: (id, text) => threads.send(id, text), mark: (id, patch) => threads.setIssueRun(id, patch) },
     reviewer: () => usage.exhausted("claude") && !usage.exhausted("codex") ? REVIEWERS[1] : REVIEWERS[0],
@@ -88,7 +92,7 @@ if (process.env.AGENT_CONSOLE_MOCK !== "1") {
   threads.onIssueTurnEnd = (t, ev) => reviewer.turnEnded(t, ev);
   setInterval(() => { dispatcher.tick().catch(() => {}); }, 5 * 60_000).unref();
   const opener = createOpener({
-    usage: () => usage.all(),
+    usage: () => usage.all(), events: automationLog,
     refresh: readCodexUsage,
     open: (provider, route) => {
       const t = threads.create({ provider, ...route, cwd: path.join(os.homedir(), "repos"), mode: "bypassPermissions", title: `Window opener · ${provider}` });
