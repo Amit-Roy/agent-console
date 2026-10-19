@@ -86,11 +86,12 @@ export interface TurnTiming {
 export class TurnClock {
   private firstEvent?: number;
   private firstOutput?: number;
-  private tools = new Map<string, Span & { n: string; e?: 1; i: number }>();
-  private stepSpans: { a: number; first?: number; last?: number }[] = [];
-  private retrySegs: { a: number; d: number; s: number | null; c: string; i: number }[] = [];
+  private tools = new Map<string, Span & { n: string; e?: 1; i: number; q: number }>();
+  private stepSpans: { a: number; first?: number; last?: number; q: number }[] = [];
+  private retrySegs: { a: number; d: number; s: number | null; c: string; i: number; q: number }[] = [];
+  private seq = 0; // arrival order: breaks ties between events in the same millisecond
   private lastResult?: number;
-  private waits = new Map<string, Span>();
+  private waits = new Map<string, Span & { q: number }>();
   private steps = 0;
   private inModel = false;
   private model?: string;
@@ -108,7 +109,7 @@ export class TurnClock {
       this.steps++; this.inModel = true;
       // A step's request goes out when the last tool result lands (or, for the first step, when the process first speaks).
       const a = this.steps === 1 ? (this.firstEvent ?? this.o.start) : (this.lastResult ?? now);
-      this.stepSpans.push({ a: Math.min(a, now), first: now });
+      this.stepSpans.push({ a: Math.min(a, now), first: now, q: ++this.seq });
     }
     this.stepSpans[this.stepSpans.length - 1].last = now;
   }
@@ -120,7 +121,7 @@ export class TurnClock {
       const s = httpStatus(ev.error_status), c = errorClass(ev.error);
       if (this.retries.length < MAX_RETRIES) this.retries.push({ s, c });
       const delay = Number(ev.retry_delay_ms);
-      this.retrySegs.push({ a: now, d: Number.isFinite(delay) && delay > 0 ? Math.min(delay, 3_600_000) : 0, s, c, i: this.inModel ? this.steps : this.steps + 1 });
+      this.retrySegs.push({ a: now, d: Number.isFinite(delay) && delay > 0 ? Math.min(delay, 3_600_000) : 0, s, c, i: this.inModel ? this.steps : this.steps + 1, q: ++this.seq });
       return;
     }
     if (ev.type === "rate_limit_event") {
@@ -138,7 +139,7 @@ export class TurnClock {
         if (b?.type === "text" || b?.type === "thinking" || b?.type === "redacted_thinking") this.output(now);
         else if (b?.type === "tool_use") {
           this.output(now);
-          if (typeof b.id === "string" && !this.tools.has(b.id) && this.tools.size < MAX_TIMED_TOOLS) this.tools.set(b.id, { n: toolName(b.name), a: now, i: this.steps });
+          if (typeof b.id === "string" && !this.tools.has(b.id) && this.tools.size < MAX_TIMED_TOOLS) this.tools.set(b.id, { n: toolName(b.name), a: now, i: this.steps, q: ++this.seq });
         }
       }
     } else if (ev.type === "user") {
@@ -149,7 +150,7 @@ export class TurnClock {
         this.inModel = false; // the next output is a new model request
         this.lastResult = now;
       }
-    } else if (ev.type === "question" && typeof ev.id === "string") this.waits.set(ev.id, { a: now });
+    } else if (ev.type === "question" && typeof ev.id === "string") this.waits.set(ev.id, { a: now, q: ++this.seq });
     else if (ev.type === "question_answer") { const w = this.waits.get(ev.id); if (w && w.b == null) w.b = now; }
   }
   finish(ev: any, now = Date.now(), spawnMs?: number | null): TurnTiming {
@@ -172,20 +173,20 @@ export class TurnClock {
   // Ordered segments, offsets from the turn start. Metadata only, like the rest of the row.
   private timeline(now: number, startup: number): Timeline {
     const start = this.o.start, off = (t: number) => Math.max(0, t - start), dur = (a: number, b: number) => Math.max(0, b - a);
-    const seg: Segment[] = [];
-    if (this.o.queueMs) seg.push({ k: "queue", a: -this.o.queueMs, d: this.o.queueMs });
-    if (startup > 0) seg.push({ k: "startup", a: 0, d: startup });
+    const seg: Segment[] = [], order = new Map<Segment, number>();
+    const add = (x: Segment, q: number) => { seg.push(x); order.set(x, q); };
+    if (this.o.queueMs) add({ k: "queue", a: -this.o.queueMs, d: this.o.queueMs }, -1);
+    if (startup > 0) add({ k: "startup", a: 0, d: startup }, 0);
     this.stepSpans.forEach((s, n) => {
       const last = n === this.stepSpans.length - 1;
       // A step ends at its last output; the final step runs on to the result unless it left a tool open.
       const end = last && ![...this.tools.values()].some((t) => t.i === n + 1 && t.b == null) ? now : (s.last ?? s.a);
-      seg.push({ k: "model", i: n + 1, a: off(s.a), d: dur(s.a, end), f: s.first != null ? dur(s.a, s.first) : null });
+      add({ k: "model", i: n + 1, a: off(s.a), d: dur(s.a, end), f: s.first != null ? dur(s.a, s.first) : null }, s.q);
     });
-    for (const t of this.tools.values()) seg.push({ k: "tool", i: t.i, n: t.n, a: off(t.a), d: dur(t.a, t.b ?? now), ...(t.e ? { e: 1 as const } : {}) });
-    for (const r of this.retrySegs) seg.push({ k: "retry", i: r.i, a: off(r.a), d: r.d, s: r.s, c: r.c });
-    for (const w of this.waits.values()) seg.push({ k: "wait", a: off(w.a), d: dur(w.a, w.b ?? now) });
-    const rank: Record<string, number> = { queue: 0, startup: 1, model: 2, retry: 3, tool: 4, wait: 5 };
-    seg.sort((x, y) => x.a - y.a || rank[x.k] - rank[y.k]);
+    for (const t of this.tools.values()) add({ k: "tool", i: t.i, n: t.n, a: off(t.a), d: dur(t.a, t.b ?? now), ...(t.e ? { e: 1 as const } : {}) }, t.q);
+    for (const r of this.retrySegs) add({ k: "retry", i: r.i, a: off(r.a), d: r.d, s: r.s, c: r.c }, r.q);
+    for (const w of this.waits.values()) add({ k: "wait", a: off(w.a), d: dur(w.a, w.b ?? now) }, w.q);
+    seg.sort((x, y) => x.a - y.a || order.get(x)! - order.get(y)!);
     return capTimeline(seg);
   }
 }
