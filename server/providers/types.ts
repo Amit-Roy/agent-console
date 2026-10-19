@@ -22,6 +22,7 @@ export interface ThreadSpec {
   advisor?: string;
   claudeAccount?: ClaudeAccount;
   sessionId?: string;
+  issueRun?: { role: "work" | "review" | "debug" }; // Unattended issue runs require filesystem isolation.
   forkFrom?: string; // a forked thread's first run continues a copy of this session instead of starting fresh (adapters that can)
 }
 
