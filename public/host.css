@@ -81,6 +81,26 @@ td.user{color:var(--t2)}
 .kv .k{color:var(--t2)}
 .kv .v{font-variant-numeric:tabular-nums;text-align:right}
 
+/* ---------- process detail modal ---------- */
+.modal{position:fixed;inset:0;z-index:50;display:flex;align-items:flex-start;justify-content:center;padding-top:6vh;padding-bottom:6vh;background:rgba(0,0,0,.35)}
+.modal[hidden]{display:none}
+.modal-backdrop{position:absolute;inset:0}
+.modal-card{width:min(92vw,520px);background:var(--s1);border:1px solid var(--edge);border-radius:var(--r-lg);box-shadow:var(--shadow-pop);overflow:hidden;display:flex;flex-direction:column}
+.modal-card .btn{position:absolute;top:var(--sp-2);right:var(--sp-2);z-index:2}
+.modal-body{padding:var(--sp-4);overflow-y:auto;max-height:70vh}
+.proc-detail{display:flex;flex-direction:column;gap:var(--sp-3)}
+.detail-head{display:flex;align-items:center;gap:var(--sp-2);padding-bottom:var(--sp-2);border-bottom:1px solid var(--edge)}
+.detail-head h2{margin:0;font:var(--fw-med) var(--f-base);color:var(--t1)}
+.detail-head .sub{margin:0;color:var(--t2);font:var(--fw-reg) var(--f-sm)}
+.detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:var(--sp-2) var(--sp-4)}
+.detail-row{display:flex;justify-content:space-between;gap:var(--sp-3);padding:var(--sp-1) 0;border-bottom:1px solid var(--edge)}
+.detail-row:last-child{border-bottom:0}
+.detail-row .k{color:var(--t2);font:var(--fw-reg) var(--f-sm);white-space:nowrap}
+.detail-row .v{color:var(--t1);font:var(--fw-reg) var(--f-sm);font-variant-numeric:tabular-nums;text-align:right;max-width:60%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.detail-sec{padding-top:var(--sp-2);border-top:1px solid var(--edge)}
+.detail-sec h3{margin:0 0 var(--sp-2) 0;font:var(--fw-med) var(--f-sm);color:var(--t1);text-transform:uppercase;letter-spacing:var(--ls-xs)}
+.detail-list{display:flex;flex-direction:column;gap:var(--sp-1)}
+@media (max-width:560px){.detail-grid{grid-template-columns:1fr}}
 /* sort indicators on column headings */
 table.proc th.sort-desc::after,table.ports th.sort-desc::after{content:"";display:inline-block;width:0;height:0;margin-left:var(--sp-2);border:5px solid transparent;border-bottom-color:currentColor}
 table.proc th.sort-asc::after,table.ports th.sort-asc::after{content:"";display:inline-block;width:0;height:0;margin-left:var(--sp-2);border:5px solid transparent;border-top-color:currentColor}

@@ -1,6 +1,6 @@
 import "./privacy.ts";
 import { usage, refreshRouterUsage, refreshUsage, readCodexUsage } from "./usage.ts";
-import { hostMetrics, hostProcesses, hostKill, hostPorts } from "./host.ts";
+import { hostMetrics, hostProcesses, hostKill, hostPorts, hostProcessDetail } from "./host.ts";
 import { createDispatcher, startIssue, defaultDirs } from "./window-dispatch.ts";
 import { route as routeWork } from "./automation/router.ts";
 import { createOpener } from "./window-opener.ts";
@@ -315,6 +315,7 @@ app.get("/api/dashboard", async (req, res) => {
 });
 app.get("/api/host/metrics", hostMetrics);
 app.get("/api/host/processes", hostProcesses);
+app.get("/api/host/processes/:pid/detail", hostProcessDetail);
 app.get("/api/host/ports", hostPorts);
 app.post("/api/host/processes/:pid/kill", express.json({ limit: "1kb" }), sameOrigin, hostKill);
 app.get("/uploads/:thread/:id/:name", (req, res) => {
