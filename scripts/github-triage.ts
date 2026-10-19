@@ -22,7 +22,7 @@ const CALIBRATION_INTERVAL_MS = 24 * 60 * 60_000;
 const CALIBRATION_RETRY_MS = 60 * 60_000;
 const CALIBRATION_PID = path.join(RUN, "calibration-pid");
 const CALIBRATION_ATTEMPT = path.join(RUN, "calibration-attempt");
-type Config = { repos: string[]; secret: string; url: string; port: number; host: string };
+type Config = { repos: string[]; secret: string; url: string; port: number; host: string; deploy?: string };
 
 function config(): Config {
   const c = JSON.parse(fs.readFileSync(CONFIG, "utf8"));
@@ -30,7 +30,17 @@ function config(): Config {
   if (typeof c.secret !== "string" || c.secret.length < 32) throw Error("Webhook secret must contain at least 32 characters.");
   if (!Number.isInteger(c.port) || c.port < 1024 || c.port > 65535) throw Error("Invalid webhook port.");
   if (!c.host || new URL(c.url).protocol !== "https:") throw Error("Configure an HTTPS webhook URL.");
+  if (c.deploy !== undefined && !c.repos.includes(c.deploy)) throw Error("The deploy repository must be in the allowlist.");
   return c;
+}
+
+// Green CI on main: fast-forward this checkout, then restart the console when idle and this worker after it drains.
+// Detached, because restarting the worker stops the process that started the deploy. A dirty or diverged tree fails the pull and skips both restarts.
+function deploy() {
+  const log = fs.openSync(path.join(RUN, "deploy.log"), "a", 0o600);
+  const script = `echo "deploy $(date -Is)"; git -C "$1" pull --ff-only -q && "$1/bin/agent-console" restart-when-idle && "$1/bin/github-triage" restart`;
+  spawn("bash", ["-c", script, "deploy", ROOT], { cwd: ROOT, env: childEnv(), detached: true, stdio: ["ignore", log, log] }).unref();
+  fs.closeSync(log);
 }
 
 function pid(): number | undefined {
@@ -246,6 +256,7 @@ async function main() {
     server.listen(c.port, c.host, () => {
       // Claim the port before opening the queue, so a duplicate start cannot recover another worker's active job.
       service = createTriageService({ secret: c.secret, repos: c.repos, dbPath: path.join(path.dirname(CONFIG), "github-triage.sqlite"),
+        deploy: c.deploy ? { workflow: "CI", run: repo => { if (repo === c.deploy) deploy(); } } : undefined,
         log: metadata => console.info(JSON.stringify(metadata)) });
       fs.writeFileSync(PID, String(process.pid), { mode: 0o600 });
       console.log(`GitHub triage listening on port ${c.port}.`);

@@ -206,6 +206,25 @@ try {
     assert.equal(fixture.comments.get(1)?.length, 1);
     assert.equal(fixture.calls.filter(call => call.method === "POST" && call.endpoint.endsWith("/comments")).length, 2);
   } finally { await fixture.close(); }
+  const deploys: string[] = [];
+  const deployer = await start("deploy", { deploy: { workflow: "CI", run: (r: string, sha: string) => deploys.push(`${r}@${sha}`) } });
+  try {
+    const sha = "a".repeat(40);
+    const run = (fields: Record<string, unknown> = {}, action = "completed") => ({ action, repository: { full_name: repo },
+      workflow_run: { name: "CI", conclusion: "success", event: "push", head_branch: "main", head_sha: sha, ...fields } });
+    for (const ignored of [run({}, "requested"), run({ conclusion: "failure" }), run({ event: "pull_request" }), run({ head_branch: "feature" }),
+      run({ name: "Dev Environment Prebuilds" }), run({ head_sha: "not-a-sha" })]) {
+      assert.equal((await deployer.post(ignored, { event: "workflow_run" })).status, 200);
+    }
+    assert.equal((await deployer.post({ ...run(), repository: { full_name: "other/repository" } }, { event: "workflow_run" })).status, 403);
+    assert.deepEqual(deploys, []);
+    assert.equal((await deployer.post(run(), { event: "workflow_run" })).status, 202);
+    assert.deepEqual(deploys, [`${repo}@${sha}`]);
+  } finally { await deployer.close(); }
+  const undeployable = await start("undeployable");
+  try {
+    assert.equal((await undeployable.post({ action: "completed", repository: { full_name: repo }, workflow_run: { name: "CI", conclusion: "success", event: "push", head_branch: "main", head_sha: "a".repeat(40) } }, { event: "workflow_run" })).status, 200);
+  } finally { await undeployable.close(); }
   const duplicate = await start("validation", { classify: async () => { throw new Error("Duplicate must never classify"); } });
   try {
     const response = await duplicate.post(payload(), { delivery: "same-delivery" });
