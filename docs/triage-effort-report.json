@@ -1,0 +1,162 @@
+{
+  "schemaVersion": 1,
+  "method": "nonnegative-ridge-log-work-v1",
+  "workUnit": "observed_logged_tool_calls",
+  "formula": "log1p(work)=intercept+sum(nonnegative_weight*feature/scale)+sum(missing_weight*is_missing)",
+  "featureNames": [
+    "breadth",
+    "complexity",
+    "uncertainty",
+    "risk"
+  ],
+  "workload": {
+    "intercept": 2.6870085280508547,
+    "coefficients": [
+      0.2806957581528574,
+      0.06622982696212484,
+      1.4405625017423739e-22,
+      0.04833790075354387
+    ],
+    "missingCoefficients": [
+      -0.2635633564203082,
+      -0.11650760935216974,
+      -0.00793196302764114,
+      -0.07738396356696833
+    ],
+    "imputation": [
+      1,
+      1,
+      2,
+      1
+    ],
+    "scale": [
+      1,
+      1,
+      1,
+      1
+    ],
+    "residualQuantiles": {
+      "p50": -0.2878095617471148,
+      "p80": 0.33959772790303683,
+      "p95": 0.8169893719019364
+    },
+    "featureRanges": [
+      {
+        "min": 0,
+        "max": 2,
+        "known": 15,
+        "missing": 7
+      },
+      {
+        "min": 0,
+        "max": 3,
+        "known": 13,
+        "missing": 9
+      },
+      {
+        "min": 0,
+        "max": 2,
+        "known": 18,
+        "missing": 4
+      },
+      {
+        "min": 0,
+        "max": 2,
+        "known": 9,
+        "missing": 13
+      }
+    ]
+  },
+  "workCutoffs": {
+    "trivialMax": 12,
+    "deepMin": 26
+  },
+  "training": {
+    "sampleCount": 22,
+    "groupCount": 11,
+    "asOf": "2026-10-18T19:01:23.251Z",
+    "alpha": 10,
+    "featureVersion": "effort-prework-v2",
+    "fittingLibraries": {
+      "numpy": "2.5.4",
+      "scipy": "1.18.1",
+      "scikit-learn": "1.9.1"
+    },
+    "oofSampleCount": 19,
+    "oofGroupCount": 8,
+    "providers": {
+      "claude": 9,
+      "codex": 13
+    }
+  },
+  "validation": {
+    "status": "experimental",
+    "scope": "one measured root-agent run; not whole issues or human hours",
+    "sampleCount": 4,
+    "groupCount": 3,
+    "purgedSampleCount": 0,
+    "splitPolicy": "newest 20% thread groups by earliest run start; every training group completed before earliest target start",
+    "work": {
+      "mae": 66.88816978238525,
+      "rmsle": 1.3448590568224241
+    },
+    "baselineWork": {
+      "mae": 71.5,
+      "rmsle": 1.5472327820699459
+    },
+    "outputTokens": {
+      "mae": 9568.752173696981,
+      "rmsle": 0.7660423473158429
+    },
+    "baselineOutputTokens": {
+      "mae": 11853.25,
+      "rmsle": 1.1172631805735656
+    },
+    "workCoverage": {
+      "p50": 0.25,
+      "p80": 0.25,
+      "p95": 0.5
+    },
+    "beatsWorkBaseline": true,
+    "outputCoverage": {
+      "p50": 0.25,
+      "p80": 0.5,
+      "p95": 0.75
+    },
+    "hasLearnedComplexitySignal": true,
+    "providers": {
+      "codex": 3,
+      "claude": 1
+    },
+    "limitations": [
+      "Observational root-run outcomes omit unlogged child-agent work and human time.",
+      "Prework feature extraction uncertainty is not identified by this sample.",
+      "Empirical OOF intervals are not coverage guarantees or risk-neutral prices.",
+      "Alpha selection and residual calibration share older-group folds; newest groups remain untouched.",
+      "Token yields reflect historical provider, tool, and context policy mixtures."
+    ],
+    "selection": [
+      {
+        "alpha": 0.01,
+        "oofLogMse": 2.5550561824745737
+      },
+      {
+        "alpha": 0.1,
+        "oofLogMse": 2.263707107895472
+      },
+      {
+        "alpha": 1,
+        "oofLogMse": 1.3655044039993782
+      },
+      {
+        "alpha": 10,
+        "oofLogMse": 0.7712707105402683
+      },
+      {
+        "alpha": 100,
+        "oofLogMse": 0.7717919618469576
+      }
+    ],
+    "rejected": {}
+  }
+}

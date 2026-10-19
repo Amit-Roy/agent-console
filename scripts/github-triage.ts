@@ -9,7 +9,8 @@ import { execFile, spawn } from "node:child_process";
 import { sign } from "@octokit/webhooks-methods";
 import { childEnv } from "../server/providers/env.ts";
 import { createTriageService } from "../server/github-triage.ts";
-import { historyPath, loadHistory, trainHistory, predictHistory } from "../server/providers/triage-history.ts";
+import { historyPath } from "../server/providers/triage-history.ts";
+import { effortModelPath, loadEffortModel, quoteEffort } from "../server/providers/triage-effort.ts";
 
 const SCRIPT = fileURLToPath(import.meta.url);
 const ROOT = path.resolve(path.dirname(SCRIPT), "..");
@@ -19,6 +20,9 @@ const PID = path.join(RUN, "pid");
 const LAST_RECONCILE = path.join(RUN, "last-reconcile");
 const RECONCILE_INTERVAL_MS = 5 * 60_000;
 const CALIBRATION_INTERVAL_MS = 24 * 60 * 60_000;
+const CALIBRATION_RETRY_MS = 60 * 60_000;
+const CALIBRATION_PID = path.join(RUN, "calibration-pid");
+const CALIBRATION_ATTEMPT = path.join(RUN, "calibration-attempt");
 type Config = { repos: string[]; secret: string; url: string; port: number; host: string };
 
 function config(): Config {
@@ -91,32 +95,77 @@ async function reconcile(c: Config) {
   console.log(`Reconciled ${scanned} open items; queued ${queued} repairs.`);
 }
 
-async function calibrate() {
-  const destination = historyPath();
-  fs.mkdirSync(path.dirname(destination), { recursive: true, mode: 0o700 });
-  const candidate = `${destination}.candidate-${process.pid}`;
+function calibrationRunning(): boolean {
   try {
-    await new Promise<void>((resolve, reject) => {
-      execFile(process.execPath, [path.join(ROOT, "scripts/triage-history-build.ts"), "--repo-dir", ROOT,
-        "--data", process.env.AGENT_CONSOLE_DATA || path.join(os.homedir(), ".config/agent-console"), "--output", candidate],
-        { env: childEnv(), timeout: 120_000, maxBuffer: 1_000_000 }, error => error ? reject(Error("Measured-history extraction failed; previous calibration retained.")) : resolve());
-    });
-    const loaded = loadHistory(candidate);
-    if (loaded.status !== "ready") throw Error("Measured-history validation failed; previous calibration retained.");
-    const model = trainHistory(loaded.tasks);
-    if (model.status !== "ready") throw Error("Not enough measured history; previous calibration retained.");
-    const estimate = predictHistory(model, "Historical workload baseline.");
-    if (estimate.status !== "ready") throw Error("Measured-history calibration failed; previous calibration retained.");
-    fs.renameSync(candidate, destination);
-    console.log(JSON.stringify({ calibratedRuns: estimate.sampleCount, independentGroups: estimate.independentGroupCount,
-      method: model.method, outputTokenMedian: estimate.output.median, outputTokenCutoffs: estimate.thresholds,
-      validation: model.validation }));
-  } finally { fs.rmSync(candidate, { force: true }); }
+    const calibrationPid = Number(fs.readFileSync(CALIBRATION_PID, "utf8"));
+    if (!Number.isSafeInteger(calibrationPid) || calibrationPid <= 1) return Date.now() - fs.statSync(CALIBRATION_PID).mtimeMs < 120_000;
+    const args = fs.readFileSync(`/proc/${calibrationPid}/cmdline`, "utf8").split("\0");
+    return args.includes(SCRIPT) && args.includes("calibrate");
+  } catch { return false; }
+}
+
+function startCalibration() {
+  if (calibrationRunning()) return;
+  fs.mkdirSync(RUN, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(CALIBRATION_ATTEMPT, String(Date.now()), { mode: 0o600 });
+  const log = fs.openSync(path.join(RUN, "calibration.log"), "a", 0o600);
+  try { spawn(process.execPath, [SCRIPT, "calibrate"], { cwd: ROOT, env: childEnv(), detached: true, stdio: ["ignore", log, log] }).unref(); }
+  finally { fs.closeSync(log); }
+  console.log("Effort calibration started in the background.");
+}
+
+async function calibrate() {
+  fs.mkdirSync(RUN, { recursive: true, mode: 0o700 });
+  let lock: number;
+  try { lock = fs.openSync(CALIBRATION_PID, "wx", 0o600); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    if (calibrationRunning()) throw Error("Effort calibration is already running.");
+    fs.rmSync(CALIBRATION_PID, { force: true });
+    lock = fs.openSync(CALIBRATION_PID, "wx", 0o600);
+  }
+  fs.writeFileSync(lock, String(process.pid)); fs.closeSync(lock);
+  const temporary = fs.mkdtempSync(path.join(RUN, "calibration-"));
+  const history = path.join(temporary, "history.json");
+  const dataset = path.join(temporary, "dataset.json");
+  const artifact = path.join(temporary, "model.json");
+  const report = path.join(temporary, "report.json");
+  const run = (command: string, args: string[], timeout: number) => new Promise<void>((resolve, reject) => {
+    execFile(command, args, { env: childEnv(), timeout, maxBuffer: 1_000_000 }, error => error
+      ? reject(Error("Effort calibration failed; the previous model was retained. See the private calibration log and setup instructions.")) : resolve());
+  });
+  try {
+    const destination = effortModelPath();
+    fs.mkdirSync(path.dirname(destination), { recursive: true, mode: 0o700 });
+    const features = path.join(path.dirname(destination), "triage-effort-features.json");
+    await run(process.execPath, [path.join(ROOT, "scripts/triage-history-build.ts"), "--repo-dir", ROOT,
+      "--data", process.env.AGENT_CONSOLE_DATA || path.join(os.homedir(), ".config/agent-console"), "--output", history], 120_000);
+    await run(process.execPath, [path.join(ROOT, "scripts/triage-effort-features.ts"), "--history", history,
+      "--output", features, "--dataset", dataset], 30 * 60_000);
+    const python = process.env.AGENT_CONSOLE_TRIAGE_PYTHON || path.join(os.homedir(), ".local/share/agent-console/triage-venv/bin/python");
+    await run(python, [path.join(ROOT, "scripts/triage-effort-fit.py"), "--dataset", dataset,
+      "--output", artifact, "--report", report], 120_000);
+    const model = loadEffortModel(artifact);
+    const quote = quoteEffort({ breadth: { value: null }, complexity: { value: null }, uncertainty: { value: null }, risk: { value: null } }, model);
+    if (model.status !== "ready" || quote.status !== "ready") throw Error("The learned effort model failed validation; previous calibration retained.");
+    fs.mkdirSync(path.dirname(historyPath()), { recursive: true, mode: 0o700 });
+    fs.renameSync(history, historyPath());
+    fs.renameSync(dataset, path.join(path.dirname(destination), "triage-effort-training.json"));
+    fs.renameSync(report, path.join(path.dirname(destination), "triage-effort-report.json"));
+    fs.renameSync(artifact, destination);
+    console.log(JSON.stringify({ status: model.model.validation.status, samples: model.model.training.sampleCount,
+      groups: model.model.training.groupCount, heldout: model.model.validation.sampleCount,
+      workError: model.model.validation.work, baselineWorkError: model.model.validation.baselineWork,
+      coefficients: model.model.workload.coefficients }));
+  } finally {
+    fs.rmSync(temporary, { recursive: true, force: true });
+    try { if (Number(fs.readFileSync(CALIBRATION_PID, "utf8")) === process.pid) fs.rmSync(CALIBRATION_PID); } catch {}
+  }
 }
 
 async function main() {
   const command = process.argv[2] || "status";
-  if (command === "calibrate") { await calibrate(); return; }
+  if (command === "calibrate") { if (process.argv.includes("--background")) startCalibration(); else await calibrate(); return; }
   if (command === "configure") {
     const repos = (process.argv[3] || "Amit-Roy/agent-console").split(",");
     const url = process.argv[4];
@@ -136,17 +185,6 @@ async function main() {
   }
   if (command === "watchdog") {
     if (process.env.AGENT_CONSOLE_MOCK === "1" || !fs.existsSync(CONFIG)) return;
-    // Scratch instances must never scan or write the production conversation history.
-    if (CONFIG === path.join(os.homedir(), ".config/agent-console/github-triage.json")
-      && RUN === path.join(os.homedir(), ".cache/agent-console/github-triage")
-      && !process.env.AGENT_CONSOLE_TRIAGE_HISTORY) {
-      let updated = 0;
-      try { updated = fs.statSync(historyPath()).mtimeMs; } catch {}
-      if (Date.now() - updated >= CALIBRATION_INTERVAL_MS) {
-        try { await calibrate(); }
-        catch { console.warn("History calibration refresh failed; existing history was retained."); }
-      }
-    }
     const c = config();
     let restarted = false;
     try { await health(c); }
@@ -159,6 +197,16 @@ async function main() {
       });
       await health(c);
       restarted = true;
+    }
+    // Recover the receiver first. Slow offline training must never block supervision.
+    if (CONFIG === path.join(os.homedir(), ".config/agent-console/github-triage.json")
+      && RUN === path.join(os.homedir(), ".cache/agent-console/github-triage")
+      && !process.env.AGENT_CONSOLE_TRIAGE_HISTORY && !process.env.AGENT_CONSOLE_TRIAGE_EFFORT_MODEL) {
+      let updated = 0, attempted = 0;
+      try { updated = fs.statSync(effortModelPath()).mtimeMs; } catch {}
+      try { attempted = Number(fs.readFileSync(CALIBRATION_ATTEMPT, "utf8")); } catch {}
+      if ((updated > Date.now() || Date.now() - updated >= CALIBRATION_INTERVAL_MS)
+        && (!Number.isFinite(attempted) || attempted > Date.now() || Date.now() - attempted >= CALIBRATION_RETRY_MS)) startCalibration();
     }
     let last = 0;
     try { last = Number(fs.readFileSync(LAST_RECONCILE, "utf8")); } catch {}

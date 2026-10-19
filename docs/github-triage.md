@@ -8,9 +8,9 @@ Each item receives one effort label and one priority label. Existing labels outs
 
 | Label | Meaning |
 | --- | --- |
-| `Eff: Trivial` | Estimated generated tokens at or below the historical lower tercile. |
-| `Eff: BAU` | Estimated generated tokens between the historical tercile cutoffs. |
-| `Eff: Deep` | Estimated generated tokens at or above the historical upper tercile. |
+| `Eff: Trivial` | Predicted logged actions at or below the historical lower tercile. |
+| `Eff: BAU` | Predicted logged actions between the historical tercile cutoffs. |
+| `Eff: Deep` | Predicted logged actions at or above the historical upper tercile. |
 | `Pri: P0` | A confirmed current outage, data loss, or active security incident. |
 | `Pri: P1` | Work that unblocks delivery, improves essential reliability, or substantially reduces babysitting. |
 | `Pri: P2` | A useful workflow enhancement that does not block delivery. |
@@ -34,21 +34,19 @@ The comment records these metrics and their evidence:
 
 Unknown values use visible planning assumptions: breadth 1, complexity 1, uncertainty 2, risk 1, impact 1, urgency 0, frequency 0. These assumptions are never presented as evidence.
 
-Effort comes from measured delivery history rather than the model's scope scores. Let `y` be the direct agent's generated output tokens in one verified completed delivery run. Estimate `y_hat = median(y in selected historical runs)`. Trivial means `y_hat <= Q1/3(all historical y)`; Deep means `y_hat >= Q2/3(all historical y)`; otherwise BAU. If cutoffs coincide, use BAU. These terciles are an explicit relative-label policy, not a claim about human complexity or hours. Input tokens include repeated cached context, so they never set effort.
+Effort follows **pre-work complexity → predicted logged actions → token quote**. Four evidence-backed features enter a learned nonnegative log-work equation. Historical tool-call activity trains work coefficients; raw input/output totals never establish task complexity. Effort labels use predicted actions against observed activity terciles. Complete scope uses P50 for routing; unknown or extrapolated scope uses P95 by explicit policy.
 
-The selector compares SQLite FTS5/BM25 request matches (`k=3` or `k=5`, one run per thread group) with the all-history median. It selects lexical matching only when older chronological tuning cases improve multiplicative output-token error. The newest 20% of entire thread groups are held out after selection. Older groups must finish before a target starts; revisions and later requests never leak across groups. Sparse history uses the global median and explicitly makes no issue-specific differentiation claim.
+Quotes show P50, P80, and P95 scenarios, plus P80−P50 reserve. Generated tokens, non-cached input, and cached replay are separate. The current model remains experimental and under-covers its small held-out sample. These quantiles are not guaranteed completion probabilities. See [the model, formula, and initial evidence](triage-effort-pricing.md).
 
 Priority remains an explicit business policy: P0 requires urgency 2, impact 3, and risk at least 2; P1 requires impact 3 or impact at least 2 with frequency 2; P3 requires impact 0; otherwise P2. Historical token consumption does not establish business priority.
 
 Design is detailed for breadth 3, complexity 3, uncertainty 3, or risk at least 2. No separate design is needed only for breadth 0, complexity 0, uncertainty at most 1, and risk at most 1. Other work needs a light design. The book of work contains one to five proposed steps, each with an observable acceptance check.
 
-Input and output budgets report separate observed medians and P10–P90 sample ranges from the selected runs. These descriptive ranges are not confidence intervals. They cover an observed completed **direct-agent delivery run**, not a whole issue, prior failed runs, human hours, or unmeasured child-agent usage. Cache-read input is counted once. The comment reports sample size, thread groups, dates, source commits, method selection, held-out output-token MAE, multiplicative error, and range hit rate.
+Calibration joins verified delivery runs with pre-work features. Historical context is limited to text available before each request; current-run outcomes, diffs, usage, and commits never enter features. Training groups must complete before target requests start. Newer thread groups remain held out, and model errors and coverage stay visible. One logged run is not a whole issue, human hours, or complete child-agent cost.
 
-`bin/github-triage calibrate` rebuilds a private dataset from normalized provider accounting and successful Git/RTK commit outputs. Each run must have an exact accounting identity, an original self-contained request, and a verified commit created within the run. Commit timestamps only check provenance; commit gaps, realized file counts, and added lines are never predictors. Completion availability can use an observed result timestamp or a conservative next-input/idle-metadata upper bound; it never implies active runtime. Unfinished or ambiguous records are excluded and counted.
+`bin/github-triage calibrate` extracts private history, reuses a private feature cache, fits the offline numerical model, validates a candidate artifact, and atomically promotes the model. The default artifact is `~/.config/agent-console/triage-effort-model.json`, mode 0600. Original requests remain local except credential-checked pre-work text sent to the configured small-model providers for feature extraction. No source requests are posted to GitHub or committed.
 
-Calibration is stored in `~/.config/agent-console/triage-history.json`, mode 0600. Original requests stay local and never enter GitHub comments or the repository. The default production watchdog refreshes calibration every 24 hours; scratch workers do not scan production history. Refresh validates a candidate before replacing the last usable dataset. Missing or invalid calibration fails before any model call, without inventing an effort label or token budget. `AGENT_CONSOLE_TRIAGE_HISTORY` overrides the private artifact path; `AGENT_CONSOLE_DATA` selects source history for explicit calibration.
-
-See [the calibration method and initial evidence](triage-calibration.md).
+The production watchdog recovers the receiver first, then schedules daily calibration in the background. Failed fitting keeps the previous model and retries at most hourly. Scratch workers never scan production history. A missing artifact fails before invoking a triage model. `AGENT_CONSOLE_TRIAGE_EFFORT_MODEL` selects the artifact; `AGENT_CONSOLE_TRIAGE_PYTHON` selects the offline interpreter. See [setup and reproduction](triage-effort-pricing.md#operation-and-reproduction).
 
 The comment uses an ownership marker, scorecard version, and source fingerprint. Retries update the same account-owned comment instead of adding duplicates. User comments are preserved. Changed issue text, PR commits, or a new scorecard version makes the report stale.
 
@@ -58,6 +56,8 @@ The worker is a separate process on port 7077. The Console keeps its existing au
 
 ```sh
 npm ci
+uv venv --managed-python --python 3.13 ~/.local/share/agent-console/triage-venv
+uv pip install --python ~/.local/share/agent-console/triage-venv/bin/python -r requirements-triage.txt
 bin/github-triage configure Amit-Roy/agent-console https://github-webhook.nefro-dev-coder.duckdns.org/api/github/webhook
 bin/github-triage calibrate
 bin/github-triage start
