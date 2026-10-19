@@ -23,10 +23,10 @@ const decision = { effort: "bau", priority: "p1", reason: "Fixture", model: "fix
   tokens: { input: [8000, 20000], output: [2000, 5000], formula: fixtureQuote.formula, confidence: "experimental" },
 } } as const;
 const sessionReport = renderTriageComment(decision as any, "fixture-source");
-assert.ok(sessionReport.includes("Initial request → estimated session work → whole-session token quote"));
-assert.ok(sessionReport.includes("Total session tokens"));
-assert.ok(sessionReport.includes("entire observed session/thread, including later follow-ups"));
-assert.ok(sessionReport.includes("later prompts are unseen and add variance"));
+assert.ok(sessionReport.includes("initial request → session work → whole-session tokens"));
+assert.ok(sessionReport.includes("| Scenario | Total tokens | Generated |"));
+assert.ok(sessionReport.includes("Whole-session usage includes later follow-ups."));
+assert.ok(sessionReport.includes("Only the initial request supplies predictors."));
 const totalModel = structuredClone(fixtureEffortModel.model);
 totalModel.workloadMetric = "totalTokens";
 totalModel.tokenYieldBasis = "workload";
@@ -38,7 +38,7 @@ const totalReport = renderTriageComment({ ...decision, scorecard: { ...decision.
 assert.ok(totalReport.includes("Initial request → total session usage"));
 assert.ok(totalReport.includes("total-token MAE"));
 assert.ok(!totalReport.includes("Logged tool actions"));
-assert.ok(totalReport.includes("predicted total session tokens"));
+assert.ok(totalReport.includes("total session tokens"));
 totalModel.estimator = "historical-baseline";
 totalModel.workload.coefficients = [0, 0, 0, 0]; totalModel.workload.missingCoefficients = [0, 0, 0, 0];
 totalModel.validation = { ...totalModel.validation, hasLearnedComplexitySignal: false, activeWork: { mae: 3 }, activeOutputTokens: { mae: 2 } };
@@ -52,7 +52,7 @@ const legacyDecision = structuredClone(decision) as any;
 legacyDecision.scorecard.pricing.scope = "completed-delivery-run";
 const legacyReport = renderTriageComment(legacyDecision, "fixture-source");
 assert.ok(legacyReport.includes("one observed direct-agent delivery run"));
-assert.ok(!legacyReport.includes("whole-session token quote"));
+assert.ok(!legacyReport.includes("whole-session tokens"));
 const payload = (number = 1, kind = "issues", action = "opened") => ({
   action, repository: { full_name: repo }, [kind === "issues" ? "issue" : "pull_request"]: { number },
 });
@@ -193,7 +193,7 @@ try {
     assert.equal(fixture.comments.get(1)?.length, 1);
     assert.equal(fixture.comments.get(2)?.length, 1);
     const report = fixture.comments.get(1)![0].body;
-    for (const section of ["### Book of work", "### Estimated token usage", "### Level of design", "### Metric evidence"]) assert.ok(report.includes(section));
+    for (const section of ["### Book of work", "### Estimated token usage", "### Level of design"]) assert.ok(report.includes(section));
     assert.ok(report.includes(TRIAGE_COMMENT_VERSION_MARKER));
     await fixture.post(payload());
     await fixture.service.waitForIdle();
@@ -295,7 +295,9 @@ try {
   try {
     await lostComment.post(payload());
     await lostComment.service.waitForIdle();
-    assert.equal(lostComment.service.status().done, 1);
+    // Retry finds the comment the lost response created and skips instead of duplicating it.
+    assert.equal(lostComment.service.status().done + lostComment.service.status().skipped, 1);
+    assert.equal(lostComment.service.status().failed, 0);
     assert.equal(lostComment.comments.get(1)?.length, 1);
     assert.equal(lostComment.calls.filter(call => call.method === "POST" && call.endpoint.endsWith("/comments")).length, 1);
   } finally { await lostComment.close(); }
@@ -306,9 +308,40 @@ try {
   try {
     await repairLost.post({ ...payload(1, "issues", "unlabeled"), label: { name: "Eff: Deep" } });
     await repairLost.service.waitForIdle();
-    assert.equal(repairLost.service.status().done, 1);
+    assert.equal(repairLost.service.status().done + repairLost.service.status().skipped, 1);
+    assert.equal(repairLost.service.status().failed, 0);
     assert.equal(repairLost.comments.get(1)?.length, 1);
   } finally { await repairLost.close(); }
+
+  // Drift repair: recalibration, hand-edited comments and wrong labels re-converge without losing the comment id.
+  let revision = "rev-1";
+  let driftRuns = 0;
+  const drift = await start("drift", { assessmentRevision: () => revision, classify: async () => { driftRuns++; return decision; } });
+  try {
+    await drift.service.reconcile(repo);
+    await drift.service.waitForIdle();
+    const first = drift.comments.get(1)![0];
+    const firstId = first.id;
+    const runsAfterSeed = driftRuns;
+    assert.deepEqual(await drift.service.reconcile(repo), { scanned: 2, queued: 0 });
+    first.body = `${TRIAGE_COMMENT_MARKER}\nMaintainer scribble`;
+    assert.equal((await drift.service.reconcile(repo)).queued, 1);
+    await drift.service.waitForIdle();
+    assert.equal(driftRuns, runsAfterSeed, "Edited comments are repaired from the stored assessment without another model call");
+    assert.equal(drift.comments.get(1)![0].id, firstId);
+    assert.ok(drift.comments.get(1)![0].body.includes(TRIAGE_COMMENT_MARKER));
+    drift.items.get(1).labels = [{ name: "bug" }, { name: "Eff: Deep" }, { name: "Pri: P3" }];
+    assert.equal((await drift.service.reconcile(repo)).queued, 1);
+    await drift.service.waitForIdle();
+    assert.deepEqual(drift.items.get(1).labels.map((label: any) => label.name).filter((name: string) => /^(Eff|Pri): /.test(name)).sort(), ["Eff: BAU", "Pri: P1"]);
+    revision = "rev-2";
+    assert.equal((await drift.service.reconcile(repo)).queued, 2);
+    await drift.service.waitForIdle();
+    assert.ok(driftRuns > runsAfterSeed, "A new calibration revision re-prices every item");
+    assert.equal(drift.comments.get(1)!.length, 1);
+    assert.equal(drift.comments.get(1)![0].id, firstId);
+    assert.equal(drift.service.status().failed, 0);
+  } finally { await drift.close(); }
 
   let stale: Awaited<ReturnType<typeof start>>;
   let staleClassifications = 0;

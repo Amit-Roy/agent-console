@@ -1,15 +1,21 @@
 import { quoteEffort, type EffortQuote, type LoadedEffortModel } from "./triage-effort.ts";
 
 /** Initial-request complexity predicts observed session usage; later outcomes are not features. */
-export const TRIAGE_SCORECARD_VERSION = 5;
+export const TRIAGE_SCORECARD_VERSION = 6;
 export const METRIC_MAX = { breadth: 3, complexity: 3, uncertainty: 3, risk: 3, impact: 3, urgency: 2, frequency: 2 } as const;
 export type MetricName = keyof typeof METRIC_MAX;
 export interface MetricEvidence { value: number | null; evidence: string | null }
+/** Planning inference is separate from the frozen historical pricing predictors. */
+export interface PlanningMetricEvidence extends MetricEvidence {
+  basis: "observed" | "inferred" | null;
+  rationale: string | null;
+}
 export interface WorkStep { step: string; check: string }
 export interface ScorecardFacts { changedFiles?: number; additions?: number; deletions?: number }
 export interface TriageScorecard {
   version: typeof TRIAGE_SCORECARD_VERSION;
   metrics: Record<MetricName, MetricEvidence>;
+  planningMetrics?: Record<MetricName, PlanningMetricEvidence>;
   unknowns: MetricName[];
   facts: ScorecardFacts;
   work: WorkStep[];
@@ -18,7 +24,7 @@ export interface TriageScorecard {
   pricing: EffortQuote;
 }
 export interface AssessmentInput extends ScorecardFacts { title: string; body: string; files?: string[] }
-export interface ExtractedAssessment { metrics: Record<MetricName, MetricEvidence>; work: WorkStep[] }
+export interface ExtractedAssessment { metrics: Record<MetricName, MetricEvidence>; planningMetrics?: Record<MetricName, PlanningMetricEvidence>; work: WorkStep[] }
 
 /** Unknowns must remain visible; defaults are planning assumptions, never evidence. */
 export const UNKNOWN_DEFAULTS: Record<MetricName, number> = {
@@ -43,6 +49,22 @@ function confirmedIncident(quote: string): boolean {
   return incident.test(quote) && current.test(quote);
 }
 
+/** Recurrence and timing are facts; source quotes must state them explicitly. */
+function supportedPlanningFact(name: MetricName, value: number, quote: string): boolean {
+  if (name === "urgency") {
+    if (value === 2) return confirmedIncident(quote);
+    if (value === 0) return /\b(no (?:deadline|rush|urgency)|not urgent|no time pressure|whenever|no active incident)\b/i.test(quote);
+    return /\b(deadline|due|by (?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|today)|before (?:release|launch)|this week|tomorrow)\b/i.test(quote);
+  }
+  if (name === "frequency") {
+    if (/\b(no|not|never|might|could|potential|future|if)\b/i.test(quote)) return false;
+    return value === 0 ? /\b(one[- ]off|one time|once only|single occurrence)\b/i.test(quote)
+      : value === 1 ? /\b(occasionally|occasional|sometimes|infrequent|rarely)\b/i.test(quote)
+      : /\b(repeated(?:ly)?|daily|every (?:day|build|session|time|run)|per[- ](?:build|session|run)|each (?:build|session|run)|always)\b/i.test(quote);
+  }
+  return true;
+}
+
 /** The model extracts evidence and proposes a work plan; it cannot select labels or budgets. */
 export function parseAssessment(raw: string | undefined, input: AssessmentInput): ExtractedAssessment | undefined {
   if (!raw || raw.length > 16_384) return;
@@ -63,13 +85,33 @@ export function parseAssessment(raw: string | undefined, input: AssessmentInput)
       if (name === "urgency" && metric.value === 2 && !confirmedIncident(metric.evidence)) return;
       metrics[name] = { value: metric.value, evidence: metric.evidence };
     }
+    let planningMetrics: ExtractedAssessment["planningMetrics"];
+    if (value.planningMetrics !== undefined) {
+      if (!value.planningMetrics || typeof value.planningMetrics !== "object" || Array.isArray(value.planningMetrics)) return;
+      planningMetrics = {} as NonNullable<ExtractedAssessment["planningMetrics"]>;
+      for (const name of Object.keys(METRIC_MAX) as MetricName[]) {
+        const item = value.planningMetrics[name];
+        if (!item || typeof item !== "object" || Array.isArray(item)) return;
+        if (item.value === null && item.evidence === null && item.basis === null && item.rationale === null) {
+          planningMetrics[name] = { value: null, evidence: null, basis: null, rationale: null };
+          continue;
+        }
+        if (!Number.isInteger(item.value) || item.value < 0 || item.value > METRIC_MAX[name]
+          || !plainText(item.evidence, 240) || item.evidence.trim().length < 4
+          || !sources.some(source => source.includes(item.evidence))
+          || !["observed", "inferred"].includes(item.basis) || !plainText(item.rationale, 240)) return;
+        if ((name === "urgency" || name === "frequency") && item.basis !== "observed") return;
+        if (!supportedPlanningFact(name, item.value, item.evidence)) return;
+        planningMetrics[name] = { value: item.value, evidence: item.evidence, basis: item.basis, rationale: item.rationale.trim() };
+      }
+    }
     if (!Array.isArray(value.work) || value.work.length < 1 || value.work.length > 5) return;
     const work: WorkStep[] = [];
     for (const item of value.work) {
       if (!item || typeof item !== "object" || !plainText(item.step, 240) || !plainText(item.check, 240)) return;
       work.push({ step: item.step.trim(), check: item.check.trim() });
     }
-    return { metrics, work };
+    return { metrics, ...(planningMetrics ? { planningMetrics } : {}), work };
   } catch { return; }
 }
 
@@ -77,8 +119,9 @@ export function deriveAssessment(extracted: ExtractedAssessment, input: Assessme
   const pricing = quoteEffort(extracted.metrics, model);
   if (pricing.status !== "ready") return;
   const names = Object.keys(METRIC_MAX) as MetricName[];
-  const unknowns = names.filter(name => extracted.metrics[name].value === null);
-  const scores = Object.fromEntries(names.map(name => [name, extracted.metrics[name].value ?? UNKNOWN_DEFAULTS[name]])) as Record<MetricName, number>;
+  const planning = extracted.planningMetrics ?? extracted.metrics;
+  const unknowns = names.filter(name => planning[name].value === null);
+  const scores = Object.fromEntries(names.map(name => [name, planning[name].value ?? UNKNOWN_DEFAULTS[name]])) as Record<MetricName, number>;
   const effort = pricing.effort;
   const priority = scores.urgency === 2 && scores.impact === 3 && scores.risk >= 2 ? "p0"
     : scores.impact === 3 || scores.impact >= 2 && scores.frequency === 2 ? "p1"
@@ -97,7 +140,7 @@ export function deriveAssessment(extracted: ExtractedAssessment, input: Assessme
     if (Number.isSafeInteger(input[name]) && input[name]! >= 0 && input[name]! <= 100_000_000) facts[name] = input[name];
   }
   const scorecard: TriageScorecard = {
-    version: TRIAGE_SCORECARD_VERSION, metrics: extracted.metrics, unknowns, facts, work: extracted.work, design,
+    version: TRIAGE_SCORECARD_VERSION, metrics: extracted.metrics, ...(extracted.planningMetrics ? { planningMetrics: extracted.planningMetrics } : {}), unknowns, facts, work: extracted.work, design,
     tokens: { input: pricing.input ? [pricing.input.p50, pricing.input.p95] : null,
       output: [pricing.output.p50, pricing.output.p95], formula: pricing.formula, confidence: pricing.confidence },
     pricing,
