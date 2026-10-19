@@ -73,9 +73,15 @@ export function plan(input: { now: number; usage: Record<string, ProviderUsage>;
     if (e) room.set(p, { ...e, left: cfg.perWindow });
   }
   const out: Decision[] = [];
+  let piLeft = cfg.perWindow;
   // Deep work first: it needs the most quota, so it gets first pick of what is expiring.
   for (const effort of ["deep", "bau", "trivial"] as Effort[]) {
     for (const issue of open.filter(i => effortOf(i.labels) === effort)) {
+      // Live Pi workers use their own capacity; premium review can wait until the PR is ready.
+      if (cfg.routing.mode === "live" && (effort === "trivial" || (effort === "bau" && cfg.routing.bauOnPi))) {
+        if (piLeft-- > 0) out.push({ key: issueKey(issue), issue, effort, route: ROUTES.trivial[0], reason: "Pi work is independent of premium reset windows" });
+        continue;
+      }
       // Trivial work runs on Pi but needs a Sonnet/Sol reviewer, so it also draws on an expiring window.
       const pool = effort === "trivial" ? REVIEWERS : ROUTES[effort];
       const route = pool.find(r => { const w = room.get(r.provider); return !!w && w.left > 0 && (effort === "trivial" || !w.full); });
@@ -117,14 +123,14 @@ export function threadTitle(issue: Pick<Issue, "repo" | "number" | "title">): st
 
 export function issuePrompt(d: Decision, branch: string, base: string): string {
   const { issue, effort } = d, repo = issue.repo.split("/")[1];
-  const direct = effort !== "trivial" && DIRECT_REPOS.includes(repo);
+  const direct = effort === "deep" && DIRECT_REPOS.includes(repo);
   return [
     `Work GitHub issue ${issue.repo}#${issue.number}: ${issue.title}`,
     `Read it first: gh issue view ${issue.number} --repo ${issue.repo} --comments. The triage comment holds the book of work.`,
     `You are in your own git worktree on branch ${branch} (from ${base}). Never touch the main checkout.`,
     direct
       ? `When done and verified, commit, rebase onto origin/${base} and push to ${base}. Reference the issue (Refs #${issue.number}).`
-      : `When done and verified, push the branch and open a pull request into ${base} that references the issue. Do not merge it.${effort === "trivial" ? " A Sonnet or Sol review must approve it before merge: say so in the PR body and stop." : ""}`,
+      : `When done and verified, push the branch and open a pull request into ${base} that references the issue. Do not merge it.${effort !== "deep" ? " A Sonnet or Sol review must approve it before merge: say so in the PR body and stop." : ""}`,
     selfReviewBlock(skillDir(), base),
     `Unattended run: do not ask questions. End with a short summary: what changed, how it was checked, what is left.`,
   ].join("\n\n");
@@ -176,7 +182,7 @@ export function addWorktree(o: { repo: string; dirs: { repos: string; worktrees:
 export function startIssue(d: Decision, runner: IssueRunner, dirs = defaultDirs(), git: Git = defaultGit) {
   const name = d.issue.repo.split("/")[1];
   const { cwd, base, branch } = addWorktree({ repo: name, dirs, dirName: `${name}-issue-${d.issue.number}`, branch: `issue-${d.issue.number}-${slug(d.issue.title)}`, git });
-  if (!(d.effort !== "trivial" && DIRECT_REPOS.includes(name))) installPrOnlyHook(cwd, base, git);
+  if (!(d.effort === "deep" && DIRECT_REPOS.includes(name))) installPrOnlyHook(cwd, base, git);
   const thread = runner.create({ ...d.route, cwd, mode: "bypassPermissions", title: threadTitle(d.issue), issueRun: { key: d.key, repo: d.issue.repo, number: d.issue.number, effort: d.effort, role: "work", branch, base } });
   runner.send(thread.id, issuePrompt(d, branch, base));
   return { thread: thread.id, cwd, branch };
@@ -233,18 +239,22 @@ export function createDispatcher(opts: {
       const rows = read();
       const done = new Set<string>(rows.filter(r => !r.dryRun).map(r => r.key));
       const live = !cfg.dryRun && !!opts.start;
-      const seen = new Set<string>(rows.filter(r => r.dryRun && r.window?.resetsAt).map(r => `${r.key}@${r.window.resetsAt}`));
+      const seen = new Set<string>(rows.filter(r => r.dryRun).map(r => `${r.key}@${r.window?.resetsAt}`));
       const planned = plan({ now: now(), usage: opts.usage(), issues, done, cfg })
         .filter(d => live || !seen.has(`${d.key}@${d.window?.resetsAt}`));
       const picked: Decision[] = [];
       let deferred = 0;
+      const active = [...(opts.active?.() ?? [])];
       for (let d of planned) {
-        const rr = routeWork({ role: "work", effort: d.effort, usage: opts.usage(), active: opts.active?.() ?? [], now: now(), flags: { bauOnPi: cfg.routing.bauOnPi }, failures: opts.failures?.() });
+        const rr = routeWork({ role: "work", effort: d.effort, usage: opts.usage(), active, now: now(), flags: { bauOnPi: cfg.routing.bauOnPi }, failures: opts.failures?.() });
         const shadow = { decision: rr.decision, route: rr.route, why: rr.why };
         ev?.record({ step: "router", kind: rr.decision === "defer" ? "info" : "ok", ref: d.key, msg: `${cfg.routing.mode}: ${rr.decision}${rr.route ? ` ${rr.route.provider}/${rr.route.model}` : ""} — ${rr.why}`, data: { legacy: d.route, router: rr.route } });
         if (cfg.routing.mode === "live") {
           if (rr.decision === "defer") { deferred++; continue; } // not marked done: the next tick tries again
-          if (rr.decision === "route") d = { ...d, route: rr.route! };
+          if (rr.decision === "route") {
+            d = { ...d, route: rr.route! };
+            active.push({ provider: d.route.provider, role: "work" });
+          }
         }
         picked.push(d);
         // Logged before the start so a crash cannot start the same issue twice; a failed start stays in the ledger with its error and is not retried.
@@ -263,7 +273,7 @@ export function createDispatcher(opts: {
           ev?.record({ step: "worktree", kind: "fail", run: wt, ref: d.key, msg: error });
         }
       }
-      ev?.record({ step: "dispatcher", kind: "ok", run, msg: `picked ${picked.length}${deferred ? `, deferred ${deferred}` : ""}${picked.length || deferred ? "" : " (nothing in a window's last " + cfg.leadMinutes + " min with room)"}` });
+      ev?.record({ step: "dispatcher", kind: "ok", run, msg: `picked ${picked.length}${deferred ? `, deferred ${deferred}` : ""}${picked.length || deferred ? "" : " (no eligible Pi work or premium window in its last " + cfg.leadMinutes + " min with room)"}` });
       return picked;
     } catch (e: any) {
       ev?.record({ step: "dispatcher", kind: "fail", run, msg: String(e?.message ?? e) });
