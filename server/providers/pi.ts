@@ -31,6 +31,8 @@ const contexts = new Map<string, number>(); // "provider/model" -> context windo
 const NVIDIA_FREE_MODELS = new Set([
   "meta/llama-3.2-11b-vision-instruct",
   "nvidia/nemotron-3-super-120b-a12b",
+  "nvidia/nemotron-3-ultra-550b-a55b",
+  "nvidia/nemotron-3.5-lightning-30b-a3b",
   "nvidia/nemotron-3.5-super-vl-120b-a12b",
   "openai/gpt-oss-20b",
   "stepfun-ai/step-5-preview",
