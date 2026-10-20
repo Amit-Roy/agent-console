@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { piRateEnv } from "./pi-rate-env.ts";
 import { childEnv } from "./env.ts";
-import { createLabelCompletion, type LabelEngine } from "./small-model.ts";
+import { createLabelCompletion, NVIDIA_LABEL_MODELS, type LabelEngine } from "./small-model.ts";
 import { deriveAssessment, parseAssessment, type TriageScorecard } from "./triage-scorecard.ts";
 import { loadEffortModel, type LoadedEffortModel } from "./triage-effort.ts";
 export { TRIAGE_SCORECARD_VERSION } from "./triage-scorecard.ts";
@@ -227,8 +227,8 @@ async function askHaiku(prompt: string, system: string): Promise<string> {
 export function defaultTriageEngines(): LabelEngine[] {
   const luna = codexLuna();
   return [
-    { id: "pi/nvidia/nvidia/nemotron-3-super-120b-a12b", cooldownMs: 45_000, available: () => !!childEnv().NVIDIA_API_KEY,
-      call: (p, s) => askPi("nvidia", "nvidia/nemotron-3-super-120b-a12b", p, s) },
+    ...NVIDIA_LABEL_MODELS.map((model): LabelEngine => ({ id: `pi/nvidia/${model}`, cooldownMs: 45_000, available: () => !!childEnv().NVIDIA_API_KEY,
+      call: (p, s) => askPi("nvidia", model, p, s) })),
     { id: "pi/openrouter/nvidia/nemotron-3-super-120b-a12b:free", cooldownMs: 45_000, available: () => !!childEnv().OPENROUTER_API_KEY,
       call: (p, s) => askPi("openrouter", "nvidia/nemotron-3-super-120b-a12b:free", p, s) },
     { id: "claude/haiku", available: () => !!readJson(path.join(process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude"), ".credentials.json"))?.claudeAiOauth,
