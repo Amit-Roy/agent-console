@@ -12,6 +12,8 @@ fs.mkdirSync(path.join(data, "pi-sessions"), { recursive: true });
 
 const { usage, ProviderUsage } = await import("../server/usage.ts");
 const { Threads } = await import("../server/threads.ts");
+const { PROVIDERS } = await import("../server/providers/index.ts");
+PROVIDERS.get("codex")!.status = () => ({ ok: true }); // CI has no Codex login; no model request is made
 
 function createThread(threads: Threads, provider: string, model = "sonnet"): string {
   const t = threads.create({ provider, cwd: data, model, title: `test-${provider}` });
