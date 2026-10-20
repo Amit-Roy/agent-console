@@ -62,6 +62,23 @@ for (const [name, viewport, scheme] of [["desktop-light", { width: 1280, height:
   check(`${name}: no console errors, first-party only`, errors.length === 0 && external.length === 0, errors.concat(external).join(" | ").slice(0, 200));
   await ctx.close();
 }
+// deploy skew: new page files against an older server (no io field, no history endpoint)
+{
+  const ctx = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  await ctx.addCookies([{ name: "ac_session", value: makeToken(), url: BASE }]);
+  const page = await ctx.newPage();
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  await page.route("**/api/host/metrics", async (route) => { const r = await route.fetch(); const j = await r.json(); delete j.io; await route.fulfill({ response: r, json: j }); });
+  await page.route("**/api/host/history*", (route) => route.fulfill({ status: 404, contentType: "text/html", body: "Cannot GET" }));
+  await page.goto(`${BASE}/host`);
+  await page.waitForSelector("#proc-rows .hrow.proc");
+  await page.waitForTimeout(2500);
+  const toast = await page.locator("#toast.show").count();
+  check("skew: old server renders without errors", errors.length === 0 && toast === 0, errors.join(" | ").slice(0, 200));
+  check("skew: history explains restart", (await page.locator("#cap-cpu").innerText()).includes("restart"));
+  await ctx.close();
+}
 // API contracts
 CK: {
   const r = await fetch(`${BASE}/api/host/metrics`, { headers: { cookie: `ac_session=${makeToken()}` } });
