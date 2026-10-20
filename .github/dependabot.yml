@@ -1,0 +1,69 @@
+# Dependabot configuration for agent-console
+# Covers npm (Node.js) and pip (Python) ecosystems.
+# Weekly schedule with grouped PRs to reduce noise.
+version: 2
+updates:
+  # npm ecosystem - package.json and package-lock.json
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "04:00"
+      timezone: "UTC"
+    groups:
+      # Group development dependencies to reduce PR count
+      dev-dependencies:
+        patterns:
+          - "*"
+        dependency-type: "development"
+      # Group production dependencies by major version to allow safer updates
+      production-dependencies:
+        patterns:
+          - "*"
+        dependency-type: "production"
+        update-types:
+          - "minor"
+          - "patch"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "npm"
+    commit-message:
+      prefix: "deps(npm)"
+      prefix-development: "deps-dev(npm)"
+      include: "scope"
+    allow:
+      - dependency-type: "direct"
+      - dependency-type: "indirect"
+    ignore:
+      # Ignore major version updates for production deps (handled manually)
+      - dependency-type: "production"
+        update-type: "version-update:semver-major"
+
+  # pip ecosystem - requirements-triage.txt
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "04:30"
+      timezone: "UTC"
+    groups:
+      # Group all pip dependencies together
+      python-dependencies:
+        patterns:
+          - "*"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "python"
+    commit-message:
+      prefix: "deps(pip)"
+      include: "scope"
+    allow:
+      - dependency-type: "direct"
+      - dependency-type: "indirect"
+    ignore:
+      # Ignore major version updates (handled manually)
+      - update-type: "version-update:semver-major"
