@@ -1,5 +1,9 @@
 # agent-console
 
+[![Watch the Agent Console launch video: laptop and Android workflows](docs/brag/brag.jpg)](docs/brag/brag.mp4)
+
+[Watch the 22.5-second video](docs/brag/brag.mp4) · Claude Code, Codex, and Pi, from your laptop or phone.
+
 Browser front end for Claude, Pi, and Codex agents running on this machine. No remote desktop. Installable as a PWA.
 
 **Personal use only** — never share this instance. Anthropic's terms restrict third-party products built on claude.ai login.

@@ -1,0 +1,1 @@
+Claude Code, Codex and Pi in one thread list. Start a turn on the laptop, close the lid, steer it from your phone, and tap an answer when the agent asks. agent-console: a self-hosted browser front end for the agents on your own machine.
