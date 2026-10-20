@@ -8,6 +8,10 @@ export function transientProviderError(message) {
   return /(?:\b429\b|\b503\b|rate[ _-]?limit|too many requests|service unavailable|temporarily unavailable|provider[ _-]?overloaded)/i.test(String(message ?? ""));
 }
 
+export function exhaustedProviderQuota(message) {
+  return /(?:daily[ _-]?quota|free[ _-]?models[ _-]?per[ _-]?day|MODEL_PROVIDER_QUOTA_EXHAUSTED)/i.test(String(message ?? ""));
+}
+
 export function routeCodingRequest(request, ctx) {
   const available = ctx.modelRegistry.getAvailable();
   const find = (provider, id) => available.find(model => model.provider === provider && model.id === id);
@@ -16,20 +20,23 @@ export function routeCodingRequest(request, ctx) {
   const approved = model => model?.provider === "nvidia" && model.id === DIRECT_CODING ||
     model?.provider === "openrouter" && model.id === ROUTER_CODING;
   const failed = request.reason === "retry" ? request.failed : undefined;
-  let model;
-  if (failed?.model?.provider === "nvidia" && failed.model.id === DIRECT_CODING &&
-      transientProviderError(failed.message?.errorMessage) && router) {
-    model = router;
-  } else {
-    // Preserve the actual successful provider through tool follow-ups and later
-    // prompts. Do not bounce back to a throttled NVIDIA key after each turn.
-    // Only a retry stays on the failed model; every new request tries direct NVIDIA first.
-    const sticky = failed?.model;
-    model = approved(sticky) ? find(sticky.provider, sticky.id) : undefined;
-    model ??= direct ?? router;
+  // Pi persists route state on the session branch. Track failures only within
+  // one retry sequence so two failing providers cannot bounce indefinitely.
+  const retryProviders = request.reason === "retry" ? [...(request.state?.retryProviders ?? [])] : [];
+  const error = failed?.message?.errorMessage;
+  const canFallback = approved(failed?.model) && (failed.model.provider === "nvidia" && transientProviderError(error) ||
+    failed.model.provider === "openrouter" && exhaustedProviderQuota(error));
+  if (canFallback && !retryProviders.includes(failed.model.provider)) retryProviders.push(failed.model.provider);
+  // Every new request tries direct NVIDIA first; only a retry stays on its failed model.
+  const sticky = failed?.model;
+  let model = approved(sticky) ? find(sticky.provider, sticky.id) : undefined;
+  if (canFallback) {
+    const alternative = failed.model.provider === "nvidia" ? router : direct;
+    if (alternative && !retryProviders.includes(alternative.provider)) model = alternative;
   }
+  model ??= direct ?? router;
   if (!model) throw new Error("Pi automation is blocked: no approved coding provider is authenticated.");
-  return { model, thinkingLevel: request.thinkingLevel ?? "off" };
+  return { model, thinkingLevel: request.thinkingLevel ?? "off", state: { retryProviders } };
 }
 
 export default function codingRoute(pi) {

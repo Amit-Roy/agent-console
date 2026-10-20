@@ -26,6 +26,14 @@ Window opener
 8. **Worker redo**: `Review: CHANGES REQUESTED` is sent back to the worker thread with the findings; it fixes the same branch and pushes, and its turn end starts the next review. At most 3 reviews per worker (`MAX_REVIEWS` in `server/issue-review.ts`); after that a person decides.
 9. **Merge and apply**: the reviewer squash-merges what it approves, except PRs that touch protected paths (`server/automation/`, `skills/`, the dispatcher, opener and reviewer, `server/auth.ts`, `bin/`, `.github/`, `package.json`): a person merges those. For agent-console, dotfiles and brain the reviewer then fast-forwards the checkout and restarts agent-console when idle.
 
+## Recovering incomplete workers
+
+The five-minute sweep resumes a Trivial or BAU worker that ended without opening a PR, using its existing private clone, branch, and transcript. Recovery requires live dispatch, available capacity for the same provider, and an open issue. Each worker gets at most two recovery turns, at least 15 minutes apart; counters and backoff survive server restarts. Closed issues and archived or running workers are skipped.
+
+A failed redo waits for worker recovery before another premium review. Successful review handoffs release the worker claim so its next review can start in the same server process. If sending findings fails, the reviewer remains eligible for another handoff.
+
+Pi can return from an exhausted OpenRouter daily quota to the approved NVIDIA coding model. Routing preserves completed tool results and prevents provider bounce loops within a retry sequence. A full-prompt 429 retry is refused once any tool call occurred in that turn.
+
 ## The log
 
 Every stage writes to `automation-events.jsonl` in the Console data directory (mode 0600): `seq, ts, step, kind, run, ref, msg, data`. Kinds are `start`, `ok`, `fail`, `info`, `abandoned`. Only the Console process writes it; it rotates at 5 MB and keeps the last 5,000 events in memory. Tokens, keys, bearer values and URL credentials are redacted before they reach disk. An unfinished run older than 30 minutes, or left over from a previous process, is shown as abandoned, not working. The dashboard, the step logs, the failure list and the Debug prompt are all views of this one stream.

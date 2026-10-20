@@ -180,6 +180,82 @@ try {
   await rv.sweep([{ id: "archived", archived: now, status: "idle", issueRun: { ...created[0].issueRun, finishedAt: now } }]);
   assert.equal(count(), archivedCount, "archived workers cannot start a new review");
 
+  // A real worker keeps the same ID through review, redo, and another review.
+  const loopWorker: any = { id: "LOOP", status: "idle", issueRun: { ...created[0].issueRun, effort: "bau" } };
+  const loopCreated: any[] = [];
+  let rejectSend = false;
+  const loopRunner = {
+    create(o: any) { loopCreated.push(o); return { id: `LR${loopCreated.length}` }; },
+    mark(id: string, patch: any) {
+      const state = id === loopWorker.id ? loopWorker.issueRun : loopCreated[Number(id.slice(2)) - 1]?.issueRun;
+      if (state) Object.assign(state, patch);
+    },
+    send() { if (rejectSend) throw new Error("worker unavailable"); },
+  };
+  const loop = createReviewer({ github: gh as any, runner: loopRunner, dirs, events: ev, route: routing, now: () => now });
+  prs = [{ number: 40, body: "## Self-review\nok" }];
+  pull = { merged: false, state: "open" };
+  comments = [{ body: "Review: CHANGES REQUESTED\nFix totals", created_at: new Date(now).toISOString() }];
+  await loop.sweep([loopWorker]);
+  assert.equal(loopCreated.length, 1);
+  const loopReview: any = { id: "LR1", status: "idle", issueRun: loopCreated[0].issueRun };
+  rejectSend = true;
+  await loop.sweep([loopReview]);
+  assert.equal(loopReview.issueRun.outcome, undefined, "failed handoff remains retryable");
+  rejectSend = false;
+  await loop.sweep([loopReview]);
+  loop.turnEnded(loopWorker, {}); await tick();
+  assert.equal(loopCreated.length, 2, "same worker starts its second review without restarting server");
+
+  comments = [];
+  await loop.sweep([{ id: "LR2", status: "idle", issueRun: loopCreated[1].issueRun }]);
+  await loop.sweep([loopWorker]);
+  assert.equal(loopCreated.length, 3, "same worker retries a reviewer that posted no verdict");
+
+  // Missing PRs resume the existing worker, with durable backoff and a strict cap.
+  prs = [];
+  const recovering: any = { id: "RECOVER", status: "idle", provider: "pi", issueRun: { ...created[0].issueRun, effort: "bau" } };
+  let resumed = 0, allowed = true, issueState = "open";
+  let issueRead: (() => Promise<void>) | undefined;
+  const recoveryDeps = {
+    github: (async (method: string, url: string) => {
+      if (/\/issues\/\d+$/.test(url)) { await issueRead?.(); return { state: issueState }; }
+      return gh(method, url);
+    }) as any,
+    runner: { ...runner, mark(id: string, patch: any) { if (id === recovering.id) Object.assign(recovering.issueRun, patch); }, send(id: string, text: string) { assert.equal(id, recovering.id); assert.match(text, /preserve completed work/); resumed++; recovering.status = "running"; } },
+    dirs, events: ev, route: routing, canResume: () => allowed, now: () => now,
+  };
+  let recovery = createReviewer(recoveryDeps);
+  allowed = false;
+  await recovery.sweep([recovering]); assert.equal(resumed, 0, "disabled dispatch cannot resume work");
+  allowed = true; issueState = "closed";
+  await recovery.sweep([recovering]); assert.equal(resumed, 0, "closed issue cannot resume work");
+  issueState = "open";
+  let releaseIssue!: () => void, issueStarted!: () => void;
+  const startedIssue = new Promise<void>(resolve => { issueStarted = resolve; });
+  issueRead = () => { issueStarted(); return new Promise<void>(resolve => { releaseIssue = resolve; }); };
+  const pendingRecovery = recovery.sweep([recovering]);
+  await startedIssue; allowed = false; releaseIssue(); await pendingRecovery;
+  assert.equal(resumed, 0, "capacity is rechecked after asynchronous GitHub reads");
+  issueRead = undefined; allowed = true;
+  await Promise.all([recovery.sweep([recovering]), recovery.sweep([recovering])]);
+  assert.equal(resumed, 1, "concurrent sweeps resume once");
+  assert.equal(recovering.issueRun.recoveries, 1);
+  recovering.status = "idle";
+  recovery = createReviewer(recoveryDeps);
+  await recovery.sweep([recovering]); assert.equal(resumed, 1, "restart preserves backoff");
+  now += 15 * 60_000;
+  await recovery.sweep([recovering]); assert.equal(resumed, 2);
+  recovering.status = "idle"; now += 15 * 60_000;
+  await createReviewer(recoveryDeps).sweep([recovering]); assert.equal(resumed, 2, "restart preserves recovery cap");
+  recovering.issueRun.recoveries = 0; recovering.issueRun.retryAt = 0;
+  recovering.issueRun.redoing = true; recovering.issueRun.pr = 40;
+  await recovery.sweep([recovering]); assert.equal(resumed, 3, "failed redo resumes worker before another review");
+
+  recovering.status = "idle"; recovering.issueRun.recoveries = 0; recovering.issueRun.retryAt = 0;
+  recovering.issueRun.redoing = true; pull = { merged: true, state: "closed" };
+  await recovery.sweep([recovering]); assert.equal(resumed, 3, "merged redo PR never receives more fixes");
+
   // setup failures are logged, contained and retried
   const bad = createReviewer({ github: (async () => { throw new Error("gh down"); }) as any, runner, dirs, log: m => logs.push(m), route: routing, events: ev });
   bad.turnEnded(worker("bau", "W9"), {}); await tick(); assert.match(logs.at(-1)!, /could not start: gh down/);

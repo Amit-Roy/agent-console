@@ -22,6 +22,7 @@ type Marker = { mark(threadId: string, patch: Partial<IssueRun>): void };
 export interface ReviewDeps {
   github?: GithubRequest;
   runner: IssueRunner & Marker;
+  canResume?: (t: ThreadLike) => boolean; // Capacity and live-dispatch gates for resuming existing workers.
   route: (effort: IssueRun["effort"]) => RouteResponse; // the router's answer for a review of this effort
   events?: EventLog;
   dirs?: { repos: string; worktrees: string };
@@ -30,7 +31,7 @@ export interface ReviewDeps {
   log?: (msg: string) => void;
   now?: () => number;
 }
-type ThreadLike = { id: string; status?: string; archived?: number; issueRun?: IssueRun };
+type ThreadLike = { id: string; provider?: string; status?: string; archived?: number; issueRun?: IssueRun };
 
 export function createReviewer(deps: ReviewDeps) {
   const github = deps.github ?? githubRequest;
@@ -45,11 +46,41 @@ export function createReviewer(deps: ReviewDeps) {
   const judging = new Set<string>();      // a reviewer's end is being judged: the sweep must not judge it twice
   const once = (key: string, f: () => void) => { if (!reported.has(key)) { reported.add(key); f(); } };
 
-  async function review(t: { id: string; issueRun: IssueRun }): Promise<boolean> {
+  const resuming = new Set<string>();
+  async function resume(t: ThreadLike): Promise<void> {
+    const run = t.issueRun!;
+    if (!deps.canResume?.(t) || resuming.has(t.id) || (run.recoveries ?? 0) >= 2 || (run.retryAt ?? 0) > now()) return;
+    resuming.add(t.id);
+    try {
+      const issue = await github("GET", `repos/${run.repo}/issues/${run.number}`);
+      if (issue?.state !== "open") return;
+      if (run.redoing) {
+        const pr = await github("GET", `repos/${run.repo}/pulls/${run.pr}`);
+        if (pr?.merged || pr?.state === "closed") {
+          deps.runner.mark(t.id, { redoing: false, reviewedAt: now() });
+          once(`${t.id}:redo-closed`, () => ev?.record({ step: "redo", kind: "info", ref: run.key, msg: `PR #${run.pr} is closed; no more fixes are needed` }));
+          return;
+        }
+      }
+      // GitHub reads yield to other turns and dispatch ticks; admission must still be valid now.
+      if (t.archived || t.status === "running" || !deps.canResume?.(t)) return;
+      // Persist admission before sending so concurrent sweeps and restarts cannot replay this recovery.
+      deps.runner.mark(t.id, { recoveries: (run.recoveries ?? 0) + 1, retryAt: now() + 15 * 60_000, finishedAt: undefined });
+      const task = run.redoing
+        ? `Continue fixing the review findings on PR #${run.pr}. Read its comments first: gh pr view ${run.pr} --repo ${run.repo} --comments. Keep the same branch and PR; do not merge.`
+        : `Continue issue #${run.number} in ${run.repo}. Read it first: gh issue view ${run.number} --repo ${run.repo} --comments. Complete the task, verify it, push branch ${run.branch}, and open its PR into ${run.base ?? "main"}. Do not merge.`;
+      deps.runner.send(t.id, `${task}\n\nThe previous turn stopped before completion. Inspect the existing diff and remote PR before acting; preserve completed work and do not repeat completed external actions. Follow the repository PR and self-review instructions. End with what changed, what you checked, and what remains.`);
+      ev?.record({ step: run.redoing ? "redo" : "worker", kind: "start", run: `${run.redoing ? "redo" : "work"}:${t.id}`, ref: run.key, msg: "resuming existing worker after an incomplete turn", data: { thread: t.id } });
+    } catch (e: any) {
+      ev?.record({ step: run.redoing ? "redo" : "worker", kind: "fail", ref: run.key, msg: `could not resume worker: ${String(e?.message ?? e)}` });
+    } finally { resuming.delete(t.id); }
+  }
+
+  async function review(t: ThreadLike & { issueRun: IssueRun }, recover: boolean): Promise<boolean> {
     const run = t.issueRun, name = run.repo.split("/")[1], owner = run.repo.split("/")[0];
     const prs = await github("GET", `repos/${run.repo}/pulls?state=open&head=${encodeURIComponent(`${owner}:${run.branch}`)}`);
     const pr = Array.isArray(prs) ? prs[0] : undefined;
-    if (!pr || !Number.isSafeInteger(pr.number)) { once(`${t.id}:nopr`, () => ev?.record({ step: "pr", kind: "fail", ref: run.key, msg: `no open PR for branch ${run.branch}` })); return false; }
+    if (!pr || !Number.isSafeInteger(pr.number)) { once(`${t.id}:nopr`, () => ev?.record({ step: "pr", kind: "fail", ref: run.key, msg: `no open PR for branch ${run.branch}` })); if (recover) await resume(t); return false; }
     once(`${t.id}:pr`, () => ev?.record({ step: "pr", kind: "ok", ref: run.key, msg: `PR #${pr.number}` }));
     once(`${t.id}:self`, () => /^#{1,4}\s*Self-review\b/mi.test(String(pr.body ?? ""))
       ? ev?.record({ step: "self_review", kind: "ok", ref: run.key, msg: "Self-review section present" })
@@ -77,12 +108,12 @@ export function createReviewer(deps: ReviewDeps) {
     return true;
   }
 
-  async function attempt(t: ThreadLike) {
+  async function attempt(t: ThreadLike, recover = false) {
     const run = t.issueRun;
     if (t.archived || !run || run.role !== "work" || run.effort === "deep" || run.reviewedAt || !run.branch || claimed.has(t.id)) return;
     if ((run.reviews ?? 0) >= MAX_REVIEWS) { once(`${t.id}:max`, () => ev?.record({ step: "review", kind: "info", ref: run.key, msg: `${MAX_REVIEWS} reviews without a merge: a person decides` })); return; }
     claimed.add(t.id); // a second turn ending while the first review is being set up must not start another
-    try { if (!(await review({ id: t.id, issueRun: run }))) claimed.delete(t.id); }
+    try { if (!(await review(t as ThreadLike & { issueRun: IssueRun }, recover))) claimed.delete(t.id); }
     catch (e: any) {
       claimed.delete(t.id);
       const why = String(e?.message ?? e);
@@ -105,9 +136,10 @@ export function createReviewer(deps: ReviewDeps) {
     const worker = run.worker;
     if (!worker) { ev?.record({ step: kind === "redo" ? "redo" : "review", kind: "info", ref: run.key, msg: "reviewer has no worker thread on record: a person decides" }); return; }
     if ((run.reviews ?? 0) >= MAX_REVIEWS) { ev?.record({ step: kind === "redo" ? "redo" : "review", kind: "info", ref: run.key, msg: `${MAX_REVIEWS} reviews without a merge: a person decides` }); return; }
-    if (kind === "retry") { deps.runner.mark(worker, { reviewedAt: undefined }); return; } // the next sweep starts a fresh reviewer
+    if (kind === "retry") { deps.runner.mark(worker, { reviewedAt: undefined }); claimed.delete(worker); return; } // the next sweep starts a fresh reviewer
     deps.runner.send(worker, redoPrompt(run, run.pr!, verdict));
     deps.runner.mark(worker, { reviewedAt: undefined, redoing: true });
+    claimed.delete(worker);
     ev?.record({ step: "redo", kind: "start", run: `redo:${worker}`, ref: run.key, msg: `worker fixes review findings on PR #${run.pr}`, data: { thread: worker, pr: run.pr } });
   }
 
@@ -144,9 +176,9 @@ export function createReviewer(deps: ReviewDeps) {
         return;
       }
       ev?.record({ step: "review", kind: "ok", run: id, ref: run.key, msg: "reviewer requested changes" });
-      judged("changes");
       again(run, "redo", verdict.body);
-    } catch (e: any) { ev?.record({ step: "merge", kind: "fail", ref: run.key, msg: `could not read PR #${run.pr}: ${String(e?.message ?? e)}` }); }
+      judged("changes");
+    } catch (e: any) { ev?.record({ step: "merge", kind: "fail", ref: run.key, msg: `could not finish review of PR #${run.pr}: ${String(e?.message ?? e)}` }); }
   }
 
   /** Called when an issue run's turn ends. */
@@ -158,7 +190,11 @@ export function createReviewer(deps: ReviewDeps) {
     // An errored turn may still have pushed its PR (a provider limit late in the turn): the PR is reviewed all the same.
     if (event?.is_error) ev?.record({ step: "worker", kind: "fail", run: id, ref: run.key, msg: "turn ended with an error" });
     else ev?.record({ step: "worker", kind: "ok", run: id, ref: run.key, msg: "turn ended" });
-    if (run.redoing) ev?.record({ step: "redo", kind: event?.is_error ? "fail" : "ok", run: `redo:${t.id}`, ref: run.key, msg: event?.is_error ? "worker turn ended with an error; the branch is reviewed as it is" : "worker pushed its fixes" });
+    if (run.redoing) ev?.record({ step: "redo", kind: event?.is_error ? "fail" : "ok", run: `redo:${t.id}`, ref: run.key, msg: event?.is_error ? "worker turn ended with an error; waiting to resume fixes" : "worker pushed its fixes" });
+    if (run.redoing && event?.is_error) {
+      deps.runner.mark(t.id, { finishedAt: now(), redoing: true, retryAt: now() + 15 * 60_000 });
+      return; // Recover the worker before spending another review on an unchanged branch.
+    }
     deps.runner.mark(t.id, { finishedAt: now(), redoing: false });
     void attempt({ ...t, issueRun: { ...run, finishedAt: now(), redoing: false } });
   }
@@ -169,7 +205,8 @@ export function createReviewer(deps: ReviewDeps) {
     for (const t of threads) {
       const run = t.issueRun;
       if (t.archived || t.status === "running" || !run) continue;
-      if (run.role === "work" && !run.reviewedAt) await attempt(t);
+      if (run.role === "work" && run.redoing) await resume(t);
+      else if (run.role === "work" && !run.reviewedAt) await attempt(t, true);
       else if (run.role === "review" && run.pr && !run.outcome) {
         // Reviewers started before the redo loop do not name their worker: it is the work thread with the same issue and PR.
         const worker = run.worker ?? threads.find(w => w.issueRun?.role === "work" && w.issueRun.key === run.key && w.issueRun.pr === run.pr)?.id;

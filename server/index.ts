@@ -112,6 +112,14 @@ if (process.env.AGENT_CONSOLE_MOCK !== "1") {
     start: d => startIssue(d, { create: o => threads.create(o), send: (id, text) => threads.send(id, text) }),
   });
   const reviewer = createReviewer({
+    canResume: t => {
+      const live = threads.get(t.id);
+      if (!live || live.archived || live.status === "running") return false;
+      const cfg = loadDispatchConfig();
+      if (!cfg.enabled || cfg.dryRun || cfg.routing.mode !== "live") return false;
+      const answer = routeWork({ role: "work", effort: t.issueRun!.effort as any, usage: usage.all(), active: activeRuns(), now: Date.now(), flags: { bauOnPi: cfg.routing.bauOnPi } });
+      return answer.decision === "route" && answer.route?.provider === t.provider;
+    },
     runner: { create: o => threads.create(o), send: (id, text) => threads.send(id, text), mark: (id, patch) => threads.setIssueRun(id, patch) },
     route: effort => routeWork({ role: "review", effort: effort as any, usage: usage.all(), active: activeRuns(), now: Date.now() }),
     events: automationLog,

@@ -19,15 +19,18 @@ const server = http.createServer((req, res) => {
     const body = JSON.parse(raw);
     requests.push({ source, messages: body.messages });
     assert.equal(body.model, source === "nvidia" ? DIRECT_CODING : ROUTER_CODING);
-    if (source === "nvidia" && requests.filter(r => r.source === source).length > 1) {
+    if (source === "nvidia" && requests.filter(r => r.source === source).length === 2) {
       res.writeHead(429, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: { message: "429 Too Many Requests", type: "rate_limit_exceeded" } }));
       return;
     }
     const chunk = (delta: any, finish: string | null) => `data: ${JSON.stringify({ id: "fixture", object: "chat.completion.chunk", created: 0, model: body.model, choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`;
     res.writeHead(200, { "content-type": "text/event-stream" });
-    if (source === "nvidia") {
+    if (source === "nvidia" && requests.filter(r => r.source === source).length === 1) {
       res.write(chunk({ role: "assistant", tool_calls: [{ index: 0, id: "write-once", type: "function", function: { name: "bash", arguments: JSON.stringify({ command: "printf 'once\\n' >> tool-executions" }) } }] }, null));
+      res.end(chunk({}, "tool_calls") + "data: [DONE]\n\n");
+    } else if (source === "openrouter") {
+      res.write(chunk({ role: "assistant", tool_calls: [{ index: 0, id: "read-once", type: "function", function: { name: "bash", arguments: JSON.stringify({ command: "cat tool-executions" }) } }] }, null));
       res.end(chunk({}, "tool_calls") + "data: [DONE]\n\n");
     } else {
       res.write(chunk({ role: "assistant", content: "FALLBACK_OK" }, null));
@@ -54,14 +57,14 @@ try {
     child.on("exit", code => { clearTimeout(timeout); code === 0 ? resolve(stdout) : reject(Error(`Native Pi exited ${code}: ${stderr.slice(-2000)}`)); });
   });
   assert.equal(fs.readFileSync(marker, "utf8"), "once\n", "completed tool must execute exactly once across provider fallback");
-  assert.deepEqual(requests.map(r => r.source), ["nvidia", "nvidia", "openrouter"]);
+  assert.deepEqual(requests.map(r => r.source), ["nvidia", "nvidia", "openrouter", "nvidia"]);
   const fallback = requests.at(-1)!;
-  assert.equal(fallback.messages.filter(message => message.role === "tool").length, 1, "fallback receives the completed tool result");
+  assert.equal(fallback.messages.filter(message => message.role === "tool").length, 2, "direct-first continuation receives both completed tool results");
   const events = output.trim().split("\n").map(line => JSON.parse(line));
-  assert.equal(events.filter(event => event.type === "tool_execution_start").length, 1);
+  assert.equal(events.filter(event => event.type === "tool_execution_start").length, 2);
   assert.ok(events.some(event => event.type === "message_end" && event.message?.provider === "openrouter" && event.message?.model === ROUTER_CODING));
   assert.ok(output.includes("FALLBACK_OK"));
-  console.log("pi-coding-route-native: NVIDIA tool then 429, OpenRouter fallback, no tool replay passed");
+  console.log("pi-coding-route-native: NVIDIA 429, OpenRouter fallback, direct-first continuation without tool replay passed");
 } finally {
   server.closeAllConnections();
   await new Promise<void>(resolve => server.close(() => resolve()));
