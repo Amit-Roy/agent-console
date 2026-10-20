@@ -182,6 +182,7 @@ export function createReviewer(deps: ReviewDeps) {
   async function judge(t: ThreadLike, run: IssueRun, event: { is_error?: boolean }) {
     const name = run.repo.split("/")[1], id = `review:${t.id}`;
     const judged = (outcome: string) => deps.runner.mark(t.id, { outcome });
+    const archiveIssue = () => deps.runner.archive(run.key);
     if (event?.is_error) { ev?.record({ step: "review", kind: "fail", run: id, ref: run.key, msg: "reviewer turn ended with an error" }); judged("error"); again(run, "retry"); return; }
     try {
       const pr = await github("GET", `repos/${run.repo}/pulls/${run.pr}`);
@@ -189,13 +190,14 @@ export function createReviewer(deps: ReviewDeps) {
         ev?.record({ step: "review", kind: "ok", run: id, ref: run.key, msg: "reviewer approved" });
         ev?.record({ step: "merge", kind: "ok", ref: run.key, msg: `PR #${run.pr} merged` });
         judged("merged");
+        archiveIssue();
         if (!DIRECT_REPOS.includes(name)) return;
         const sha = String(pr.merge_commit_sha ?? "");
         if (sha && applied(name, sha)) ev?.record({ step: "apply", kind: "ok", ref: run.key, msg: `${name} checkout is at the merge commit` });
         else ev?.record({ step: "apply", kind: "fail", ref: run.key, msg: `${name} checkout is not at the merge commit yet` });
         return;
       }
-      if (pr?.state === "closed") { ev?.record({ step: "merge", kind: "info", ref: run.key, msg: `PR #${run.pr} was closed without merging` }); judged("closed"); return; }
+      if (pr?.state === "closed") { ev?.record({ step: "merge", kind: "info", ref: run.key, msg: `PR #${run.pr} was closed without merging` }); judged("closed"); archiveIssue(); return; }
       const verdict = await verdictOf(run);
       if (!verdict) { ev?.record({ step: "review", kind: "fail", run: id, ref: run.key, msg: `reviewer posted no verdict on PR #${run.pr}` }); judged("no-verdict"); again(run, "retry"); return; }
       if (verdict.approved) {

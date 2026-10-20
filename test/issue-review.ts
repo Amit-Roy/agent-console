@@ -21,7 +21,7 @@ try {
   const dirs = { repos, worktrees: path.join(root, "wt") };
 
   const created: any[] = [], sent: any[] = [], marks: any[] = [];
-  const runner = { create: (o: any) => { created.push(o); return { id: "T" + created.length }; }, send: (id: string, text: string) => sent.push({ id, text }), mark: (id: string, patch: any) => marks.push({ id, patch }) };
+  const runner = { create: (o: any) => { created.push(o); return { id: "T" + created.length }; }, send: (id: string, text: string) => sent.push({ id, text }), mark: (id: string, patch: any) => marks.push({ id, patch }), archive: (issueKey: string) => { for (const t of created) if (t.issueRun?.key === issueKey && !t.archived) t.archived = now; } };
   const dec = (effort: any, repo = "o/webapp", number = 42): any => ({ key: `${repo}#${number}`, issue: { repo, number, title: "Fix totals", labels: [] }, effort, route: ROUTES.trivial[0], reason: "" });
 
   // PR-only: a started worktree refuses a push to the default branch but allows a branch push
@@ -106,6 +106,9 @@ try {
   const reviewer = (repo: string) => ({ id: "R1", issueRun: { key: `${repo}#42`, repo, number: 42, effort: "bau", role: "review", pr: 7, branch: "b", base: "main" } });
   rv.turnEnded(reviewer("o/webapp"), {}); await tick();
   assert.ok(steps("merge").includes("ok:PR #7 merged")); assert.equal(applied.length, 0, "a repo that is not applied locally has no apply step");
+  // verify that merged issue threads are archived (worker + reviewer for o/webapp#42)
+  let archivedAfterMerge = created.filter(t => t.archived && t.issueRun?.key === "o/webapp#42").length;
+  assert.equal(archivedAfterMerge, 2, "both worker and reviewer threads for merged issue are archived");
   rv.turnEnded(reviewer("o/agent-console"), {}); await tick();
   assert.deepEqual(applied.at(-1), ["agent-console", "good"]); assert.ok(steps("apply").some(m => m.startsWith("ok:")));
   pull = { merged: true, merge_commit_sha: "bad" };
