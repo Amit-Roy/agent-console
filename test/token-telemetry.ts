@@ -2,10 +2,22 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { raisedItems, raisedPrs } from "../server/session-prs.ts";
 import { createTelemetryService, linkThread, parseRemote, renderTelemetry, NO_USAGE_TEXT, TELEMETRY_MARKER } from "../server/token-telemetry.ts";
 
 const repo = "Amit-Roy/agent-console";
 const repos = [repo];
+
+// --- issues a thread filed link to it, but are not listed as PRs ---
+const toolLog = (id: string, command: string, out: string) => [
+  JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", id, name: "Bash", input: { command } }] } }),
+  JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: id, content: out }] } }),
+].join("\n");
+const filed = toolLog("t1", "cd /tmp && gh issue create -R Amit-Roy/agent-console --title x", `https://github.com/${repo}/issues/39`);
+assert.deepEqual(raisedItems(filed).map(i => i.number), [39]);
+assert.deepEqual(raisedPrs(filed), []);
+assert.deepEqual(raisedItems(toolLog("t2", "gh pr create --fill", `https://github.com/${repo}/pull/23`)).map(i => i.number), [23]);
+assert.deepEqual(raisedItems(toolLog("t3", 'grep "gh issue create" x', `https://github.com/${repo}/issues/5`)), []);
 
 // --- linkage ---
 const run = { repo, number: 7, branch: "issue-7", pr: 9 };
