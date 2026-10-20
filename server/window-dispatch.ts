@@ -143,6 +143,7 @@ export type IssueRun = {
   retryAt?: number;   // Earliest time another worker recovery may start.
   reviews?: number;   // work: reviews started so far, capped by MAX_REVIEWS; review: which of them this is
   redoing?: boolean;  // work: the worker is fixing review findings
+  nudges?: number;    // work: times the worker was asked to push because the PR had no commit after the last verdict
   worker?: string;    // review: the worker thread whose PR this reviews
   startedAt?: number; // review: when the reviewer started; its verdict comment is newer
   outcome?: string;   // review: set once the end of the reviewer's turn has been judged
