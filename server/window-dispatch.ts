@@ -176,8 +176,6 @@ export type IssueRun = {
 export interface IssueRunner {
   create(opts: { provider: string; model: string; effort: string; cwd: string; mode: "bypassPermissions"; title: string; issueRun: IssueRun }): { id: string };
   send(id: string, text: string): void;
-  mark(id: string, patch: Partial<IssueRun>): void;
-  archive(issueKey: string): void;
 }
 /** Work that goes through a PR may not push to the default branch: the worktree's pre-push hook refuses it. */
 export function installPrOnlyHook(cwd: string, base: string, git: (cwd: string, ...args: string[]) => string) {
