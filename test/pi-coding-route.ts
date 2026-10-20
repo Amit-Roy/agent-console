@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import codingRoute, { DIRECT_CODING, ROUTER_CODING, routeCodingRequest } from "../server/providers/pi-coding-route.mjs";
+import codingRoute, { DIRECT_CODING, DIRECT_CODING_MODELS, ROUTER_CODING, routeCodingRequest } from "../server/providers/pi-coding-route.mjs";
 
 const direct = { provider: "nvidia", id: DIRECT_CODING };
 const router = { provider: "openrouter", id: ROUTER_CODING };
@@ -51,6 +51,19 @@ assert.equal(exhaustedFallback.model, router, "do not bounce to a provider alrea
 const reverseFallback = routeCodingRequest({ ...request, reason: "retry", failed: { model: router, message: { errorMessage: "daily-quota" } } }, context());
 assert.equal(routeCodingRequest({ ...request, reason: "retry", state: reverseFallback.state, failed: { model: direct, message: { errorMessage: "503" } } }, context()).model, direct, "do not bounce back to an exhausted router");
 assert.equal(routeCodingRequest({ ...request, reason: "continuation", state: firstFallback.state, previous: { model: router } }, context()).state.retryProviders.length, 0, "successful continuation resets retry sequence");
+
+// Several NIM models: a withdrawn (404) or rate-limited one moves to the next NIM model before OpenRouter.
+const [ultra, superVl, lightning] = DIRECT_CODING_MODELS.map(id => ({ provider: "nvidia", id }));
+const all = context([ultra, superVl, lightning, router]);
+assert.equal(routeCodingRequest(request, all).model, ultra);
+const gone = routeCodingRequest({ ...request, reason: "retry", failed: { model: ultra, message: { errorMessage: "404 {\"detail\":\"Function 'x': Not found for account 'y'\"}" } } }, all);
+assert.equal(gone.model, superVl, "a withdrawn NIM model falls through to the next NIM model");
+const busy = routeCodingRequest({ ...request, reason: "retry", state: gone.state, failed: { model: superVl, message: { errorMessage: "429" } } }, all);
+assert.equal(busy.model, lightning);
+const last = routeCodingRequest({ ...request, reason: "retry", state: busy.state, failed: { model: lightning, message: { errorMessage: "503" } } }, all);
+assert.equal(last.model, router, "OpenRouter free only after every NIM model failed");
+assert.equal(routeCodingRequest({ ...request, reason: "retry", state: last.state, failed: { model: router, message: { errorMessage: "daily-quota" } } }, all).model, router, "never bounces once the whole chain failed");
+assert.equal(routeCodingRequest(request, context([superVl, router])).model, superVl);
 
 let definition: any;
 codingRoute({ registerVirtualModel: (value: any) => { definition = value; } });
