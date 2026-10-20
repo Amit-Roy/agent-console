@@ -36,6 +36,7 @@ Open the URL, sign in, create a thread. You're running.
 **File viewer.** Click any file path or image in a message. Syntax highlighting, line references (`server/threads.ts:360`), copy, wrap toggle. **Edit** opens text files in Acode and saves back. See [Acode setup](docs/acode-editing.md).
 
 **Scheduled tasks.** Sidebar → **Scheduled**. Saved prompts that run on a timer: Manual, Hourly, Daily, Weekdays, or Weekly. Pi is default; Claude and Codex work too. Each run is an ordinary thread. Reports commit to `~/repos/agent-outputs/<task>/<date>-<time>.md`. A run never overlaps the previous one. After downtime, one catch-up run covers the latest missed window within 7 days.
+**App ideas.** Sidebar → ⋯ → **App ideas**. A list of app ideas kept in a private git repo (`~/repos/app-ideas`, override with `AGENT_CONSOLE_IDEAS`) as `index.md` plus one `<app>.md` of features each. Adding an idea commits both files, and pushes when the branch tracks a remote. See [docs/app-ideas.md](docs/app-ideas.md).
 
 **Thread actions (⋯ menu).** Rename, Fork, Download (Markdown), Share, Delete. Fork continues from this session: Claude forks its real session, Pi copies its directory, Codex uses the transcript as context. Refused while a turn is running.
 
