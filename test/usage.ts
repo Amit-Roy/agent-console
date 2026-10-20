@@ -66,7 +66,7 @@ try {
   globalThis.fetch = (async (u: any, opts: any) => { url = String(u); sent = JSON.parse(opts.body); return new Response(JSON.stringify({ choices: [{ message: { content: "Nvidia label" } }] }), { status: 200 }); }) as typeof fetch;
   assert.equal(await askNvidia("fixture", "labels"), "Nvidia label");
   assert.equal(url, "https://integrate.api.nvidia.com/v1/chat/completions");
-  assert.equal(sent.model, process.env.AGENT_CONSOLE_LABEL_NVIDIA_MODEL || "nvidia/nemotron-3-super-120b-a12b");
+  assert.equal(sent.model, process.env.AGENT_CONSOLE_LABEL_NVIDIA_MODEL || "nvidia/nemotron-3.5-super-vl-120b-a12b");
   assert.equal(sent.chat_template_kwargs.enable_thinking, false);
   if (originalNvidia === undefined) delete process.env.NVIDIA_API_KEY; else process.env.NVIDIA_API_KEY = originalNvidia;
 } finally { globalThis.fetch = originalFetch; if (originalKey === undefined) delete process.env.OPENROUTER_API_KEY; else process.env.OPENROUTER_API_KEY = originalKey; }

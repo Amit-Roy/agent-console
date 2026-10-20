@@ -25,7 +25,8 @@ export function createLabelCompletion(engines: LabelEngine[], cooldownMs = 5 * 6
 }
 // Titles and tool labels are written by Nemotron 3 Super 120B, direct from NVIDIA (the same `nvidia` provider Pi uses). Haiku and
 // Codex Luna are deliberately not used here. Thinking is off: it would spend the whole output budget before the label.
-const NVIDIA_MODEL = process.env.AGENT_CONSOLE_LABEL_NVIDIA_MODEL || "nvidia/nemotron-3-super-120b-a12b";
+// NVIDIA retired nemotron-3-super for this key (404 "Function not found", 2026-10-20); 3.5 Super answers in ~0.3 s.
+const NVIDIA_MODEL = process.env.AGENT_CONSOLE_LABEL_NVIDIA_MODEL || "nvidia/nemotron-3.5-super-vl-120b-a12b";
 // All model requests share one priority queue, including Pi subprocesses. Labels are the lowest priority and yield to coding work.
 export async function askNvidia(prompt: string, system: string) {
   const key = childEnv().NVIDIA_API_KEY;

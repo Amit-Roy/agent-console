@@ -227,8 +227,8 @@ async function askHaiku(prompt: string, system: string): Promise<string> {
 export function defaultTriageEngines(): LabelEngine[] {
   const luna = codexLuna();
   return [
-    { id: "pi/nvidia/nvidia/nemotron-3-super-120b-a12b", cooldownMs: 45_000, available: () => !!childEnv().NVIDIA_API_KEY,
-      call: (p, s) => askPi("nvidia", "nvidia/nemotron-3-super-120b-a12b", p, s) },
+    { id: "pi/nvidia/nvidia/nemotron-3.5-super-vl-120b-a12b", cooldownMs: 45_000, available: () => !!childEnv().NVIDIA_API_KEY,
+      call: (p, s) => askPi("nvidia", "nvidia/nemotron-3.5-super-vl-120b-a12b", p, s) },
     { id: "pi/openrouter/nvidia/nemotron-3-super-120b-a12b:free", cooldownMs: 45_000, available: () => !!childEnv().OPENROUTER_API_KEY,
       call: (p, s) => askPi("openrouter", "nvidia/nemotron-3-super-120b-a12b:free", p, s) },
     { id: "claude/haiku", available: () => !!readJson(path.join(process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude"), ".credentials.json"))?.claudeAiOauth,
