@@ -112,6 +112,32 @@ function imageType(bytes: Buffer): string | null {
   return null;
 }
 
+const MEDIA_TYPES: Record<string, string> = {
+  ".mp4": "video/mp4", ".m4v": "video/mp4", ".mov": "video/quicktime", ".webm": "video/webm",
+  ".mp3": "audio/mpeg", ".wav": "audio/wav", ".m4a": "audio/mp4", ".aac": "audio/aac", ".ogg": "audio/ogg", ".oga": "audio/ogg", ".opus": "audio/ogg", ".flac": "audio/flac",
+};
+const ISO_BOXES = ["ftyp", "moov", "mdat", "wide", "free", "skip"];
+
+// Extension picks the type; magic bytes must agree so a renamed text file is never served as media.
+function mediaMagic(ext: string, head: Buffer): boolean {
+  const ascii = (from: number, to: number) => head.subarray(from, to).toString("latin1");
+  switch (ext) {
+    case ".webm": return head.length >= 4 && head.readUInt32BE(0) === 0x1a45dfa3;
+    case ".wav": return head.length >= 12 && ascii(0, 4) === "RIFF" && ascii(8, 12) === "WAVE";
+    case ".mp3": return ascii(0, 3) === "ID3" || (head.length >= 2 && head[0] === 0xff && (head[1] & 0xe0) === 0xe0);
+    case ".aac": return ascii(0, 3) === "ID3" || (head.length >= 2 && head[0] === 0xff && (head[1] & 0xf6) === 0xf0);
+    case ".ogg": case ".oga": case ".opus": return ascii(0, 4) === "OggS";
+    case ".flac": return ascii(0, 4) === "fLaC";
+    default: return head.length >= 12 && ISO_BOXES.includes(ascii(4, 8));
+  }
+}
+
+function mediaType(file: string, head: Buffer): string | null {
+  const ext = path.extname(file).toLowerCase();
+  const type = MEDIA_TYPES[ext];
+  return type && mediaMagic(ext, head) ? type : null;
+}
+
 async function readProjectFile(cwd: string, requested: string, binary = false, threadId?: string) {
   const { root, target, candidate } = await scopedPath(cwd, requested, threadId);
   const handle = await openScoped(root, target);
@@ -122,6 +148,9 @@ async function readProjectFile(cwd: string, requested: string, binary = false, t
     const head = Buffer.alloc(16);
     const peek = await handle.read(head, 0, head.length, 0);
     const media_type = imageType(head.subarray(0, peek.bytesRead));
+    // Audio and video stream from /api/file-media with Range, so they have no preview size limit.
+    const stream_type = media_type ? null : mediaType(target, head.subarray(0, peek.bytesRead));
+    if (stream_type && !binary) return { kind: "media" as const, root, path: target, name: path.basename(target), media_type: stream_type, bytes: stat.size, meta };
     const limit = media_type ? MAX_PREVIEW_IMAGE_BYTES : MAX_VIEW_BYTES;
     if (stat.size > limit) throw new ViewError(413, `The file is too large to preview (maximum ${limit >> 20} MB).`);
     if (binary && !media_type) throw new ViewError(415, "Only PNG, JPEG, GIF and WebP images can be previewed.");
@@ -194,7 +223,8 @@ export function fileViewer(lookup: Lookup, binary = false): RequestHandler {
         res.setHeader("Content-Security-Policy", "default-src 'none'; sandbox");
         return void res.send(file.data);
       }
-      const url = file.kind === "image" ? `/api/file-image?${new URLSearchParams({ ...scope.params, path: file.path })}` : undefined;
+      const route = file.kind === "image" ? "file-image" : file.kind === "media" ? "file-media" : undefined;
+      const url = route ? `/api/${route}?${new URLSearchParams({ ...scope.params, path: file.path })}` : undefined;
       res.json({ ...file, url, read_ms });
     } catch (error) {
       timing(res, start, "file");
@@ -203,12 +233,6 @@ export function fileViewer(lookup: Lookup, binary = false): RequestHandler {
   };
 }
 
-const VIDEO_TYPES: Record<string, string> = { ".mp4": "video/mp4", ".m4v": "video/mp4", ".mov": "video/quicktime", ".webm": "video/webm" };
-
-function videoMagic(ext: string, head: Buffer): boolean {
-  if (ext === ".webm") return head.length >= 4 && head.readUInt32BE(0) === 0x1a45dfa3;
-  return head.length >= 12 && ["ftyp", "moov", "mdat", "wide", "free", "skip"].includes(head.subarray(4, 8).toString("latin1"));
-}
 
 /** Parse a single `Range: bytes=` spec against `size`. null = ignore the header (serve 200), "bad" = 416. */
 export function parseRange(header: unknown, size: number): { start: number; end: number } | null | "bad" {
@@ -224,8 +248,8 @@ export function parseRange(header: unknown, size: number): { start: number; end:
   return { start, end };
 }
 
-// Video for the inline player. Same scope and secret rules as the viewer; streamed from the verified descriptor with HTTP Range
-// so phones can seek. Only known video containers (extension + magic bytes) are served, always inline under a locked-down CSP.
+// Audio and video for inline players. Same scope and secret rules as the viewer; streamed from the verified descriptor with HTTP Range
+// so phones can seek. Only known media containers (extension + magic bytes) are served, always inline under a locked-down CSP.
 export function fileMedia(lookup: Lookup): RequestHandler {
   return async (req, res) => {
     res.setHeader("Cache-Control", "private, no-cache");
@@ -234,15 +258,14 @@ export function fileMedia(lookup: Lookup): RequestHandler {
     try {
       const scope = viewerScope(req.query, lookup);
       const { root, target } = await scopedPath(scope.cwd, requestPath(req.query.path), scope.threadId);
-      const ext = path.extname(target).toLowerCase();
-      const type = VIDEO_TYPES[ext];
-      if (!type) throw new ViewError(415, "Only MP4, WebM and MOV video can be played.");
+      if (!MEDIA_TYPES[path.extname(target).toLowerCase()]) throw new ViewError(415, "Only MP4, WebM and MOV video or MP3, WAV, M4A, AAC, Ogg and FLAC audio can be played.");
       handle = await openScoped(root, target);
       const stat = await handle.stat();
-      if (!stat.isFile()) throw new ViewError(415, "Only regular video files can be played.");
-      const head = Buffer.alloc(12);
+      if (!stat.isFile()) throw new ViewError(415, "Only regular media files can be played.");
+      const head = Buffer.alloc(16);
       const peek = await handle.read(head, 0, head.length, 0);
-      if (!videoMagic(ext, head.subarray(0, peek.bytesRead))) throw new ViewError(415, "This file is not a playable video.");
+      const type = mediaType(target, head.subarray(0, peek.bytesRead));
+      if (!type) throw new ViewError(415, "This file is not playable media.");
       const range = parseRange(req.headers.range, stat.size);
       if (range === "bad") { res.setHeader("Content-Range", `bytes */${stat.size}`); throw new ViewError(416, "Invalid byte range."); }
       const [start, end] = range ? [range.start, range.end] : [0, stat.size - 1];
