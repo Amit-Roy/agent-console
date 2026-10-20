@@ -17,7 +17,7 @@ Window opener
 ```
 
 1. **Triage** (separate worker) labels issues `Eff:` and `Pri:`.
-2. **Dispatcher** (every 5 minutes) picks premium work in the last 90 minutes of an expiring Claude or Codex window, only from allowed authors. Live Pi work uses its own capacity and does not wait for a premium window.
+2. **Dispatcher** (every 5 minutes) picks premium work in the last 90 minutes of an expiring Claude or Codex window (180 minutes when it is below 60% used), Deep first, then the next issue by priority and effort, only from allowed authors. Live Pi work uses its own capacity and does not wait for a premium window.
 3. **Router** chooses the provider (`server/automation/router.ts`, pure): headroom in the 5-hour and 7-day windows, minus a penalty for each running automation thread, plus a bonus for a window that ends soon. Unknown usage is never preferred over a known-good provider; an exhausted one is never chosen. Deep work waits when no premium provider has room. Pi has its own capacity: the daily allowance, at most three at once, and recent failures.
 4. **Worktree + hook**: a private clone with its own Git metadata, a fresh attempt branch, and a pre-push hook refusing the default branch.
 5. **Worker**: Deep on a premium model, Trivial and BAU on Pi (BAU after `routing.bauOnPi`).
