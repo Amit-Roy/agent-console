@@ -139,6 +139,8 @@ export function issuePrompt(d: Decision, branch: string, base: string): string {
 
 export type IssueRun = {
   key: string; repo: string; number: number; effort: string; role: "work" | "review" | "debug"; branch?: string; base?: string; pr?: number; reviewedAt?: number; finishedAt?: number;
+  recoveries?: number; // Bounded resumptions of incomplete worker turns, preserved across restarts.
+  retryAt?: number;   // Earliest time another worker recovery may start.
   reviews?: number;   // work: reviews started so far, capped by MAX_REVIEWS; review: which of them this is
   redoing?: boolean;  // work: the worker is fixing review findings
   worker?: string;    // review: the worker thread whose PR this reviews

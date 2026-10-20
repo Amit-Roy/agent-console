@@ -18,6 +18,10 @@ rl.on("line", (l) => {
   n++; out({ id: r.id, type: "response", command: "prompt", success: true });
   out({ type: "agent_start" });
   const fail = mode !== "recover" || n === 1;
+  if (mode === "tool-then-error") {
+    out({ type: "message_end", message: { role: "assistant", content: [{ type: "toolCall", id: "t1", name: "bash", arguments: { command: "x" } }], stopReason: "toolUse" } });
+    out({ type: "tool_execution_end", toolCallId: "t1", result: { content: [{ type: "text", text: "completed" }] } });
+  }
   const content = mode === "tool" ? [{ type: "toolCall", id: "t1", name: "bash", arguments: { command: "x" } }] : [];
   if (fail) {
     out({ type: "message_end", message: { role: "assistant", content, stopReason: "error", errorMessage: '429 {"status":429,"title":"Too Many Requests"}' } });
@@ -61,5 +65,8 @@ assert.equal(again.filter((e) => e.subtype === "api_retry").length, 1, "only one
 const tool = await run("tool");
 assert.equal(tool.find((e) => e.type === "result").is_error, true, "tool call blocks re-send");
 assert.ok(!tool.some((e) => e.subtype === "api_retry"), "no re-send after tool call");
+const toolThenError = await run("tool-then-error");
+assert.equal(toolThenError.find((e) => e.type === "result").is_error, true, "error after an earlier tool call fails the turn");
+assert.ok(!toolThenError.some((e) => e.subtype === "api_retry"), "no full prompt replay after an earlier completed tool call");
 console.log("pi-429-retry ok");
 process.exit(0);
