@@ -2,19 +2,14 @@ import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import type express from "express";
+import os from "node:os";
+import { latestRates, mountRoots } from "./host-history.ts";
 
 const PROC = "/proc";
 const PAGE_SIZE = 4096;
 const CLK_TCK = 100;
 const SAMPLE_MS = 200;
 const MAX_PROCS = 200;
-
-/* Pseudo / virtual filesystems that carry no meaningful disk usage. */
-const VIRTUAL_FS = new Set([
-  "proc", "sysfs", "devtmpfs", "cgroup", "cgroup2", "tmpfs", "devpts", "mqueue",
-  "autofs", "binfmt_misc", "configfs", "securityfs", "pstore", "bpf", "tracefs",
-  "fusectl", "debugfs", "overlay",
-]);
 
 const passwd = new Map<number, string>();
 try {
@@ -48,8 +43,32 @@ function readCpuStat(): CpuStat | null {
 export interface Proc {
   pid: number; ppid: number; name: string; state: string; uid: number;
   utime: number; stime: number; starttime: number; rssPages: number;
-  threads: number; nice: number; cmd: string;
+  threads: number; nice: number; cmd: string; label: string; cwd: string;
   cpu?: number; memPct?: number;
+}
+
+const HOME = os.homedir();
+const INTERPRETERS = /^(node|nodejs|bun|deno|tsx|ts-node|python[\d.]*|pypy[\d.]*|ruby|perl|php|java|sh|bash|zsh|dash|uv|uvx|npx|npm|pnpm|yarn)$/;
+const tildify = (p: string) => p === HOME ? "~" : p.startsWith(HOME + "/") ? "~" + p.slice(HOME.length) : p;
+const tail = (p: string, n = 2) => p.split("/").filter(Boolean).slice(-n).join("/") || p;
+
+/* Human label from argv: interpreters show the script they run, everything else its executable,
+   plus the first plain word after it (a subcommand such as "proxy" or "agent"). */
+export function procLabel(argv: string[], comm: string): string {
+  if (!argv.length) return comm;
+  let i = 0;
+  let head = path.basename(argv[0]);
+  if (INTERPRETERS.test(head)) {
+    for (let j = 1; j < argv.length; j++) {
+      const a = argv[j];
+      if (a === "-m" || a === "-c" || a === "-e") { if (a === "-m" && argv[j + 1]) { head = argv[j + 1]; i = j + 1; } break; }
+      if (a.startsWith("-")) continue;
+      head = a.includes("/") ? tail(a, a.startsWith("/") ? 1 : 2) : a; i = j; break;
+    }
+  }
+  const next = argv[i + 1];
+  const sub = next && /^[a-z][\w:-]{1,20}$/i.test(next) ? " " + next : "";
+  return (head + sub).slice(0, 48);
 }
 
 function readProcStat(pid: string, memTotal: number): Proc | null {
@@ -66,14 +85,17 @@ function readProcStat(pid: string, memTotal: number): Proc | null {
       const m = /^Uid:\s+(\d+)/.exec(fs.readFileSync(path.join(dir, "status"), "utf8"));
       if (m) uid = Number(m[1]);
     } catch {}
-    let cmd = "";
-    try { cmd = fs.readFileSync(path.join(dir, "cmdline"), "utf8").replace(/\0/g, " ").trim(); } catch {}
+    let argv: string[] = [];
+    try { argv = fs.readFileSync(path.join(dir, "cmdline"), "utf8").split("\0").filter(Boolean); } catch {}
+    const cmd = argv.join(" ").replace(/\s+/g, " ").trim();
     const name = line.slice(line.indexOf("(") + 1, end).replace(/\s+/g, " ") || `pid ${pid}`;
+    let cwd = "";
+    try { cwd = tildify(fs.readlinkSync(path.join(dir, "cwd"))); } catch {}
     return {
       pid: Number(pid), ppid: Number(rest[1]) || 0, name, state: rest[0] || "?", uid,
       utime: Number(rest[11]) || 0, stime: Number(rest[12]) || 0,
       starttime: Number(rest[19]) || 0, rssPages, threads: Number(rest[17]) || 1,
-      nice: Number(rest[16]) || 0, cmd: cmd || `(${name})`,
+      nice: Number(rest[16]) || 0, cmd: cmd || `(${name})`, label: procLabel(argv, name), cwd,
       memPct: memTotal > 0 ? (rssPages * PAGE_SIZE) / memTotal * 100 : 0,
     };
   } catch { return null; }
@@ -142,33 +164,23 @@ export async function hostSnapshot(): Promise<{ cpu: CpuStat | null; procs: Proc
 }
 
 export interface DiskRow { source: string; fstype: string; size: number; used: number; avail: number; pcent: number; target: string }
-export interface DirSize { path: string; size: number }
 
+/* Root plus every real directory mount. Mounts that report identical numbers share one disk
+   (the overlay root and /home/coder both sit on the same device here), so they merge into one row. */
 export function diskRows(): DiskRow[] {
   const out: DiskRow[] = [];
   try {
-    const txt = execFileSync("df", ["--output=source,fstype,size,used,avail,pcent,target"], { encoding: "utf8", maxBuffer: 4 << 20 });
+    const txt = execFileSync("df", ["--output=source,fstype,size,used,avail,pcent,target", "/", ...mountRoots()], { encoding: "utf8", maxBuffer: 4 << 20 });
     for (const line of txt.trim().split("\n").slice(1)) {
       const m = /^(\S+)\s+(\S+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)%\s+(.+)$/.exec(line);
-      if (!m || VIRTUAL_FS.has(m[2]) || Number(m[3]) === 0) continue;
-      out.push({ source: m[1], fstype: m[2], size: Number(m[3]) * 1024, used: Number(m[4]) * 1024, avail: Number(m[5]) * 1024, pcent: Number(m[6]), target: m[7] });
+      if (!m || Number(m[3]) === 0) continue;
+      const row = { source: m[1], fstype: m[2], size: Number(m[3]) * 1024, used: Number(m[4]) * 1024, avail: Number(m[5]) * 1024, pcent: Number(m[6]), target: m[7] };
+      const same = out.find(d => d.size === row.size && d.used === row.used);
+      if (same) { if (!same.target.split(" · ").includes(row.target)) same.target += ` · ${row.target}`; }
+      else out.push(row);
     }
   } catch {}
-  return out.sort((a, b) => b.pcent - a.pcent);
-}
-
-/* Top-level directory sizes under a mount point, via du. Limited to 15 entries. */
-export function dirSizes(target: string): DirSize[] {
-  const out: DirSize[] = [];
-  try {
-    const txt = execFileSync("du", ["-sh", target + "/*"], { encoding: "utf8", maxBuffer: 4 << 20, timeout: 10000 });
-    for (const line of txt.trim().split("\n")) {
-      const m = /^(\d+)\s+(.+)$/.exec(line);
-      if (!m) continue;
-      out.push({ path: m[2], size: Number(m[1]) * 1024 });
-    }
-  } catch {}
-  return out.sort((a, b) => b.size - a.size).slice(0, 15);
+  return out;
 }
 
 function sameOrigin(req: express.Request, res: express.Response, next: express.NextFunction) {
@@ -211,7 +223,7 @@ export function hostMetrics(req: express.Request, res: express.Response) {
       load,
       mem: { total: memTotal, available: memAvailable, used: memUsed, pct: memTotal > 0 ? memUsed / memTotal * 100 : 0, swapTotal: mem.SwapTotal ?? 0, swapFree: mem.SwapFree ?? 0 },
       disk,
-      dirs: { root: dirSizes("/"), home: dirSizes("/home/coder") },
+      io: latestRates(),
       uptime: uptimeSec, boot: Date.now() - uptimeSec * 1000,
       platform: process.platform, arch: process.arch,
     });
@@ -225,7 +237,7 @@ export async function hostProcesses(req: express.Request, res: express.Response)
     res.json({ processes: procs.map(p => ({
       pid: p.pid, ppid: p.ppid, name: p.name, user: userOf(p.uid), state: p.state,
       cpu: p.cpu ?? 0, mem: p.memPct ?? 0, rss: p.rssPages * PAGE_SIZE,
-      threads: p.threads, nice: p.nice, cmd: p.cmd,
+      threads: p.threads, nice: p.nice, cmd: p.cmd.slice(0, 400), label: p.label, cwd: p.cwd,
     })) });
   } catch { res.status(503).json({ error: "Process list is unavailable." }); }
 }
@@ -282,8 +294,11 @@ export function hostPorts(req: express.Request, res: express.Response) {
         try { cmd = fs.readFileSync(path.join(PROC, String(pidOwner.pid), "cmdline"), "utf8").replace(/\0/g, " ").trim(); } catch {}
         uid = pidOwner.uid;
       }
-      return { port: s.port, proto: s.proto, pid: pidOwner?.pid ?? 0, cmd, user: pidOwner ? userOf(pidOwner.uid) : "" };
-    }).filter(p => p.pid > 0 || p.cmd.length > 0).sort((a, b) => a.port - b.port);
+      const argv = cmd.split(" ").filter(Boolean);
+      return { port: s.port, proto: s.proto, pid: pidOwner?.pid ?? 0, cmd: cmd.slice(0, 400), label: procLabel(argv, ""), user: pidOwner ? userOf(pidOwner.uid) : "" };
+    }).filter(p => p.pid > 0 || p.cmd.length > 0)
+      .filter((p, i, all) => all.findIndex(q => q.port === p.port && q.pid === p.pid) === i)
+      .sort((a, b) => a.port - b.port);
     res.json({ ports: portList });
   } catch { res.status(503).json({ error: "Port information is unavailable." }); }
 }
@@ -324,7 +339,7 @@ export async function hostProcessDetail(req: express.Request, res: express.Respo
             const cname = cl.slice(cl.indexOf("(") + 1, end).replace(/\s+/g, " ");
             let ccmd = "";
             try { ccmd = fs.readFileSync(path.join(PROC, entry.name, "cmdline"), "utf8").replace(/\0/g, " ").trim(); } catch {}
-            children.push({ pid: cpid, name: cname || `pid ${cpid}`, cmd: ccmd || `(${cname})` });
+            children.push({ pid: cpid, name: procLabel(ccmd.split(" ").filter(Boolean), cname || `pid ${cpid}`), cmd: (ccmd || `(${cname})`).slice(0, 400) });
           }
         } catch {}
       }
@@ -358,7 +373,7 @@ export async function hostProcessDetail(req: express.Request, res: express.Respo
     } catch {}
     res.json({
       pid: p.pid, ppid: p.ppid, name: p.name, state: p.state, uid: p.uid,
-      user: userOf(p.uid), cmd: p.cmd, threads: p.threads, nice: p.nice,
+      user: userOf(p.uid), cmd: p.cmd.slice(0, 4000), label: p.label, cwd: p.cwd, threads: p.threads, nice: p.nice,
       cpu: p.cpu ?? 0, memPct: p.memPct ?? 0, rss: p.rssPages * PAGE_SIZE,
       starttime: p.starttime, uptime: `${h}h ${min}m ${s}s`, startedMs,
       tgid: status.Tgid ?? "", ngid: status.Ngid ?? "", pidns: status.PidNS ?? "",
