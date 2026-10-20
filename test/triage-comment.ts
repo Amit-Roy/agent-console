@@ -81,4 +81,46 @@ const unavailable = renderTriageComment({ effort: "bau", priority: "p2", reason:
 assert.ok(unavailable.includes("Run triage again"));
 assert.ok(unavailable.includes("Unavailable without a scorecard."));
 assert.ok(!unavailable.includes("undefined"));
+
+// Test for image chart in estimated token usage section
+const imageTestDecision = { ...derived, model: "pi/test" };
+imageTestDecision.scorecard.pricing.estimator = "historical-baseline";
+imageTestDecision.scorecard.pricing.validation = {
+  sampleCount: 34, groupCount: 32, hasLearnedComplexitySignal: false,
+  work: { mae: 1000 }, baselineWork: { mae: 2000 }, activeWork: { mae: 1000 },
+  activeCoverage: { work: { p80: 0.8, p95: 0.9 }, output: { p80: 0.7, p95: 0.85 } },
+};
+const imageRendered = renderTriageComment(imageTestDecision, "<!-- source:fixture -->");
+console.log("Rendered comment:");
+console.log(imageRendered);
+const estimatedTokenUsageSection = imageRendered.split("### Estimated token usage")[1].split("### Level of design")[0];
+console.log("Estimated token usage section:");
+console.log(estimatedTokenUsageSection);
+const hasImage = estimatedTokenUsageSection.includes("![") && estimatedTokenUsageSection.includes('http');
+console.log("Has image tag (looking for '![' and 'http'):", hasImage);
+assert.ok(hasImage, "Expected an image tag in the estimated token usage section");
+
+// Test for replacement of "Unavailable" with a contextual description
+const unavailableDecision = { ...derived, model: "pi/test" };
+unavailableDecision.scorecard.pricing = { ...unavailableDecision.scorecard.pricing, total: null };
+const unavailableRendered = renderTriageComment(unavailableDecision, "<!-- source:fixture -->");
+console.log("Unavailable decision rendered comment:");
+console.log(unavailableRendered);
+const estimatedTokenUsageSectionUnavailable = unavailableRendered.split("### Estimated token usage")[1].split("### Level of design")[0];
+console.log("Unavailable decision estimated token usage section:");
+console.log(estimatedTokenUsageSectionUnavailable);
+assert.ok(!estimatedTokenUsageSectionUnavailable.includes("Unavailable"), "Expected no 'Unavailable' in token usage section");
+assert.ok(estimatedTokenUsageSectionUnavailable.trim().length > 0, "Expected some contextual description");
+
+// Test for link to pricing model documentation and plain language
+const plainLanguageDecision = { ...derived, model: "pi/test" };
+plainLanguageDecision.scorecard.pricing.estimator = "historical-baseline";
+plainLanguageDecision.scorecard.pricing.validation = {
+  sampleCount: 34, groupCount: 32, hasLearnedComplexitySignal: false,
+  work: { mae: 1000 }, baselineWork: { mae: 2000 }, activeWork: { mae: 1000 },
+  activeCoverage: { work: { p80: 0.8, p95: 0.9 }, output: { p80: 0.7, p95: 0.85 } },
+};
+const plainLanguageRendered = renderTriageComment(plainLanguageDecision, "<!-- source:fixture -->");
+// Check for a link to the pricing model documentation
+assert.ok(plainLanguageRendered.includes('http://docs.agent-console.dev/pricing-model'), "Expected a link to the pricing model documentation");
 console.log("triage-comment: pass");

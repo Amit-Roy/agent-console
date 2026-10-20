@@ -51,9 +51,30 @@ export function renderTriageComment(decision: TriageDecision, sourceMarker = "")
   const outputCoverage = metrics.activeCoverage?.output ?? metrics.outputCoverage;
   const underCovered = [workCoverage, outputCoverage].some(coverage => (coverage?.p80 ?? 1) < 0.8 || (coverage?.p95 ?? 1) < 0.95);
   const budget = price.total?.[price.recommendedBudget] ?? null;
-  lines.push("", "### Estimated token usage", "", price.total
-    ? `About **${compact(price.total.p50)}** tokens typical; **${compact(price.total.p80)}** likely ceiling; **${compact(price.total.p95)}** worst case. Plan with **${compact(budget ?? price.total.p80)}**.`
-    : "Unavailable.");
+  let tokenUsageText;
+  if (price.total) {
+    tokenUsageText = price.total
+      ? `About **${compact(price.total.p50)}** tokens typical; **${compact(price.total.p80)}** likely ceiling; **${compact(price.total.p95)}** worst case. Plan with **${compact(budget ?? price.total.p80)}**.`
+      : "Unavailable.";
+  } else {
+    tokenUsageText = `Token usage estimation is not available for ${decision.model || 'this request type'}. [Please refer to the pricing model documentation](http://docs.agent-console.dev/pricing-model) for guidance.`;
+  }
+  lines.push("", "### Estimated token usage", "", tokenUsageText);
+  // Add a simple image chart showing token usage scenarios
+  if (price.total && price.output) {
+    const chartUrl = `https://quickchart.io/chart?c=${encodeURIComponent(JSON.stringify({
+      type: 'line',
+      data: {
+        labels: ['P50', 'P80', 'P95'],
+        datasets: [
+          { label: 'Total tokens', data: [price.total.p50, price.total.p80, price.total.p95] },
+          { label: 'Generated tokens', data: [price.output.p50, price.output.p80, price.output.p95] }
+        ]
+      },
+      options: { title: { display: true, text: 'Token Usage Scenarios' } }
+    }))}`;
+    lines.push("", `![Token usage chart](${chartUrl})`);
+  }
   const warning: string[] = [];
   if (price.estimator === "historical-baseline") warning.push("The complexity fit failed the held-out baseline check. Historical quotes are not task-specific.");
   else if (metrics.hasLearnedComplexitySignal === false) warning.push("Initial-request features have not established predictive value.");
