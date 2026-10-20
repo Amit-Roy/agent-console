@@ -69,7 +69,6 @@ const threads = new Threads(broadcast, notice => {
 });
 const schedules = new Schedules(threads, broadcast);
 const sessionSearch = new SessionSearch(DATA_DIR);
-void sessionSearch.warm().catch(() => console.warn("Session search index will retry on the next query."));
 // Agent tools (Pi extension providers/console-tools.mjs) call back over loopback with a per-process secret, never the session cookie
 const TOOL_TOKEN = crypto.randomBytes(24).toString("base64url");
 process.env.AGENT_CONSOLE_TOOL_URL = `http://${HOST}:${PORT}/api/agent-tools`;
@@ -259,6 +258,7 @@ const RUN_DIR = process.env.AGENT_CONSOLE_RUN || path.join(os.homedir(), ".cache
 // (which inherit everything else) can never overwrite the live server's pid file.
 const PID_FILE = process.env.AGENT_CONSOLE_PID_FILE;
 delete process.env.AGENT_CONSOLE_PID_FILE;
+delete process.env.NODE_COMPILE_CACHE; // the launcher caches compiled server code; agents this server spawns must not share it
 // In-app Claude sign-in: start returns Anthropic's link, finish takes the code its page shows.
 app.post("/api/claude-login/:account", sameOrigin, express.json({ limit: "4kb" }), async (req, res) => {
   try {
@@ -579,9 +579,6 @@ wss.on("connection", (ws) => {
   });
 });
 
-void refreshPiModels();
-await headroom.start();
-
 if (acodeSettings) {
   const bridgeServer = acodePublicApp(acode, ROOT).listen(acodeSettings.port, HOST);
   // a scratch server reads the same env file as the live one: exiting here made agents hunt down the port's owner, the live server
@@ -594,6 +591,15 @@ server.listen(PORT, HOST, () => {
   console.log(`agent-console listening on http://${HOST}:${PORT}`);
   console.log(CODER_HOSTS.length ? `auth: Coder SSO for ${CODER_HOSTS.join(", ")} (password cookie still works elsewhere)` : "auth: password only");
   if (process.env.AGENT_CONSOLE_SHOW_PASSWORD) console.log(`password: ${PASSWORD}`);
+  void refreshPiModels(); // `pi --list-models` takes seconds; spawn it once the port is taken
+  // Boot work nothing waits on runs once the first page has had its turn on the event loop.
+  setTimeout(() => {
+    // Never wait for the proxy: a cold Headroom launch takes up to 10 s, and turns go direct until it is healthy.
+    void headroom.start().catch(() => console.warn("Headroom proxy failed to start."));
+    threads.restoreTelemetry();
+    threads.warmAccounting();
+    void sessionSearch.warm().catch(() => console.warn("Session search index will retry on the next query."));
+  }, 1000).unref();
 });
 
 // A hash of the code this process loaded. Open tabs compare it on reconnect and reload themselves when the server was replaced
