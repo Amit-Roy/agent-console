@@ -123,7 +123,7 @@ if (process.env.AGENT_CONSOLE_MOCK !== "1") {
       const answer = routeWork({ role: "work", effort: t.issueRun!.effort as any, usage: usage.all(), active: activeRuns(), now: Date.now(), flags: { bauOnPi: cfg.routing.bauOnPi } });
       return answer.decision === "route" && answer.route?.provider === t.provider;
     },
-    runner: { create: o => threads.create(o), send: (id, text) => threads.send(id, text), mark: (id, patch) => threads.setIssueRun(id, patch) },
+    runner: { create: o => threads.create(o), send: (id, text) => threads.send(id, text), mark: (id, patch) => threads.setIssueRun(id, patch), archive: (issueKey) => { for (const t of threads.list()) if (t.issueRun?.key === issueKey && !t.archived) threads.archive(t.id, true); } },
     route: effort => routeWork({ role: "review", effort: effort as any, usage: usage.all(), active: activeRuns(), now: Date.now() }),
     events: automationLog,
   });
