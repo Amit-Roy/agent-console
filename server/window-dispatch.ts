@@ -137,7 +137,14 @@ export function issuePrompt(d: Decision, branch: string, base: string): string {
   ].join("\n\n");
 }
 
-export type IssueRun = { key: string; repo: string; number: number; effort: string; role: "work" | "review" | "debug"; branch?: string; base?: string; pr?: number; reviewedAt?: number; finishedAt?: number };
+export type IssueRun = {
+  key: string; repo: string; number: number; effort: string; role: "work" | "review" | "debug"; branch?: string; base?: string; pr?: number; reviewedAt?: number; finishedAt?: number;
+  reviews?: number;   // work: reviews started so far, capped by MAX_REVIEWS; review: which of them this is
+  redoing?: boolean;  // work: the worker is fixing review findings
+  worker?: string;    // review: the worker thread whose PR this reviews
+  startedAt?: number; // review: when the reviewer started; its verdict comment is newer
+  outcome?: string;   // review: set once the end of the reviewer's turn has been judged
+};
 export interface IssueRunner {
   create(opts: { provider: string; model: string; effort: string; cwd: string; mode: "bypassPermissions"; title: string; issueRun: IssueRun }): { id: string };
   send(id: string, text: string): void;

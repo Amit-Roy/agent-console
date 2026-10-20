@@ -2,6 +2,7 @@ import { selectAutomationPiModel } from "./providers/pi-model.ts";
 import { assertAutomationSandbox } from "./automation/sandbox.ts";
 import { normalizeClaudeAccount, requireClaudeAccount, claudeUsageKey, type ClaudeAccount } from "./providers/claude-accounts.ts";
 import type { ThreadNotice } from "./notifications.ts";
+import type { IssueRun } from "./window-dispatch.ts";
 import { IdleCompactionTimers, idleCompactionPolicy, idleCompactionDeadline } from "./idle-compaction.ts";
 import { HistoryIndex } from "./history.ts";
 import { historyWireEvent } from "./history-wire.ts";
@@ -62,7 +63,7 @@ export interface Thread {
   lastCompactedAt?: number;
   archived?: number; // when it was archived: it leaves the working list until unarchived or sent to again
   schedule?: { task: string; run: string }; // a scheduled task's run: the sidebar files it under its task
-  issueRun?: { key: string; repo: string; number: number; effort: string; role: "work" | "review" | "debug"; branch?: string; base?: string; pr?: number; reviewedAt?: number; finishedAt?: number }; // started by window-dispatch for a GitHub issue
+  issueRun?: IssueRun; // started by window-dispatch for a GitHub issue
   cost: number;
   costMeasured?: boolean;
   createdAt: number;
