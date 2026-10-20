@@ -3,6 +3,7 @@ import { MODEL_REQUEST_PRIORITIES } from "./providers/model-rate-limit.ts";
 import "./privacy.ts";
 import { usage, refreshRouterUsage, refreshUsage, readCodexUsage } from "./usage.ts";
 import { hostMetrics, hostProcesses, hostKill, hostPorts, hostProcessDetail } from "./host.ts";
+import { startToolPriority } from "./tool-priority.ts";
 import { startHostSampler, hostHistory, hostDu, hostDuRescan } from "./host-history.ts";
 import { createDispatcher, startIssue, defaultDirs } from "./window-dispatch.ts";
 import { route as routeWork } from "./automation/router.ts";
@@ -80,6 +81,7 @@ let latency: LatencyStore | undefined;
 try { latency = new LatencyStore(path.join(DATA_DIR, "latency.sqlite")); }
 catch { console.warn("Local latency storage is unavailable."); }
 setInterval(() => threads.sweep(), 60_000).unref();
+startToolPriority(); // tool commands below agents and this server: busy tests never delay a turn
 // Every automation stage writes here; the dashboard reads it. A previous process's unfinished runs are closed as abandoned.
 const automationLog = createEventLog({ file: path.join(DATA_DIR, "automation-events.jsonl") });
 automationLog.recoverOpenRuns();
