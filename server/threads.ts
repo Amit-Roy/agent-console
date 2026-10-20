@@ -1,3 +1,4 @@
+import os from "node:os";
 import { selectAutomationPiModel } from "./providers/pi-model.ts";
 import { assertAutomationSandbox } from "./automation/sandbox.ts";
 import { normalizeClaudeAccount, requireClaudeAccount, claudeUsageKey, type ClaudeAccount } from "./providers/claude-accounts.ts";
@@ -79,7 +80,11 @@ const QUESTIONS_FILE = path.join(DATA_DIR, "questions.json");
 const LOG_DIR = path.join(DATA_DIR, "logs");
 fs.mkdirSync(LOG_DIR, { recursive: true, mode: 0o700 });
 
-const IDLE_KILL_MS = 30 * 60 * 1000;
+// An idle agent keeps its process (warm next turn: ~0.3 s to start instead of ~20 s) for up to IDLE_KILL_MS. Idle processes are
+// capped at IDLE_MAX, oldest killed first, and all but the newest two go early when available memory drops under IDLE_MEM_FLOOR.
+const IDLE_KILL_MS = Number(process.env.AGENT_CONSOLE_IDLE_MS ?? 2 * 60 * 60 * 1000);
+const IDLE_MAX = Number(process.env.AGENT_CONSOLE_IDLE_MAX ?? 8);
+const IDLE_MEM_FLOOR = 0.2;
 // Pre-warm: opening/focusing a thread spawns its idle agent so the first send skips the harness cold start. Spawning sends no
 // prompt and makes no model request (verified per harness). At most WARM_MAX unused processes; unused ones are reaped sooner.
 const WARM_MAX = Number(process.env.AGENT_CONSOLE_WARM_MAX ?? 2);
@@ -1176,12 +1181,17 @@ export class Threads {
   }
 
   // free memory from idle agent processes; sessions resume on the next message
-  sweep() {
+  sweep(memAvailable = os.freemem() / os.totalmem()) {
+    const idle: [string, number][] = [];
     for (const [id, live] of this.live) {
       const t = this.threads.get(id);
       if (t && t.status === "idle" && t.background && Date.now() - (live.heardAt ?? live.spawnAt!) > BACKGROUND_STALE_MS) this.kill(id, "stale-background");
       else if (t && t.status === "idle" && !t.background && Date.now() - Math.max(t.updatedAt, live.spawnAt!) > (live.warm ? WARM_IDLE_MS : IDLE_KILL_MS)) this.kill(id, "idle");
+      else if (t && t.status === "idle" && !t.background && !t.operation) idle.push([id, Math.max(t.updatedAt, live.spawnAt!)]);
     }
+    idle.sort((a, b) => a[1] - b[1]); // oldest first
+    const keep = memAvailable < IDLE_MEM_FLOOR ? 2 : IDLE_MAX;
+    for (const [id] of idle.slice(0, Math.max(0, idle.length - keep))) this.kill(id, memAvailable < IDLE_MEM_FLOOR ? "memory" : "idle-cap");
     // no process left to finish them
     for (const t of this.threads.values()) if (t.background && !this.live.has(t.id)) { delete t.background; this.emit({ t: "thread", thread: t }); }
   }
