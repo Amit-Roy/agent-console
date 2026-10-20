@@ -25,17 +25,19 @@ export function createLabelCompletion(engines: LabelEngine[], cooldownMs = 5 * 6
 }
 // Titles and tool labels are written by Nemotron 3 Super 120B, direct from NVIDIA (the same `nvidia` provider Pi uses). Haiku and
 // Codex Luna are deliberately not used here. Thinking is off: it would spend the whole output budget before the label.
-// NVIDIA retired nemotron-3-super for this key (404 "Function not found", 2026-10-20); 3.5 Super answers in ~0.3 s.
-const NVIDIA_MODEL = process.env.AGENT_CONSOLE_LABEL_NVIDIA_MODEL || "nvidia/nemotron-3.5-super-vl-120b-a12b";
+// Several NIM models, tried in order: a single NIM model can 404 ("Function not found", nemotron-3-super on 2026-10-20) or hang.
+export const NVIDIA_LABEL_MODELS: readonly string[] = process.env.AGENT_CONSOLE_LABEL_NVIDIA_MODEL
+  ? [process.env.AGENT_CONSOLE_LABEL_NVIDIA_MODEL]
+  : ["nvidia/nemotron-3.5-super-vl-120b-a12b", "nvidia/nemotron-3-ultra-550b-a55b", "nvidia/nemotron-3.5-lightning-30b-a3b"];
 // All model requests share one priority queue, including Pi subprocesses. Labels are the lowest priority and yield to coding work.
-export async function askNvidia(prompt: string, system: string) {
+export async function askNvidia(prompt: string, system: string, model = NVIDIA_LABEL_MODELS[0]) {
   const key = childEnv().NVIDIA_API_KEY;
   if (!key) return;
   for (let attempt = 0; ; attempt++) {
     await acquireModelRequest({ provider: "nvidia", priority: "label" });
     const r = await fetch("https://integrate.api.nvidia.com/v1/chat/completions", {
       method: "POST", headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ model: NVIDIA_MODEL, messages: [{ role: "system", content: system }, { role: "user", content: prompt }], max_tokens: 512, temperature: 0.2, chat_template_kwargs: { enable_thinking: false } }),
+      body: JSON.stringify({ model, messages: [{ role: "system", content: system }, { role: "user", content: prompt }], max_tokens: 512, temperature: 0.2, chat_template_kwargs: { enable_thinking: false } }),
       signal: AbortSignal.timeout(12_000),
     });
     if (r.status === 429) {
@@ -61,6 +63,7 @@ export async function askRouter(prompt: string, system: string) {
   return (await r.json() as any).choices?.[0]?.message?.content;
 }
 export const completeLabel = createLabelCompletion([
-  { id: "nvidia-nemotron", cooldownMs: 45_000, call: askNvidia, available: () => !!childEnv().NVIDIA_API_KEY }, // ~1 RPS key limit: a blip should recover soon
+  ...NVIDIA_LABEL_MODELS.map(model => ({ id: `nvidia/${model.split("/").pop()}`, cooldownMs: 45_000, // ~1 RPS key limit: a blip should recover soon
+    call: (p: string, s: string) => askNvidia(p, s, model), available: () => !!childEnv().NVIDIA_API_KEY })),
   { id: "openrouter-nemotron-free", cooldownMs: 45_000, call: askRouter, available: () => !!childEnv().OPENROUTER_API_KEY },
 ]);
