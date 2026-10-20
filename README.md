@@ -69,7 +69,7 @@ Anthropic's terms restrict third-party products that offer claude.ai login, so d
   Queue state and edit holds persist privately in `queues.json` across restarts. Reopen an Editing item to resume; Remove and Stop discard queued work.
 - Browser latency samples are batched every five seconds over the existing authenticated WebSocket, with no idle polling or third-party analytics.
   WebSocket compression reduces history/tool bytes. Browsers request full live events only for the selected thread; other threads send small cache invalidations.
-  Local `latency.sqlite` stores up to 20,000 samples for 7 days: opens, cached switches, background refreshes, older pages and interrupted loads.
+  Local `latency.sqlite` stores up to 20,000 samples for `RETENTION_DAYS` (`server/latency.ts`, 7) days: opens, cached switches, background refreshes, older pages and interrupted loads.
   Cached switch latency measures the visible restoration; background refresh duration is tracked separately.
   Timings distinguish preparation, request round-trip (including server/transport), JSON decoding, server reads and rendering; counts and byte sizes aid diagnosis.
   Run details includes the request round-trip so server reads cannot hide transport delays. `wire_bytes` measures decoded JSON payload size, before transport compression.
