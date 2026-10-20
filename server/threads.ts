@@ -446,8 +446,9 @@ export class Threads {
       if (t.archived) continue;
       if (t.quotaPaused?.provider === provider && t.quotaPaused?.windowLabel === windowLabel) {
         delete t.quotaPaused;
-        this.send(t.id, "Continue.", { auto: "quota-resume" });
-        resumed++;
+        if (t.status === "running") continue; // the user already continued it; send would throw and abort the other resumes
+        try { this.send(t.id, "Continue.", { auto: "quota-resume" }); resumed++; }
+        catch (error) { console.error(`[quota-resume] ${t.id}: ${error instanceof Error ? error.message : error}`); }
       }
     }
     return resumed;
@@ -962,6 +963,7 @@ export class Threads {
       }
     }
     if (!opts.auto) {
+      delete t.quotaPaused; // the user continued by hand: no auto "Continue." later
       t.lastUserActivityAt = Math.max(Date.now(), (t.lastUserActivityAt ?? 0) + 1);
       this.idleCompactionTimers.cancel(id);
       delete t.idleCompactionDueAt;

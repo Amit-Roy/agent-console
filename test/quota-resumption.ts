@@ -215,6 +215,15 @@ assert.ok(threads.get(multiThread2)?.quotaPaused, "Claude thread still quota-pau
 assert.deepEqual(resumedThreads, [multiThread], "Only codex thread resumed");
 pass("Multiple providers - only affected provider's threads resumed");
 
+// Test 11: a running thread does not make resumeQuotaPaused throw or lose the other resumes
+const busyThread = createThread(threads, "codex");
+const idleThread = createThread(threads, "codex");
+for (const id of [busyThread, idleThread]) threads.get(id)!.quotaPaused = { provider: "codex", windowLabel: "weekly", resetsAt: Date.now() + 1000 };
+threads.get(busyThread)!.status = "running";
+assert.doesNotThrow(() => threads.resumeQuotaPaused("codex", "weekly"));
+assert.ok(!threads.get(busyThread)?.quotaPaused && !threads.get(idleThread)?.quotaPaused, "both pauses cleared");
+pass("Running quota-paused thread does not abort resume");
+
 threads.shutdown();
 fs.rmSync(data, { recursive: true, force: true });
 console.log("All quota resumption tests passed");
