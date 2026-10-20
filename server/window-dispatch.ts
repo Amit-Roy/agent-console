@@ -335,7 +335,7 @@ export function createDispatcher(opts: {
           ev?.record({ step: "worktree", kind: "fail", run: wt, ref: d.key, msg: error });
         }
       }
-      ev?.record({ step: "dispatcher", kind: "ok", run, msg: `picked ${picked.length}${deferred ? `, deferred ${deferred}` : ""}${picked.length || deferred ? "" : ` (no eligible Pi work or premium window in its last ${cfg.leadMinutes} min, ${cfg.lowUsageLeadMinutes} below ${cfg.lowUsagePct}% used, with room)`}` });
+      ev?.record({ step: "dispatcher", kind: "ok", run, msg: `picked ${picked.length}${deferred ? `, deferred ${deferred}` : ""}${picked.length || deferred ? "" : ` (no eligible Pi work or premium window in its last ${cfg.leadMinutes} min, or ${cfg.lowUsageLeadMinutes} min below ${cfg.lowUsagePct}% used, with room)`}` });
       return picked;
     } catch (e: any) {
       ev?.record({ step: "dispatcher", kind: "fail", run, msg: String(e?.message ?? e) });
