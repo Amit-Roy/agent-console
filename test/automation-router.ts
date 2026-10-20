@@ -39,9 +39,9 @@ assert.equal(pick({ role: "debug", usage: { claude: win(100), codex: win(100) } 
 assert.match(pick({ role: "debug", effort: "bau" }), /^(claude\/sonnet\/medium|codex\/gpt-6\.1-sol\/medium)$/);
 assert.equal(pick({ role: "debug", effort: "bau", active: [{ provider: "claude", role: "debug" }, { provider: "codex", role: "work" }, { provider: "codex", role: "work" }], usage: { claude: win(95), codex: win(95) } }), "pi/default/default");
 
-// --- Pi has its own capacity: a daily allowance, a concurrency cap and recent failures -------------------------------
+// --- Pi has its own capacity: a concurrency cap and recent failures -------------------------------
 const pi = (used: number) => ({ windows: [{ label: "Free/day", used, limit: 1000, resetsAt: now + 3 * 3600_000 }], updatedAt: now });
-assert.equal(pick({ effort: "trivial", usage: { pi: pi(1000) } }), "defer", "no daily allowance left");
+assert.equal(pick({ effort: "trivial", usage: { pi: pi(1009) } }), "pi/default/default", "OpenRouter free cap spent: direct NVIDIA still runs");
 assert.equal(pick({ effort: "trivial", usage: { pi: pi(10) }, active: [{ provider: "pi", role: "work" }, { provider: "pi", role: "work" }, { provider: "pi", role: "work" }] }), "defer", "three Pi tasks at once is the cap");
 assert.equal(pick({ effort: "trivial", usage: {}, failures: { pi: 5 } }), "defer", "Pi has been failing: wait");
 assert.equal(pick({ effort: "trivial", usage: {}, failures: { pi: 1 } }), "pi/default/default");
