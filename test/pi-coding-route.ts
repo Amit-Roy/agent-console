@@ -29,9 +29,10 @@ for (const errorMessage of ["401 Unauthorized", "403 Forbidden", "Invalid tool s
 }
 assert.equal(routeCodingRequest({ ...request, reason: "retry", failed: { model: direct, message: { errorMessage: "429" } } }, context([direct, paid])).model, direct);
 for (const reason of ["user", "continuation", "direct"]) {
-  assert.equal(routeCodingRequest({ ...request, reason, previous: { model: router }, messages }, context()).model, router);
+  assert.equal(routeCodingRequest({ ...request, reason, previous: { model: router }, messages }, context()).model, direct);
 }
 assert.equal(routeCodingRequest({ ...request, reason: "retry", failed: { model: router, message: { errorMessage: "429" } } }, context()).model, router);
+assert.equal(routeCodingRequest({ ...request, previous: { model: router } }, context([router])).model, router);
 
 let definition: any;
 codingRoute({ registerVirtualModel: (value: any) => { definition = value; } });
