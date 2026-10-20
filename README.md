@@ -228,7 +228,7 @@ The viewer's Performance control shows recent timings for module loading, file/i
 - Subagents render as one card with their own nested activity, live stats and an "in background" chip.
 - `/compact` is one progress card (spinner, then done/failed) instead of a message bubble; messages typed meanwhile queue.
 - Effort menus: Claude offers Low, Medium, High, Extra high (`xhigh`), Max and Ultra (`ultracode`, Claude Code's multi-agent mode); the CLI itself downgrades levels a model does not support. Codex lists whatever the model advertises (includes Ultra).
-- **Usage & savings** (`/dashboard`, link in the sidebar): Today / 7 / 30 / 90 days or a custom range, compared with the previous period. Turns, tokens, API-equivalent cost, tokens saved by RTK (`rtk gain`) and Headroom (proxy ledger), per-day charts, model/tool/thread breakdowns and a weekday-by-hour heatmap in local time.
+- **Usage & savings** (`/dashboard`, link in the sidebar): Today / 7 / 30 / 90 days or a custom range, compared with the previous period. Turns, input and output tokens, API-equivalent cost, tokens saved by RTK (`rtk gain`) and Headroom (proxy ledger), per-day charts, a per-model table (input, output, cost), tool/thread breakdowns and a weekday-by-hour heatmap in local time.
   Turn history is `turns.jsonl` in the data dir (one row per finished turn; older turns are rebuilt once from the thread logs). Token and cost figures exist for Claude (and Codex when it reports usage); Pi reports neither.
   Headroom's "tool-schema deferral" is an estimate and is excluded from Tokens saved.
 

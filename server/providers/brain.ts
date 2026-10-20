@@ -41,7 +41,7 @@ export function brainCommit() {
   if (brainAvailable()) execFile(BRAIN_BIN, ["commit"], { timeout: 15_000 }, () => {});
 }
 
-// Reply-style preamble (ADHD + caveman max) shared by every harness, replacing the always-loaded caveman / i-have-adhd skills.
+// Reply-style preamble (ADHD + caveman ultra) shared by every harness, replacing the always-loaded caveman / i-have-adhd skills.
 export const STYLE_FILE = process.env.AGENT_CONSOLE_STYLE || path.join(os.homedir(), "repos", "brain", "config", "style-preamble.md");
 
 export function stylePreamble(): string {
