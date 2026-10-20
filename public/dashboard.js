@@ -76,6 +76,8 @@ const sumTurns = (turns) => ({
   knownCost: turns.filter(t => t.cost != null && t.accounting === 2).length,
   turns: turns.length,
   tokens: turns.reduce((s, t) => s + tokensOf(t), 0),
+  in: turns.reduce((s, t) => s + (hasTokens(t) ? t.in : 0), 0),
+  out: turns.reduce((s, t) => s + (hasTokens(t) ? t.out : 0), 0),
   cache: turns.reduce((s, t) => s + (t.accounting === 2 ? t.cache || 0 : 0), 0),
   cost: turns.reduce((s, t) => s + (t.accounting === 2 ? t.cost || 0 : 0), 0),
   ms: turns.reduce((s, t) => s + (t.ms || 0), 0),
@@ -332,7 +334,8 @@ function render(cur, prev) {
   const kpis = el("div", "kpis");
   kpis.append(
     kpi("Turns", fmt(cs.turns), ps ? delta(cs.turns, ps.turns) : "", false),
-    kpi("Tokens processed", cs.knownTokens ? fmt(cs.tokens) : "—", `${cs.knownTokens}/${cs.turns} turns with token counts · ${fmt(cs.cache)} verified cache reads included`, false),
+    kpi("Input tokens", cs.knownTokens ? fmt(cs.in) : "—", `${fmt(cs.cache)} cache reads included`, false),
+    kpi("Output tokens", cs.knownTokens ? fmt(cs.out) : "—", `${cs.knownTokens}/${cs.turns} turns counted`, false),
     kpi("Estimated API cost", cs.knownCost ? usd(cs.cost) : "—", `${cs.knownCost}/${cs.turns} turns priced${cs.knownCost < cs.turns ? " · partial coverage" : ""} · public list prices`, false),
     kpi("RTK output reduction", fmt(sv.rtk), "Command output; all local CLI activity", true),
     kpi("Headroom input reduction", fmt(sv.hr), "Claude + Codex proxy activity; separate scope", true),
@@ -373,28 +376,28 @@ function render(cur, prev) {
   savePanel.append(sv.rtk || sv.hr ? barChart(srows, hrSeries, fmt) : el("div", "empty-c", "No savings recorded in this range."), legend(hrSeries.map((s) => [s.name, s.color])));
 
   // breakdowns
-  const byModel = new Map(), byTool = new Map(), byThread = new Map();
+  const byTool = new Map(), byThread = new Map();
   for (const t of cur.turns) {
-    const m = `${provMeta(t.provider)[0]} · ${t.model || "default"}`;
-    byModel.set(m, (byModel.get(m) || 0) + 1);
     for (const [n, c] of Object.entries(t.tools || {})) byTool.set(n, (byTool.get(n) || 0) + c);
     const th = byThread.get(t.thread) || { turns: 0, tokens: 0, cost: 0, p: t.provider };
     th.turns++; th.tokens += tokensOf(t); th.cost += t.accounting === 2 ? t.cost || 0 : 0; byThread.set(t.thread, th);
   }
   const top = (m, n = 8) => [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, n);
-  const modelPanel = panel("Models", "Turns by configured model; Claude may use additional unattributed models");
-  modelPanel.append(hbars(top(byModel).map(([name, value]) => ({ name, value, color: css(provMeta(name.split(" · ")[0].toLowerCase())[1]) })), (v) => `${v} turns`));
-  const measuredModels = new Map();
-  for (const turn of cur.turns.filter(t => t.accounting === 2)) for (const model of turn.models || []) {
-    const row = measuredModels.get(model.model) || { cost: 0, known: false };
-    if (model.cost != null) { row.cost += model.cost; row.known = true; }
-    measuredModels.set(model.model, row);
+  const modelPanel = panel("Models", "Tokens and estimated API cost by actual model");
+  const byModel = new Map();
+  for (const turn of cur.turns.filter(t => t.accounting === 2)) for (const m of turn.models || []) {
+    const row = byModel.get(m.model) || { in: 0, out: 0, cost: 0, known: false };
+    row.in += (m.fresh || 0) + (m.cacheWrite || 0) + (m.cacheRead || 0); row.out += m.output || 0;
+    if (m.cost != null) { row.cost += m.cost; row.known = true; }
+    byModel.set(m.model, row);
   }
-  if (measuredModels.size) {
-    const list = el("dl");
-    for (const [name, row] of [...measuredModels].sort((a, b) => b[1].cost - a[1].cost)) list.append(el("dt", "", name), el("dd", "", row.known ? usd(row.cost) : "Cost unknown"));
-    modelPanel.append(list, el("p", "note", "Estimated API costs by actual model. Claude does not separately identify advisor and subagent cost."));
+  const table = el("div", "mtab");
+  table.append(...["Model", "In", "Out", "Cost"].map((h) => el("div", "h", h)));
+  for (const [name, r] of [...byModel].filter(([, r]) => r.in || r.out || r.cost).sort((a, b) => b[1].cost - a[1].cost || b[1].in - a[1].in)) {
+    const n = el("div", "n", name); n.title = name;
+    table.append(n, el("div", "", fmt(r.in)), el("div", "", fmt(r.out)), el("div", "", r.known ? usd(r.cost) : "—"));
   }
+  modelPanel.append(byModel.size ? table : el("div", "empty-c", "No model usage in this range."));
   const toolPanel = panel("Tools", "What the agents reached for");
   toolPanel.append(hbars(top(byTool, 10).map(([name, value]) => ({ name, value, color: css("--c-used") })), (v) => `${fmt(v)} calls`));
   const threadPanel = panel("Busiest threads", "By turns");
