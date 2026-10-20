@@ -1,5 +1,5 @@
 import os from "node:os";
-import { selectAutomationPiModel } from "./providers/pi-model.ts";
+import { isAutomationPiModel, selectAutomationPiModel } from "./providers/pi-model.ts";
 import { assertAutomationSandbox } from "./automation/sandbox.ts";
 import { normalizeClaudeAccount, requireClaudeAccount, claudeUsageKey, type ClaudeAccount } from "./providers/claude-accounts.ts";
 import type { ThreadNotice } from "./notifications.ts";
@@ -620,7 +620,8 @@ export class Threads {
     if (!prov) throw new Error(`Unknown provider "${t.provider}".`);
     if (t.issueRun) {
       assertAutomationSandbox(t);
-      if (t.provider === "pi") t.model = selectAutomationPiModel(prov.models(), t.model);
+      // A model removed from the approved list (retired upstream) is re-selected, not kept: the run continues on a working model.
+      if (t.provider === "pi") t.model = selectAutomationPiModel(prov.models(), isAutomationPiModel(t.model) ? t.model : undefined);
     }
     const live: Live = { agent: undefined as unknown as Agent, aborted: false, spawnAt: Date.now(), warm, held: [] };
     const ready = () => {
