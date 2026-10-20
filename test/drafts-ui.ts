@@ -68,8 +68,44 @@ try{
  await page.reload();await page.waitForFunction(()=>(document.getElementById('input') as HTMLTextAreaElement).value==='Legacy draft');
  assert.equal(await page.evaluate(()=>sessionStorage.getItem('ac_draft')),null,'legacy draft consumed');
  assert.equal(await page.evaluate(()=>localStorage.getItem('ac_draft:draft-a')),'Legacy draft','legacy draft migrated');
+ // Keep sends away from the mock server to control acknowledgement and rejection precisely.
+ let reply: ((message: any) => void) | undefined;
+ const outgoing: any[] = [];
+ await context.routeWebSocket('**/ws', socket => {
+   const upstream = socket.connectToServer();
+   reply = message => socket.send(JSON.stringify(message));
+   upstream.onMessage(raw => socket.send(raw));
+   socket.onMessage(raw => {
+     const message = JSON.parse(String(raw));
+     if (message.t === 'send') outgoing.push(message);
+     else upstream.send(raw);
+   });
+ });
+ await page.reload();
+ await page.waitForFunction(()=>!(document.getElementById('input') as any)?.disabled);
+ const recovery = 'Keep this until accepted\n  including whitespace  ';
+ await page.fill('#input',recovery);
+ await page.click('#send');
+ await page.waitForFunction(()=>(document.getElementById('input') as any).value==='');
+ assert.equal(outgoing.length,1,'send is held before server acceptance');
+ assert.equal(await page.evaluate(()=>Object.keys(localStorage).filter(k=>k.startsWith('ac_sending:')).length),1,'recovery copy remains until acknowledgement');
+ await page.reload();
+ await page.waitForFunction(()=>(document.getElementById('input') as any).value=== 'Keep this until accepted\n  including whitespace  ');
+ assert.equal(outgoing.length,1,'recovered send stays unsent instead of replaying automatically');
+ await page.click('#send');
+ await page.waitForFunction(()=>(document.getElementById('input') as any).value==='');
+ reply!({t:'error',cid:outgoing.at(-1).cid,message:'Rejected fixture'});
+ await page.waitForFunction(()=>(document.getElementById('input') as any).value=== 'Keep this until accepted\n  including whitespace  ');
+ await page.click('#send');
+ await page.waitForFunction(()=>(document.getElementById('input') as any).value==='');
+ await page.fill('#input','Newer edits');
+ reply!({t:'ack',cid:outgoing.at(-1).cid});
+ await page.waitForFunction(()=>!Object.keys(localStorage).some(k=>k.startsWith('ac_sending:')));
+ assert.equal(await page.locator('#input').evaluate((e:any)=>e.value),'Newer edits','late acknowledgement preserves newer typing');
+ await page.reload();
+ await page.waitForFunction(()=>(document.getElementById('input') as any).value==='Newer edits');
  assert.deepEqual(errors,[]);
- console.log('PASS drafts: thread isolation, exact text, reconnect, reload, close, clear, send');
+ console.log('PASS drafts: thread isolation, exact text, reconnect, reload, close, clear, send, unacknowledged recovery, rejection, newer edits');
 }finally{
  await browser?.close();
  const exited=once(server,'exit');server.kill();await exited;
