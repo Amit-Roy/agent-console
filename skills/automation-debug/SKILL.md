@@ -30,7 +30,7 @@ Other evidence: `git worktree list` in `~/repos/agent-console`; each dispatched 
 | opener, usage | `server/window-opener.ts`, `server/usage.ts` | `test/window-opener.ts`, `test/usage.ts` |
 | dispatcher, worktree, worker | `server/window-dispatch.ts` | `test/window-dispatch.ts` |
 | router | `server/automation/router.ts` | `test/automation-router.ts` |
-| self-review, PR, review, merge, apply | `server/issue-review.ts`, `server/automation/review-prompts.ts`, `skills/pr-standards/` | `test/issue-review.ts`, `test/pr-standards.ts` |
+| self-review, PR, review, redo, merge, apply | `server/issue-review.ts`, `server/automation/review-prompts.ts`, `skills/pr-standards/` | `test/issue-review.ts`, `test/pr-standards.ts` |
 | dashboard and API | `server/automation/`, `public/automation.js` | `test/automation*.ts` |
 
 ## Procedure
