@@ -20,7 +20,7 @@ export { reviewPrompt };
 export const MAX_REVIEWS = 3;
 export const MAX_NUDGES = 2;
 const VERDICT = /^\s*Review:\s*(APPROVED|CHANGES REQUESTED)\b/i;
-type Marker = { mark(threadId: string, patch: Partial<IssueRun>): void };
+type Marker = { mark(threadId: string, patch: Partial<IssueRun>): void; archive(issueKey: string): void };
 export interface ReviewDeps {
   github?: GithubRequest;
   runner: IssueRunner & Marker;
