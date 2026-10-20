@@ -431,6 +431,8 @@ export class Threads {
     if (!t || !!t.archived === archived) return;
     if (archived) t.archived = Date.now();
     else delete t.archived;
+    // Clearing quotaPaused on archive prevents stale resume on unarchive
+    if (archived) delete t.quotaPaused;
     if (archived && this.live.get(id)?.warm) this.kill(id, "archive");
     this.refreshIdleCompaction(t);
     this.persist();
@@ -797,13 +799,17 @@ export class Threads {
       this.finishTurn(t, ev);
       // Mark thread as quota-paused if turn ended due to rate limit and quota is exhausted
       if (ev.is_error && !t.archived && !t.quotaPaused) {
-        const providerKey = t.provider === "claude" ? claudeUsageKey(t.claudeAccount) : t.provider;
-        if (usage.exhausted(providerKey)) {
-          const u = usage.get(providerKey);
-          const window = u?.windows.find(w => w.used >= w.limit && w.resetsAt && w.resetsAt > Date.now());
-          if (window) {
-            t.quotaPaused = { provider: providerKey, windowLabel: window.label, resetsAt: window.resetsAt };
-            this.touch(t);
+        const errMsg = String(ev.error?.message ?? ev.error ?? "");
+        const isRateLimit = /\b429\b|rate.?limit|too many requests|usage.?limit|quota/i.test(errMsg);
+        if (isRateLimit) {
+          const providerKey = t.provider === "claude" ? claudeUsageKey(t.claudeAccount) : t.provider;
+          if (usage.exhausted(providerKey)) {
+            const u = usage.get(providerKey);
+            const window = u?.windows.find(w => w.used >= w.limit && w.resetsAt && w.resetsAt > Date.now());
+            if (window) {
+              t.quotaPaused = { provider: providerKey, windowLabel: window.label, resetsAt: window.resetsAt };
+              this.touch(t);
+            }
           }
         }
       }

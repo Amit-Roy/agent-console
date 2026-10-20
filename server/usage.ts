@@ -35,6 +35,8 @@ let values: Record<string, ProviderUsage> = {};
 try { values = JSON.parse(fs.readFileSync(file, "utf8")); } catch {}
 let notify = (_provider: string, _usage: ProviderUsage) => {};
 let notifyWindowReset = (_provider: string, _windowLabel: string, _usage: ProviderUsage) => {};
+// Track which windows have already fired notifyWindowReset to avoid duplicate notifications
+const firedResets = new Set<string>();
 export const usage = {
   all: () => values,
   get: (provider: string) => values[provider],
@@ -52,9 +54,13 @@ export const usage = {
     // Detect window reset: a window that was exhausted (used >= limit) is now not exhausted
     if (prev) {
       for (const prevWindow of prev.windows) {
-        if (prevWindow.used >= prevWindow.limit && prevWindow.resetsAt && prevWindow.resetsAt > Date.now()) {
-          const newWindow = values[provider].windows.find(w => w.label === prevWindow.label);
-          if (newWindow && newWindow.used < newWindow.limit) {
+        const wasExhausted = prevWindow.used >= prevWindow.limit;
+        const newWindow = values[provider].windows.find(w => w.label === prevWindow.label);
+        const isNowAvailable = newWindow && newWindow.used < newWindow.limit;
+        if (wasExhausted && isNowAvailable) {
+          const key = `${provider}:${prevWindow.label}:${prevWindow.resetsAt ?? 0}`;
+          if (!firedResets.has(key)) {
+            firedResets.add(key);
             notifyWindowReset(provider, prevWindow.label, values[provider]);
           }
         }
