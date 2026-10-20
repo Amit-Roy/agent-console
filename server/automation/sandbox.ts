@@ -138,6 +138,8 @@ export function automationSandboxConfig(t: AutoThread, env: NodeJS.ProcessEnv, o
     const original = env.CODEX_HOME || path.join(home, ".codex");
     for (const file of ["auth.json", "config.toml", "models_cache.json"]) seedFile(path.join(original, file), path.join(config, file));
     result.CODEX_HOME = config;
+    // The standalone helper launcher resolves packages under CODEX_HOME; keep it on the shared install.
+    result.CODEX_HELPER_PACKAGE_ROOT = env.CODEX_HELPER_PACKAGE_ROOT || path.join(original, "packages");
   } else {
     throw new Error("Auto sandbox requires a known provider.");
   }

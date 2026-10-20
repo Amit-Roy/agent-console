@@ -91,6 +91,7 @@ try {
   for (const name of ["auth.json", "config.toml", "models_cache.json"]) fs.writeFileSync(path.join(originalCodex, name), name === "config.toml" ? 'command = "/absolute/mcp/path"' : "original");
   const codex = automationSandboxConfig({ ...t, provider: "codex", id: "codex", issueRun: { role: "debug" } }, { ...env, CODEX_HOME: originalCodex }, options);
   assert.notEqual(codex.env.CODEX_HOME, originalCodex);
+  assert.equal(codex.env.CODEX_HELPER_PACKAGE_ROOT, path.join(originalCodex, "packages"));
   assert.equal(fs.readFileSync(path.join(codex.env.CODEX_HOME!, "config.toml"), "utf8"), 'command = "/absolute/mcp/path"');
 
   assert.throws(() => automationSandboxConfig({ ...t, id: "../../escape" }, env, options), /Invalid Auto thread/);
