@@ -1,0 +1,600 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1280, height=720" />
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        width: 1280px;
+        height: 720px;
+        overflow: hidden;
+        background: #0b0b0d;
+        font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+      }
+
+      #root {
+        width: 100%;
+        height: 100%;
+        position: relative;
+      }
+
+      .clip {
+        position: absolute;
+        opacity: 0;
+      }
+
+      /* Scene 1: New thread dialog */
+      #dialog-card {
+        width: 520px;
+        height: 560px;
+        background: #131316;
+        border-radius: 12px;
+        border: 1px solid #25252b;
+        left: 50%;
+        top: 50%;
+        transform: translate(-50%, -50%);
+        padding: 32px;
+        data-layout-allow-overflow: true;
+      }
+
+      #dialog-title {
+        color: #ededf0;
+        font-size: 28px;
+        font-weight: 600;
+        letter-spacing: -0.02em;
+        margin-bottom: 8px;
+      }
+
+      #dialog-sub {
+        color: #a4a4ae;
+        font-size: 14px;
+        margin-bottom: 24px;
+      }
+
+      .provider-row {
+        display: flex;
+        gap: 12px;
+        margin-bottom: 24px;
+      }
+
+      .provider-btn {
+        flex: 1;
+        min-height: 44px;
+        border: 1px solid #25252b;
+        border-radius: 8px;
+        background: #1b1b20;
+        color: #a4a4ae;
+        font-size: 14px;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      .provider-btn.active {
+        border-color: #9aa5ff;
+        background: #9aa5ff;
+        color: #0b0b0d;
+      }
+
+      .provider-icon {
+        width: 20px;
+        height: 20px;
+        margin-right: 8px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      #account-field {
+        margin-bottom: 20px;
+      }
+
+      .field-label {
+        color: #a4a4ae;
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        margin-bottom: 6px;
+      }
+
+      .field-value {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        background: #1b1b20;
+        border: 1px solid #25252b;
+        border-radius: 8px;
+        padding: 10px 14px;
+        color: #ededf0;
+        font-size: 14px;
+        cursor: pointer;
+      }
+
+      .field-value .chevron {
+        color: #a4a4ae;
+      }
+
+      #dialog-ok {
+        width: 100%;
+        min-height: 44px;
+        background: #9aa5ff;
+        color: #0b0b0d;
+        border: none;
+        border-radius: 8px;
+        font-size: 14px;
+        font-weight: 600;
+        cursor: pointer;
+        margin-top: 12px;
+      }
+
+      /* Scene 2: Composer */
+      #composer-wrap {
+        width: 100%;
+        height: 140px;
+        background: #1b1b20;
+        border-top: 1px solid #25252b;
+        bottom: 0;
+        left: 0;
+        padding: 16px 24px;
+        position: absolute;
+      }
+
+      #slash-menu {
+        position: absolute;
+        top: -200px;
+        left: 0;
+        width: 320px;
+        background: #131316;
+        border: 1px solid #25252b;
+        border-radius: 8px;
+        padding: 8px;
+      }
+
+      .slash-item {
+        padding: 8px 12px;
+        color: #a4a4ae;
+        font-size: 13px;
+        cursor: pointer;
+        border-radius: 6px;
+        margin-bottom: 4px;
+      }
+
+      .slash-item:hover {
+        background: #25252b;
+        color: #ededf0;
+      }
+
+      .input-area {
+        flex: 1;
+        background: #0b0b0d;
+        border: 1px solid #25252b;
+        border-radius: 8px;
+        padding: 12px;
+        color: #ededf0;
+        font-size: 14px;
+        min-height: 44px;
+        display: flex;
+        align-items: center;
+      }
+
+      #response-card {
+        width: 520px;
+        background: #1b1b20;
+        border: 1px solid #25252b;
+        border-radius: 12px;
+        padding: 20px;
+        position: absolute;
+        bottom: 160px;
+        left: 50%;
+        transform: translateX(-50%);
+      }
+
+      .tool-card {
+        background: #131316;
+        border: 1px solid #25252b;
+        border-radius: 8px;
+        padding: 12px;
+        margin-bottom: 12px;
+      }
+
+      .tool-header {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        color: #9aa5ff;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        margin-bottom: 6px;
+      }
+
+      .tool-body {
+        color: #ededf0;
+        font-size: 13px;
+        font-family: JetBrains Mono, ui-monospace, monospace;
+        line-height: 1.5;
+      }
+
+      /* Scene 3: File viewer */
+      #file-viewer {
+        width: 700px;
+        height: 400px;
+        background: #0f0f12;
+        border: 1px solid #25252b;
+        border-radius: 8px;
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        transform: translate(-50%, -50%);
+        overflow: hidden;
+      }
+
+      .file-header {
+        background: #131316;
+        border-bottom: 1px solid #25252b;
+        padding: 10px 16px;
+        color: #a4a4ae;
+        font-size: 12px;
+        font-family: JetBrains Mono, ui-monospace, monospace;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+
+      .code-lines {
+        padding: 16px;
+        color: #a4a4ae;
+        font-size: 12px;
+        font-family: JetBrains Mono, ui-monospace, monospace;
+        line-height: 1.6;
+        height: calc(100% - 40px);
+        overflow: hidden;
+      }
+
+      .code-line {
+        margin-bottom: 2px;
+      }
+
+      .code-line .line-num {
+        display: inline-block;
+        width: 40px;
+        color: #6b6f7f;
+        user-select: none;
+      }
+
+      .code-line .hl-kw { color: #ff8fa3; }
+      .code-line .hl-string { color: #a6d98a; }
+      .code-line .hl-fn { color: #7cc4ff; }
+      .code-line .hl-var { color: #f0a0a0; }
+
+      /* Scene 4: Usage dashboard */
+      #dashboard {
+        width: 100%;
+        height: 100%;
+        background: #0b0b0d;
+      }
+
+      .chart-wrap {
+        width: 45%;
+        height: 220px;
+        background: #131316;
+        border: 1px solid #25252b;
+        border-radius: 8px;
+        position: absolute;
+      }
+
+      .chart-label {
+        color: #a4a4ae;
+        font-size: 11px;
+        position: absolute;
+        bottom: 10px;
+        left: 12px;
+      }
+
+      .stat-row {
+        position: absolute;
+        width: 45%;
+        height: 40px;
+        background: #131316;
+        border: 1px solid #25252b;
+        border-radius: 8px;
+        padding: 0 16px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        color: #ededf0;
+        font-size: 13px;
+      }
+
+      .heatmap-wrap {
+        width: 100%;
+        height: 140px;
+        background: #131316;
+        border: 1px solid #25252b;
+        border-radius: 8px;
+        position: absolute;
+        bottom: 20px;
+        left: 0;
+        right: 0;
+        margin: auto;
+        padding: 16px;
+        overflow: hidden;
+      }
+
+      .heatmap-label {
+        color: #a4a4ae;
+        font-size: 10px;
+        position: absolute;
+        bottom: 8px;
+        left: 16px;
+      }
+
+      /* Scene 5: Context meter */
+      #context-wrap {
+        width: 100%;
+        height: 100%;
+        background: #0b0b0d;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      .meter-ring {
+        width: 200px;
+        height: 200px;
+        border: 8px solid #25252b;
+        border-top-color: #7d4a00;
+        border-radius: 50%;
+        position: relative;
+        data-layout-allow-overflow: true;
+      }
+
+      .meter-fill {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        width: 184px;
+        height: 184px;
+        border: 8px solid transparent;
+        border-top-color: #7d4a00;
+        border-radius: 50%;
+        transform: translate(-50%, -50%) rotate(252deg);
+      }
+
+      .meter-label {
+        color: #ededf0;
+        font-size: 32px;
+        font-weight: 600;
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        z-index: 2;
+      }
+
+      .meter-text {
+        color: #a4a4ae;
+        font-size: 14px;
+        position: absolute;
+        top: 72%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        z-index: 2;
+      }
+
+      /* Scene 6: Outro */
+      #outro-wrap {
+        width: 100%;
+        height: 100%;
+        background: #0b0b0d;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+        flex-direction: column;
+      }
+
+      #outro-text {
+        color: #ededf0;
+        font-size: 36px;
+        font-weight: 600;
+        letter-spacing: -0.02em;
+        line-height: 1.2;
+        max-width: 1000px;
+      }
+
+      #outro-sub {
+        color: #a4a4ae;
+        font-size: 14px;
+        margin-top: 16px;
+      }
+    </style>
+  </head>
+  <body>
+    <div
+      id="root"
+      data-composition-id="main"
+      data-start="0"
+      data-duration="20"
+      data-width="1280"
+      data-height="720"
+    >
+
+      <!-- Scene 1: Hook - New thread dialog -->
+      <div id="scene1" class="clip" data-start="0" data-duration="3" data-track-index="0" data-layout-allow-overflow="true">
+        <div id="dialog-card">
+          <div id="dialog-title">New thread</div>
+          <div id="dialog-sub">Run a coding agent in one of your folders.</div>
+          <div class="provider-row">
+            <button class="provider-btn provider-claude">
+              <div class="provider-icon">C</div><span>Claude Code</span>
+            </button>
+            <button class="provider-btn provider-pi">
+              <div class="provider-icon">π</div><span>Pi</span>
+            </button>
+            <button class="provider-btn provider-codex">
+              <div class="provider-icon">X</div><span>Codex</span>
+            </button>
+          </div>
+          <div id="account-field">
+            <div class="field-label">Claude account</div>
+            <div class="field-value"><span>Sunny</span><span class="chevron">▼</span></div>
+          </div>
+          <div class="field-label">Folder</div>
+          <div class="field-value"><span>~/repos/agent-console</span><span class="chevron">▼</span></div>
+          <button id="dialog-ok">Create thread</button>
+        </div>
+      </div>
+
+      <!-- Scene 2: Composer + streaming -->
+      <div id="scene2" class="clip" data-start="3" data-duration="4" data-track-index="1">
+        <div id="composer-wrap">
+          <div id="slash-menu">
+            <div class="slash-item">/brag</div>
+            <div class="slash-item">/compact</div>
+            <div class="slash-item">/dashboard</div>
+            <div class="slash-item">/skills</div>
+            <div class="slash-item">/compact context</div>
+          </div>
+          <div class="input-area">
+            <span>/brag about agent-console</span>
+          </div>
+        </div>
+        <div id="response-card">
+          <div class="tool-card">
+            <div class="tool-header">bash · git diff</div>
+            <div class="tool-body">diff --git a/public/index.html b/public/index.html</div>
+          </div>
+          <div class="tool-card">
+            <div class="tool-header">bash · npm test</div>
+            <div class="tool-body">✓ All 47 tests passed</div>
+          </div>
+          <div class="tool-card">
+            <div class="tool-header">read · server/providers.ts</div>
+            <div class="tool-body">247 lines · provider adapters</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Scene 3: File viewer -->
+      <div id="scene3" class="clip" data-start="7" data-duration="4" data-track-index="2">
+        <div id="file-viewer">
+          <div class="file-header">
+            <span>server/threads.ts</span>
+            <span>360</span>
+          </div>
+          <div class="code-lines">
+            <div class="code-line"><span class="line-num">355</span> <span class="hl-kw">export</span> <span class="hl-kw">async</span> <span class="hl-kw">function</span> <span class="hl-fn">processTurn</span>()</div>
+            <div class="code-line"><span class="line-num">356</span>  {</div>
+            <div class="code-line"><span class="line-num">357</span>    <span class="hl-kw">const</span> result = <span class="hl-kw">await</span> <span class="hl-fn">provider.send</span>(message)</div>
+            <div class="code-line"><span class="line-num">358</span>    <span class="hl-kw">return</span> result</div>
+            <div class="code-line"><span class="line-num">359</span>  }</div>
+            <div class="code-line"><span class="line-num">360</span>  <span class="hl-kw">const</span> thread = <span class="hl-fn">threads.get</span>(threadId)</div>
+            <div class="code-line"><span class="line-num">361</span>  thread.messages.push(result)</div>
+            <div class="code-line"><span class="line-num">362</span>  <span class="hl-kw">return</span> thread</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Scene 4: Usage dashboard -->
+      <div id="scene4" class="clip" data-start="11" data-duration="4" data-track-index="3">
+        <div id="dashboard">
+          <div class="chart-wrap" style="left: 2%; top: 60px;">
+            <div class="chart-label">Tokens per day — last 7 days</div>
+          </div>
+          <div class="chart-wrap" style="right: 2%; top: 60px;">
+            <div class="chart-label">Model breakdown</div>
+          </div>
+          <div class="stat-row" style="left: 2%; top: 300px;">
+            <span>Turns today</span>
+            <span>1,247</span>
+          </div>
+          <div class="stat-row" style="right: 2%; top: 300px;">
+            <span>API-equivalent cost</span>
+            <span>$4.82</span>
+          </div>
+          <div class="stat-row" style="left: 2%; top: 360px;">
+            <span>Headroom savings</span>
+            <span>32%</span>
+          </div>
+          <div class="stat-row" style="right: 2%; top: 360px;">
+            <span>RTK hits</span>
+            <span>89</span>
+          </div>
+          <div class="heatmap-wrap">
+            <div class="heatmap-label">Weekday × hour heatmap</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Scene 5: Context compaction -->
+      <div id="scene5" class="clip" data-start="15" data-duration="3" data-track-index="4" data-layout-allow-overflow="true">
+        <div id="context-wrap">
+          <div class="meter-ring"></div>
+          <div class="meter-fill"></div>
+          <div class="meter-label">70%</div>
+          <div class="meter-text">Context — compacting</div>
+        </div>
+      </div>
+
+      <!-- Scene 6: Outro -->
+      <div id="scene6" class="clip" data-start="18" data-duration="2" data-track-index="5">
+        <div id="outro-wrap">
+          <div id="outro-text">Your agents.<br>Your machine.<br>No remote desktop.</div>
+          <div id="outro-sub">Agent Console — Claude Code · Pi · Codex · local first</div>
+        </div>
+      </div>
+
+    </div>
+    <script>
+      const tl = gsap.timeline({ paused: true });
+      window.__timelines["main"] = tl;
+      tl.seek(0);
+
+      // Scene 1: Dialog fades in, provider hover/click
+      tl.to("#scene1", { opacity: 1, duration: 0.4 }, 0);
+      tl.to(".provider-pi", { borderColor: "#9aa5ff", background: "#9aa5ff", color: "#0b0b0d", duration: 0.3 }, 0.6);
+      tl.to("#dialog-ok", { background: "#4a43d6", color: "#fff", duration: 0.2 }, 1.2);
+
+      // Scene 2: Fade scene1 out, scene2 in, slash menu items appear
+      tl.to("#scene1", { opacity: 0, duration: 0.3 }, 2.7);
+      tl.to("#scene2", { opacity: 1, duration: 0.4 }, 3.0);
+      tl.to(".slash-item", { opacity: 1, y: -10, stagger: 0.15, duration: 0.3 }, 3.2);
+      tl.to(".tool-card", { opacity: 1, y: -10, stagger: 0.25, duration: 0.4 }, 4.0);
+
+      // Scene 3: Fade scene2 out, scene3 in, code lines highlight
+      tl.to("#scene2", { opacity: 0, duration: 0.3 }, 6.7);
+      tl.to("#scene3", { opacity: 1, duration: 0.4 }, 7.0);
+      tl.to(".hl-kw", { color: "#ff8fa3", duration: 0.2 }, 7.4);
+      tl.to(".hl-string", { color: "#a6d98a", duration: 0.2 }, 7.6);
+      tl.to(".hl-fn", { color: "#7cc4ff", duration: 0.2 }, 7.8);
+
+      // Scene 4: Fade scene3 out, scene4 in, chart lines draw, stat rows pop
+      tl.to("#scene3", { opacity: 0, duration: 0.3 }, 10.7);
+      tl.to("#scene4", { opacity: 1, duration: 0.4 }, 11.0);
+      tl.to(".chart-label", { opacity: 1, duration: 0.3 }, 11.4);
+      tl.to(".stat-row", { opacity: 1, y: -10, stagger: 0.15, duration: 0.3 }, 11.8);
+
+      // Scene 5: Fade scene4 out, scene5 in, meter spins
+      tl.to("#scene4", { opacity: 0, duration: 0.3 }, 14.7);
+      tl.to("#scene5", { opacity: 1, duration: 0.4 }, 15.0);
+
+      // Scene 6: Fade scene5 out, scene6 in, tagline appears
+      tl.to("#scene5", { opacity: 0, duration: 0.3 }, 17.7);
+      tl.to("#scene6", { opacity: 1, duration: 0.4 }, 18.0);
+      tl.to("#outro-text", { opacity: 1, y: -10, duration: 0.5 }, 18.2);
+      tl.to("#outro-sub", { opacity: 1, y: -10, duration: 0.4 }, 19.0);
+
+      tl.seek(0);
+    </script>
+  </body>
+</html>
