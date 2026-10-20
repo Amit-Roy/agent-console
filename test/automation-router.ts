@@ -9,7 +9,7 @@ const pick = (over?: Partial<RouteRequest>) => { const r = route(req(over)); ret
 // --- who does the work -------------------------------------------------------------------------------------
 assert.equal(pick({ effort: "trivial" }), "pi/default/default");
 assert.equal(pick({ effort: "bau", flags: { bauOnPi: true } }), "pi/default/default", "BAU runs on Pi once the flag is on");
-assert.notEqual(pick({ effort: "bau", premium: true, flags: { bauOnPi: true } }).split("/")[0], "pi", "a premium slot keeps BAU off Pi");
+assert.match(pick({ effort: "bau", premium: true, flags: { bauOnPi: true } }), /^(claude\/sonnet|codex\/gpt-6.1-sol)\/low$/, "a premium slot runs BAU at low effort, off Pi");
 assert.notEqual(pick({ effort: "trivial", premium: true }).split("/")[0], "pi", "a premium slot keeps Trivial off Pi");
 assert.match(pick({ effort: "bau" }), /^(claude\/sonnet\/medium|codex\/gpt-6\.1-sol\/low)$/, "BAU keeps the old premium route until the flag is on");
 assert.match(pick({ effort: "deep" }), /^(claude\/opus\/medium|codex\/gpt-6\.1-sol\/high)$/);

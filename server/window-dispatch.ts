@@ -40,6 +40,8 @@ export const ROUTES: Record<Effort, Route[]> = {
   bau: [{ provider: "claude", model: "sonnet", effort: "medium" }, { provider: "codex", model: "gpt-6.1-sol", effort: "low" }],
   trivial: [{ provider: "pi", model: "default", effort: "default" }],
 };
+// Spare premium slots (no Deep work left) run the next issue at low effort.
+export const FILL: Route[] = [{ provider: "claude", model: "sonnet", effort: "low" }, { provider: "codex", model: "gpt-6.1-sol", effort: "low" }];
 export const REVIEWERS: Route[] = [{ provider: "claude", model: "sonnet", effort: "medium" }, { provider: "codex", model: "gpt-6.1-sol", effort: "low" }];
 
 export const issueKey = (i: Pick<Issue, "repo" | "number">) => `${i.repo}#${i.number}`;
@@ -81,20 +83,22 @@ export function plan(input: { now: number; usage: Record<string, ProviderUsage>;
   const out: Decision[] = [];
   const minutes = (w: { resetsAt: number }) => Math.round((w.resetsAt - input.now) / 60_000);
   // Deep work first: it needs the most quota, so it gets first pick of what is expiring.
-  // Premium slots left without Deep work take the next issue by priority, then effort, on the BAU premium models.
+  // Premium slots left without Deep work take the next issue by priority, then effort. Work that would otherwise run on Pi
+  // gets the low-effort FILL routes; BAU kept off Pi keeps its own BAU route.
+  const piWork = (e: Effort) => e === "trivial" || (e === "bau" && cfg.routing.mode === "live" && cfg.routing.bauOnPi);
   const byPriority = open.filter(i => effortOf(i.labels) !== "deep")
     .sort((a, b) => rank(a.labels) - rank(b.labels) || EFFORT_ORDER.indexOf(effortOf(a.labels)!) - EFFORT_ORDER.indexOf(effortOf(b.labels)!) || a.number - b.number);
   const fill = new Set<Issue>();
   for (const issue of [...open.filter(i => effortOf(i.labels) === "deep"), ...byPriority]) {
     const effort = effortOf(issue.labels)!;
-    const pool = effort === "deep" ? ROUTES.deep : ROUTES.bau;
+    const pool = effort === "deep" ? ROUTES.deep : piWork(effort) ? FILL : ROUTES.bau;
     const route = pool.find(r => { const w = room.get(r.provider); return !!w && w.left > 0 && !w.full; });
     if (!route) continue;
     const w = room.get(route.provider)!;
     w.left--;
     fill.add(issue);
     out.push({
-      key: issueKey(issue), issue, effort, route, premium: true,
+      key: issueKey(issue), issue, effort, route, premium: pool === FILL,
       window: { provider: route.provider, resetsAt: w.resetsAt, used: Math.round(w.used) },
       reason: `${route.provider} window ends in ${minutes(w)} min at ${Math.round(w.used)}% used${effort === "deep" ? "" : "; no Deep work left"}`,
     });

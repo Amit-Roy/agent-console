@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { historyRows } from "../server/usage.ts";
 import { execFileSync } from "node:child_process";
-import { plan, effortOf, expiring, loadConfig, createDispatcher, ROUTES, threadTitle, topicOf, issuePrompt, addWorktree, startIssue, type Issue } from "../server/window-dispatch.ts";
+import { plan, effortOf, expiring, loadConfig, createDispatcher, ROUTES, FILL, threadTitle, topicOf, issuePrompt, addWorktree, startIssue, type Issue } from "../server/window-dispatch.ts";
 
 const now = 1_800_000_000_000, min = 60_000;
 const win = (used: number, endsInMin: number, week = 5) => ({ windows: [{ label: "5-hour", used, limit: 100, unit: "%", resetsAt: now + endsInMin * min }, { label: "7-day", used: week, limit: 100 }], updatedAt: now });
@@ -47,12 +47,14 @@ assert.equal(both.length, 3);
 // no Deep work: the premium slot takes the next issue by priority, then effort
 const next = plan({ now, usage: { claude: win(10, 60) }, issues: [issue(3, "Trivial", "P0"), issue(2, "BAU", "P1"), issue(6, "BAU", "P0")], done: new Set() });
 assert.deepEqual(next.map(d => d.key), ["o/r#6", "o/r#3"], "P0 BAU, then P0 Trivial, before P1 BAU");
-assert.deepEqual(next.map(d => d.route), [ROUTES.bau[0], ROUTES.bau[0]]);
-assert.ok(next.every(d => d.premium));
+assert.deepEqual(next.map(d => d.route), [ROUTES.bau[0], FILL[0]], "BAU off Pi keeps Sonnet medium; Trivial fill runs Sonnet low");
+assert.deepEqual(next.map(d => !!d.premium), [false, true]);
 assert.match(next[1].reason, /no Deep work left/);
 const live = { routing: { mode: "live" as const, bauOnPi: true }, perWindow: 1 };
 const mixed = plan({ now, usage: { claude: win(10, 60) }, issues: [issue(1, "Deep", "P3"), issue(2, "BAU", "P0"), issue(3, "Trivial")], done: new Set(), cfg: live });
 assert.deepEqual(mixed.map(d => [d.key, d.route.provider]), [["o/r#1", "claude"], ["o/r#2", "pi"]], "Deep keeps first pick; Pi takes the rest");
+const liveFill = plan({ now, usage: { claude: win(10, 60) }, issues: [issue(2, "BAU", "P0"), issue(3, "Trivial", "P1")], done: new Set(), cfg: { ...live, perWindow: 2 } });
+assert.deepEqual(liveFill.map(d => [d.key, d.route.model, d.route.effort]), [["o/r#2", "sonnet", "low"], ["o/r#3", "sonnet", "low"]], "live bauOnPi: spare slots run Sonnet low");
 assert.deepEqual(plan({ now, usage: { claude: win(10, 60) }, issues: [issue(2, "BAU"), issue(3, "Trivial", "P0")], done: new Set(), cfg: live }).map(d => [d.key, d.route.provider]), [["o/r#3", "claude"], ["o/r#2", "pi"]]);
 // trivial in a full window still runs on Pi with a premium reviewer
 const trivial = plan({ now, usage: { codex: win(95, 60) }, issues: [issue(3, "Trivial")], done: new Set() });
@@ -188,7 +190,7 @@ try {
     assert.deepEqual(started.map(s => s[0]), ["o/r#1", "o/r#2"]);
     assert.ok(started.every(s => s[1] === "claude"), "shadow: legacy routing still decides");
     const shadowRows = fs.readFileSync(path.join(dir, "window-dispatch.jsonl"), "utf8").trim().split("\n").map(l => JSON.parse(l));
-    assert.equal(shadowRows.find(r => r.key === "o/r#2").shadow.route.provider, "claude", "the router's choice is logged beside it: a premium slot keeps BAU off Pi");
+    assert.equal(shadowRows.find(r => r.key === "o/r#2").shadow.route.provider, "pi", "the router's choice is logged beside it");
     assert.ok(ev.read({ step: "router" }).events.some(e => /shadow/.test(e.msg!) && e.ref === "o/r#2"));
 
     put({ mode: "live", bauOnPi: true }); reset(); started = [];
