@@ -56,9 +56,14 @@ assert.match(env, new RegExp(`renice -n ${TOOL_NICE} -p \\$\\$`), "Claude's Bash
 const harness = spawn("sh", ["-c", "sleep 30 & wait"], { stdio: "ignore" });
 await new Promise((r) => setTimeout(r, 300));
 const tool = Number(fs.readFileSync(`/proc/${harness.pid}/task/${harness.pid}/children`, "utf8").trim().split(" ")[0]);
-lowerToolPriority();
-assert.equal(os.getPriority(harness.pid!), 0, "the harness keeps normal priority");
-assert.equal(os.getPriority(tool), TOOL_NICE, "its tool process runs at the tool priority");
-harness.kill("SIGKILL"); try { process.kill(tool, "SIGKILL"); } catch {}
+const harnessPriority = os.getPriority(harness.pid!);
+const toolPriority = os.getPriority(tool);
+try {
+  lowerToolPriority();
+  assert.equal(os.getPriority(harness.pid!), harnessPriority, "the harness keeps its inherited priority");
+  assert.equal(os.getPriority(tool), Math.max(toolPriority, TOOL_NICE), "tool priority is lowered without raising already lower-priority work");
+} finally {
+  harness.kill("SIGKILL"); try { process.kill(tool, "SIGKILL"); } catch {}
+}
 console.log("PASS idle agents stay warm for two hours within a count cap and a memory floor; tool processes run below agents");
 process.exit(0);
