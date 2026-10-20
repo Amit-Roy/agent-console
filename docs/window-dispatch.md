@@ -21,13 +21,15 @@ Claude and Codex subscriptions reset every 5 hours whether or not the quota was 
 | `enabled` | `false` | Master switch. |
 | `dryRun` | `true` | Log decisions to `window-dispatch.jsonl`; start nothing. |
 | `leadMinutes` | `90` | Assign premium work only in the last N minutes of a 5-hour window (5–300). |
+| `lowUsagePct` | `60` | A window used less than this percentage uses `lowUsageLeadMinutes` instead (0–100). |
+| `lowUsageLeadMinutes` | `180` | Lead time for a lightly used window (5–300); never shorter than `leadMinutes`. |
 | `maxUsedPct` | `90` | Deep and BAU skip a window already this full; nothing would expire. Trivial work ignores this check. |
 | `perWindow` | `2` | Premium candidates per provider per tick; Pi candidates per tick. |
 | `repos` | `["Amit-Roy/agent-console"]` | Allowlist, `owner/name` only. |
 | `authors` | `["Amit-Roy"]` | Only issues opened by these GitHub logins are dispatched: issue text steers an unattended agent. |
 | `routing` | `{"mode":"shadow","bauOnPi":false}` | `shadow`: the router logs its choice beside the legacy route. `live`: the router decides. `bauOnPi`: BAU runs on Pi. |
 
-Only open issues with exactly one `Eff:` label are considered. Higher `Pri:` goes first; Deep gets first pick of expiring quota.
+Only open issues with exactly one `Eff:` label are considered. Higher `Pri:` goes first; Deep gets first pick of expiring quota. Premium slots left without Deep work take the next issue by priority, then effort (BAU before Trivial), on Sonnet low or `gpt-6.1-sol` low when the issue would otherwise run on Pi (Trivial, or BAU with live `routing.bauOnPi`); other BAU keeps its BAU route. Pi takes the rest.
 
 | Effort | Worker | Second model |
 | --- | --- | --- |
