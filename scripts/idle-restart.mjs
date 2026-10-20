@@ -24,7 +24,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const busy = (t) => t.status === "running" || t.background > 0;
 let threads, queues = new Map(), durableQueues = false, idleSince = 0, restarting = false;
 const give = (why, code) => { console.log(why); process.exit(code); };
-const deadline = setTimeout(() => give("Waited 30 minutes; server left running.", 1), 30 * 60_000);
+// outlast the server's sweep, which ends a hung turn after 30 minutes of silence and hung background work after 135
+const deadline = setTimeout(() => give("Waited 150 minutes; server left running.", 1), 150 * 60_000);
 ws.on("error", (e) => give(`Could not connect: ${e.message}`, 1));
 ws.on("message", (raw) => {
   const m = JSON.parse(String(raw));

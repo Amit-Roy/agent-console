@@ -87,6 +87,9 @@ const WARM_IDLE_MS = 10 * 60 * 1000;
 // Background tasks keep an idle thread's agent alive and block restart-when-idle. Claude caps a background command at 2 hours
 // and a working subagent reports progress, so tasks silent for longer than this are hung: the sweep kills the agent.
 const BACKGROUND_STALE_MS = Number(process.env.AGENT_CONSOLE_BACKGROUND_STALE_MS ?? 135 * 60 * 1000);
+// A running turn streams tokens, tool results or progress; a foreground tool call is capped at 10 minutes. A turn silent for longer
+// than this, with no blocking question waiting on the user, is hung and would block restart-when-idle forever: the sweep ends it.
+const TURN_STALE_MS = Number(process.env.AGENT_CONSOLE_TURN_STALE_MS ?? 30 * 60 * 1000);
 
 // First-party turn timing (metadata only, never sent anywhere). Unavailable storage must never affect a turn.
 let timing: TurnTimingStore | undefined;
@@ -1179,11 +1182,26 @@ export class Threads {
   sweep() {
     for (const [id, live] of this.live) {
       const t = this.threads.get(id);
-      if (t && t.status === "idle" && t.background && Date.now() - (live.heardAt ?? live.spawnAt!) > BACKGROUND_STALE_MS) this.kill(id, "stale-background");
+      if (t?.status === "running" && this.questions.list(id).some((q) => !q.async)) live.heardAt = Date.now(); // waiting on the user is not silence
+      if (t?.status === "running" && Date.now() - Math.max(live.heardAt ?? 0, live.spawnAt!, this.turns.get(id)?.start ?? 0) > TURN_STALE_MS) this.expire(t);
+      else if (t && t.status === "idle" && t.background && Date.now() - (live.heardAt ?? live.spawnAt!) > BACKGROUND_STALE_MS) this.kill(id, "stale-background");
       else if (t && t.status === "idle" && !t.background && Date.now() - Math.max(t.updatedAt, live.spawnAt!) > (live.warm ? WARM_IDLE_MS : IDLE_KILL_MS)) this.kill(id, "idle");
     }
     // no process left to finish them
     for (const t of this.threads.values()) if (t.background && !this.live.has(t.id)) { delete t.background; this.emit({ t: "thread", thread: t }); }
+  }
+
+  // End a hung turn like a crash, except that whatever was queued behind it still goes out.
+  private expire(t: Thread) {
+    const notify = !t.operation && this.notificationTurns.has(t.id);
+    this.kill(t.id, "stale-turn");
+    t.status = "idle";
+    delete t.operation;
+    this.publish(t.id, { type: "console_error", text: `No output for ${Math.round(TURN_STALE_MS / 60_000)} minutes, so the hung turn was stopped. Send a message to continue the session.` });
+    if (notify) this.notify(t, "failed");
+    this.endTiming(t, { subtype: "stale", is_error: true });
+    this.touch(t);
+    this.drain(t.id);
   }
 
   shutdown() {
