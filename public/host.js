@@ -108,9 +108,13 @@ function renderMetrics(m) {
   setDial(dials.mem, m.mem.pct, pct(m.mem.pct), subLine([`of ${bytes(m.mem.total)}`, bytes(m.mem.used)]));
   setDial(dials.disk, root?.pcent ?? 0, root ? pct(root.pcent) : "—", root ? subLine(["free", bytes(root.avail)]) : []);
   const loadPct = m.cpu.n ? m.load[0] / m.cpu.n * 100 : 0;
-  setDial(dials.load, loadPct, m.load[0].toFixed(2), subLine(["5m", m.load[1].toFixed(2)], ["15m", m.load[2].toFixed(2)]));
+  // load = processes running or queued for a CPU (plus ones blocked on disk); 1 per core = fully busy
+  setDial(dials.load, loadPct, m.load[0].toFixed(1), subLine(["per core", (m.cpu.n ? m.load[0] / m.cpu.n : 0).toFixed(1)], ["15m", m.load[2].toFixed(1)]));
+  dials.load.title = `Load ${m.load[0].toFixed(2)}: processes running or waiting for a CPU, averaged over 1 minute. ${m.cpu.n} means all ${m.cpu.n} cores busy; above that, work queues.`;
   const swap = m.mem.swapTotal > 0 ? ` · swap ${pct((1 - m.mem.swapFree / m.mem.swapTotal) * 100)}` : "";
-  $("meta").textContent = `Up ${dur(m.uptime)} · ${m.platform} ${m.arch} · net in ${rate(m.io.rx)} out ${rate(m.io.tx)} · disk read ${rate(m.io.rd)} write ${rate(m.io.wr)}${swap}`;
+  // page files go live on pull, the server only on restart: tolerate an older server's payload
+  const io = m.io ? ` · net in ${rate(m.io.rx)} out ${rate(m.io.tx)} · disk read ${rate(m.io.rd)} write ${rate(m.io.wr)}` : "";
+  $("meta").textContent = `Up ${dur(m.uptime)} · ${m.platform} ${m.arch}${io}${swap}`;
   renderMounts(m.disk);
 }
 
@@ -154,7 +158,13 @@ const mean = (rows, i) => rows.length ? rows.reduce((s, r) => s + r[i], 0) / row
 
 async function loadHistory() {
   historyAt = Date.now();
-  const h = await getJSON(`/api/host/history?range=${range}`);
+  let h;
+  try { h = await getJSON(`/api/host/history?range=${range}`); }
+  catch (e) {
+    // a server older than this page has no history endpoint until it restarts
+    $("cap-cpu").textContent = /404/.test(e.message) ? "available after the server restarts" : "unavailable";
+    return;
+  }
   const p = h.points;
   const col = name => p.map(r => ({ x: r[0], y: r[h.cols.indexOf(name)] }));
   const ix = name => h.cols.indexOf(name);
