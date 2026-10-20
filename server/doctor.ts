@@ -88,7 +88,7 @@ export function createDoctor(threads: Pick<Threads, "routingHealth" | "repairRou
     if (repairing) return repairing;
     const pending = (async () => {
       // Refresh cached reachability before deciding which warm sessions require recycling.
-      await proxy.probe();
+      await proxy.probe(true);
       const expired = threads.repairStaleTurns();
       const result = threads.repairRouting();
       const report = await inspect();

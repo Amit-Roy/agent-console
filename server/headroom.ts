@@ -145,10 +145,10 @@ export const headroom = {
     return stopping;
   },
   url: () => (enabled() && active && !latched && healthy ? URL_ : undefined),
-  async probe() {
+  async probe(refreshRouting = false) {
     const responding = await live();
-    // Never clear a resource breaker or enable routing from a diagnostic probe.
-    if (!responding && healthy) { healthy = false; lastError ??= "Headroom proxy is unreachable"; }
+    // Inspection is observational. Repair can invalidate routing, never clear a breaker or enable it.
+    if (refreshRouting && !responding && healthy) { healthy = false; lastError ??= "Headroom proxy is unreachable"; }
     return { ...headroom.state(), reachable: responding };
   },
   state: () => ({ latched, enabled: enabled(), running: enabled() && active && !latched && healthy, url: URL_, owned: !!child, error: healthy ? undefined : lastError }),
