@@ -3,6 +3,7 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { DATA_DIR } from "./auth.ts";
 import { headroom } from "./headroom.ts";
+import { linesWith } from "./history.ts";
 import { SessionAccounting, type ModelUsage } from "./accounting.ts";
 import { accountingSamples } from "./accounting-log.ts";
 import { normalizeAccountingRows } from "./accounting-repair.ts";
@@ -45,9 +46,9 @@ export function restoreAccounting(threads: { id: string; provider: string; sessi
   const accounting = new SessionAccounting();
   for (const th of threads.filter(t => t.provider === "claude")) {
     let session = th.id;
-    let raw = "";
-    try { raw = fs.readFileSync(path.join(LOG_DIR, `${th.id}.jsonl`), "utf8"); } catch { continue; }
-    for (const line of raw.split("\n")) {
+    let raw: Buffer;
+    try { raw = fs.readFileSync(path.join(LOG_DIR, `${th.id}.jsonl`)); } catch { continue; }
+    for (const line of linesWith(raw, ['"modelUsage"', '"init"'])) {
       try {
         const ev = JSON.parse(line);
         if (ev.type === "system" && ev.subtype === "init" && ev.session_id) session = ev.session_id;

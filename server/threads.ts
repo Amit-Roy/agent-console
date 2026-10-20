@@ -111,6 +111,32 @@ interface Queued {
   at?: number; // when it was queued: queue wait in turn timing
 }
 const attachList = (q: Queued): any[] => (Array.isArray(q.attachments) ? q.attachments : []);
+// The newest Claude rate-limit event in a log. Boot restores one per thread: read only the tail, never the transcript.
+function lastClaudeWindows(file: string) {
+  let fd: number;
+  try { fd = fs.openSync(file, "r"); } catch { return undefined; }
+  try {
+    const size = fs.fstatSync(fd).size;
+    for (const span of [64 * 1024, 4 * 1024 * 1024]) {
+      const start = Math.max(0, size - span), buf = Buffer.alloc(size - start);
+      fs.readSync(fd, buf, 0, buf.length, start);
+      for (let at = buf.lastIndexOf('"unifiedWindows"'); at !== -1; at = buf.lastIndexOf('"unifiedWindows"', at - 1)) {
+        const from = buf.lastIndexOf(10, at) + 1;
+        if (from === 0 && start > 0) break; // the line began before this window
+        const to = buf.indexOf(10, at);
+        try {
+          const ev = JSON.parse(buf.toString("utf8", from, to === -1 ? buf.length : to));
+          if (claudeWindows(ev).length) return ev;
+        } catch {}
+        if (from === 0) break;
+        at = from;
+      }
+      if (start === 0) break;
+    }
+  } finally { fs.closeSync(fd); }
+  return undefined;
+}
+
 // One prompt from several queued messages. "[Image #n]" is numbered per message, so renumber to keep the references unambiguous.
 function mergeQueued(items: Queued[]): { text: string; attachments: unknown; questionAnswer?: true } {
   if (items.length === 1) return { text: items[0].text, attachments: items[0].attachments, ...(items[0].questionAnswer ? { questionAnswer: true } : {}) };
@@ -157,7 +183,10 @@ export class Threads {
   private threads = new Map<string, Thread>();
   private live = new Map<string, Live>();
   private turns = new Map<string, TurnState>(); // the turn in flight, per thread
-  private accounting = new SessionAccounting();
+  // Replaying every Claude log takes a few hundred ms; only a finished turn needs the baselines, so boot leaves it to warmAccounting()
+  private restoredAccounting?: SessionAccounting;
+  private get accounting() { return this.restoredAccounting ??= restoreAccounting([...this.threads.values()]); }
+  warmAccounting() { void this.accounting; }
   private queues = new Map<string, Queued[]>(); // messages to send, in order, once the running turn ends
   private emit: Emit;
   private notificationTurns = new Set<string>();
@@ -189,22 +218,6 @@ export class Threads {
           catch { console.warn("Skipped a thread with an unknown Claude account."); continue; }
         }
         if (t.provider === "codex" && t.context?.source !== "codex/last_request") delete t.context;
-        try {
-          if (t.provider === "claude") {
-            const last = this.historyIndex.read(path.join(LOG_DIR, `${t.id}.jsonl`), undefined, 100).events.findLast(e => claudeWindows(e).length);
-            if (last) usage.record(claudeUsageKey(t.claudeAccount), { windows: claudeWindows(last) }, t.updatedAt);
-          }
-          if (t.provider === "codex") {
-            const samples = t.sessionId ? new CodexTelemetry(t.sessionId).read() : [];
-            for (const s of samples) if (s.context) {
-              const c = s.context;
-              if ("reset" in c) { t.context = { max: t.context?.max, source: c.source }; t.lastCompactedAt = s.observedAt || t.lastCompactedAt; }
-              else t.context = { ...t.context, ...c };
-            }
-            const quota = samples.findLast(s => s.rateLimits);
-            if (quota) usage.record("codex", { windows: codexWindows(quota.rateLimits) }, quota.observedAt);
-          }
-        } catch {} // unavailable telemetry must never hide the thread
         this.threads.set(t.id, t);
       }
     } catch {}
@@ -220,7 +233,6 @@ export class Threads {
         if (count) this.threads.get(id)!.waiting = count;
       }
     } catch {}
-    this.accounting = restoreAccounting([...this.threads.values()]);
     try { backfill([...this.threads.values()]); } catch {} // usage history from logs written before the dashboard existed
     try {
       repairAccounting(DATA_DIR, true); // startup precedes new turns; preserves an exclusive original backup
@@ -239,6 +251,30 @@ export class Threads {
       setImmediate(() => { for (const id of this.queues.keys()) this.drain(id); });
     } catch {}
     for (const thread of this.threads.values()) this.refreshIdleCompaction(thread);
+  }
+
+  // Rate limits and Codex context from provider logs. Each thread keeps its saved context meanwhile, so boot defers this until
+  // after the server listens; open tabs get the refreshed usage and threads as events.
+  restoreTelemetry() {
+    for (const t of this.threads.values()) {
+      try {
+        if (t.provider === "claude") {
+          const last = lastClaudeWindows(path.join(LOG_DIR, `${t.id}.jsonl`));
+          if (last) usage.record(claudeUsageKey(t.claudeAccount), { windows: claudeWindows(last) }, t.updatedAt);
+        }
+        if (t.provider === "codex") {
+          const samples = t.sessionId ? new CodexTelemetry(t.sessionId).read() : [];
+          for (const s of samples) if (s.context) {
+            const c = s.context;
+            if ("reset" in c) { t.context = { max: t.context?.max, source: c.source }; t.lastCompactedAt = s.observedAt || t.lastCompactedAt; }
+            else t.context = { ...t.context, ...c };
+          }
+          const quota = samples.findLast(s => s.rateLimits);
+          if (quota) usage.record("codex", { windows: codexWindows(quota.rateLimits) }, quota.observedAt);
+          if (samples.length) { this.refreshIdleCompaction(t); this.emit({ t: "thread", thread: t }); }
+        }
+      } catch {} // one unreadable log must not stop the rest
+    }
   }
 
   private refreshIdleCompaction(t: Thread) {
