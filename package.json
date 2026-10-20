@@ -33,7 +33,7 @@
     "test:startup": "node test/startup-ui.ts",
     "test:signin": "node test/signin-ui.ts",
     "test:claude-accounts": "node test/claude-accounts.ts && node test/claude-account-cli.ts && node test/claude-login.ts && node test/claude-accounts-integration.ts && node test/claude-accounts-ui.ts",
-    "test:drafts-ui": "node test/drafts-ui.ts",
+    "test:drafts-ui": "node test/drafts-ui.ts && node test/attachment-drafts-ui.ts",
     "test:archive": "node test/archive-ui.ts",
     "test:schedules-ui": "node test/schedules-ui.ts",
     "test:rich": "node test/rich-render-ui.ts",
