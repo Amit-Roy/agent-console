@@ -1,7 +1,10 @@
-import { acquireModelRequest, reportModel429 } from "./providers/model-rate-limit.ts";
+import { acquireModelRequest, reportModel429, startModelRateBroker } from "./providers/model-rate-client.ts";
+import { MODEL_REQUEST_PRIORITIES } from "./providers/model-rate-limit.ts";
 import "./privacy.ts";
 import { usage, refreshRouterUsage, refreshUsage, readCodexUsage } from "./usage.ts";
 import { hostMetrics, hostProcesses, hostKill, hostPorts, hostProcessDetail } from "./host.ts";
+import { startToolPriority } from "./tool-priority.ts";
+import { startHostSampler, hostHistory, hostDu, hostDuRescan } from "./host-history.ts";
 import { createDispatcher, startIssue, defaultDirs } from "./window-dispatch.ts";
 import { route as routeWork } from "./automation/router.ts";
 import { createOpener } from "./window-opener.ts";
@@ -36,6 +39,7 @@ import { dashboard } from "./analytics.ts";
 import { pricing, rates } from "./api-pricing.ts";
 import { contextAllocation } from "./context-allocation.ts";
 import { headroom } from "./headroom.ts";
+import { createDoctor } from "./doctor.ts";
 import { LatencyStore } from "./latency.ts";
 import { fileMedia, fileTree, fileViewer } from "./files.ts";
 import { createAcodeBridge } from "./acode.ts";
@@ -68,7 +72,6 @@ const threads = new Threads(broadcast, notice => {
 });
 const schedules = new Schedules(threads, broadcast);
 const sessionSearch = new SessionSearch(DATA_DIR);
-void sessionSearch.warm().catch(() => console.warn("Session search index will retry on the next query."));
 // Agent tools (Pi extension providers/console-tools.mjs) call back over loopback with a per-process secret, never the session cookie
 const TOOL_TOKEN = crypto.randomBytes(24).toString("base64url");
 process.env.AGENT_CONSOLE_TOOL_URL = `http://${HOST}:${PORT}/api/agent-tools`;
@@ -79,6 +82,7 @@ let latency: LatencyStore | undefined;
 try { latency = new LatencyStore(path.join(DATA_DIR, "latency.sqlite")); }
 catch { console.warn("Local latency storage is unavailable."); }
 setInterval(() => threads.sweep(), 60_000).unref();
+startToolPriority(); // tool commands below agents and this server: busy tests never delay a turn
 // Every automation stage writes here; the dashboard reads it. A previous process's unfinished runs are closed as abandoned.
 const automationLog = createEventLog({ file: path.join(DATA_DIR, "automation-events.jsonl") });
 automationLog.recoverOpenRuns();
@@ -111,6 +115,14 @@ if (process.env.AGENT_CONSOLE_MOCK !== "1") {
     start: d => startIssue(d, { create: o => threads.create(o), send: (id, text) => threads.send(id, text) }),
   });
   const reviewer = createReviewer({
+    canResume: t => {
+      const live = threads.get(t.id);
+      if (!live || live.archived || live.status === "running") return false;
+      const cfg = loadDispatchConfig();
+      if (!cfg.enabled || cfg.dryRun || cfg.routing.mode !== "live") return false;
+      const answer = routeWork({ role: "work", effort: t.issueRun!.effort as any, usage: usage.all(), active: activeRuns(), now: Date.now(), flags: { bauOnPi: cfg.routing.bauOnPi } });
+      return answer.decision === "route" && answer.route?.provider === t.provider;
+    },
     runner: { create: o => threads.create(o), send: (id, text) => threads.send(id, text), mark: (id, patch) => threads.setIssueRun(id, patch) },
     route: effort => routeWork({ role: "review", effort: effort as any, usage: usage.all(), active: activeRuns(), now: Date.now() }),
     events: automationLog,
@@ -159,23 +171,31 @@ app.use("/fonts", express.static(path.join(ROOT, "public", "fonts"), { maxAge: "
 app.get("/icon.svg", (_req, res) => res.sendFile(path.join(ROOT, "public", "icon.svg")));
 app.get("/manifest.webmanifest", (_req, res) => res.sendFile(path.join(ROOT, "public", "manifest.webmanifest")));
 
+// Loopback broker for the single model queue. Pi, the triage worker and the label helpers all admit through here.
+const MODEL_RATE_TOKEN_HEADER = "x-agent-console-tool";
+app.post("/api/model-request", express.json({ limit: "4kb" }), async (req, res) => {
+  const given = Buffer.from(String(req.headers[MODEL_RATE_TOKEN_HEADER] || ""));
+  const expected = Buffer.from(String(process.env.AGENT_CONSOLE_RATE_TOKEN || ""));
+  if (!expected.length || given.length !== expected.length || !crypto.timingSafeEqual(given, expected)) return void res.status(401).json({ error: "Not an Agent Console model request." });
+  const provider = req.body?.provider === "nvidia" || req.body?.provider === "openrouter" ? req.body.provider : "other";
+  const priority = typeof req.body?.priority === "string" && req.body.priority in MODEL_REQUEST_PRIORITIES ? req.body.priority : "interactive";
+  const abort = new AbortController();
+  const disconnected = () => abort.abort();
+  res.once("close", disconnected);
+  try {
+    if (req.body?.action === "acquire") await acquireModelRequest({ provider, priority, signal: abort.signal });
+    else if (req.body?.action === "cooldown") await reportModel429(typeof req.body.retryAfter === "string" || typeof req.body.retryAfter === "number" ? req.body.retryAfter : null, provider);
+    else return void res.status(400).json({ error: "Unknown model admission action." });
+    if (!res.destroyed) res.json({ ok: true });
+  } catch (error: any) {
+    const message = error?.code === "MODEL_PROVIDER_QUOTA_EXHAUSTED" ? error.message : "Model admission unavailable.";
+    if (!res.destroyed) res.status(503).json({ error: message, message, code: error?.code, retryAt: error?.retryAt, provider: error?.provider });
+  } finally { res.removeListener("close", disconnected); }
+});
+
 app.post("/api/agent-tools/:name", express.json({ limit: "1mb" }), async (req, res) => {
   const given = Buffer.from(String(req.headers["x-agent-console-tool"] || ""));
   if (given.length !== TOOL_TOKEN.length || !crypto.timingSafeEqual(given, Buffer.from(TOOL_TOKEN))) return void res.status(401).json({ error: "Not an Agent Console tool call." });
-  if (req.params.name === "model_request") {
-    const abort = new AbortController();
-    const disconnected = () => abort.abort();
-    res.once("close", disconnected);
-    try {
-      if (req.body?.action === "acquire") await acquireModelRequest(abort.signal);
-      else if (req.body?.action === "cooldown") reportModel429(typeof req.body.retryAfter === "string" || typeof req.body.retryAfter === "number" ? req.body.retryAfter : null);
-      else return void res.status(400).json({ error: "Unknown model admission action." });
-      if (!res.destroyed) res.json({ ok: true });
-    } catch {
-      if (!res.destroyed) res.status(503).json({ error: "Model admission unavailable." });
-    } finally { res.removeListener("close", disconnected); }
-    return;
-  }
   const thread = typeof req.headers["x-agent-console-thread"] === "string" ? req.headers["x-agent-console-thread"] : undefined;
   try {
     if (thread && threads.get(thread)?.issueRun && !["session_search", "session_read"].includes(req.params.name)) {
@@ -203,6 +223,11 @@ app.get("/api/sessions/search", async (req, res) => {
   try { res.json(await sessionSearch.search({ query: req.query.q, provider: req.query.provider, limit: req.query.limit === undefined ? undefined : Number(req.query.limit) } as any)); }
   catch (e: any) { res.status(400).json({ error: e?.message || "Search failed." }); }
 });
+app.get("/api/sessions/prs", async (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  try { res.json(await sessionSearch.prs({ thread: req.query.thread as any, ref: req.query.ref as any })); }
+  catch (e: any) { res.status(400).json({ error: e?.message || "PR lookup failed." }); }
+});
 app.get("/api/sessions/:thread", async (req, res) => {
   res.setHeader("Cache-Control", "no-store");
   try { res.json(await sessionSearch.read({ thread: req.params.thread, start: req.query.start === undefined ? undefined : Number(req.query.start), limit: req.query.limit === undefined ? undefined : Number(req.query.limit) } as any)); }
@@ -219,6 +244,18 @@ const sameOrigin: express.RequestHandler = (req, res, next) => {
   } catch {}
   res.status(403).json({ error: "Cross-site request refused." });
 };
+const doctor = createDoctor(threads);
+app.get("/doctor", (_req, res) => res.sendFile(path.join(ROOT, "public", "doctor.html")));
+app.get("/api/doctor", async (_req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  try { res.json(await doctor.inspect()); }
+  catch { res.status(503).json({ error: "Setup checks are temporarily unavailable." }); }
+});
+app.post("/api/doctor", sameOrigin, async (_req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  try { res.json(await doctor.repair()); }
+  catch { res.status(503).json({ error: "Setup repair could not finish. Check again for current status." }); }
+});
 // Browser push is opt-in per device. Both writes require a same-origin session.
 app.get("/api/notifications", (_req, res) => {
   res.setHeader("Cache-Control", "no-store");
@@ -245,6 +282,7 @@ const RUN_DIR = process.env.AGENT_CONSOLE_RUN || path.join(os.homedir(), ".cache
 // (which inherit everything else) can never overwrite the live server's pid file.
 const PID_FILE = process.env.AGENT_CONSOLE_PID_FILE;
 delete process.env.AGENT_CONSOLE_PID_FILE;
+delete process.env.NODE_COMPILE_CACHE; // the launcher caches compiled server code; agents this server spawns must not share it
 // In-app Claude sign-in: start returns Anthropic's link, finish takes the code its page shows.
 app.post("/api/claude-login/:account", sameOrigin, express.json({ limit: "4kb" }), async (req, res) => {
   try {
@@ -380,6 +418,9 @@ app.get("/api/host/metrics", hostMetrics);
 app.get("/api/host/processes", hostProcesses);
 app.get("/api/host/processes/:pid/detail", hostProcessDetail);
 app.get("/api/host/ports", hostPorts);
+app.get("/api/host/history", hostHistory);
+app.get("/api/host/du", hostDu);
+app.post("/api/host/du/rescan", sameOrigin, hostDuRescan);
 app.post("/api/host/processes/:pid/kill", express.json({ limit: "1kb" }), sameOrigin, hostKill);
 app.get("/uploads/:thread/:id/:name", (req, res) => {
   const { thread, id, name } = req.params;
@@ -565,9 +606,6 @@ wss.on("connection", (ws) => {
   });
 });
 
-void refreshPiModels();
-await headroom.start();
-
 if (acodeSettings) {
   const bridgeServer = acodePublicApp(acode, ROOT).listen(acodeSettings.port, HOST);
   // a scratch server reads the same env file as the live one: exiting here made agents hunt down the port's owner, the live server
@@ -576,9 +614,20 @@ if (acodeSettings) {
 
 server.listen(PORT, HOST, () => {
   if (PID_FILE) fs.writeFileSync(PID_FILE, String(process.pid)); // only the process that holds the port may claim it
+  startModelRateBroker(PORT); // same rule: a scratch server that lost the port must not repoint the live broker
+  startHostSampler(); // 5 s host samples for the Host page's history charts
   console.log(`agent-console listening on http://${HOST}:${PORT}`);
   console.log(CODER_HOSTS.length ? `auth: Coder SSO for ${CODER_HOSTS.join(", ")} (password cookie still works elsewhere)` : "auth: password only");
   if (process.env.AGENT_CONSOLE_SHOW_PASSWORD) console.log(`password: ${PASSWORD}`);
+  void refreshPiModels(); // `pi --list-models` takes seconds; spawn it once the port is taken
+  // Boot work nothing waits on runs once the first page has had its turn on the event loop.
+  setTimeout(() => {
+    // Never wait for the proxy: a cold Headroom launch takes up to 10 s, and turns go direct until it is healthy.
+    void headroom.start().catch(() => console.warn("Headroom proxy failed to start."));
+    threads.restoreTelemetry();
+    threads.warmAccounting();
+    void sessionSearch.warm().catch(() => console.warn("Session search index will retry on the next query."));
+  }, 1000).unref();
 });
 
 // A hash of the code this process loaded. Open tabs compare it on reconnect and reload themselves when the server was replaced

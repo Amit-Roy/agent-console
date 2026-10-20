@@ -2,101 +2,109 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawn } from "node:child_process";
-import { pathToFileURL } from "node:url";
-import { ModelRateLimit, MODEL_REQUEST_INTERVAL_MS } from "../server/providers/model-rate-limit.ts";
+import { setTimeout as delay } from "node:timers/promises";
+import { DatabaseSync } from "node:sqlite";
+import { AdmissionUnavailable, ModelRateLimit, MODEL_REQUEST_INTERVAL_MS } from "../server/providers/model-rate-limit.ts";
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ac-model-rate-limit-"));
-const database = path.join(dir, "gate.sqlite");
-const gate = new ModelRateLimit({ path: database, intervalMs: 80 });
-const peer = new ModelRateLimit({ path: database, intervalMs: 80 });
+const gates: ModelRateLimit[] = [];
+const make = (name: string, options: Record<string, any> = {}) => {
+  const gate = new ModelRateLimit({ path: path.join(dir, name), intervalMs: 35, ...options });
+  gates.push(gate);
+  return gate;
+};
 try {
   assert.equal(MODEL_REQUEST_INTERVAL_MS, 1100);
-  assert.throws(() => new ModelRateLimit({ path: database, intervalMs: 0 }), /positive integer/);
-  assert.equal(fs.statSync(database).mode & 0o777, 0o600);
-  const { DatabaseSync } = await import("node:sqlite");
-  const inspect = new DatabaseSync(database);
-  inspect.exec(`CREATE TABLE observed_admissions (started INTEGER);
-    CREATE TRIGGER observe_admission AFTER UPDATE OF next_at ON admission
-    WHEN NEW.next_at > OLD.next_at
-    BEGIN INSERT INTO observed_admissions VALUES (NEW.next_at - 80); END;`);
-
-  // Each child owns an independent SQLite connection and Node event loop.
-  const moduleUrl = pathToFileURL(path.resolve("server/providers/model-rate-limit.ts")).href;
-  const childSource = `
-    const { ModelRateLimit } = await import(${JSON.stringify(moduleUrl)});
-    const gate = new ModelRateLimit({ path: process.argv[1], intervalMs: 80 });
-    for (let i = 0; i < 3; i++) {
-      await gate.acquire();
-      console.log(Date.now());
-    }
-    gate.close();
-  `;
-  const child = () => new Promise<number[]>((resolve, reject) => {
-    const processChild = spawn(process.execPath, ["--disable-warning=ExperimentalWarning", "--input-type=module", "-e", childSource, database]);
-    let output = "", errors = "";
-    processChild.stdout.on("data", chunk => output += chunk);
-    processChild.stderr.on("data", chunk => errors += chunk);
-    processChild.on("error", reject);
-    processChild.on("exit", code => code === 0
-      ? resolve(output.trim().split("\n").map(Number))
-      : reject(new Error(`Rate gate child exited ${code}: ${errors}`)));
-  });
-  const starts = (await Promise.all([child(), child(), child()])).flat().sort((a, b) => a - b);
-  assert.equal(starts.length, 9);
-  // Capture admission clocks atomically inside SQLite. A child can be paused
-  // after admission, so timestamps printed after commit are not exact clocks.
-  const admissions = inspect.prepare("SELECT started FROM observed_admissions ORDER BY started").all() as { started: number }[];
-  assert.equal(admissions.length, 9);
-  for (let index = 1; index < admissions.length; index++) {
-    const spacing = admissions[index].started - admissions[index - 1].started;
-    assert.ok(spacing >= 80, `Cross-process spacing ${spacing}ms`);
-  }
-
-  // An aborted waiter must leave the exact previously stored deadline untouched.
+  assert.throws(() => make("bad", { intervalMs: 0 }), /positive integers/);
+  const gate = make("priority", { intervalMs: 150 }); // slow enough that queued requests are still waiting when the next is added
+  assert.equal(fs.statSync(path.join(dir, "priority")).mode & 0o777, 0o600);
   await gate.acquire();
-  const before = inspect.prepare("SELECT next_at FROM admission WHERE id = 1").get();
-  const aborted = new AbortController();
-  const pending = peer.acquire(aborted.signal);
-  aborted.abort();
-  await assert.rejects(pending, { name: "AbortError" });
-  assert.deepEqual(inspect.prepare("SELECT next_at FROM admission WHERE id = 1").get(), before);
-  const alreadyAborted = new AbortController();
-  alreadyAborted.abort();
-  await assert.rejects(peer.acquire(alreadyAborted.signal), { name: "AbortError" });
-  assert.deepEqual(inspect.prepare("SELECT next_at FROM admission WHERE id = 1").get(), before);
+  const order: string[] = [];
+  const low = gate.acquire({ priority: "label" }).then(() => order.push("label"));
+  const medium = gate.acquire({ priority: "triage" }).then(() => order.push("triage"));
+  const high = gate.acquire({ priority: "interactive" }).then(() => order.push("interactive"));
+  await Promise.all([low, medium, high]);
+  assert.deepEqual(order, ["interactive", "triage", "label"]);
 
-  // The second connection sees another process's reported provider cooldown.
-  const cooldown = gate.report429("0.24");
-  await peer.acquire();
-  assert.ok(Date.now() >= cooldown);
-  const defaultCooldown = gate.report429("invalid");
-  assert.ok(defaultCooldown >= Date.now() + 29_900);
-  assert.ok(gate.report429("0") >= defaultCooldown, "a later response cannot shorten an active cooldown");
-  const capped = gate.report429("999999999");
-  assert.ok(capped <= Date.now() + 900_000);
+  // A long interval keeps the next request queued when it is cancelled, however late a loaded host resolves the first.
+  const slow = make("cancel", { intervalMs: 5000 });
+  const inspect = new DatabaseSync(path.join(dir, "cancel"));
+  await slow.acquire();
+  const before = inspect.prepare("SELECT next_at FROM admission").get();
+  const cancel = new AbortController();
+  const pending = slow.acquire({ signal: cancel.signal, priority: "interactive" });
+  cancel.abort();
+  await assert.rejects(pending, { name: "AbortError" });
+  assert.deepEqual(inspect.prepare("SELECT next_at FROM admission").get(), before);
+  const already = new AbortController();
+  already.abort();
+  await assert.rejects(gate.acquire(already.signal), { name: "AbortError" });
   inspect.close();
 
-  // HTTP-date Retry-After and response plumbing use a separate clock/database.
-  const http = new ModelRateLimit({ path: path.join(dir, "http.sqlite"), intervalMs: 1 });
-  try {
-    const date = new Date(Date.now() + 10_000).toUTCString();
-    assert.equal(http.report429(date), Date.parse(date));
-    const original = globalThis.fetch;
-    globalThis.fetch = async () => new Response("slow down", { status: 429, headers: { "retry-after": "0.01" } });
-    // Clear only this test database's clock; the production API never clears it.
-    const scratch = new DatabaseSync(path.join(dir, "http.sqlite"));
-    scratch.exec("UPDATE admission SET cooldown_until = 0");
-    try {
-      const beforeFetch = Date.now();
-      assert.equal((await http.fetch("https://example.invalid")).status, 429);
-      const row = scratch.prepare("SELECT cooldown_until FROM admission WHERE id = 1").get() as { cooldown_until: number };
-      assert.ok(row.cooldown_until >= beforeFetch + 10);
-    } finally { globalThis.fetch = original; scratch.close(); }
-  } finally { http.close(); }
-  console.log("model-rate-limit: cross-process spacing, aborts, shared cooldown, and Retry-After passed");
+  const providers = make("providers", { intervalMs: 10 });
+  const until = providers.report429("0.12", "nvidia");
+  let nvidiaStarted = 0;
+  const nvidia = providers.acquire({ provider: "nvidia" }).then(() => { nvidiaStarted = Date.now(); });
+  await providers.acquire({ provider: "openrouter" });
+  assert.equal(nvidiaStarted, 0, "NVIDIA cooldown must not block OpenRouter");
+  await nvidia;
+  assert.ok(nvidiaStarted >= until);
+  // A cooldown published after enqueue must also be rechecked at admission.
+  // A slow interval keeps the request queued, so the cooldown lands after enqueue and before admission.
+  const recheck = make("recheck", { intervalMs: 150 });
+  await recheck.acquire();
+  const queued = recheck.acquire({ provider: "nvidia", priority: "interactive" });
+  const recheckUntil = recheck.report429("0.3", "nvidia");
+  await queued;
+  assert.ok(Date.now() >= recheckUntil);
+  assert.ok(providers.report429("invalid", "other") >= Date.now() + 29_900);
+  assert.ok(providers.report429("9999999", "other") <= Date.now() + 900_000);
+
+  const minute = make("minute", { intervalMs: 5, openRouterMinuteLimit: 2, openRouterWindowMs: 400 });
+  const start = Date.now();
+  await minute.acquire({ provider: "openrouter" });
+  await minute.acquire({ provider: "openrouter" });
+  let thirdDone = false;
+  const third = minute.acquire({ provider: "openrouter" }).then(() => { thirdDone = true; });
+  await minute.acquire({ provider: "nvidia" });
+  assert.equal(thirdDone, false, "Minute quota waits outside the global queue");
+  await third;
+  assert.ok(Date.now() >= start + 400);
+
+  let clock = Date.parse("2026-10-19T23:59:59Z");
+  const daily = make("daily", { intervalMs: 1, openRouterDayLimit: 3, now: () => clock });
+  daily.syncOpenRouterQuota({ used: 2, limit: 1000 });
+  await daily.acquire({ provider: "openrouter" });
+  daily.syncOpenRouterQuota({ used: 1, limit: 1000 });
+  await assert.rejects(daily.acquire({ provider: "openrouter" }), (error: unknown) => {
+    assert.ok(error instanceof AdmissionUnavailable);
+    assert.equal(error.code, "MODEL_PROVIDER_QUOTA_EXHAUSTED");
+    assert.equal(error.retryAt, Date.parse("2026-10-20T00:00:00Z"));
+    return true;
+  });
+  clock = Date.parse("2026-10-20T00:00:00Z");
+  await daily.acquire({ provider: "openrouter" });
+  daily.syncOpenRouterQuota({ used: 0, limit: 1 });
+  await assert.rejects(daily.acquire({ provider: "openrouter" }), AdmissionUnavailable);
+
+  const persisted = make("restart", { intervalMs: 90 });
+  const admitted = Date.now();
+  await persisted.acquire();
+  persisted.close();
+  const restored = make("restart", { intervalMs: 90 });
+  await restored.acquire();
+  assert.ok(Date.now() >= admitted + 90, "Restart cannot reset the global clock");
+
+  // An admission does not remain occupied for the lifetime of a streamed response.
+  const streaming = make("streaming", { intervalMs: 10 });
+  await streaming.acquire();
+  let responseFinished = false;
+  const response = delay(100).then(() => { responseFinished = true; });
+  await streaming.acquire();
+  assert.equal(responseFinished, false);
+  await response;
+  console.log("model-rate-limit: priorities, provider cooldowns, rolling/day quotas, cancellation, restart and streaming passed");
 } finally {
-  gate.close();
-  peer.close();
+  for (const gate of gates) gate.close();
   fs.rmSync(dir, { recursive: true, force: true });
 }

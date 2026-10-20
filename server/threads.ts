@@ -1,7 +1,10 @@
-import { selectAutomationPiModel } from "./providers/pi-model.ts";
+import os from "node:os";
+import { headroom } from "./headroom.ts";
+import { isAutomationPiModel, selectAutomationPiModel } from "./providers/pi-model.ts";
 import { assertAutomationSandbox } from "./automation/sandbox.ts";
 import { normalizeClaudeAccount, requireClaudeAccount, claudeUsageKey, type ClaudeAccount } from "./providers/claude-accounts.ts";
 import type { ThreadNotice } from "./notifications.ts";
+import type { IssueRun } from "./window-dispatch.ts";
 import { IdleCompactionTimers, idleCompactionPolicy, idleCompactionDeadline } from "./idle-compaction.ts";
 import { HistoryIndex } from "./history.ts";
 import { historyWireEvent } from "./history-wire.ts";
@@ -62,7 +65,7 @@ export interface Thread {
   lastCompactedAt?: number;
   archived?: number; // when it was archived: it leaves the working list until unarchived or sent to again
   schedule?: { task: string; run: string }; // a scheduled task's run: the sidebar files it under its task
-  issueRun?: { key: string; repo: string; number: number; effort: string; role: "work" | "review" | "debug"; branch?: string; base?: string; pr?: number; reviewedAt?: number; finishedAt?: number }; // started by window-dispatch for a GitHub issue
+  issueRun?: IssueRun; // started by window-dispatch for a GitHub issue
   cost: number;
   costMeasured?: boolean;
   createdAt: number;
@@ -78,11 +81,21 @@ const QUESTIONS_FILE = path.join(DATA_DIR, "questions.json");
 const LOG_DIR = path.join(DATA_DIR, "logs");
 fs.mkdirSync(LOG_DIR, { recursive: true, mode: 0o700 });
 
-const IDLE_KILL_MS = 30 * 60 * 1000;
+// An idle agent keeps its process (warm next turn: ~0.3 s to start instead of ~20 s) for up to IDLE_KILL_MS. Idle processes are
+// capped at IDLE_MAX, oldest killed first, and all but the newest two go early when available memory drops under IDLE_MEM_FLOOR.
+const IDLE_KILL_MS = Number(process.env.AGENT_CONSOLE_IDLE_MS ?? 2 * 60 * 60 * 1000);
+const IDLE_MAX = Number(process.env.AGENT_CONSOLE_IDLE_MAX ?? 8);
+const IDLE_MEM_FLOOR = 0.2;
 // Pre-warm: opening/focusing a thread spawns its idle agent so the first send skips the harness cold start. Spawning sends no
 // prompt and makes no model request (verified per harness). At most WARM_MAX unused processes; unused ones are reaped sooner.
 const WARM_MAX = Number(process.env.AGENT_CONSOLE_WARM_MAX ?? 2);
 const WARM_IDLE_MS = 10 * 60 * 1000;
+// Background tasks keep an idle thread's agent alive and block restart-when-idle. Claude caps a background command at 2 hours
+// and a working subagent reports progress, so tasks silent for longer than this are hung: the sweep kills the agent.
+const BACKGROUND_STALE_MS = Number(process.env.AGENT_CONSOLE_BACKGROUND_STALE_MS ?? 135 * 60 * 1000);
+// A running turn streams tokens, tool results or progress; a foreground tool call is capped at 10 minutes. A turn silent for longer
+// than this, with no blocking question waiting on the user, is hung and would block restart-when-idle forever: the sweep ends it.
+const TURN_STALE_MS = Number(process.env.AGENT_CONSOLE_TURN_STALE_MS ?? 30 * 60 * 1000);
 
 // First-party turn timing (metadata only, never sent anywhere). Unavailable storage must never affect a turn.
 let timing: TurnTimingStore | undefined;
@@ -108,6 +121,32 @@ interface Queued {
   at?: number; // when it was queued: queue wait in turn timing
 }
 const attachList = (q: Queued): any[] => (Array.isArray(q.attachments) ? q.attachments : []);
+// The newest Claude rate-limit event in a log. Boot restores one per thread: read only the tail, never the transcript.
+function lastClaudeWindows(file: string) {
+  let fd: number;
+  try { fd = fs.openSync(file, "r"); } catch { return undefined; }
+  try {
+    const size = fs.fstatSync(fd).size;
+    for (const span of [64 * 1024, 4 * 1024 * 1024]) {
+      const start = Math.max(0, size - span), buf = Buffer.alloc(size - start);
+      fs.readSync(fd, buf, 0, buf.length, start);
+      for (let at = buf.lastIndexOf('"unifiedWindows"'); at !== -1; at = buf.lastIndexOf('"unifiedWindows"', at - 1)) {
+        const from = buf.lastIndexOf(10, at) + 1;
+        if (from === 0 && start > 0) break; // the line began before this window
+        const to = buf.indexOf(10, at);
+        try {
+          const ev = JSON.parse(buf.toString("utf8", from, to === -1 ? buf.length : to));
+          if (claudeWindows(ev).length) return ev;
+        } catch {}
+        if (from === 0) break;
+        at = from;
+      }
+      if (start === 0) break;
+    }
+  } finally { fs.closeSync(fd); }
+  return undefined;
+}
+
 // One prompt from several queued messages. "[Image #n]" is numbered per message, so renumber to keep the references unambiguous.
 function mergeQueued(items: Queued[]): { text: string; attachments: unknown; questionAnswer?: true } {
   if (items.length === 1) return { text: items[0].text, attachments: items[0].attachments, ...(items[0].questionAnswer ? { questionAnswer: true } : {}) };
@@ -131,6 +170,8 @@ interface TurnState { start: number; tools: Record<string, number>; usage?: any;
 interface Live {
   agent: Agent;
   aborted: boolean;
+  proxyUrl?: string;
+  recycleRouting?: boolean;
   warm?: boolean; // spawned ahead of a send and not used yet
   held?: any[]; // events from a starting or warm agent, replayed once a send uses it
   interrupting?: NodeJS.Timeout; // Stop asked the harness to end the turn; swallow events until its result
@@ -139,6 +180,7 @@ interface Live {
   compactWait?: NodeJS.Timeout;
   spawnAt?: number; // process lifecycle for turn timing: spawn -> first process output, and why it ended
   readyAt?: number;
+  heardAt?: number; // last event from the process, including progress noise
   exitReason?: string;
   model?: string; // resolved model id the process announced
   wakes?: string[]; // subagent results waiting for the agent to be free (harnesses that do not wake themselves)
@@ -153,7 +195,10 @@ export class Threads {
   private threads = new Map<string, Thread>();
   private live = new Map<string, Live>();
   private turns = new Map<string, TurnState>(); // the turn in flight, per thread
-  private accounting = new SessionAccounting();
+  // Replaying every Claude log takes a few hundred ms; only a finished turn needs the baselines, so boot leaves it to warmAccounting()
+  private restoredAccounting?: SessionAccounting;
+  private get accounting() { return this.restoredAccounting ??= restoreAccounting([...this.threads.values()]); }
+  warmAccounting() { void this.accounting; }
   private queues = new Map<string, Queued[]>(); // messages to send, in order, once the running turn ends
   private emit: Emit;
   private notificationTurns = new Set<string>();
@@ -185,22 +230,6 @@ export class Threads {
           catch { console.warn("Skipped a thread with an unknown Claude account."); continue; }
         }
         if (t.provider === "codex" && t.context?.source !== "codex/last_request") delete t.context;
-        try {
-          if (t.provider === "claude") {
-            const last = this.historyIndex.read(path.join(LOG_DIR, `${t.id}.jsonl`), undefined, 100).events.findLast(e => claudeWindows(e).length);
-            if (last) usage.record(claudeUsageKey(t.claudeAccount), { windows: claudeWindows(last) }, t.updatedAt);
-          }
-          if (t.provider === "codex") {
-            const samples = t.sessionId ? new CodexTelemetry(t.sessionId).read() : [];
-            for (const s of samples) if (s.context) {
-              const c = s.context;
-              if ("reset" in c) { t.context = { max: t.context?.max, source: c.source }; t.lastCompactedAt = s.observedAt || t.lastCompactedAt; }
-              else t.context = { ...t.context, ...c };
-            }
-            const quota = samples.findLast(s => s.rateLimits);
-            if (quota) usage.record("codex", { windows: codexWindows(quota.rateLimits) }, quota.observedAt);
-          }
-        } catch {} // unavailable telemetry must never hide the thread
         this.threads.set(t.id, t);
       }
     } catch {}
@@ -216,7 +245,6 @@ export class Threads {
         if (count) this.threads.get(id)!.waiting = count;
       }
     } catch {}
-    this.accounting = restoreAccounting([...this.threads.values()]);
     try { backfill([...this.threads.values()]); } catch {} // usage history from logs written before the dashboard existed
     try {
       repairAccounting(DATA_DIR, true); // startup precedes new turns; preserves an exclusive original backup
@@ -235,6 +263,30 @@ export class Threads {
       setImmediate(() => { for (const id of this.queues.keys()) this.drain(id); });
     } catch {}
     for (const thread of this.threads.values()) this.refreshIdleCompaction(thread);
+  }
+
+  // Rate limits and Codex context from provider logs. Each thread keeps its saved context meanwhile, so boot defers this until
+  // after the server listens; open tabs get the refreshed usage and threads as events.
+  restoreTelemetry() {
+    for (const t of this.threads.values()) {
+      try {
+        if (t.provider === "claude") {
+          const last = lastClaudeWindows(path.join(LOG_DIR, `${t.id}.jsonl`));
+          if (last) usage.record(claudeUsageKey(t.claudeAccount), { windows: claudeWindows(last) }, t.updatedAt);
+        }
+        if (t.provider === "codex") {
+          const samples = t.sessionId ? new CodexTelemetry(t.sessionId).read() : [];
+          for (const s of samples) if (s.context) {
+            const c = s.context;
+            if ("reset" in c) { t.context = { max: t.context?.max, source: c.source }; t.lastCompactedAt = s.observedAt || t.lastCompactedAt; }
+            else t.context = { ...t.context, ...c };
+          }
+          const quota = samples.findLast(s => s.rateLimits);
+          if (quota) usage.record("codex", { windows: codexWindows(quota.rateLimits) }, quota.observedAt);
+          if (samples.length) { this.refreshIdleCompaction(t); this.emit({ t: "thread", thread: t }); }
+        }
+      } catch {} // one unreadable log must not stop the rest
+    }
   }
 
   private refreshIdleCompaction(t: Thread) {
@@ -571,9 +623,14 @@ export class Threads {
     if (!prov) throw new Error(`Unknown provider "${t.provider}".`);
     if (t.issueRun) {
       assertAutomationSandbox(t);
-      if (t.provider === "pi") t.model = selectAutomationPiModel(prov.models(), t.model);
+      // A model removed from the approved list (retired upstream) is re-selected, not kept: the run continues on a working model.
+      if (t.provider === "pi") t.model = selectAutomationPiModel(prov.models(), isAutomationPiModel(t.model) ? t.model : undefined);
     }
-    const live: Live = { agent: undefined as unknown as Agent, aborted: false, spawnAt: Date.now(), warm, held: [] };
+    const proxy = headroom.url();
+    const inherited = (t.provider === "claude" ? process.env.ANTHROPIC_BASE_URL : process.env.OPENAI_BASE_URL)?.replace(/\/+$/, "");
+    const managed = t.provider === "claude" ? headroom.state().url : `${headroom.state().url}/v1`;
+    const proxyUrl = ["claude", "codex"].includes(t.provider) && (!inherited || inherited === managed) ? proxy : undefined;
+    const live: Live = { agent: undefined as unknown as Agent, aborted: false, spawnAt: Date.now(), warm, held: [], proxyUrl };
     const ready = () => {
       if (live.readyAt != null) return;
       live.readyAt = Date.now();
@@ -583,6 +640,7 @@ export class Threads {
     const ctx: AgentCtx = {
       event: (ev) => {
         if (fromProcess(ev)) ready();
+        live.heardAt = Date.now();
         if (live.aborted) return;
         if (live.interrupting) { if (ev.type === "result") { clearTimeout(live.interrupting); live.interrupting = undefined; } return; }
         if (live.held) { if (live.held.length < 500) live.held.push(ev); }
@@ -744,6 +802,7 @@ export class Threads {
         else if (!queued && !this.questions.list(t.id).length) this.notify(t, "finished");
       }
       this.touch(t);
+      this.recycleRouting(t.id);
       brainCommit(); // agents may have written wiki pages this turn; keep the shared brain's git history current
       if (t.status === "idle" && (!ev.is_error || parseCommand(this.queues.get(t.id)?.[0]?.text || "")?.name === "compact")) this.drain(t.id);
       if (t.status === "idle" && !ev.is_error) this.wake(t);
@@ -891,6 +950,7 @@ export class Threads {
       delete t.replayLimit;
     }
     if (!opts.auto) delete t.archived; // writing to an archived thread puts it back to work (touch below persists it)
+    this.recycleRouting(id);
     let live = this.live.get(id);
     if (live?.interrupting) { this.kill(id, "stop"); live = undefined; } // its interrupted turn has not ended yet
     const cold = !live || !live.agent.alive; // a pre-warmed agent counts as warm
@@ -1129,14 +1189,92 @@ export class Threads {
       this.live.delete(id);
       live.agent.kill();
     }
+    const t = this.threads.get(id);
+    if (t?.background) { delete t.background; this.emit({ t: "thread", thread: t }); } // the tasks died with the process
+  }
+
+  private staleRouting(live: Live) {
+    return live.recycleRouting || !!live.proxyUrl && live.proxyUrl !== headroom.url();
+  }
+
+  private recycleRouting(id: string) {
+    const live = this.live.get(id), t = this.threads.get(id);
+    if (!live || !t || !this.staleRouting(live)) return false;
+    live.recycleRouting = true;
+    // Background subagents and running turns retain their process until they finish.
+    if (t.status !== "idle" || t.background || t.operation) return false;
+    this.kill(id, "stale-proxy-routing");
+    return true;
+  }
+
+  routingHealth() {
+    let idle = 0, active = 0, silent = 0;
+    for (const [id, live] of this.live) {
+      const t = this.threads.get(id);
+      if (!t) continue;
+      if (this.staleRouting(live)) {
+        if (t.status === "idle" && !t.background && !t.operation) idle++;
+        else active++;
+      }
+      if (this.staleTurn(t, live)) silent++;
+    }
+    return { idle, active, silent };
+  }
+
+  private staleTurn(t: Thread, live: Live) {
+    return t.status === "running" && !t.background && !this.questions.list(t.id).some(q => !q.async) &&
+      Date.now() - Math.max(live.heardAt ?? 0, live.spawnAt ?? 0, this.turns.get(t.id)?.start ?? 0) > TURN_STALE_MS;
+  }
+
+  repairStaleTurns() {
+    let fixed = 0;
+    for (const [id, live] of this.live) {
+      const t = this.threads.get(id);
+      if (t && this.staleTurn(t, live)) { this.expire(t); fixed++; }
+    }
+    return fixed;
+  }
+
+  repairRouting() {
+    let fixed = 0, deferred = 0;
+    for (const [id, live] of this.live) {
+      if (!this.staleRouting(live)) continue;
+      if (this.recycleRouting(id)) fixed++;
+      else deferred++;
+    }
+    return { fixed, deferred };
   }
 
   // free memory from idle agent processes; sessions resume on the next message
-  sweep() {
+  sweep(memAvailable = os.freemem() / os.totalmem()) {
+    this.repairRouting();
+    const idle: [string, number][] = [];
     for (const [id, live] of this.live) {
       const t = this.threads.get(id);
-      if (t && t.status === "idle" && !t.background && Date.now() - Math.max(t.updatedAt, live.spawnAt!) > (live.warm ? WARM_IDLE_MS : IDLE_KILL_MS)) this.kill(id, "idle");
+      if (t?.status === "running" && this.questions.list(id).some((q) => !q.async)) live.heardAt = Date.now(); // waiting on the user is not silence
+      if (t?.status === "running" && Date.now() - Math.max(live.heardAt ?? 0, live.spawnAt!, this.turns.get(id)?.start ?? 0) > TURN_STALE_MS) this.expire(t);
+      else if (t && t.status === "idle" && t.background && Date.now() - (live.heardAt ?? live.spawnAt!) > BACKGROUND_STALE_MS) this.kill(id, "stale-background");
+      else if (t && t.status === "idle" && !t.background && Date.now() - Math.max(t.updatedAt, live.spawnAt!) > (live.warm ? WARM_IDLE_MS : IDLE_KILL_MS)) this.kill(id, "idle");
+      else if (t && t.status === "idle" && !t.background && !t.operation) idle.push([id, Math.max(t.updatedAt, live.spawnAt!)]);
     }
+    idle.sort((a, b) => a[1] - b[1]); // oldest first
+    const keep = memAvailable < IDLE_MEM_FLOOR ? 2 : IDLE_MAX;
+    for (const [id] of idle.slice(0, Math.max(0, idle.length - keep))) this.kill(id, memAvailable < IDLE_MEM_FLOOR ? "memory" : "idle-cap");
+    // no process left to finish them
+    for (const t of this.threads.values()) if (t.background && !this.live.has(t.id)) { delete t.background; this.emit({ t: "thread", thread: t }); }
+  }
+
+  // End a hung turn like a crash, except that whatever was queued behind it still goes out.
+  private expire(t: Thread) {
+    const notify = !t.operation && this.notificationTurns.has(t.id);
+    this.kill(t.id, "stale-turn");
+    t.status = "idle";
+    delete t.operation;
+    this.publish(t.id, { type: "console_error", text: `No output for ${Math.round(TURN_STALE_MS / 60_000)} minutes, so the hung turn was stopped. Send a message to continue the session.` });
+    if (notify) this.notify(t, "failed");
+    this.endTiming(t, { subtype: "stale", is_error: true });
+    this.touch(t);
+    this.drain(t.id);
   }
 
   shutdown() {

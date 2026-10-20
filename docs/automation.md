@@ -4,19 +4,35 @@ How the issue automation works end to end, what you can watch, and how to debug 
 
 ## Flow
 
+Two separate workflows. The PR workflow has three phases:
+
 ```
-triage ─► dispatcher ─► router ─► worktree + hook ─► worker ─► self-review ─► PR ─► review ─► merge ─► apply
-opener ─► usage windows ─┘
+PR workflow
+  1. Issue to labels            triage
+  2. Labels to pull request     dispatcher ─► router ─► worktree + hook ─► worker ─► self-review ─► PR
+  3. Premium review and merge   review ◄─► worker redo ─► merge ─► apply
+
+Window opener
+  1. Quota windows              opener ─► usage windows   (the dispatcher plans from these readings)
 ```
 
 1. **Triage** (separate worker) labels issues `Eff:` and `Pri:`.
-2. **Dispatcher** (every 5 minutes) picks premium work in the last 90 minutes of an expiring Claude or Codex window, only from allowed authors. Live Pi work uses its own capacity and does not wait for a premium window.
+2. **Dispatcher** (every 5 minutes) picks premium work in the last 90 minutes of an expiring Claude or Codex window (180 minutes when it is below 60% used), Deep first, then the next issue by priority and effort, only from allowed authors. Live Pi work uses its own capacity and does not wait for a premium window.
 3. **Router** chooses the provider (`server/automation/router.ts`, pure): headroom in the 5-hour and 7-day windows, minus a penalty for each running automation thread, plus a bonus for a window that ends soon. Unknown usage is never preferred over a known-good provider; an exhausted one is never chosen. Deep work waits when no premium provider has room. Pi has its own capacity: the daily allowance, at most three at once, and recent failures.
 4. **Worktree + hook**: a private clone with its own Git metadata, a fresh attempt branch, and a pre-push hook refusing the default branch.
 5. **Worker**: Deep on a premium model, Trivial and BAU on Pi (BAU after `routing.bauOnPi`).
 6. **Self-review**: before the PR the worker writes its test first, then reviews its own diff with the `pr-standards` skill and ends the PR body with `## Self-review`.
-7. **Review** (Trivial and BAU): a premium reviewer, chosen by the router, applies the same skill, may fix up to 20 changed lines, and comments `Review: APPROVED` or `Review: CHANGES REQUESTED`. Deep PRs get no second reviewer.
-8. **Merge and apply**: the reviewer squash-merges what it approves, except PRs that touch protected paths (`server/automation/`, `skills/`, the dispatcher, opener and reviewer, `server/auth.ts`, `bin/`, `.github/`, `package.json`): a person merges those. For agent-console, dotfiles and brain the reviewer then fast-forwards the checkout and restarts agent-console when idle.
+7. **Review** (Trivial and BAU): a premium reviewer, chosen by the router, applies the same skill, may fix up to 20 changed lines, and comments `Review: APPROVED` or `Review: CHANGES REQUESTED`. Deep PRs get no second reviewer. A worker whose turn ended with an error is still reviewed when it already opened its PR (a provider limit late in the turn). A reviewer that ends without posting a verdict counts as a failed review and is retried.
+8. **Worker redo**: `Review: CHANGES REQUESTED` is sent back to the worker thread with the findings; it fixes the same branch and pushes, and the next review starts once the PR has a commit newer than the last verdict. No new commit (a worker that edited but never pushed): the worker is asked to commit and push, at most 2 times (`MAX_NUDGES`), then a person decides. At most 3 reviews per worker (`MAX_REVIEWS` in `server/issue-review.ts`); after that a person decides. The dashboard boxes review and redo as the review loop, each arrow labelled with its condition.
+9. **Merge and apply**: the reviewer squash-merges what it approves, except PRs that touch protected paths (`server/automation/`, `skills/`, the dispatcher, opener and reviewer, `server/auth.ts`, `bin/`, `.github/`, `package.json`): a person merges those. For agent-console, dotfiles and brain the reviewer then fast-forwards the checkout and restarts agent-console when idle.
+
+## Recovering incomplete workers
+
+The five-minute sweep resumes a Trivial or BAU worker that ended without opening a PR, using its existing private clone, branch, and transcript. Recovery requires live dispatch, available capacity for the same provider, and an open issue. Each worker gets at most two recovery turns, at least 15 minutes apart; counters and backoff survive server restarts. Closed issues and archived or running workers are skipped.
+
+A failed redo waits for worker recovery before another premium review. Successful review handoffs release the worker claim so its next review can start in the same server process. If sending findings fails, the reviewer remains eligible for another handoff.
+
+Pi can return from an exhausted OpenRouter daily quota to the approved NVIDIA coding model. Routing preserves completed tool results and prevents provider bounce loops within a retry sequence. A full-prompt 429 retry is refused once any tool call occurred in that turn.
 
 ## The log
 
@@ -24,7 +40,7 @@ Every stage writes to `automation-events.jsonl` in the Console data directory (m
 
 ## The dashboard
 
-`/automation` (link in the Auto lane and the sidebar menu). It shows the workflow as boxes with icons: the working step pulses, a failed step is red with a count, a disabled one is dashed. Click a step for its log, newest first. Panels list failures, triggers (webhook, the two 5-minute ticks, the turn-end hook, scheduled tasks, the Debug button), runs, the git hooks in dispatched worktrees and the settings. It refreshes every 5 seconds. On a phone the graph becomes a vertical list.
+`/automation` (link in the Auto lane and the sidebar menu). It shows each workflow in its own panel (PR workflow with its three phases, then the window opener), with the triggers that start it; steps are boxes with icons: the working step pulses, a failed step is red with a count, a disabled one is dashed. Click a step for its log, newest first. Panels list failures, other triggers (scheduled tasks, the Debug button), runs, the git hooks in dispatched worktrees and the settings. It refreshes every 5 seconds. On a phone each phase becomes a vertical list.
 
 The sidebar has a third lane, **Auto**, for threads the automation started, grouped by issue with a role chip (work, review, debug). They no longer appear in the Threads lane; notifications still arrive.
 

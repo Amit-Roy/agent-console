@@ -9,6 +9,8 @@ const pick = (over?: Partial<RouteRequest>) => { const r = route(req(over)); ret
 // --- who does the work -------------------------------------------------------------------------------------
 assert.equal(pick({ effort: "trivial" }), "pi/default/default");
 assert.equal(pick({ effort: "bau", flags: { bauOnPi: true } }), "pi/default/default", "BAU runs on Pi once the flag is on");
+assert.match(pick({ effort: "bau", premium: true, flags: { bauOnPi: true } }), /^(claude\/sonnet|codex\/gpt-6.1-sol)\/low$/, "a premium slot runs BAU at low effort, off Pi");
+assert.notEqual(pick({ effort: "trivial", premium: true }).split("/")[0], "pi", "a premium slot keeps Trivial off Pi");
 assert.match(pick({ effort: "bau" }), /^(claude\/sonnet\/medium|codex\/gpt-6\.1-sol\/low)$/, "BAU keeps the old premium route until the flag is on");
 assert.match(pick({ effort: "deep" }), /^(claude\/opus\/medium|codex\/gpt-6\.1-sol\/high)$/);
 
@@ -37,9 +39,9 @@ assert.equal(pick({ role: "debug", usage: { claude: win(100), codex: win(100) } 
 assert.match(pick({ role: "debug", effort: "bau" }), /^(claude\/sonnet\/medium|codex\/gpt-6\.1-sol\/medium)$/);
 assert.equal(pick({ role: "debug", effort: "bau", active: [{ provider: "claude", role: "debug" }, { provider: "codex", role: "work" }, { provider: "codex", role: "work" }], usage: { claude: win(95), codex: win(95) } }), "pi/default/default");
 
-// --- Pi has its own capacity: a daily allowance, a concurrency cap and recent failures -------------------------------
+// --- Pi has its own capacity: a concurrency cap and recent failures -------------------------------
 const pi = (used: number) => ({ windows: [{ label: "Free/day", used, limit: 1000, resetsAt: now + 3 * 3600_000 }], updatedAt: now });
-assert.equal(pick({ effort: "trivial", usage: { pi: pi(1000) } }), "defer", "no daily allowance left");
+assert.equal(pick({ effort: "trivial", usage: { pi: pi(1009) } }), "pi/default/default", "OpenRouter free cap spent: direct NVIDIA still runs");
 assert.equal(pick({ effort: "trivial", usage: { pi: pi(10) }, active: [{ provider: "pi", role: "work" }, { provider: "pi", role: "work" }, { provider: "pi", role: "work" }] }), "defer", "three Pi tasks at once is the cap");
 assert.equal(pick({ effort: "trivial", usage: {}, failures: { pi: 5 } }), "defer", "Pi has been failing: wait");
 assert.equal(pick({ effort: "trivial", usage: {}, failures: { pi: 1 } }), "pi/default/default");

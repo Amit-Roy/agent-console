@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { historyRows } from "../server/usage.ts";
 import { execFileSync } from "node:child_process";
-import { plan, effortOf, expiring, loadConfig, createDispatcher, ROUTES, threadTitle, topicOf, issuePrompt, addWorktree, startIssue, type Issue } from "../server/window-dispatch.ts";
+import { plan, effortOf, expiring, loadConfig, createDispatcher, ROUTES, FILL, threadTitle, topicOf, issuePrompt, addWorktree, startIssue, type Issue } from "../server/window-dispatch.ts";
 
 const now = 1_800_000_000_000, min = 60_000;
 const win = (used: number, endsInMin: number, week = 5) => ({ windows: [{ label: "5-hour", used, limit: 100, unit: "%", resetsAt: now + endsInMin * min }, { label: "7-day", used: week, limit: 100 }], updatedAt: now });
@@ -16,9 +16,13 @@ assert.equal(historyRows("claude", undefined, a).length, 2);
 assert.equal(historyRows("claude", a, { ...a, updatedAt: now + 1 }).length, 0);
 assert.equal(historyRows("claude", a, win(11, 200)).length, 1);
 
-// lead window: only the last 90 minutes, only with room left
-assert.ok(!expiring(win(10, 120), now, loadConfig("/nonexistent")));
-assert.equal(expiring(win(10, 89), now, loadConfig("/nonexistent"))?.full, false);
+// lead window: the last 90 minutes, or the last 180 below 60% used; only with room left
+assert.ok(!expiring(win(70, 120), now, loadConfig("/nonexistent")));
+assert.equal(expiring(win(70, 89), now, loadConfig("/nonexistent"))?.full, false);
+assert.equal(expiring(win(59, 179), now, loadConfig("/nonexistent"))?.full, false, "a lightly used window opens 180 minutes early");
+assert.ok(!expiring(win(59, 181), now, loadConfig("/nonexistent")));
+assert.ok(!expiring(win(60, 120), now, loadConfig("/nonexistent")), "60% used is not low usage");
+assert.ok(!expiring(win(10, 120), now, { ...loadConfig("/nonexistent"), lowUsageLeadMinutes: 60 }), "a shorter low-usage lead never narrows the normal one");
 assert.equal(expiring(win(95, 30), now, loadConfig("/nonexistent"))?.full, true);
 assert.ok(!expiring({ windows: [{ label: "5-hour", used: 0, limit: 100, resetsAt: now - 1 }], updatedAt: now }, now, loadConfig("/nonexistent")), "an already-reset window is stale");
 assert.equal(effortOf(["Eff: Deep", "x"]), "deep");
@@ -26,8 +30,9 @@ assert.equal(effortOf(["Eff: Deep", "Eff: BAU"]), undefined);
 
 // routing per issue #10
 const issues = [issue(1, "Deep"), issue(2, "BAU"), issue(3, "Trivial"), issue(4, "BAU", "P0"), issue(5, "BAU", "P3")];
-const none = plan({ now, usage: { claude: win(10, 120) }, issues, done: new Set() });
+const none = plan({ now, usage: { claude: win(70, 120) }, issues, done: new Set() });
 assert.deepEqual(none, [], "nothing before the last 90 minutes");
+assert.equal(plan({ now, usage: { claude: win(10, 120) }, issues, done: new Set() }).length, 2, "below 60% used, the last 180 minutes");
 const claude = plan({ now, usage: { claude: win(10, 60) }, issues, done: new Set() });
 assert.equal(claude.length, 2, "two per window");
 assert.deepEqual(claude[0].route, ROUTES.deep[0], "deep gets Opus medium first");
@@ -39,7 +44,20 @@ assert.equal(codex[0].route.effort, "high");
 assert.equal(codex[1].route.effort, "low");
 const both = plan({ now, usage: { claude: win(10, 60), codex: win(10, 60) }, issues: [issue(1, "Deep"), issue(2, "Deep"), issue(3, "Deep")], done: new Set() });
 assert.equal(both.length, 3);
-const trivial = plan({ now, usage: { codex: win(10, 60) }, issues: [issue(3, "Trivial")], done: new Set() });
+// no Deep work: the premium slot takes the next issue by priority, then effort
+const next = plan({ now, usage: { claude: win(10, 60) }, issues: [issue(3, "Trivial", "P0"), issue(2, "BAU", "P1"), issue(6, "BAU", "P0")], done: new Set() });
+assert.deepEqual(next.map(d => d.key), ["o/r#6", "o/r#3"], "P0 BAU, then P0 Trivial, before P1 BAU");
+assert.deepEqual(next.map(d => d.route), [ROUTES.bau[0], FILL[0]], "BAU off Pi keeps Sonnet medium; Trivial fill runs Sonnet low");
+assert.deepEqual(next.map(d => !!d.premium), [false, true]);
+assert.match(next[1].reason, /no Deep work left/);
+const live = { routing: { mode: "live" as const, bauOnPi: true }, perWindow: 1 };
+const mixed = plan({ now, usage: { claude: win(10, 60) }, issues: [issue(1, "Deep", "P3"), issue(2, "BAU", "P0"), issue(3, "Trivial")], done: new Set(), cfg: live });
+assert.deepEqual(mixed.map(d => [d.key, d.route.provider]), [["o/r#1", "claude"], ["o/r#2", "pi"]], "Deep keeps first pick; Pi takes the rest");
+const liveFill = plan({ now, usage: { claude: win(10, 60) }, issues: [issue(2, "BAU", "P0"), issue(3, "Trivial", "P1")], done: new Set(), cfg: { ...live, perWindow: 2 } });
+assert.deepEqual(liveFill.map(d => [d.key, d.route.model, d.route.effort]), [["o/r#2", "sonnet", "low"], ["o/r#3", "sonnet", "low"]], "live bauOnPi: spare slots run Sonnet low");
+assert.deepEqual(plan({ now, usage: { claude: win(10, 60) }, issues: [issue(2, "BAU"), issue(3, "Trivial", "P0")], done: new Set(), cfg: live }).map(d => [d.key, d.route.provider]), [["o/r#3", "claude"], ["o/r#2", "pi"]]);
+// trivial in a full window still runs on Pi with a premium reviewer
+const trivial = plan({ now, usage: { codex: win(95, 60) }, issues: [issue(3, "Trivial")], done: new Set() });
 assert.equal(trivial[0].route.provider, "pi");
 assert.match(trivial[0].reason, /reviewer gpt-6.1-sol/);
 // a nearly full window wastes nothing: deep/BAU skip it, trivial does not check
@@ -177,14 +195,18 @@ try {
 
     put({ mode: "live", bauOnPi: true }); reset(); started = [];
     await mk(both, started).tick();
-    assert.deepEqual(started, [["o/r#1", "claude"], ["o/r#2", "pi"]], "live: Deep on premium, BAU on Pi");
+    assert.deepEqual(started, [["o/r#1", "claude"], ["o/r#2", "codex"]], "live: Deep on premium, then a free premium slot takes BAU; the router spreads load");
+    fs.writeFileSync(path.join(dir, "window-dispatch.json"), JSON.stringify({ enabled: true, dryRun: false, repos: ["o/r"], routing: { mode: "live", bauOnPi: true }, perWindow: 1 }));
+    reset(); started = [];
+    await mk({ claude: win(10, 60) }, started).tick();
+    assert.deepEqual(started, [["o/r#1", "claude"], ["o/r#2", "pi"]], "live: Deep fills the premium slot, BAU on Pi");
 
     // Pi workers do not borrow a premium review window before their PR exists.
     put({ mode: "live", bauOnPi: true }); reset(); started = [];
     await mk({}, started).tick();
     assert.deepEqual(started, [["o/r#2", "pi"]], "BAU starts even without premium usage");
     reset(); started = [];
-    await mk({ claude: win(100, 60), codex: win(10, 180) }, started).tick();
+    await mk({ claude: win(100, 60), codex: win(10, 200) }, started).tick();
     assert.deepEqual(started, [["o/r#2", "pi"]], "full or non-expiring premium windows do not block Pi");
     reset(); started = [];
     fs.writeFileSync(path.join(dir, "window-dispatch.json"), JSON.stringify({ enabled: true, dryRun: true, repos: ["o/r"], routing: { mode: "live", bauOnPi: true } }));
@@ -204,7 +226,7 @@ try {
     reset(); started = [];
     const exhaustedPi = { pi: { windows: [{ label: "Free/day", used: 1000, limit: 1000 }], updatedAt: now } };
     await mk(exhaustedPi, started).tick();
-    assert.deepEqual(started, [], "Pi's own exhausted quota still defers work");
+    assert.deepEqual(started, [["o/r#2", "pi"]], "OpenRouter's spent Free/day counter does not block direct NVIDIA work");
 
     put({ mode: "live", bauOnPi: false }); reset(); started = [];
     await mk({ claude: win(10, 60, 100), codex: win(10, 60, 100) }, started).tick();
@@ -216,4 +238,4 @@ try {
     assert.ok(ev.read({ step: "dispatcher" }).events.some(e => e.kind === "ok" && /picked 2/.test(e.msg!)), "each tick leaves a trace");
   }
 } finally { fs.rmSync(dir, { recursive: true, force: true }); }
-console.log("PASS usage history, 90-minute lead window, effort routing, priority order, config clamps, dry-run ledger");
+console.log("PASS usage history, 90/180-minute lead window, next-priority premium fill, effort routing, priority order, config clamps, dry-run ledger");

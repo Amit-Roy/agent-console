@@ -3,10 +3,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { CodexTelemetry, codexTokenEvent } from "../server/providers/codex-telemetry.ts";
-import { createLabelCompletion, askRouter, askNvidia } from "../server/providers/small-model.ts";
+import { createLabelCompletion, askRouter, askNvidia, NVIDIA_LABEL_MODELS } from "../server/providers/small-model.ts";
+import { setLocalModelRateLimit } from "../server/providers/model-rate-client.ts";
+import { ModelRateLimit } from "../server/providers/model-rate-limit.ts";
 import { claudeWindows, codexWindows, routerUsage } from "../server/usage.ts";
 import { parseLabels } from "../server/providers/label.ts";
 import { codexTranslator } from "../server/providers/codex.ts";
+setLocalModelRateLimit(new ModelRateLimit({ path: path.join(fs.mkdtempSync(path.join(os.tmpdir(), "usage-rate-")), "gate.sqlite"), intervalMs: 1 }));
 const token = { type: "event_msg", timestamp: "2026-10-16T10:00:00Z", payload: { type: "token_count", info: { total_token_usage: { total_tokens: 5_700_000 }, last_token_usage: { total_tokens: 136279 }, model_context_window: 475000 }, rate_limits: { primary: { used_percent: 15, window_minutes: 300, resets_at: 1792151311 }, secondary: { used_percent: 4, window_minutes: 10080, resets_at: 1792655061 } } } };
 assert.deepEqual(codexTokenEvent(token)?.context, { used: 136279, max: 475000, source: "codex/last_request" });
 assert.equal(codexWindows(token.payload.rate_limits)[0].label, "5-hour");
@@ -63,7 +66,10 @@ try {
   globalThis.fetch = (async (u: any, opts: any) => { url = String(u); sent = JSON.parse(opts.body); return new Response(JSON.stringify({ choices: [{ message: { content: "Nvidia label" } }] }), { status: 200 }); }) as typeof fetch;
   assert.equal(await askNvidia("fixture", "labels"), "Nvidia label");
   assert.equal(url, "https://integrate.api.nvidia.com/v1/chat/completions");
-  assert.equal(sent.model, process.env.AGENT_CONSOLE_LABEL_NVIDIA_MODEL || "nvidia/nemotron-3-super-120b-a12b");
+  assert.equal(sent.model, process.env.AGENT_CONSOLE_LABEL_NVIDIA_MODEL || "nvidia/nemotron-3.5-super-vl-120b-a12b");
+  assert.equal(NVIDIA_LABEL_MODELS.length > 1 || !!process.env.AGENT_CONSOLE_LABEL_NVIDIA_MODEL, true, "more than one NIM model before OpenRouter");
+  await askNvidia("fixture", "labels", "nvidia/nemotron-3-ultra-550b-a55b");
+  assert.equal(sent.model, "nvidia/nemotron-3-ultra-550b-a55b", "each fallback engine asks its own NIM model");
   assert.equal(sent.chat_template_kwargs.enable_thinking, false);
   if (originalNvidia === undefined) delete process.env.NVIDIA_API_KEY; else process.env.NVIDIA_API_KEY = originalNvidia;
 } finally { globalThis.fetch = originalFetch; if (originalKey === undefined) delete process.env.OPENROUTER_API_KEY; else process.env.OPENROUTER_API_KEY = originalKey; }

@@ -2,10 +2,22 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { raisedItems, raisedPrs } from "../server/session-prs.ts";
 import { createTelemetryService, linkThread, parseRemote, renderTelemetry, NO_USAGE_TEXT, TELEMETRY_MARKER } from "../server/token-telemetry.ts";
 
 const repo = "Amit-Roy/agent-console";
 const repos = [repo];
+
+// --- issues a thread filed link to it, but are not listed as PRs ---
+const toolLog = (id: string, command: string, out: string) => [
+  JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", id, name: "Bash", input: { command } }] } }),
+  JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: id, content: out }] } }),
+].join("\n");
+const filed = toolLog("t1", "cd /tmp && gh issue create -R Amit-Roy/agent-console --title x", `https://github.com/${repo}/issues/39`);
+assert.deepEqual(raisedItems(filed).map(i => i.number), [39]);
+assert.deepEqual(raisedPrs(filed), []);
+assert.deepEqual(raisedItems(toolLog("t2", "gh pr create --fill", `https://github.com/${repo}/pull/23`)).map(i => i.number), [23]);
+assert.deepEqual(raisedItems(toolLog("t3", 'grep "gh issue create" x', `https://github.com/${repo}/issues/5`)), []);
 
 // --- linkage ---
 const run = { repo, number: 7, branch: "issue-7", pr: 9 };
@@ -13,6 +25,7 @@ let l = linkThread({ thread: { id: "a", issueRun: run }, repos });
 assert.deepEqual(l.items.map(i => [i.number, i.via]), [[7, "issue-run"], [9, "pr-run"]]);
 l = linkThread({ thread: { id: "b", defaultRepo: repo, texts: ["fix #12 and see https://github.com/Amit-Roy/agent-console/pull/13", "x#99 &#39; foo/#5"] }, repos });
 assert.deepEqual(l.items.map(i => i.number), [13, 12]); // url pass first, then #n; x#99 and &#39; are not refs
+assert.deepEqual(linkThread({ thread: { id: "w", branch: "main", raised: [{ repo, number: 28 }, { repo: "evil/repo", number: 1 }] }, repos, item: { repo, number: 28 } }).items.map(i => i.via), ["raised"], "PR opened from a worktree links without a matching cwd branch");
 assert.equal(linkThread({ thread: { id: "b", texts: ["https://github.com/evil/repo/issues/1", "#4"] }, repos }).items.length, 0, "other repos and no default repo are ignored");
 assert.equal(linkThread({ thread: { id: "c", branch: "feat/x" }, repos, item: { repo, number: 3, head: "feat/x" } }).linked, true);
 assert.equal(linkThread({ thread: { id: "c", branch: "feat/x" }, repos, item: { repo, number: 3, head: "other" } }).linked, false);
@@ -115,6 +128,16 @@ assert.equal(store.get(7)!.length, 1);
 store.delete(3);
 await svc.threadTurnEnded(threadList[1]); await svc.flush();
 assert.equal(store.get(3)!.length, 1);
+
+// git runs once per cwd, not per thread per sync; a turn end refreshes it
+const gitCalls: string[] = [];
+const shared = [...threadList, { id: "manual-2", provider: "codex", title: "Chat 2", createdAt: 0, cwd: "/w" }];
+const cached = make({ threads: () => shared, git: async (cwd: string, ...args: string[]) => { gitCalls.push(cwd); return args[0] === "rev-parse" ? "manual-branch" : "git@github.com:Amit-Roy/agent-console.git"; } });
+await cached.syncByNumber(repo, 3); await cached.syncByNumber(repo, 3);
+assert.equal(gitCalls.length, 2, "one rev-parse and one remote lookup for the shared cwd");
+await cached.threadTurnEnded(threadList[1]); await cached.flush();
+assert.equal(gitCalls.length, 4, "turn end refreshes the thread's cwd");
+cached.close();
 
 // failures are logged, never thrown
 const broken = make({ github: async () => { throw new Error("boom token=secret"); } });

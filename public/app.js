@@ -1,6 +1,7 @@
 import { $, el, icon, iconButton, wireCopy, renderMarkdown, highlightInto, langFromPath, parseFileRef, setFileScope } from "/render.js";
 import { createMenu } from "/menu.js";
 import { composerField } from "/composer-field.js";
+import { attachmentDraftStore } from "/attachment-drafts.js";
 import { toolName, toolSummary } from "/tool-display.js";
 import { createLatencyReporter } from "/telemetry.js";
 import { createQuestions } from "/questions.js";
@@ -10,6 +11,7 @@ import { setupNotifications } from "/notifications.js";
 import { createChatSearch } from "/chat-search.js";
 import { createSchedules, REPEAT_ITEMS, DAY_ITEMS } from "/schedules.js";
 import { createAutoLane } from "/automation-lane.js";
+import { autoCandidates, autoPick } from "/auto-pick.js";
 
 composerField($("input"));
 
@@ -40,9 +42,11 @@ const chatSearch = createChatSearch({
   navigate: () => { releaseHistoryAnchor(); state.stick = false; },
 });
 let ws, retry = 0, reconnectTimer = 0, probeTimer = 0;
+let draftsLoaded = false;
 
 // ---------- connection ----------
 function connect() {
+  if (!draftsLoaded) return;
   clearTimeout(reconnectTimer);
   if (ws && ws.readyState <= 1) return; // connecting or open already
   const sock = ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
@@ -109,24 +113,36 @@ addEventListener("pageshow", (e) => e.persisted && reconnectNow());
 // Messages the user typed or Stop presses: kept until the server acknowledges them, resent after a reconnect (the server drops
 // repeats by id), so a dead socket neither loses nor duplicates them.
 const outbox = [];
+const sendingDrafts = new Map();
 let cidSeq = 0;
-function sendReliable(msg) {
+function sendReliable(msg, draft) {
   const item = { ...msg, cid: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}-${++cidSeq}` };
+  if (draft) {
+    draft = { ...draft, createdAt: Date.now(), sequence: cidSeq };
+    sendingDrafts.set(item.cid, draft);
+    try { localStorage.setItem(`ac_sending:${item.cid}`, JSON.stringify(draft)); }
+    catch { toast("Browser storage unavailable. Keep this page open until your message sends."); }
+  }
   outbox.push(item);
   if (!send(item)) { toast("Offline. Your message will send when the connection is back."); return false; }
-  if (!state.features.acks) outbox.splice(outbox.indexOf(item), 1); // an older server cannot acknowledge: never resend
+  if (!state.features.acks) acked(item.cid); // An older server cannot acknowledge: never resend.
   else setTimeout(() => outbox.includes(item) && probe(), 2000);
   return true;
 }
 function flushOutbox() {
   for (const item of [...outbox]) {
     if (!send(item)) return;
-    if (!state.features.acks) outbox.splice(outbox.indexOf(item), 1);
+    if (!state.features.acks) acked(item.cid);
   }
 }
-function acked(cid) {
+function acked(cid, accepted = true) {
   const at = outbox.findIndex((x) => x.cid === cid);
   if (at >= 0) outbox.splice(at, 1);
+  const draft = sendingDrafts.get(cid);
+  sendingDrafts.delete(cid);
+  if (!accepted && draft) void recoverSendingDraft(cid, draft);
+  else if (draft) void finishSendingDraft(cid, draft);
+  else try { localStorage.removeItem(`ac_sending:${cid}`); } catch {}
 }
 const send = (o) => { if (ws?.readyState !== 1) return false; ws.send(JSON.stringify(o)); return true; };
 const questions = createQuestions({ send, root: () => $("chat"), changed: () => { renderThreads(); updateWorking(); } });
@@ -284,11 +300,11 @@ function handle(m) {
     case "removed":
       state.threads.delete(m.thread);
       views.delete(m.thread);
+      for (const item of [...outbox]) if (item.thread === m.thread) acked(item.cid);
       writeDraft(m.thread, "");
-      if (pending.length && pending[0].thread === m.thread) {
-        pending.length = 0; // the server already deleted that thread's uploads
-        renderThumbs();
-      }
+      for (const p of attachmentDrafts.get(m.thread) || []) forgetAttachment(p);
+      attachmentDrafts.delete(m.thread);
+      if (state.current === m.thread) { pending = []; renderThumbs(); }
       if (state.current === m.thread) {
         state.current = null;
         $("input").value = "";
@@ -353,7 +369,7 @@ function handle(m) {
       acked(m.cid);
       break;
     case "error":
-      if (m.cid) acked(m.cid);
+      if (m.cid) acked(m.cid, false);
       addNote(m.message, "errtxt");
       break;
   }
@@ -438,6 +454,42 @@ async function finishSignIn() {
 }
 $("d-signin-finish").onclick = finishSignIn;
 $("d-code").onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); finishSignIn(); } };
+// Auto: Sonnet or Sol at medium effort, on whichever five-hour window would otherwise leave the most allowance unused.
+const autoUsable = (r) => !!prov(r.provider)?.ok && prov(r.provider).models?.includes(r.model) && (!r.account || !!claudeAccount(r.account).ready);
+const autoName = (r) => r.provider === "claude" ? `Claude · ${claudeAccount(r.account).label}` : provLabel(r.provider);
+const AUTO_HINT = "Sonnet or Sol medium, on the allowance closest to going unused.";
+const resetClock = (at) => new Date(at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+function renderAutoPanel() {
+  const list = autoCandidates(state.usage, Date.now(), autoUsable), best = autoPick(list);
+  const head = el("div", "auto-line hdr");
+  head.append(el("span", "", "5-hour"), el("span", "", "Left"), el("span", "", "Resets"));
+  $("d-auto-panel").replaceChildren(head, ...list.map(c => {
+    const row = el("div", `auto-line${c === best ? " best" : ""}${c.blocked ? " off" : ""}`);
+    row.title = c.blocked ? `Skipped: ${c.blocked}` : c === best ? "Auto picks this one" : "";
+    row.append(el("span", "", autoName(c.route)), el("span", "", c.known ? `${Math.round(c.left)}% left` : "Unknown"), el("span", "", c.resetsAt ? `${resetClock(c.resetsAt)} · ${resetsText(c.resetsAt).replace(/^Resets in /, "")}` : "No reset"));
+    return row;
+  }));
+}
+$("d-auto-info").onclick = () => {
+  const open = $("d-auto-panel").hidden;
+  if (open) renderAutoPanel();
+  $("d-auto-panel").hidden = !open;
+  $("d-auto-info").setAttribute("aria-expanded", String(open));
+};
+$("d-auto").onclick = () => {
+  const best = autoPick(autoCandidates(state.usage, Date.now(), autoUsable));
+  if (!best) return void ($("d-auto-note").textContent = "No signed-in agent has five-hour allowance left.");
+  const r = best.route;
+  menus.dProv.setValue(r.provider);
+  fillDialog(r.provider);
+  if (r.account) menus.dAccount.setValue(r.account);
+  menus.dModel.setValue(r.model);
+  dialogEffort(r.model, r.provider);
+  menus.dEffort.setValue(r.effort);
+  syncDialogAccount();
+  $("d-auto-note").textContent = `${autoName(r)} · ${menus.dModel.items().find(i => i.value === r.model)?.label || r.model} · medium. ${best.known ? `${Math.round(best.left)}% left${best.resetsAt ? `, ${resetsText(best.resetsAt).toLowerCase()}` : ""}` : "Usage unknown"}.`;
+  if (!$("d-auto-panel").hidden) renderAutoPanel();
+};
 function fillDialog(id) {
   const p = prov(id);
   if (!p) return;
@@ -725,10 +777,51 @@ function writeDraft(id, text) {
   try {
     if (text) localStorage.setItem(`ac_draft:${id}`, text);
     else localStorage.removeItem(`ac_draft:${id}`);
-  } catch {} // Keep thread switching usable when browser storage is unavailable.
+  } catch {
+    if (!storageWarning) toast("Browser storage unavailable. Drafts are kept only while this page stays open.");
+    storageWarning = true;
+  }
 }
 function saveDraft() {
   writeDraft(state.current, $("input").value);
+}
+async function finishSendingDraft(cid, draft) {
+  // A synchronous receipt prevents an interrupted IndexedDB deletion from restoring a sent file.
+  try { localStorage.setItem(`ac_sending:${cid}`, JSON.stringify({ ...draft, accepted: true })); } catch {}
+  const keys = new Set(draft.attachments.map(p => p.key));
+  const list = attachmentDrafts.get(draft.thread) || [];
+  for (let i = list.length - 1; i >= 0; i--) if (keys.has(list[i].key)) list.splice(i, 1);
+  await Promise.all(draft.attachments.map(p => attachmentStorage.remove(p.key)));
+  if (!storageWarning) try { localStorage.removeItem(`ac_sending:${cid}`); } catch {}
+}
+async function recoverSendingDraft(cid, draft) {
+  let text = drafts.get(draft.thread) || "";
+  try { text = localStorage.getItem(`ac_draft:${draft.thread}`) ?? text; } catch {}
+  const list = attachmentDrafts.get(draft.thread) || [];
+  attachmentDrafts.set(draft.thread, list);
+  const saved = [];
+  const labels = new Map();
+  for (const p of draft.attachments) {
+    const existing = list.find(item => item.key === p.key);
+    if (existing) {
+      if (p.n && existing.n !== p.n) labels.set(p.n, existing.n);
+      continue;
+    }
+    if (p.n && list.some(item => item.n === p.n)) {
+      const n = Math.max(0, ...list.map(item => item.n || 0)) + 1;
+      labels.set(p.n, n);
+      p.n = n;
+    }
+    list.push(p);
+    saved.push(attachmentStorage.save(p));
+  }
+  list.sort((a, b) => (a.order || 0) - (b.order || 0));
+  const recovered = draft.text.replace(/\[Image #(\d+)\]/g, (token, n) => labels.has(Number(n)) ? `[Image #${labels.get(Number(n))}]` : token);
+  if (recovered && text !== recovered && !text.startsWith(`${recovered}\n\n`)) text = recovered + (text ? `\n\n${text}` : "");
+  writeDraft(draft.thread, text);
+  if (state.current === draft.thread) restoreDraft(draft.thread);
+  await Promise.all(saved);
+  if (!storageWarning) try { localStorage.removeItem(`ac_sending:${cid}`); } catch {}
 }
 function restoreDraft(id) {
   let text = drafts.get(id) || "";
@@ -739,6 +832,16 @@ function restoreDraft(id) {
     sessionStorage.removeItem("ac_draft");
   } catch {}
   $("input").value = text;
+  pending = attachmentDrafts.get(id) || [];
+  attachmentDrafts.set(id, pending);
+  imageCount = Math.max(0, ...pending.map(p => p.n || 0));
+  for (const p of pending) {
+    if (p.id) {
+      p.url = `/uploads/${p.thread}/${p.id}/${encodeURIComponent(p.name)}`;
+      p.ready = Promise.resolve();
+    } else if (!p.ready) startUpload(p);
+  }
+  renderThumbs();
   sizeInput();
   closeSlash();
 }
@@ -771,7 +874,6 @@ function openThread(id) {
   $("conversation-updating")?.remove();
   state.openAt = performance.now();
   state.request = (state.request || 0) + 1;
-  if (pending.length && pending[0].thread !== id) clearPending(); // attachments belong to the thread they were uploaded to
   state.current = id;
   history.replaceState(null, "", `${location.pathname}${location.search}#thread=${encodeURIComponent(id)}`);
   if (switching) restoreDraft(id);
@@ -2197,8 +2299,9 @@ async function submit(mode) {
   const tapAt = performance.now();
   const thread = state.current;
   try {
-    await Promise.all(pending.map((p) => p.ready)); // uploads still in flight; failed ones remove themselves
+    await Promise.all(pending.map((p) => p.ready));
     if (state.current !== thread) return; // Upload completion must not submit another thread's draft.
+    if (pending.some(p => !p.id)) { toast("Retry or remove failed attachments before sending."); return; }
     const text = box.value.trim();
     if (/^\/(model|effort)$/i.test(text)) {
       if (text.toLowerCase() === "/effort" && $("effort").hidden) { toast("This agent does not expose effort settings."); return; }
@@ -2212,10 +2315,12 @@ async function submit(mode) {
     if (!mode && !attachments.length && (questions.count(state.current) || cur()?.waiting)) mode = "steer";
     // mid-turn a message queues until the turn ends; mode "steer" (Alt+Enter, or Steer on a queued card) hands it to the agent now
     const startsTurn = !mode && cur()?.status !== "running";
-    if (sendReliable({ t: "send", thread: state.current, text, attachments, ...(mode ? { mode } : {}) }) && startsTurn) firstToken = { thread: state.current, at: tapAt, wait_ms: performance.now() - tapAt };
+    const draft = { thread, text: box.value, attachments: pending.map(({ key, thread, name, kind, size, n, id, order }) => ({ key, thread, name, kind, size, n, id, order })) };
+    if (sendReliable({ t: "send", thread: state.current, text, attachments, ...(mode ? { mode } : {}) }, draft) && startsTurn) firstToken = { thread: state.current, at: tapAt, wait_ms: performance.now() - tapAt };
     box.value = "";
     saveDraft();
     box.style.height = "";
+    for (const p of pending) forgetAttachment(p);
     pending.length = 0;
     imageCount = 0;
     renderThumbs();
@@ -2269,7 +2374,14 @@ function removeToken(n) {
   box.value = box.value.includes(token + " ") ? box.value.replace(token + " ", "") : box.value.replace(token, "");
   box.dispatchEvent(new Event("input"));
 }
-const pending = []; // { thread, name, kind: "image"|"file", size, url (images: data: URL, so the CSP needs no blob:), id (once uploaded), busy, ready }
+const attachmentDrafts = new Map();
+let attachmentOrder = Date.now();
+let pending = [];
+let storageWarning = false;
+const attachmentStorage = attachmentDraftStore(() => {
+  if (!storageWarning) toast("Browser storage unavailable. Attachments are kept only while this page stays open.");
+  storageWarning = true;
+});
 
 const fmtSize = (n) => (n < 1024 ? `${n} B` : n < 1048576 ? `${Math.round(n / 1024)} KB` : `${(n / 1048576).toFixed(1)} MB`);
 const readDataUrl = (blob) =>
@@ -2318,16 +2430,61 @@ async function upload(thread, blob, name) {
   if (!r.ok) throw new Error(j.error || `Upload failed (${r.status}).`);
   return j;
 }
-const discard = (p) => p.ready.then(() => p.id && apiFetch(`/uploads/${p.thread}/${p.id}`, { method: "DELETE" }).catch(() => {}));
-function dropPending(p) {
-  const i = pending.indexOf(p);
-  if (i >= 0) pending.splice(i, 1);
-  renderThumbs();
+const discard = (p) => Promise.resolve(p.ready).then(() => p.id && apiFetch(`/uploads/${p.thread}/${p.id}`, { method: "DELETE" }).catch(() => {}));
+function forgetAttachment(p) {
+  p.removed = true;
+  attachmentStorage.remove(p.key);
 }
-function clearPending() {
-  for (const p of pending.splice(0)) discard(p);
-  imageCount = 0;
-  renderThumbs();
+function dropPending(p) {
+  const list = attachmentDrafts.get(p.thread) || [];
+  const i = list.indexOf(p);
+  if (i >= 0) list.splice(i, 1);
+  forgetAttachment(p);
+  if (state.current === p.thread) renderThumbs();
+}
+function startUpload(p) {
+  p.busy = true;
+  p.error = false;
+  p.ready = (async () => {
+    // Persist the original file before image decoding, resizing, or networking.
+    await attachmentStorage.save(p);
+    if (p.removed) return;
+    if (!p.prepared) {
+      const prep = await prepare(p.blob);
+      if (p.removed) return;
+      Object.assign(p, prep, { size: prep.blob.size, prepared: true });
+      if (p.kind === "image" && !p.n) {
+        p.n = Math.max(0, ...(attachmentDrafts.get(p.thread) || []).map(item => item.n || 0)) + 1;
+        p.labelPending = true;
+      }
+      await attachmentStorage.save(p);
+    } else if (p.kind === "image") p.url = await readDataUrl(p.blob);
+    if (p.removed) return;
+    if (p.labelPending) {
+      const token = `[Image #${p.n}]`;
+      if (state.current === p.thread) {
+        imageCount = p.n;
+        if (!$("input").value.includes(token)) insertToken(token);
+      } else {
+        const text = drafts.get(p.thread) || "";
+        if (!text.includes(token)) writeDraft(p.thread, `${text}${text && !/\s$/.test(text) ? " " : ""}${token} `);
+      }
+      p.labelPending = false;
+      await attachmentStorage.save(p);
+    }
+    if (p.removed) return;
+    if (state.current === p.thread) renderThumbs();
+    const result = await upload(p.thread, p.blob, p.name);
+    Object.assign(p, { id: result.id, name: result.name, kind: result.kind });
+    if (!p.removed) await attachmentStorage.save(p);
+    delete p.blob;
+  })().catch(error => {
+    p.error = true;
+    if (!p.removed && state.current === p.thread) toast(`${p.name}: ${error.message}`);
+  }).finally(() => {
+    p.busy = false;
+    if (state.current === p.thread) renderThumbs();
+  });
 }
 
 function renderThumbs() {
@@ -2343,12 +2500,19 @@ function renderThumbs() {
       if (p.busy) li.setAttribute("aria-busy", "true");
       if (p.kind === "image") {
         const img = el("img");
-        img.src = p.url;
+        if (p.url) img.src = p.url;
         img.alt = p.n ? `${p.name} (Image ${p.n})` : p.name;
         li.append(img);
         if (p.n) li.append(el("span", "n", String(p.n)));
       } else {
         li.append(icon("file"), el("span", "nm", p.name), el("span", "sz", fmtSize(p.size)));
+      }
+      if (p.error) {
+        const retry = el("button", "btn", "Retry");
+        retry.type = "button";
+        retry.setAttribute("aria-label", `Retry ${p.name}`);
+        retry.onclick = () => { startUpload(p); renderThumbs(); };
+        li.append(retry);
       }
       const rm = el("button", "btn rm");
       rm.type = "button";
@@ -2368,35 +2532,26 @@ function renderThumbs() {
 
 // serialised, so two quick pastes cannot both pass the MAX_ATTACH check while their files are still being processed
 let adding = Promise.resolve();
-const addFiles = (files) => (adding = adding.then(() => addFilesNow(files)));
-async function addFilesNow(files) {
+const addFiles = (files) => {
   const thread = state.current;
+  return (adding = adding.then(() => addFilesNow(files, thread)));
+};
+async function addFilesNow(files, thread) {
   if (!thread) return;
+  const list = attachmentDrafts.get(thread) || [];
+  attachmentDrafts.set(thread, list);
   for (const f of files) {
-    if (pending.length >= MAX_ATTACH) {
+    if (list.length >= MAX_ATTACH) {
       addNote(`At most ${MAX_ATTACH} attachments per message.`, "errtxt");
       break;
     }
     try {
-      const prep = await prepare(f);
-      if (state.current !== thread) return; // switched threads while processing
-      const p = { thread, name: prep.name, kind: prep.kind, size: prep.blob.size, url: prep.url, busy: true, n: prep.kind === "image" ? ++imageCount : 0 };
-      if (p.n) insertToken(`[Image #${p.n}]`);
-      p.ready = upload(thread, prep.blob, prep.name).then(
-        (r) => {
-          Object.assign(p, { id: r.id, name: r.name, kind: r.kind });
-        },
-        (err) => {
-          dropPending(p);
-          if (p.n) removeToken(p.n);
-          addNote(`${prep.name}: ${err.message}`, "errtxt");
-        },
-      ).finally(() => {
-        p.busy = false;
-        renderThumbs();
-      });
-      pending.push(p);
-      renderThumbs();
+      if (!f.size) throw new Error(`${f.name || "That file"} is empty (or a folder).`);
+      if (f.size > MAX_FILE_BYTES && f.type && !f.type.startsWith("image/")) throw new Error(`${f.name || "That file"} is over ${MAX_FILE_BYTES >> 20} MB.`);
+      const p = { key: crypto.randomUUID(), thread, name: f.name || "file", kind: "file", size: f.size, blob: f, n: 0, order: attachmentOrder = Math.max(Date.now(), attachmentOrder + 1) };
+      list.push(p);
+      startUpload(p);
+      if (state.current === thread) renderThumbs();
     } catch (err) {
       addNote(err.message, "errtxt");
     }
@@ -2559,6 +2714,7 @@ $("input").addEventListener("keydown", (e) => {
 });
 function sizeInput() {
   const box = $("input");
+  const scrollTop = box.scrollTop;
   box.style.height = "auto";
   const viewport = window.visualViewport?.height || window.innerHeight;
   const line = parseFloat(getComputedStyle(box).lineHeight);
@@ -2566,6 +2722,30 @@ function sizeInput() {
   const reserve = $("head").offsetHeight + $("composer").offsetHeight - box.offsetHeight
     + parseFloat(chat.paddingTop) + parseFloat(chat.paddingBottom) + line;
   box.style.height = Math.max(line, Math.min(box.scrollHeight, viewport * 0.35, viewport - reserve)) + "px";
+  // Measuring at full height clears the editable's scroll position. Restore it before revealing the caret.
+  box.scrollTop = scrollTop;
+  const selection = getSelection();
+  if (document.activeElement !== box || !selection?.focusNode || !box.contains(selection.focusNode)) return;
+  const caret = document.createRange();
+  caret.setStart(selection.focusNode, selection.focusOffset);
+  caret.collapse(true);
+  let rect = caret.getBoundingClientRect();
+  // Blank lines need their newline or placeholder <br> to supply the range's bounds.
+  if (!rect.height && selection.focusNode.nodeType === Node.TEXT_NODE
+      && selection.focusNode.textContent[selection.focusOffset] === "\n") {
+    caret.setEnd(selection.focusNode, selection.focusOffset + 1);
+    rect = caret.getBoundingClientRect();
+  }
+  const next = selection.focusNode.nodeType === Node.TEXT_NODE
+    ? selection.focusNode.nextSibling : selection.focusNode.childNodes[selection.focusOffset];
+  if (!rect.height && next?.nodeName === "BR") {
+    caret.selectNode(next);
+    rect = caret.getBoundingClientRect();
+  }
+  if (!rect.height) return;
+  const bounds = box.getBoundingClientRect();
+  if (rect.bottom > bounds.bottom) box.scrollTop += rect.bottom - bounds.bottom;
+  else if (rect.top < bounds.top) box.scrollTop -= bounds.top - rect.top;
 }
 $("input").addEventListener("input", () => {
   saveDraft();
@@ -2607,6 +2787,9 @@ let dialogTask = null; // "new" or the task being edited; null for a new thread
 function setDialogKind(task) {
   const wasTask = dialogTask !== null;
   dialogTask = task;
+  $("d-auto-panel").hidden = true;
+  $("d-auto-info").setAttribute("aria-expanded", "false");
+  $("d-auto-note").textContent = AUTO_HINT;
   const isTask = task !== null, editing = isTask && task !== "new";
   $("task-fields").hidden = $("save-field").hidden = !isTask;
   $("dlg-title").textContent = editing ? "Edit scheduled task" : isTask ? "New scheduled task" : "New thread";
@@ -2737,6 +2920,7 @@ createMenu({
     { value: "dashboard", label: "Usage dashboard", icon: "chart" },
     { value: "automation", label: "Automation dashboard", icon: "play" },
     { value: "host", label: "Host dashboard", icon: "terminal" },
+    { value: "doctor", label: "Doctor", desc: "Check and repair the setup", icon: "alert" },
     { value: "reload", label: "Reload page", icon: "refresh" },
     { value: "restart", label: "Restart server…", desc: "Once every thread is idle", icon: "power" },
   ],
@@ -2744,6 +2928,7 @@ createMenu({
     if (v === "dashboard") location.href = $("dash-link").href;
     else if (v === "automation") location.href = $("auto-link").href;
     else if (v === "host") location.href = $("host-link").href;
+    else if (v === "doctor") location.href = "/doctor";
     else if (v === "task") { setLane("tasks"); openTaskDialog(); }
     else (v === "new" ? $("new") : $(v)).click();
   },
@@ -2791,4 +2976,22 @@ if ("serviceWorker" in navigator) {
 setupNotifications({ apiFetch });
 clearChat();
 renderHead();
+for (const p of await attachmentStorage.load()) {
+  attachmentOrder = Math.max(attachmentOrder, p.order || 0);
+  const list = attachmentDrafts.get(p.thread) || [];
+  list.push(p);
+  attachmentDrafts.set(p.thread, list);
+}
+try {
+  const recovered = Object.keys(localStorage).filter(key => key.startsWith("ac_sending:")).map(key => ({ key, draft: JSON.parse(localStorage.getItem(key)) }));
+  recovered.sort((a, b) => b.draft.createdAt - a.draft.createdAt || b.draft.sequence - a.draft.sequence);
+  for (const { key, draft } of recovered) {
+    if (draft?.thread && typeof draft.text === "string" && Array.isArray(draft.attachments)) {
+      const cid = key.slice("ac_sending:".length);
+      if (draft.accepted) await finishSendingDraft(cid, draft);
+      else await recoverSendingDraft(cid, draft);
+    }
+  }
+} catch { toast("A message recovery copy could not be loaded."); }
+draftsLoaded = true;
 connect();

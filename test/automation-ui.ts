@@ -80,7 +80,17 @@ try {
     // --- the page --------------------------------------------------------------------------------------------------
     await page.goto(`${base}/automation`);
     await page.waitForSelector('[data-step="dispatcher"]');
-    ok("all twelve steps are drawn", (await page.locator("[data-step]").count()) === 12);
+    ok("all thirteen steps are drawn", (await page.locator("[data-step]").count()) === 13);
+    const inPipe = async (p: string) => page.locator(`[data-pipeline="${p}"] [data-step]`).evaluateAll(ns => ns.map(n => (n as HTMLElement).dataset.step));
+    ok("PR workflow: issue to labels, labels to PR, premium review and merge", JSON.stringify(await inPipe("pr")) === JSON.stringify(["triage", "dispatcher", "router", "worktree", "worker", "self_review", "pr", "review", "redo", "merge", "apply"]), JSON.stringify(await inPipe("pr")));
+    ok("PR workflow phases are labelled", (await page.locator('[data-pipeline="pr"] .phase h3').allInnerTexts()).map(t => t.toLowerCase()).join("|") === "1. issue to labels|2. labels to pull request|3. premium review and merge");
+    ok("window opener is its own workflow", JSON.stringify(await inPipe("windows")) === JSON.stringify(["opener", "usage"]));
+    ok("review and redo loop", (await page.locator('[data-pipeline="pr"] .link.loop[data-to="redo"]').count()) === 1);
+    ok("review loop is boxed with its label", (await page.locator('[data-pipeline="pr"] .cycle [data-step]').evaluateAll((b) => b.map((x) => x.dataset.step).join())) === "review,redo"
+      && /3 reviews at most/.test(await page.locator('[data-pipeline="pr"] .cycle .cap').innerText()));
+    ok("loop arrows name their conditions", (await page.locator('[data-pipeline="pr"] .link.loop[data-to="redo"]').innerText()).replace(/\s+/g, " ").trim() === "changes requested new commits pushed"
+      && (await page.locator('[data-pipeline="pr"] .link[data-to="merge"]').innerText()).trim() === "approved");
+    ok("each workflow lists its own triggers", (await page.locator('[data-pipeline="pr"] .ptrig').innerText()).includes("GitHub webhook") && (await page.locator('[data-pipeline="windows"] .ptrig').innerText()).includes("Window opener tick"));
     const state = (s: string) => page.getAttribute(`[data-step="${s}"]`, "data-state");
     ok("worker is the active step", (await state("worker")) === "active");
     ok("review is active too", (await state("review")) === "active");
@@ -90,7 +100,7 @@ try {
     ok("apply has not run", (await state("apply")) === "idle");
     ok("the header says it is live", /live/i.test(await page.locator("#mode").innerText()));
     ok("failures list the failed step", (await page.locator("#failures li").allInnerTexts()).join(" ").includes("No local checkout"));
-    ok("triggers list webhook, ticks, hook and manual", (await page.locator("#triggers li").count()) >= 5 && (await page.locator("#triggers").innerText()).includes("GitHub webhook"));
+    ok("other triggers list what belongs to no workflow", (await page.locator("#triggers").innerText()).includes("Debug button") && !(await page.locator("#triggers").innerText()).includes("GitHub webhook"));
     ok("git hooks list the worktree and the branch it protects", /r-issue-5/.test(await page.locator("#hooks").innerText()) && /main/.test(await page.locator("#hooks").innerText()));
     ok("a Debug button", await page.locator("#debug").isVisible());
     // clicking a step opens its log
@@ -124,4 +134,4 @@ try {
   server.kill("SIGTERM");
   fs.rmSync(data, { recursive: true, force: true });
 }
-console.log("PASS automation UI: Auto lane, flow graph with active/failed steps, step drawer logs, triggers, failures, hooks, live refresh, phone layout");
+console.log("PASS automation UI: Auto lane, workflow panels (PR workflow phases, window opener) with active/failed steps, review/redo loop, step drawer logs, triggers, failures, hooks, live refresh, phone layout");
