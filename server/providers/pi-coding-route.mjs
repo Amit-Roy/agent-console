@@ -23,7 +23,8 @@ export function routeCodingRequest(request, ctx) {
   } else {
     // Preserve the actual successful provider through tool follow-ups and later
     // prompts. Do not bounce back to a throttled NVIDIA key after each turn.
-    const sticky = failed?.model ?? request.previous?.model;
+    // Only a retry stays on the failed model; every new request tries direct NVIDIA first.
+    const sticky = failed?.model;
     model = approved(sticky) ? find(sticky.provider, sticky.id) : undefined;
     model ??= direct ?? router;
   }
