@@ -149,6 +149,35 @@ export function startCodexApp(t: ThreadSpec, ctx: AgentCtx, translate: (row: any
       const child = children.get(v.threadId);
       if (child && !child.done && Date.now() - heartbeat > 60_000) { heartbeat = Date.now(); ctx.event({ type: "system", subtype: "task_updated", task_id: v.threadId }); }
       if (child && r.method === "item/completed" && v.item?.type === "agentMessage" && typeof v.item.text === "string") child.text = v.item.text;
+      // Forward events from the subagent thread to the main thread, setting parent_tool_use_id to the child's call.
+      if (child) {
+        // Determine if we should forward this event.
+        const shouldForward = () => {
+          switch (r.method) {
+            case "assistant":
+            case "user":
+            case "stream_event":
+              return true;
+            case "system":
+              // Forward task-related system events.
+              const subtype = v.subtype;
+              return subtype === "task_started" || subtype === "task_notification" || subtype === "task_progress";
+            default:
+              return false;
+          }
+        };
+        if (shouldForward()) {
+          // Clone the event to avoid mutating the original.
+          const forwarded = { ...r, parent_tool_use_id: child.call };
+          // If the event already has a parent_tool_use_id, we should not override it? 
+          // But we assume events from the subagent turn do not have it set.
+          // To be safe, we only set it if it's not already set.
+          if (!(r.parent_tool_use_id != null)) {
+            forwarded.parent_tool_use_id = child.call;
+          }
+          ctx.event(forwarded);
+        }
+      }
       // A subagent that dies (usage exhausted, crash) never sends subAgentActivity "completed"; without this it counts as background work forever.
       const failure = r.method === "turn/completed" && ["failed", "interrupted"].includes(v.turn?.status) ? v.turn?.error?.message || `turn ${v.turn.status}`
         : r.method === "error" && !v.willRetry ? v.error?.message || "Codex error." : "";
