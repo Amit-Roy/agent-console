@@ -56,6 +56,8 @@ try {
   };
   watch(await context.newPage());
   const ready = () => page.waitForFunction(() => !(document.getElementById('input') as any)?.disabled && Boolean(document.getElementById('ttl')?.textContent));
+  // Composer readiness is the assertion; unrelated resource loading must not delay navigation.
+  const navigation = {waitUntil: 'domcontentloaded' as const, timeout: 15000};
   const thread = async (index: number) => {
     const row = page.locator('#threads li .t', {hasText: `Attachment draft ${index + 1}`});
     if (await row.count()) await row.click();
@@ -82,7 +84,7 @@ try {
   }, {threadId, count, needsBlob});
   const file = (name: string, text: string) => ({name, mimeType: 'text/plain', buffer: Buffer.from(text)});
   const image = {name: 'draft-image.png', mimeType: 'image/png', buffer: await sharp({create: {width: 120, height: 80, channels: 3, background: '#3399ff'}}).png().toBuffer()};
-  await page.goto(base); await ready(); await thread(0);
+  await page.goto(base, navigation); await ready(); await thread(0);
   await page.fill('#input', 'First draft\n  keep whitespace  ');
   await page.locator('#file').setInputFiles([file('first.txt', 'first attachment'), image]);
   await settled(2); await stored(ids[0], 2);
@@ -97,7 +99,7 @@ try {
   await settled(1); await stored(ids[1], 1);
   await thread(0); await settled(2);
   assert.equal(await value(), first, 'thread switch restores exact text');
-  await page.reload(); await ready(); await thread(0); await settled(2);
+  await page.reload(navigation); await ready(); await thread(0); await settled(2);
   assert.equal(await value(), first, 'reload restores text and attachments');
   assert.deepEqual(await attachmentOrder(), firstOrder, 'reload preserves attachment order');
   const saved = await context.storageState({indexedDB: true});
@@ -108,13 +110,13 @@ try {
   context.setDefaultTimeout(7000);
   await configureSocket(context);
   watch(await context.newPage());
-  await page.goto(base); await ready(); await thread(0); await settled(2);
+  await page.goto(base, navigation); await ready(); await thread(0); await settled(2);
   assert.equal(await value(), first, 'closed browser context restores draft');
   assert.deepEqual(await attachmentOrder(), firstOrder, 'closed browser context preserves attachment order');
   assert.equal(await page.locator('#thumbs img').evaluate((img: HTMLImageElement) => img.complete && img.naturalWidth > 0), true, 'restored image preview loads');
   await page.getByRole('button', {name: 'Remove first.txt', exact: true}).click();
   await settled(1); await stored(ids[0], 1); await stored(ids[1], 1);
-  await page.reload(); await ready(); await thread(0); await settled(1);
+  await page.reload(navigation); await ready(); await thread(0); await settled(1);
   assert.equal(await page.getByRole('button', {name: 'Remove first.txt', exact: true}).count(), 0, 'removed attachment stays removed');
   await page.click('#send');
   await page.waitForFunction(() => (document.getElementById('input') as any).value === '');
@@ -136,7 +138,7 @@ try {
   await page.getByText('Retry or remove failed attachments before sending.', {exact: true}).waitFor();
   assert.equal(sent.length, beforeFailureSend, 'failed attachment blocks partial sends');
   assert.equal(await value(), 'Second draft', 'failed send retains text');
-  await page.reload(); await ready(); await thread(1);
+  await page.reload(navigation); await ready(); await thread(1);
   await page.getByRole('button', {name: 'Retry retry.txt', exact: true}).waitFor();
   assert.equal(await value(), 'Second draft', 'failed upload draft survives reload');
   failUpload = false;
@@ -161,7 +163,7 @@ try {
   await requested; await stored(ids[0], 1, true);
   assert.equal(await page.locator('#thumbs li[aria-busy="true"]').count(), 1, 'interrupted upload is still pending');
   blockUpload = false;
-  const reloaded = page.reload();
+  const reloaded = page.reload(navigation);
   await ready().catch(() => {});
   await reloaded;
   release();
@@ -175,7 +177,7 @@ try {
   await page.getByRole('button', {name: 'Remove resume.txt', exact: true}).click();
   await settled(0); await stored(ids[0], 0);
   await page.fill('#input', '');
-  await page.reload(); await ready(); await thread(0); await settled(0);
+  await page.reload(navigation); await ready(); await thread(0); await settled(0);
   assert.equal(await value(), '', 'explicit clear survives reload');
   await page.fill('#input', 'Recover unacknowledged message');
   await page.locator('#file').setInputFiles([file('unacknowledged.txt', 'recover this uploaded file'), image]);
@@ -196,7 +198,7 @@ try {
   await page.click('#send');
   await page.waitForFunction(() => (document.getElementById('input') as any).value === '');
   await settled(0);
-  await page.reload(); await ready(); await thread(0); await settled(3);
+  await page.reload(navigation); await ready(); await thread(0); await settled(3);
   assert.equal(await value(), `${unacknowledged.replace('[Image #1]', '[Image #2]')}\n\n${later}`, 'held sends recover chronologically with unique image labels');
   assert.equal(await page.getByRole('button', {name: 'Remove unacknowledged.txt', exact: true}).count(), 1, 'unacknowledged send restores uploaded file');
   await page.waitForFunction(() => {
@@ -208,7 +210,7 @@ try {
   await stored(ids[0], 3);
   const recoveredText = await value();
   await page.evaluate(({key, value}) => localStorage.setItem(key, value), originalRecoveryCopy);
-  await page.reload(); await ready(); await thread(0); await settled(3);
+  await page.reload(navigation); await ready(); await thread(0); await settled(3);
   assert.equal(await value(), recoveredText, 'interrupted recovery cleanup remains idempotent after image renumbering');
   assert.deepEqual(await attachmentOrder(), ['Remove unacknowledged.txt', 'Remove draft-image.png', 'Remove later-image.png'], 'repeated recovery keeps attachment order and does not duplicate attachments');
   assert.deepEqual((await page.locator('#thumbs .n').allTextContents()).sort(), ['1', '2'], 'repeated recovery keeps remapped image labels');
@@ -248,7 +250,7 @@ try {
     });
   }, {stale, threadId: ids[0]});
   await stored(ids[0], 1);
-  await page.reload(); await ready(); await thread(0); await settled(0); await stored(ids[0], 0);
+  await page.reload(navigation); await ready(); await thread(0); await settled(0); await stored(ids[0], 0);
   assert.equal(await value(), '', 'accepted receipt prevents stale attachment resurrection');
   assert.equal(await page.evaluate(() => localStorage.getItem('ac_sending:accepted-fixture')), null, 'accepted receipt is removed after stale rows are deleted');
   assert.deepEqual(errors, []);
@@ -262,7 +264,7 @@ try {
   await configureSocket(context);
   await context.addCookies([{name: 'ac_session', value: makeToken(), url: base}]);
   watch(context.pages()[0] || await context.newPage());
-  await page.goto(base); await ready(); await thread(0);
+  await page.goto(base, navigation); await ready(); await thread(0);
   await page.fill('#input', 'Draft survives a complete browser restart');
   await page.locator('#file').setInputFiles([file('browser-restart.txt', 'persistent browser attachment'), file('browser-restart-second.txt', 'second persistent browser attachment')]);
   await settled(2); await stored(ids[0], 2);
@@ -276,7 +278,7 @@ try {
   await configureSocket(context);
   await context.addCookies([{name: 'ac_session', value: makeToken(), url: base}]);
   watch(context.pages()[0] || await context.newPage());
-  await page.goto(base); await ready(); await thread(0); await settled(2);
+  await page.goto(base, navigation); await ready(); await thread(0); await settled(2);
   assert.equal(await value(), 'Draft survives a complete browser restart', 'real browser restart preserves text without storageState');
   assert.equal(await page.getByRole('button', {name: 'Remove browser-restart.txt', exact: true}).count(), 1, 'real browser restart preserves uploaded attachment without storageState');
   assert.deepEqual(await attachmentOrder(), persistentOrder, 'real browser restart preserves attachment order');

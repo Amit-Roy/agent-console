@@ -62,6 +62,7 @@ try{
  await page.waitForFunction(()=>(document.getElementById('input') as HTMLTextAreaElement).value==='');
  assert.equal(await page.locator('#input').evaluate((e:any)=>e.value),'','send clears composer');
  assert.equal(await page.evaluate(()=>localStorage.getItem('ac_draft:draft-a')),null,'send deletes stored draft');
+ await page.waitForFunction(()=>!Object.keys(localStorage).some(key=>key.startsWith('ac_sending:')));
  await page.reload();await page.waitForFunction(()=>document.getElementById('ttl')?.textContent&&!(document.getElementById('input') as HTMLTextAreaElement).disabled);
  assert.equal(await page.locator('#input').evaluate((e:any)=>e.value),'','sent draft does not return');
  await page.evaluate(()=>{localStorage.removeItem('ac_draft:draft-a');sessionStorage.setItem('ac_draft','Legacy draft');});
