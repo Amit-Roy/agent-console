@@ -1,0 +1,411 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <title>agent-console — brag</title>
+    <script src="assets/vendor/gsap.min.js"></script>
+    <style>
+      @font-face {
+        font-family: "Archivo";
+        src: url("assets/fonts/Archivowdthwght.ttf") format("truetype");
+        font-weight: 100 900;
+        font-stretch: 62% 125%;
+      }
+      @font-face {
+        font-family: "Plex Mono";
+        src: url("assets/fonts/IBMPlexMono-Regular.ttf") format("truetype");
+        font-weight: 400;
+      }
+      @font-face {
+        font-family: "Plex Mono";
+        src: url("assets/fonts/IBMPlexMono-SemiBold.ttf") format("truetype");
+        font-weight: 600;
+      }
+      @font-face {
+        font-family: "Cormorant";
+        src: url("assets/fonts/CormorantGaramond-Italicwght.ttf") format("truetype");
+        font-weight: 300 700;
+        font-style: italic;
+      }
+      :root {
+        --ink: #0a0a0b;
+        --ink2: #151517;
+        --graphite: #5e5b57;
+        --ash: #9c978f;
+        --bone: #eee9df;
+        --signal: #ff4d12;
+        --ember: #ff8a3d;
+      }
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body { width: 1920px; height: 1080px; overflow: hidden; background: var(--ink); }
+      #root {
+        position: relative; width: 100%; height: 100%; overflow: hidden;
+        background: var(--ink); color: var(--bone);
+        font-family: "Archivo", sans-serif;
+        font-kerning: normal;
+      }
+      .layer { position: absolute; inset: 0; }
+      .mono { font-family: "Plex Mono", monospace; font-size: 17px; letter-spacing: 0.02em; color: var(--ash); }
+      .serif { font-family: "Cormorant", serif; font-style: italic; font-weight: 500; }
+      .display { font-weight: 850; font-stretch: 112%; letter-spacing: -0.02em; line-height: 0.92; }
+      .fringe { text-shadow: -1.5px 0 rgba(255, 70, 40, 0.42), 1.5px 0 rgba(120, 200, 255, 0.28); }
+      .hot { color: var(--signal); text-shadow: 0 0 28px rgba(255, 77, 18, 0.55), 0 0 2px rgba(255, 138, 61, 0.9); }
+
+      /* ground: hairline drafting grid */
+      #grid {
+        background-image:
+          linear-gradient(rgba(238, 233, 223, 0.10) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(238, 233, 223, 0.10) 1px, transparent 1px),
+          linear-gradient(rgba(238, 233, 223, 0.045) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(238, 233, 223, 0.045) 1px, transparent 1px);
+        background-size: 240px 240px, 240px 240px, 48px 48px, 48px 48px;
+        background-position: -1px -1px;
+      }
+      #vignette { background: radial-gradient(ellipse at 50% 45%, transparent 45%, rgba(0, 0, 0, 0.62) 100%); pointer-events: none; }
+      #grain { background-image: url("assets/grain.png"); background-size: 512px 512px; mix-blend-mode: overlay; opacity: 0.16; pointer-events: none; }
+      #paper { background: var(--bone); opacity: 0; }
+      #paper-grid {
+        opacity: 0;
+        background-image:
+          linear-gradient(rgba(10, 10, 11, 0.13) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(10, 10, 11, 0.13) 1px, transparent 1px),
+          linear-gradient(rgba(10, 10, 11, 0.05) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(10, 10, 11, 0.05) 1px, transparent 1px);
+        background-size: 240px 240px, 240px 240px, 48px 48px, 48px 48px;
+        background-position: -1px -1px;
+      }
+
+      /* crop marks (bookends) */
+      #crop { pointer-events: none; }
+      .cm { position: absolute; width: 56px; height: 56px; border-color: var(--bone); border-style: solid; border-width: 0; opacity: 0.85; }
+      .cm.tl { left: 64px; top: 64px; border-left-width: 1.5px; border-top-width: 1.5px; }
+      .cm.tr { right: 64px; top: 64px; border-right-width: 1.5px; border-top-width: 1.5px; }
+      .cm.bl { left: 64px; bottom: 64px; border-left-width: 1.5px; border-bottom-width: 1.5px; }
+      .cm.br { right: 64px; bottom: 64px; border-right-width: 1.5px; border-bottom-width: 1.5px; }
+      .cm-label { position: absolute; font-size: 14px; color: var(--ash); }
+
+      /* spark */
+      #fuse-svg { position: absolute; inset: 0; width: 1920px; height: 1080px; overflow: visible; pointer-events: none; }
+      .fuse { fill: none; stroke: var(--signal); stroke-width: 2; filter: drop-shadow(0 0 4px rgba(255, 77, 18, 0.8)); }
+      .hair { fill: none; stroke: rgba(238, 233, 223, 0.55); stroke-width: 1.2; }
+      #spark {
+        position: absolute; left: 0; top: 0; width: 18px; height: 18px; margin: -9px 0 0 -9px; border-radius: 50%;
+        background: radial-gradient(circle, #fff 0 22%, #ffd2a8 34%, var(--ember) 52%, rgba(255, 77, 18, 0) 72%);
+        box-shadow: 0 0 22px 8px rgba(255, 77, 18, 0.55), 0 0 60px 18px rgba(255, 77, 18, 0.22);
+        opacity: 0;
+      }
+
+      /* ---------- S1 hook ---------- */
+      #s1 .name { position: absolute; left: 150px; font-size: 150px; }
+      #s1 .ann { position: absolute; left: 156px; }
+      #s1 #oc { position: absolute; left: 1290px; top: 470px; font-size: 84px; font-weight: 850; font-stretch: 100%; letter-spacing: -0.02em; white-space: nowrap; }
+      #s1 #oc-ann { position: absolute; left: 1294px; top: 572px; }
+
+      /* ---------- devices (S2-S4) ---------- */
+      #devices { opacity: 0; }
+      .laptop { position: absolute; left: 0; top: 0; width: 1152px; height: 720px; transform-origin: 0 0; }
+      .laptop .bezel { position: absolute; inset: -22px -22px -26px -22px; border: 1.5px solid rgba(238, 233, 223, 0.7); border-radius: 22px; background: #050506; }
+      .laptop .screen { position: absolute; inset: 0; overflow: hidden; border-radius: 4px; background: #111; transform-origin: 50% 100%; }
+      .laptop .screen img, .laptop .screen video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+      .laptop .base { position: absolute; left: -80px; right: -80px; top: 746px; height: 26px; border: 1.5px solid rgba(238, 233, 223, 0.7); border-radius: 0 0 26px 26px; background: #0d0d0f; }
+      .laptop .notch { position: absolute; left: 50%; top: 746px; width: 160px; height: 10px; margin-left: -80px; border: 1.5px solid rgba(238, 233, 223, 0.5); border-top: 0; border-radius: 0 0 10px 10px; }
+      .phone { position: absolute; left: 0; top: 0; width: 350px; height: 777px; transform-origin: 0 0; }
+      .phone .bezel { position: absolute; inset: -16px; border: 1.5px solid rgba(238, 233, 223, 0.75); border-radius: 52px; background: #050506; }
+      .phone .screen { position: absolute; inset: 0; overflow: hidden; border-radius: 38px; background: #111; }
+      .phone .screen img, .phone .screen video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+      .phone .cam { position: absolute; left: 50%; top: 14px; width: 12px; height: 12px; margin-left: -6px; border-radius: 50%; background: #000; border: 1px solid rgba(238, 233, 223, 0.3); }
+      .dim { position: absolute; left: 0; font-size: 14px; color: var(--ash); white-space: nowrap; }
+      .dimline { position: absolute; border-color: rgba(238, 233, 223, 0.45); border-style: solid; border-width: 0; }
+      .screen-off { position: absolute; inset: 0; background: #000; opacity: 0; }
+      .lid-line { position: absolute; left: -22px; right: -22px; top: 720px; height: 0; border-top: 1.5px solid rgba(238, 233, 223, 0.7); opacity: 0; }
+      .tap { position: absolute; width: 64px; height: 64px; margin: -32px 0 0 -32px; border-radius: 50%; border: 2px solid var(--signal); box-shadow: 0 0 18px rgba(255, 77, 18, 0.6); opacity: 0; }
+      .notif {
+        position: absolute; left: 14px; right: 14px; top: 46px; padding: 16px 18px; border-radius: 22px;
+        background: rgba(30, 30, 33, 0.96); border: 1px solid rgba(238, 233, 223, 0.18); color: var(--bone); opacity: 0;
+        font-family: "Archivo", sans-serif;
+      }
+      .notif .app { font-family: "Plex Mono", monospace; font-size: 13px; color: var(--ash); display: flex; gap: 8px; align-items: center; }
+      .notif .app i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; background: var(--signal); }
+      .notif .t { font-size: 20px; font-weight: 650; margin-top: 6px; }
+      .notif .b { font-size: 16px; color: #c9c4ba; margin-top: 3px; }
+      .callout { position: absolute; white-space: nowrap; font-size: 16px; color: var(--bone); }
+      .callout b { color: var(--signal); font-weight: 600; }
+
+      #s2-title { position: absolute; left: 120px; top: 170px; width: 480px; }
+      #s2-title h1 { white-space: nowrap; font-size: 86px; font-weight: 850; font-stretch: 72%; letter-spacing: -0.025em; line-height: 0.95; }
+      #s2-title p { font-size: 46px; line-height: 1.12; margin-top: 30px; color: var(--bone); }
+      #s2-title .mono { margin-bottom: 26px; display: block; }
+
+      .headline { position: absolute; font-size: 92px; white-space: nowrap; }
+      #clock { position: absolute; font-size: 22px; color: var(--bone); white-space: nowrap; }
+      #clock b { color: var(--signal); font-weight: 600; }
+
+      /* ---------- S5 (bone paper) ---------- */
+      #s5 .phone .bezel { border-color: rgba(10, 10, 11, 0.85); background: #050506; }
+      #s5 .ink { color: var(--ink); }
+      #s5 .mono { color: #57534e; }
+      #s5 .headline { color: var(--ink); text-shadow: none; }
+      #s5 .headline.hot { color: #d13a0c; }
+
+      /* ---------- S6 outro ---------- */
+      #s6-title { position: absolute; left: 150px; top: 330px; font-size: 230px; font-weight: 900; font-stretch: 100%; letter-spacing: -0.035em; white-space: nowrap; }
+      #s6-sub { position: absolute; left: 160px; top: 628px; font-size: 64px; white-space: nowrap; }
+      #s6-mono { position: absolute; left: 164px; top: 756px; font-size: 20px; color: var(--ash); white-space: nowrap; }
+      #s6-mono b { color: var(--bone); font-weight: 600; }
+    </style>
+  </head>
+  <body>
+    <div data-hf-id="hf-f87d" id="root" data-composition-id="main" data-start="0" data-width="1920" data-height="1080" data-duration="22.5">
+      <!-- grounds -->
+      <div data-hf-id="hf-kbnh" id="grid" class="layer"></div>
+      <div data-hf-id="hf-i139" id="paper" class="layer"></div>
+      <div data-hf-id="hf-qt76" id="paper-grid" class="layer"></div>
+      <div data-hf-id="hf-etlp" id="vignette" class="layer"></div>
+
+      <!-- S1: hook — three agents -->
+      <section data-hf-id="hf-r1zn" id="s1" class="clip layer" data-start="0" data-duration="3.75" data-track-index="1">
+        <div data-hf-id="hf-8ajr" class="name display fringe" id="n1" style="top: 150px">Claude Code</div>
+        <div data-hf-id="hf-a0h1" class="mono ann" id="a1" style="top: 318px">claude -p · stream-json · plan / accept edits / bypass</div>
+        <div data-hf-id="hf-vm2m" class="name display fringe" id="n2" style="top: 400px">Codex</div>
+        <div data-hf-id="hf-9bes" class="mono ann" id="a2" style="top: 568px">codex app-server · persistent per session</div>
+        <div data-hf-id="hf-xe2e" class="name display fringe" id="n3" style="top: 650px">Pi</div>
+        <div data-hf-id="hf-qdg4" class="mono ann" id="a3" style="top: 818px">pi --mode rpc · any model pi knows</div>
+        <div data-hf-id="hf-ua2o" id="oc" class="hot">One console.</div>
+        <div data-hf-id="hf-4wky" id="oc-ann" class="mono">fig. 1 — three agents, one thread list</div>
+      </section>
+
+      <!-- S2–S4: devices (untimed wrapper; videos inside carry their own timing) -->
+      <div data-hf-id="hf-0z3e" id="devices" class="layer">
+        <div data-hf-id="hf-kz03" id="s2-title">
+          <span data-hf-id="hf-6bqu" class="mono">PL. 01 · the console</span>
+          <h1 data-hf-id="hf-k2ac" class="fringe">agent-console</h1>
+          <p data-hf-id="hf-5ubd" class="serif" id="s2-sub">Your coding agents.<br data-hf-id="hf-x5px" />Any browser.</p>
+        </div>
+
+        <div data-hf-id="hf-fp5e" class="laptop" id="laptop">
+          <div data-hf-id="hf-g0x4" class="bezel"></div>
+          <div data-hf-id="hf-3wav" class="screen" id="laptop-screen">
+            <img data-hf-id="hf-9b4r" id="laptop-still" src="assets/clips/desktop-still.png" alt="" />
+            <video data-hf-id="hf-n469" id="v-desktop" src="assets/clips/desktop-turn.mp4" muted playsinline data-start="3.75" data-duration="7.9" data-playback-rate="1.45" data-track-index="5"></video>
+            <div data-hf-id="hf-xxom" class="screen-off" id="laptop-off"></div>
+          </div>
+          <div data-hf-id="hf-n9cy" class="lid-line" id="lid-line"></div>
+          <div data-hf-id="hf-9327" class="base"></div>
+          <div data-hf-id="hf-8kjy" class="notch"></div>
+          <div data-hf-id="hf-z876" class="callout mono" id="co1" style="left: -10px; top: -64px"><b data-hf-id="hf-y4v2">●</b> threads · resumable after restarts</div>
+          <div data-hf-id="hf-0yxv" class="callout mono" id="co2" style="left: 640px; top: -64px"><b data-hf-id="hf-8ttu">●</b> tool cards · say what a command is for</div>
+          <div data-hf-id="hf-5hkf" class="dim mono" id="laptop-dim" style="top: 790px; left: 0">1440 × 900 · laptop</div>
+        </div>
+
+        <div data-hf-id="hf-t7sa" class="phone" id="phone">
+          <div data-hf-id="hf-c7ts" class="bezel"></div>
+          <div data-hf-id="hf-km5r" class="screen" id="phone-screen">
+            <img data-hf-id="hf-ocbp" id="phone-still" src="assets/clips/phone-still.png" alt="" />
+            <video data-hf-id="hf-8vq1" id="v-phone" src="assets/clips/phone-steer.mp4" muted playsinline data-start="7.5" data-duration="4.6" data-playback-rate="1.075" data-track-index="6"></video>
+            <div data-hf-id="hf-30ja" class="screen-off" id="phone-off"></div>
+            <div data-hf-id="hf-youi" class="notif" id="notif">
+              <div data-hf-id="hf-cuiz" class="app"><i data-hf-id="hf-wt6k"></i>agent-console · now</div>
+              <div data-hf-id="hf-k3y2" class="t">Thread finished</div>
+              <div data-hf-id="hf-5pw4" class="b">Add retry with backoff to the webhook handler</div>
+            </div>
+          </div>
+          <div data-hf-id="hf-12x1" class="cam"></div>
+          <div data-hf-id="hf-ie6t" class="tap" id="tap1"></div>
+          <div data-hf-id="hf-b2dx" class="dim mono" id="phone-dim" style="top: 806px; left: 0">412 × 915 · android, one hand</div>
+        </div>
+
+        <div data-hf-id="hf-n018" class="headline display fringe" id="h3a" style="left: 120px; top: 830px; font-size: 84px">Start on the laptop.</div>
+        <div data-hf-id="hf-vleq" class="headline display hot" id="h3b" style="left: 120px; top: 925px; font-size: 84px">Steer from the phone.</div>
+        <div data-hf-id="hf-tso7" class="headline display fringe" id="h4a" style="left: 120px; top: 830px; font-size: 84px">Close the lid.</div>
+        <div data-hf-id="hf-m96f" class="headline display hot" id="h4b" style="left: 120px; top: 925px; font-size: 84px">It keeps working.</div>
+        <div data-hf-id="hf-xiv1" id="clock" class="mono" style="left: 120px; top: 96px">turn running · <b data-hf-id="hf-wsg3" id="clock-t">00:00:00</b></div>
+      </div>
+
+      <!-- S5: questions (bone paper plate) -->
+      <section data-hf-id="hf-en42" id="s5" class="clip layer" data-start="15" data-duration="3.75" data-track-index="2">
+        <div data-hf-id="hf-ctb9" class="phone" id="phone5" style="left: 1080px; top: 110px">
+          <div data-hf-id="hf-b0wp" class="bezel"></div>
+          <div data-hf-id="hf-cdmk" class="screen">
+            <img data-hf-id="hf-qlrf" src="assets/clips/phone-question-still.png" alt="" />
+          </div>
+          <div data-hf-id="hf-wcpl" class="cam"></div>
+          <div data-hf-id="hf-v06p" class="tap" id="tap5"></div>
+        </div>
+        <div data-hf-id="hf-a6z3" class="mono" id="s5-pl" style="position: absolute; left: 150px; top: 300px">PL. 04 · questions mid-turn</div>
+        <div data-hf-id="hf-bizo" class="headline display ink" id="h5a" style="left: 140px; top: 350px; font-size: 128px">It asks.</div>
+        <div data-hf-id="hf-xm8d" class="headline display hot" id="h5b" style="left: 140px; top: 480px; font-size: 128px">You tap.</div>
+        <div data-hf-id="hf-sp7b" class="mono" id="s5-ann" style="position: absolute; left: 150px; top: 640px; width: 760px; line-height: 1.6">Choices. One tap. Back to work.</div>
+      </section>
+      <video data-hf-id="hf-ybf5" id="v-question" src="assets/clips/phone-question.mp4" muted playsinline data-start="15" data-duration="3.75" data-playback-rate="1.0222" data-track-index="7" style="position: absolute; left: 1080px; top: 110px; width: 350px; height: 777px; object-fit: cover; border-radius: 38px"></video>
+
+      <!-- S6: outro -->
+      <section data-hf-id="hf-tvdb" id="s6" class="clip layer" data-start="18.75" data-duration="3.75" data-track-index="3">
+        <div data-hf-id="hf-pwsi" id="s6-title" class="fringe">agent-console</div>
+        <div data-hf-id="hf-fy5b" id="s6-sub" class="serif">Claude Code, Codex and Pi — from any device.</div>
+        <div data-hf-id="hf-s58f" id="s6-mono" class="mono">self-hosted · your machine, your logins · <b data-hf-id="hf-v4pk">bin/agent-console start</b></div>
+      </section>
+
+      <!-- spark + fuse lines -->
+      <svg data-hf-id="hf-3qea" id="fuse-svg" viewBox="0 0 1920 1080">
+        <path data-hf-id="hf-8zp6" id="f1a" class="hair" d="M 0 0" />
+        <path data-hf-id="hf-51l5" id="f1b" class="hair" d="M 0 0" />
+        <path data-hf-id="hf-49xc" id="f1c" class="hair" d="M 0 0" />
+        <path data-hf-id="hf-e898" id="f3" class="fuse" d="M 0 0" />
+        <path data-hf-id="hf-5dbs" id="f6" class="fuse" d="M 160 606 L 1760 606" />
+      </svg>
+      <div data-hf-id="hf-2p7g" id="spark"></div>
+
+      <div data-hf-id="hf-tk3v" id="crop" class="layer">
+        <div data-hf-id="hf-hjv8" class="cm tl"></div><div data-hf-id="hf-be1e" class="cm tr"></div><div data-hf-id="hf-ai5y" class="cm bl"></div><div data-hf-id="hf-9xyo" class="cm br"></div>
+        <div data-hf-id="hf-3vu5" class="cm-label mono" style="left: 136px; top: 62px">agent-console · brag</div>
+        <div data-hf-id="hf-9gug" class="cm-label mono" style="right: 136px; bottom: 62px; text-align: right">sheet 1 of 1</div>
+      </div>
+
+      <div data-hf-id="hf-48ym" id="grain" class="layer"></div>
+
+      <audio data-hf-id="hf-6aj2" id="a-music" src="assets/audio/music.wav" data-start="0" data-duration="22.5" data-volume="0.9"></audio>
+      <audio data-hf-id="hf-6k0b" id="a-sfx" src="assets/audio/sfx.wav" data-start="0" data-duration="22.5" data-volume="0.8"></audio>
+    </div>
+
+    <script>
+      const BEAT = 60 / 128;
+      const BAR = BEAT * 4;
+      const $ = (s) => document.querySelector(s);
+      document.fonts.ready.then(build);
+      function build() {
+      const tl = gsap.timeline({ paused: true });
+
+      // S1 hairlines: from the end of each provider name to one node left of "One console."
+      const node = { x: $("#oc").offsetLeft - 40, y: $("#oc").offsetTop + $("#oc").offsetHeight * 0.55 };
+      ["#n1", "#n2", "#n3"].forEach((n, i) => {
+        const e = $(n);
+        const x = e.offsetLeft + e.offsetWidth + 28, y = e.offsetTop + e.offsetHeight * 0.55;
+        const mx = (x + node.x) / 2;
+        $(["#f1a", "#f1b", "#f1c"][i]).setAttribute("d", `M ${x} ${y} C ${mx} ${y}, ${mx} ${node.y}, ${node.x} ${node.y}`);
+      });
+
+      // seeded flicker so the spark breathes without clocks
+      const flick = (p) => 1 + 0.12 * Math.sin(p * 97.3) + 0.08 * Math.sin(p * 211.7);
+
+      // move the spark along an SVG path while drawing it
+      function fuse(path, start, dur, ease = "power2.inOut", sparkOn = true) {
+        const el = typeof path === "string" ? $(path) : path;
+        const len = el.getTotalLength();
+        gsap.set(el, { strokeDasharray: len, strokeDashoffset: len });
+        const proxy = { p: 0 };
+        tl.to(el, { strokeDashoffset: 0, duration: dur, ease }, start);
+        if (sparkOn) {
+          tl.to(proxy, {
+            p: 1, duration: dur, ease,
+            onUpdate() {
+              const pt = el.getPointAtLength(proxy.p * len);
+              gsap.set("#spark", { x: pt.x, y: pt.y, scale: flick(proxy.p * dur + start) });
+            },
+          }, start);
+        }
+      }
+
+      // ---- grounds: grain crawls in steps (film), grid breathes slightly
+      tl.fromTo("#grain", { backgroundPosition: "0px 0px" }, { backgroundPosition: "512px 1024px", duration: 22.5, ease: "steps(270)" }, 0);
+      tl.fromTo("#grid", { scale: 1.06 }, { scale: 1, duration: 3.75, ease: "power2.out" }, 0);
+
+      // ---- S1 hook: three names stamp on beats, hairlines converge, "One console."
+      [["#n1", "#a1"], ["#n2", "#a2"], ["#n3", "#a3"]].forEach(([n, a], i) => {
+        const t = 0.12 + i * 2 * BEAT;
+        tl.fromTo(n, { opacity: 0, scale: 1.18, fontStretch: "125%" }, { opacity: 1, scale: 1, fontStretch: "112%", duration: 0.32, ease: "expo.out", transformOrigin: "0% 50%" }, t);
+        tl.fromTo(a, { opacity: 0, x: -16 }, { opacity: 1, x: 0, duration: 0.3, ease: "power3.out" }, t + 0.12);
+      });
+      tl.set("#spark", { opacity: 1 }, 6 * BEAT - 0.5);
+      fuse("#f1c", 6 * BEAT - 0.5, 0.42, "power3.in");
+      fuse("#f1b", 6 * BEAT - 0.42, 0.34, "power3.in", false);
+      fuse("#f1a", 6 * BEAT - 0.36, 0.28, "power3.in", false);
+      tl.fromTo("#oc", { opacity: 0, x: 40 }, { opacity: 1, x: 0, duration: 0.35, ease: "expo.out" }, 6 * BEAT);
+      tl.fromTo("#oc-ann", { opacity: 0 }, { opacity: 1, duration: 0.3 }, 6 * BEAT + 0.15);
+      // hook exit: names condense away just before the drop (stagger out, then reveal in)
+      tl.to(["#n1", "#n2", "#n3", "#a1", "#a2", "#a3", "#oc", "#oc-ann"], { opacity: 0, duration: 0.2, stagger: 0.02, ease: "power2.in" }, BAR * 2 - 0.3);
+      tl.to(["#f1a", "#f1b", "#f1c"], { opacity: 0, duration: 0.2 }, BAR * 2 - 0.3);
+
+      // crop marks: present at the bookends, fly out at the drop, close back in for the outro
+      tl.fromTo(".cm", { scale: 1 }, { scale: 1, duration: 0.01 }, 0);
+      tl.to("#crop", { opacity: 0, scale: 1.08, duration: 0.35, ease: "power3.in" }, BAR * 2 - 0.2);
+      tl.fromTo("#crop", { opacity: 0, scale: 1.08 }, { opacity: 1, scale: 1, duration: 0.6, ease: "expo.out", immediateRender: false }, BAR * 10);
+
+      // ---- S2 reveal (3.75): laptop with the real desktop UI
+      const T2 = BAR * 2;
+      tl.set("#devices", { opacity: 1 }, T2);
+      tl.set("#spark", { opacity: 0 }, T2);
+      tl.fromTo("#laptop", { x: 650, y: 210, scale: 0.96, opacity: 0 }, { x: 650, y: 190, scale: 1, opacity: 1, duration: 0.6, ease: "expo.out" }, T2);
+      tl.fromTo("#s2-title", { opacity: 0, y: 24 }, { opacity: 1, y: 0, duration: 0.5, ease: "expo.out" }, T2 + 0.1);
+      tl.fromTo("#s2-sub", { opacity: 0 }, { opacity: 1, duration: 0.5 }, T2 + 0.45);
+      tl.fromTo("#co1", { opacity: 0, y: 8 }, { opacity: 1, y: 0, duration: 0.35, ease: "power3.out" }, T2 + 1.2);
+      tl.fromTo("#co2", { opacity: 0, y: 8 }, { opacity: 1, y: 0, duration: 0.35, ease: "power3.out" }, T2 + 1.65);
+      tl.fromTo("#laptop-dim", { opacity: 0 }, { opacity: 1, duration: 0.4 }, T2 + 0.8);
+      tl.to(["#co1", "#co2", "#s2-title", "#laptop-dim"], { opacity: 0, duration: 0.25, ease: "power2.in" }, BAR * 4 - 0.3);
+
+      // ---- S3 (7.5): laptop shrinks left, phone enters right, fuse links them
+      const T3 = BAR * 4;
+      tl.to("#laptop", { x: 120, y: 150, scale: 0.78, duration: 0.7, ease: "expo.inOut" }, T3 - 0.25);
+      tl.fromTo("#phone", { x: 1380, y: 1100, opacity: 1 }, { x: 1380, y: 150, duration: 0.8, ease: "expo.out" }, T3 + 0.1);
+      tl.fromTo("#phone-dim", { opacity: 0 }, { opacity: 1, duration: 0.4 }, T3 + 0.8);
+      tl.fromTo("#h3a", { opacity: 0, y: 20 }, { opacity: 1, y: 0, duration: 0.45, ease: "expo.out" }, T3 + 0.35);
+      tl.fromTo("#h3b", { opacity: 0, y: 20 }, { opacity: 1, y: 0, duration: 0.45, ease: "expo.out" }, T3 + 1.3);
+      // fuse: from laptop screen edge to phone bezel (path set once layout is final)
+      $("#f3").setAttribute("d", "M 1030 420 C 1150 420, 1200 300, 1362 300");
+      tl.set("#spark", { opacity: 1 }, T3 + 0.9);
+      fuse("#f3", T3 + 0.9, 0.9, "power2.inOut");
+      tl.to("#spark", { opacity: 0, duration: 0.2 }, T3 + 1.9);
+      tl.to(["#h3a", "#h3b"], { opacity: 0, duration: 0.22, ease: "power2.in" }, BAR * 6 - 0.3);
+
+      // ---- S4 (11.25): breakdown — lid closes, phone sleeps, clock keeps counting, chime wakes the phone
+      const T4 = BAR * 6;
+      tl.to("#laptop-screen", { scaleY: 0.02, duration: 0.45, ease: "power3.in" }, T4 + 0.1);
+      tl.to("#lid-line", { opacity: 1, duration: 0.1 }, T4 + 0.5);
+      tl.to("#phone-off", { opacity: 0.94, duration: 0.5, ease: "power2.inOut" }, T4 + 0.6);
+      tl.fromTo("#h4a", { opacity: 0, y: 20 }, { opacity: 1, y: 0, duration: 0.45, ease: "expo.out" }, T4 + 0.15);
+      tl.fromTo("#h4b", { opacity: 0, y: 20 }, { opacity: 1, y: 0, duration: 0.45, ease: "expo.out" }, T4 + 1.1);
+      tl.fromTo("#clock", { opacity: 0 }, { opacity: 1, duration: 0.3 }, T4 + 0.5);
+      const clock = { s: 0 };
+      tl.to(clock, {
+        s: 432, duration: 2.6, ease: "power1.in",
+        onUpdate() {
+          const s = Math.floor(clock.s);
+          const mm = String(Math.floor(s / 60)).padStart(2, "0");
+          const ss = String(s % 60).padStart(2, "0");
+          $("#clock-t").textContent = `00:${mm}:${ss}`;
+        },
+      }, T4 + 0.5);
+      tl.set("#clock-t", { textContent: "done" }, 14.2);
+      tl.to("#phone-off", { opacity: 0, duration: 0.25 }, 14.15);
+      tl.fromTo("#notif", { opacity: 0, y: -40 }, { opacity: 1, y: 0, duration: 0.45, ease: "back.out(1.6)" }, 14.2);
+      tl.to(["#devices", "#f3"], { opacity: 0, duration: 0.25, ease: "power2.in" }, BAR * 8 - 0.25);
+      tl.to("#vignette", { opacity: 0.35, duration: 0.01 }, BAR * 8);
+      tl.to("#vignette", { opacity: 1, duration: 0.01 }, BAR * 10);
+
+      // ---- S5 (15): invert to bone paper
+      const T5 = BAR * 8;
+      tl.set(["#paper", "#paper-grid"], { opacity: 1 }, T5);
+      tl.set("#grid", { opacity: 0 }, T5);
+      tl.fromTo("#phone5", { y: 60, opacity: 0 }, { y: 0, opacity: 1, duration: 0.5, ease: "expo.out" }, T5);
+      tl.fromTo("#v-question", { y: 60, opacity: 0 }, { y: 0, opacity: 1, duration: 0.5, ease: "expo.out" }, T5);
+      tl.fromTo("#s5-pl", { opacity: 0 }, { opacity: 1, duration: 0.3 }, T5 + 0.1);
+      tl.fromTo("#h5a", { opacity: 0, x: -30 }, { opacity: 1, x: 0, duration: 0.4, ease: "expo.out" }, T5 + 0.2);
+      tl.fromTo("#h5b", { opacity: 0, x: -30 }, { opacity: 1, x: 0, duration: 0.4, ease: "expo.out" }, T5 + 1.0);
+      tl.fromTo("#s5-ann", { opacity: 0 }, { opacity: 1, duration: 0.4 }, T5 + 1.4);
+      tl.set(["#paper", "#paper-grid"], { opacity: 0 }, BAR * 10);
+      tl.set("#grid", { opacity: 1 }, BAR * 10);
+
+      // ---- S6 outro (18.75): title, fuse underline, final hit on bar 11
+      const T6 = BAR * 10;
+      tl.fromTo("#s6-title", { opacity: 0, fontStretch: "125%" }, { opacity: 1, fontStretch: "100%", duration: 0.7, ease: "expo.out" }, T6 + 0.05);
+      tl.set("#spark", { opacity: 1, x: 160, y: 606 }, T6 + 0.5);
+      fuse("#f6", T6 + 0.5, BAR - 0.5, "power2.inOut");
+      tl.fromTo("#s6-sub", { opacity: 0, y: 14 }, { opacity: 1, y: 0, duration: 0.5, ease: "expo.out" }, T6 + 0.6);
+      tl.fromTo("#s6-mono", { opacity: 0 }, { opacity: 1, duration: 0.4 }, T6 + 1.2);
+      tl.fromTo("#s6-title", { scale: 1 }, { scale: 1.015, duration: 0.12, ease: "power2.out", yoyo: true, repeat: 1, transformOrigin: "0% 50%", immediateRender: false }, BAR * 11);
+
+      window.__timelines["main"] = tl;
+      }
+    </script>
+  </body>
+</html>
