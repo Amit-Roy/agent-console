@@ -74,6 +74,7 @@ body.host .dh{flex:0 0 auto}
 .kill:hover{color:var(--bad);border-color:color-mix(in srgb,var(--bad) 50%,transparent)}
 .kill.armed{background:var(--stop);border-color:var(--stop);color:var(--on-stop)}
 .kill:disabled{opacity:.5}
+.hrow .kill[hidden]{display:inline-block;visibility:hidden}
 .kill-slot:empty{width:4.25rem}
 
 /* ---------- storage ---------- */
@@ -127,5 +128,6 @@ div.hrow.du{cursor:default}
 .kids{margin:0;padding:0;list-style:none;font:var(--fw-reg) var(--fm-xs)}
 .kids li{padding:var(--sp-2) 0;border-top:1px solid var(--edge)}
 .kids li span{color:var(--t3)}
+.modal-body .note{margin-top:var(--sp-5);color:var(--t3);font:var(--fw-reg) var(--f-sm)}
 .pm-acts{display:flex;gap:var(--sp-2);margin-top:var(--sp-5)}
 .pm-acts .kill{flex:1;min-height:var(--ctl-h)}

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import { spawn } from "node:child_process";
 import type express from "express";
 import { DATA_DIR } from "./auth.ts";
@@ -12,7 +13,8 @@ const RAW_KEEP = 720;        // 1 h of 5 s samples
 const MIN_KEEP = 1440;       // 24 h of 1 min averages
 const HISTORY_FILE = path.join(DATA_DIR, "host-history.json");
 const DU_FILE = path.join(DATA_DIR, "host-du.json");
-const DU_MAX_AGE = 6 * 3600_000;
+const DU_MAX_AGE = 24 * 3600_000;
+const DU_DUTY = 0.2;         // du may run a fifth of the time: about 20% of one core, under 3% of this 8-core box
 
 // Sample columns: ts, cpu %, mem %, swap %, load1, net rx B/s, net tx B/s, disk read B/s, disk write B/s
 export type Sample = [number, number, number, number, number, number, number, number, number];
@@ -126,8 +128,10 @@ export function startHostSampler() {
   setInterval(sample, STEP_MS).unref();
   setInterval(persist, 5 * 60_000).unref();
   process.once("beforeExit", persist);
-  setTimeout(() => { if (duStale()) void scanDisk(); }, 30_000).unref();
-  setInterval(() => { if (duStale()) void scanDisk(); }, 3600_000).unref();
+  // automatic rescans wait for a quiet box; the Rescan button skips this check
+  const quiet = () => load1() < os.cpus().length * 0.5;
+  setTimeout(() => { if (duStale() && quiet()) void scanDisk(); }, 60_000).unref();
+  setInterval(() => { if (duStale() && quiet()) void scanDisk(); }, 3600_000).unref();
 }
 
 /* Downsample to at most `max` points by averaging consecutive samples. */
@@ -166,10 +170,18 @@ let du: DuState | null = null;
 let duRunning: Promise<void> | null = null;
 try { du = JSON.parse(fs.readFileSync(DU_FILE, "utf8")); } catch {}
 
+// folders that have listed subfolders, computed once per scan
+let parentSet: { of: DuState | null; set: Set<string> } = { of: null, set: new Set() };
+function parents() {
+  if (parentSet.of !== du) parentSet = { of: du, set: new Set(Object.keys(du?.sizes ?? {}).map(p => path.posix.dirname(p))) };
+  return parentSet.set;
+}
+
 const duStale = () => !duRunning && (!du || Date.now() - du.scannedAt > DU_MAX_AGE);
 
-/* One low-priority du walk of the root filesystem, five levels deep, entries of 16 MB and up.
-   A full walk takes minutes, so it runs in the background and the result is cached on disk. */
+/* One du walk of the root filesystem, five levels deep, entries of 16 MB and up, cached on disk.
+   The walk is mostly kernel time (nice cannot cap it on an idle box), so the child is also
+   duty-cycled with SIGSTOP/SIGCONT to DU_DUTY of each 200 ms. A walk takes several minutes. */
 export function scanDisk(): Promise<void> {
   if (duRunning) return duRunning;
   const t0 = Date.now();
@@ -181,6 +193,14 @@ export function scanDisk(): Promise<void> {
     const mounts = mountRoots();
     const roots = [...mounts, "/"];
     const child = spawn("nice", ["-n", "19", "ionice", "-c3", "du", "-x", "-B1", "-d5", "--threshold=16M", ...roots], { stdio: ["ignore", "pipe", "ignore"] });
+    // every 200 ms: continue, then stop again after DU_DUTY of the period
+    const pid = child.pid;
+    let done = false;
+    const signal = (sig: NodeJS.Signals) => { try { if (pid && !done) process.kill(pid, sig); } catch {} };
+    signal("SIGSTOP");
+    const duty = setInterval(() => { signal("SIGCONT"); setTimeout(() => signal("SIGSTOP"), 200 * DU_DUTY).unref(); }, 200);
+    const reap = () => { signal("SIGKILL"); };
+    process.once("exit", reap); // a stopped du must never outlive the server
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => {
       buf += chunk;
@@ -193,6 +213,9 @@ export function scanDisk(): Promise<void> {
     });
     child.on("error", () => resolve());
     child.on("close", () => {
+      clearInterval(duty);
+      done = true;
+      process.off("exit", reap);
       // fold nested mounts into their ancestors so / and /home add up
       for (const r of mounts) {
         for (let p = path.posix.dirname(r); sizes[r] != null; p = path.posix.dirname(p)) {
@@ -211,7 +234,9 @@ export function scanDisk(): Promise<void> {
 }
 
 /* Directory mount points backed by a block device (bind-mounted files like /etc/hosts are skipped). */
+let mountsCache: { ts: number; roots: string[] } | null = null;
 export function mountRoots(): string[] {
+  if (mountsCache && Date.now() - mountsCache.ts < 60_000) return mountsCache.roots;
   const out: string[] = [];
   try {
     for (const line of fs.readFileSync(path.join(PROC, "mounts"), "utf8").split("\n")) {
@@ -221,7 +246,8 @@ export function mountRoots(): string[] {
       try { if (fs.statSync(t).isDirectory()) out.push(t); } catch {}
     }
   } catch {}
-  return [...new Set(out)];
+  mountsCache = { ts: Date.now(), roots: [...new Set(out)] };
+  return mountsCache.roots;
 }
 
 export function hostDu(req: express.Request, res: express.Response) {
@@ -237,7 +263,7 @@ export function hostDu(req: express.Request, res: express.Response) {
   }
   children.sort((a, b) => b.size - a.size);
   const top = children.slice(0, 25);
-  for (const c of top) { const cp = c.path + "/"; c.more = Object.keys(sizes).some(p => p.startsWith(cp)); }
+  for (const c of top) c.more = parents().has(c.path);
   res.json({ path: want, scanning: !!duRunning, scannedAt: du.scannedAt, ms: du.ms, size: sizes[want] ?? 0, children: top });
 }
 

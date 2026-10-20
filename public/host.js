@@ -3,7 +3,7 @@
 // on Kill never land on a row that was just replaced.
 const REFRESH = 2000;
 const PROC_LIMIT = 30;
-let timer = null, paused = false, seq = 0, range = 300, historyAt = 0, showAll = false;
+let timer = null, paused = false, seq = 0, range = 300, historyAt = 0, portsAt = 0, showAll = false;
 let procSort = "cpu", procFilter = "", lastProcs = [], lastMetrics = null;
 let duPath = "/home/coder";
 const confirming = new Map(); // "pid" or "pid:SIGKILL" -> revert timer
@@ -203,7 +203,7 @@ document.addEventListener("click", async e => {
     if (signal === "SIGKILL" || !$("proc-modal").hidden) closeModal();
   } catch (err) { toast(`Kill failed: ${err.message}`, "bad"); }
   b.disabled = false; syncKill(b);
-  void tick();
+  portsAt = 0; void tick();
 });
 
 // ---------- processes ----------
@@ -226,7 +226,9 @@ function updateProc(row, r) {
   row.title = r.cmd;
   const cpu = row.querySelector(".cpu"); cpu.textContent = pct(r.cpu); cpu.className = `cpu ${tier(r.cpu)}`;
   row.querySelector(".mem").textContent = bytes(r.rss, 0);
-  syncKill(row.querySelector(".kill"));
+  const kill = row.querySelector(".kill");
+  kill.hidden = !!r.protected; // the server refuses these anyway: the console's own process tree and the Coder agent
+  syncKill(kill);
 }
 function renderProcs() {
   const f = procFilter.toLowerCase();
@@ -266,8 +268,8 @@ function updatePort(row, r) {
   row.querySelector(".hctx").textContent = [r.proto === "tcp6" ? "IPv6" : "IPv4", r.pid ? `pid ${r.pid}` : "", r.user].filter(Boolean).join(" · ");
   row.title = r.cmd;
   const slot = row.children[2];
-  if (r.pid && slot.firstChild?.dataset.pid !== String(r.pid)) slot.replaceChildren(killButton(r.pid));
-  if (!r.pid) slot.replaceChildren();
+  if (r.pid && !r.protected && slot.firstChild?.dataset.pid !== String(r.pid)) slot.replaceChildren(killButton(r.pid));
+  if (!r.pid || r.protected) slot.replaceChildren();
   if (slot.firstChild) syncKill(slot.firstChild);
 }
 function renderPorts(list) {
@@ -366,7 +368,7 @@ async function openModal(pid) {
       for (const c of d.children) { const li = el("li"); li.append(el("b", "", c.name), el("span", "", ` pid ${c.pid}`)); li.title = c.cmd; list.append(li); }
       body.append(el("h3", "", `Child processes · ${d.children.length}`), list);
     }
-    body.append(acts);
+    body.append(d.protected ? el("p", "note", "Protected: stopping this process would take down the console or the workspace.") : acts);
   } catch (e) {
     body.replaceChildren(el("p", "muted", `Could not load details: ${e.message}`));
   }
@@ -377,11 +379,14 @@ async function openModal(pid) {
 async function tick() {
   const mine = ++seq;
   try {
-    const [metrics, procs, ports] = await Promise.all([getJSON("/api/host/metrics"), getJSON("/api/host/processes"), getJSON("/api/host/ports")]);
+    // ports change rarely and cost the most to resolve, so they refresh every 10 s
+    const wantPorts = Date.now() - portsAt > 10_000;
+    if (wantPorts) portsAt = Date.now();
+    const [metrics, procs, ports] = await Promise.all([getJSON("/api/host/metrics"), getJSON("/api/host/processes"), wantPorts ? getJSON("/api/host/ports") : null]);
     if (mine !== seq) return;
     renderMetrics(metrics);
     lastProcs = procs.processes; renderProcs();
-    renderPorts(ports.ports);
+    if (ports) renderPorts(ports.ports);
     // 5 s samples move every tick on the 5 minute view; longer views refresh twice a minute
     if (Date.now() - historyAt > (range <= 300 ? REFRESH : 30000)) void loadHistory().catch(() => {});
     $("hm").setAttribute("aria-busy", "false");
