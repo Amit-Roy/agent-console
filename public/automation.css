@@ -16,9 +16,13 @@ body.auto{--n-w:10.5rem;--n-h:4.25rem}
 .phase h3{margin:0 0 var(--sp-2);color:var(--t2);font:var(--fw-semi) var(--f-xs) var(--font-ui);letter-spacing:.04em;text-transform:uppercase}
 .chain{display:flex;align-items:center;gap:var(--sp-2);overflow-x:auto;padding:6px 4px}
 .chain .node{flex:1 1 0;min-width:8.5rem;max-width:var(--n-w)}
-.link{display:grid;place-items:center;flex:none;color:var(--edge-strong)}
+.link{display:grid;gap:var(--sp-1);place-items:center;flex:none;color:var(--edge-strong)}
 .link .ico{width:1.1rem;height:1.1rem}
 .link.loop{color:var(--t2)}
+.arrow{display:grid;justify-items:center;color:inherit}
+.arrow span{color:var(--t3);font:var(--fw-reg) 10px/1.2 var(--font-ui);white-space:nowrap}
+.cycle{position:relative;display:flex;align-items:center;gap:var(--sp-2);flex:0 1 auto;padding:calc(var(--sp-3) + 1rem) var(--sp-3) var(--sp-3);border:1px dashed var(--edge-strong);border-radius:var(--r-lg)}
+.cycle .cap{position:absolute;top:var(--sp-2);left:var(--sp-3);right:var(--sp-3);color:var(--t2);font:var(--fw-med) var(--f-xs) var(--font-ui);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .link.live{color:var(--accent);animation:link-pulse 1s ease-in-out infinite alternate}
 @keyframes link-pulse{to{opacity:.35}}
 .node{position:relative;z-index:1;display:grid;grid-template-columns:auto 1fr;grid-template-rows:auto auto;align-items:center;column-gap:var(--sp-3);row-gap:2px;min-height:var(--n-h);padding:var(--sp-2) var(--sp-3);border:1px solid var(--edge);border-radius:var(--r-lg);background:var(--card);color:var(--t1);font:var(--fw-med) var(--f-sm) var(--font-ui);text-align:left;cursor:pointer;box-shadow:var(--shadow-card);transition:border-color var(--dur-1),transform var(--dur-1)}
@@ -49,6 +53,9 @@ body.auto{--n-w:10.5rem;--n-h:4.25rem}
   .chain .node{width:100%;max-width:none;flex:none}
   .link{justify-self:start;padding-left:1.4rem;place-items:start}
   .link .ico{transform:rotate(90deg)}
+  .arrow{display:flex;align-items:center;gap:var(--sp-2)}
+  .cycle{flex-direction:column;align-items:stretch;gap:var(--sp-1)}
+  .cycle .cap{position:static;white-space:normal}
 }
 
 /* panels */

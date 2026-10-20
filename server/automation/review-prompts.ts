@@ -43,7 +43,17 @@ export function redoPrompt(run: IssueRun, pr: number, verdict: string): string {
     `1. Fix every finding in this checkout. Write a failing test first where a finding is a bug.`,
     `2. Run the checks the repo documents (tests, lint).`,
     `3. Commit, then git push origin HEAD:refs/heads/${run.branch}. Same branch, same PR: do not open a new PR and do not merge.`,
-    `4. Update the "## Self-review" section of the PR body (gh pr edit ${pr} --repo ${run.repo} --body-file ...): which findings you fixed and how you checked them.`,
+    `4. Update only the "## Self-review" section of the PR body: which findings you fixed and how you checked them. Start from the current body (gh pr view ${pr} --repo ${run.repo} --json body -q .body), keep every other section and image, then gh pr edit ${pr} --repo ${run.repo} --body-file .... If the edit is refused, leave the body as it is: the pushed commits matter most.`,
     `Unattended run: do not ask questions. End with a short summary: what you fixed, how it was checked, what is left.`,
+  ].join("\n\n");
+}
+
+/** The PR has no commit after the last review verdict: the fixes never reached the branch. */
+export function pushPrompt(run: IssueRun, pr: number): string {
+  return [
+    `Pull request #${pr} (${run.repo}, issue #${run.number}) has no new commit since the reviewer requested changes, so it cannot be reviewed again.`,
+    `1. git status: finish any fix that is not done, then run the checks the repo documents.`,
+    `2. Commit everything that belongs to the fix, then git push origin HEAD:refs/heads/${run.branch}. Same branch, same PR: do not open a new PR and do not merge.`,
+    `Unattended run: do not ask questions. End with the commit you pushed.`,
   ].join("\n\n");
 }

@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import { githubRequest, type GithubRequest } from "./github-triage.ts";
 import { addWorktree, defaultDirs, installPrOnlyHook, topicOf, type IssueRun, type IssueRunner } from "./window-dispatch.ts";
 import { DIRECT_REPOS, isProtected } from "./automation/policy.ts";
-import { redoPrompt, reviewPrompt } from "./automation/review-prompts.ts";
+import { pushPrompt, redoPrompt, reviewPrompt } from "./automation/review-prompts.ts";
 import type { RouteResponse } from "./automation/router.ts";
 import type { EventLog } from "./automation/events.ts";
 
@@ -14,9 +14,11 @@ import type { EventLog } from "./automation/events.ts";
 // author and the reviewer share one GitHub account, so the verdict is a PR comment, not a formal approval.
 // A "Review: CHANGES REQUESTED" verdict goes back to the worker, which fixes the branch; its next turn end starts another review.
 // A reviewer that ends without a verdict is retried. Both loops stop after MAX_REVIEWS reviews of one worker: then a person decides.
+// A PR with no commit after the last verdict is not reviewed again: the worker is asked to push, MAX_NUDGES times at most.
 
 export { reviewPrompt };
 export const MAX_REVIEWS = 3;
+export const MAX_NUDGES = 2;
 const VERDICT = /^\s*Review:\s*(APPROVED|CHANGES REQUESTED)\b/i;
 type Marker = { mark(threadId: string, patch: Partial<IssueRun>): void };
 export interface ReviewDeps {
@@ -76,6 +78,28 @@ export function createReviewer(deps: ReviewDeps) {
     } finally { resuming.delete(t.id); }
   }
 
+  /** Did the worker push after the newest verdict? "none" when there is no verdict yet (a first review, or a retry). */
+  async function pushedSinceVerdict(run: IssueRun, pr: any): Promise<"none" | "yes" | "no"> {
+    const [commit, comments] = await Promise.all([github("GET", `repos/${run.repo}/commits/${pr.head?.sha}`), github("GET", `repos/${run.repo}/issues/${pr.number}/comments?per_page=100`)]);
+    const verdicts = (Array.isArray(comments) ? comments : []).filter((c: any) => VERDICT.test(String(c?.body ?? ""))).map((c: any) => Date.parse(c.created_at));
+    const pushed = Date.parse(commit?.commit?.committer?.date ?? "");
+    if (!verdicts.length || !Number.isFinite(pushed)) return "none";
+    return verdicts.some(v => v > pushed) ? "no" : "yes";
+  }
+
+  /** Ask the worker to commit and push its fixes; after MAX_NUDGES a person decides. */
+  function nudge(t: ThreadLike & { issueRun: IssueRun }, pr: number) {
+    const run = t.issueRun, nudges = (run.nudges ?? 0) + 1;
+    if (nudges > MAX_NUDGES) {
+      once(`${t.id}:stuck:${run.reviews}`, () => ev?.record({ step: "redo", kind: "fail", run: `redo:${t.id}`, ref: run.key, msg: `PR #${pr} still has no commit after the last review: a person decides` }));
+      deps.runner.mark(t.id, { reviewedAt: now() });
+      return;
+    }
+    ev?.record({ step: "redo", kind: "fail", run: `redo:${t.id}`, ref: run.key, msg: `no commit on PR #${pr} since the last review: worker asked to push (${nudges} of ${MAX_NUDGES})`, data: { thread: t.id, pr } });
+    deps.runner.mark(t.id, { nudges });
+    deps.runner.send(t.id, pushPrompt(run, pr));
+  }
+
   async function review(t: ThreadLike & { issueRun: IssueRun }, recover: boolean): Promise<boolean> {
     const run = t.issueRun, name = run.repo.split("/")[1], owner = run.repo.split("/")[0];
     const prs = await github("GET", `repos/${run.repo}/pulls?state=open&head=${encodeURIComponent(`${owner}:${run.branch}`)}`);
@@ -85,6 +109,11 @@ export function createReviewer(deps: ReviewDeps) {
     once(`${t.id}:self`, () => /^#{1,4}\s*Self-review\b/mi.test(String(pr.body ?? ""))
       ? ev?.record({ step: "self_review", kind: "ok", ref: run.key, msg: "Self-review section present" })
       : ev?.record({ step: "self_review", kind: "fail", ref: run.key, msg: `PR #${pr.number} has no Self-review section` }));
+    if ((run.reviews ?? 0) > 0) {
+      const pushed = await pushedSinceVerdict(run, pr);
+      if (pushed === "no") { nudge(t, pr.number); return false; } // its turn end comes back here
+      if (pushed === "yes") once(`${t.id}:pushed:${run.reviews}`, () => ev?.record({ step: "redo", kind: "ok", run: `redo:${t.id}`, ref: run.key, msg: `worker pushed new commits to PR #${pr.number}` }));
+    }
     const answer = deps.route(run.effort);
     if (answer.decision !== "route" || !answer.route) {
       once(`${t.id}:defer:${answer.why}`, () => ev?.record({ step: "review", kind: "info", ref: run.key, msg: `deferred: ${answer.why}` }));
@@ -102,7 +131,7 @@ export function createReviewer(deps: ReviewDeps) {
     installPrOnlyHook(cwd, base, git); // Review fixes target the PR branch, never the default branch.
     const reviews = (run.reviews ?? 0) + 1;
     const made = deps.runner.create({ ...answer.route, cwd, mode: "bypassPermissions", title: `${topicOf(run.repo)}:${run.number} review PR#${pr.number}${reviews > 1 ? ` #${reviews}` : ""}`, issueRun: { ...run, role: "review", pr: pr.number, worker: t.id, startedAt: now(), reviewedAt: undefined, finishedAt: undefined, reviews, redoing: undefined } });
-    deps.runner.mark(t.id, { pr: pr.number, reviewedAt: now(), reviews });
+    deps.runner.mark(t.id, { pr: pr.number, reviewedAt: now(), reviews, nudges: 0 });
     ev?.record({ step: "review", kind: "start", run: `review:${made.id}`, ref: run.key, msg: `${answer.route.provider}/${answer.route.model}${guarded ? " (protected paths: no merge)" : ""}`, data: { thread: made.id, pr: pr.number } });
     deps.runner.send(made.id, reviewPrompt(run, pr.number, base, { protected: guarded }));
     return true;
@@ -190,7 +219,7 @@ export function createReviewer(deps: ReviewDeps) {
     // An errored turn may still have pushed its PR (a provider limit late in the turn): the PR is reviewed all the same.
     if (event?.is_error) ev?.record({ step: "worker", kind: "fail", run: id, ref: run.key, msg: "turn ended with an error" });
     else ev?.record({ step: "worker", kind: "ok", run: id, ref: run.key, msg: "turn ended" });
-    if (run.redoing) ev?.record({ step: "redo", kind: event?.is_error ? "fail" : "ok", run: `redo:${t.id}`, ref: run.key, msg: event?.is_error ? "worker turn ended with an error; waiting to resume fixes" : "worker pushed its fixes" });
+    if (run.redoing) ev?.record({ step: "redo", kind: event?.is_error ? "fail" : "ok", run: `redo:${t.id}`, ref: run.key, msg: event?.is_error ? "worker turn ended with an error; waiting to resume fixes" : "worker turn ended; its push is checked before the next review" });
     if (run.redoing && event?.is_error) {
       deps.runner.mark(t.id, { finishedAt: now(), redoing: true, retryAt: now() + 15 * 60_000 });
       return; // Recover the worker before spending another review on an unchanged branch.
