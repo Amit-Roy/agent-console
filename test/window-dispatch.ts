@@ -204,7 +204,7 @@ try {
     reset(); started = [];
     const exhaustedPi = { pi: { windows: [{ label: "Free/day", used: 1000, limit: 1000 }], updatedAt: now } };
     await mk(exhaustedPi, started).tick();
-    assert.deepEqual(started, [], "Pi's own exhausted quota still defers work");
+    assert.deepEqual(started, [["o/r#2", "pi"]], "OpenRouter's spent Free/day counter does not block direct NVIDIA work");
 
     put({ mode: "live", bauOnPi: false }); reset(); started = [];
     await mk({ claude: win(10, 60, 100), codex: win(10, 60, 100) }, started).tick();
