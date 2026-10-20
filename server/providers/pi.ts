@@ -240,7 +240,7 @@ export const pi: Provider = {
       }, (line) => {
         const r = parseJson(line);
         if (!r || questions.handle(r)) return;
-        if (r.type === "message_end" && r.message?.role === "assistant") hadTools = (r.message.content ?? []).some((b: any) => b?.type === "toolCall");
+        if (r.type === "message_end" && r.message?.role === "assistant") hadTools ||= (r.message.content ?? []).some((b: any) => b?.type === "toolCall");
         if (r.type === "auto_retry_end" && r.success === false && !retried && !hadTools && last && /\b429\b/.test(String(r.finalError ?? ""))) {
           retried = true;
           resending = new AbortController();

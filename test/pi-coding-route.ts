@@ -33,6 +33,24 @@ for (const reason of ["user", "continuation", "direct"]) {
 }
 assert.equal(routeCodingRequest({ ...request, reason: "retry", failed: { model: router, message: { errorMessage: "429" } } }, context()).model, router);
 
+// OpenRouter daily limits recover through the same approved NVIDIA model.
+for (const errorMessage of ["daily-quota exhausted", "Rate limit exceeded: free-models-per-day.", "MODEL_PROVIDER_QUOTA_EXHAUSTED"]) {
+  const retry = { ...request, reason: "retry", failed: { model: router, message: { errorMessage } }, messages };
+  const recovered = routeCodingRequest(retry, context());
+  assert.equal(recovered.model, direct);
+  assert.equal(retry.messages, messages);
+  assert.equal(routeCodingRequest(retry, context([router, paid])).model, router, "no paid fallback");
+  const next = routeCodingRequest({ ...request, previous: { model: router }, state: recovered.state }, context());
+  assert.equal(next.model, direct, "a new prompt drops the exhausted provider's previous success");
+  assert.deepEqual(next.state.exhaustedProviders, []);
+}
+const firstFallback = routeCodingRequest({ ...request, reason: "retry", failed: { model: direct, message: { errorMessage: "429" } } }, context());
+const exhaustedFallback = routeCodingRequest({ ...request, reason: "retry", state: firstFallback.state, failed: { model: router, message: { errorMessage: "free-models-per-day" } } }, context());
+assert.equal(exhaustedFallback.model, router, "do not bounce to a provider already failed in this retry sequence");
+const reverseFallback = routeCodingRequest({ ...request, reason: "retry", failed: { model: router, message: { errorMessage: "daily-quota" } } }, context());
+assert.equal(routeCodingRequest({ ...request, reason: "retry", state: reverseFallback.state, failed: { model: direct, message: { errorMessage: "503" } } }, context()).model, direct, "do not bounce back to an exhausted router");
+assert.equal(routeCodingRequest({ ...request, reason: "continuation", state: firstFallback.state, previous: { model: router } }, context()).state.retryProviders.length, 0, "successful continuation resets retry sequence");
+
 let definition: any;
 codingRoute({ registerVirtualModel: (value: any) => { definition = value; } });
 assert.equal(`${definition.provider}/${definition.id}`, "agent-console/auto-coding");
