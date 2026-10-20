@@ -1,5 +1,24 @@
 import fs from "node:fs";
 
+// Lines of a JSONL buffer that contain any needle, in file order. Decoding and splitting whole logs costs seconds at boot;
+// a native byte search finds the few init and result lines among megabytes of tool output.
+export function linesWith(buf: Buffer, needles: string[]): string[] {
+  const starts = new Set<number>();
+  for (const needle of needles) {
+    for (let at = buf.indexOf(needle); at !== -1; ) {
+      const start = buf.lastIndexOf(10, at) + 1;
+      starts.add(start);
+      const end = buf.indexOf(10, at);
+      if (end === -1) break;
+      at = buf.indexOf(needle, end);
+    }
+  }
+  return [...starts].sort((a, b) => a - b).map(start => {
+    const end = buf.indexOf(10, start);
+    return buf.toString("utf8", start, end === -1 ? buf.length : end);
+  });
+}
+
 // Byte offsets, not parsed transcripts: retain a small index and read only the requested page.
 // Extend indexes as JSONL grows; replacing/truncating a log invalidates its index.
 export class HistoryIndex {
@@ -14,7 +33,7 @@ export class HistoryIndex {
       while (pos < stat.size) {
         const n = fs.readSync(fd, chunk, 0, Math.min(chunk.length, stat.size - pos), pos);
         if (!n) break;
-        for (let i = 0; i < n; i++) if (chunk[i] === 10) index.offsets.push(pos + i + 1);
+        for (let i = chunk.indexOf(10); i !== -1 && i < n; i = chunk.indexOf(10, i + 1)) index.offsets.push(pos + i + 1);
         pos += n;
       }
       index.size = pos;
