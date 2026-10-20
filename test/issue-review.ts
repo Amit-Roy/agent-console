@@ -37,12 +37,13 @@ try {
   // --- the reviewer ---------------------------------------------------------------------------------------------
   const ev = createEventLog({ file: path.join(root, "ev.jsonl"), now: () => now });
   const steps = (s: string) => ev.read({ step: s as any }).events.map(e => `${e.kind}:${e.msg ?? ""}`);
-  let prs: any[] = [], files: string[] = ["src/a.ts"], pull: any = { merged: false }, comments: any[] = [];
+  let prs: any[] = [], files: string[] = ["src/a.ts"], pull: any = { merged: false }, comments: any[] = [], headAt = now;
   const gh = async (_m: string, url: string) => {
     if (/\/issues\/\d+\/comments/.test(url)) return comments;
     if (/\/pulls\?state=open&head=/.test(url)) return prs;
     if (/\/pulls\/\d+\/files/.test(url)) return files.map(filename => ({ filename }));
     if (/\/pulls\/\d+$/.test(url)) return pull;
+    if (/\/commits\/\w+$/.test(url)) return { commit: { committer: { date: new Date(headAt).toISOString() } } };
     throw new Error("unexpected " + url);
   };
   let routing: any = (effort: any) => realRoute({ role: "review", effort, usage: {}, active: [], now });
@@ -79,8 +80,9 @@ try {
   assert.match(sent.at(-1).text, /gh pr merge 7 --repo o\/webapp --squash/); assert.match(sent.at(-1).text, /at most 20 changed lines/);
   assert.ok(steps("review").some(m => m.startsWith("ok:") || m.startsWith("info:")) || ev.read({ step: "review" as any }).events.some(e => e.kind === "start"), "review start recorded");
   assert.ok(marks.some(m => m.id === "W1" && m.patch.pr === 7 && m.patch.reviewedAt));
-  // once per worker, also across the in-memory claim and after the thread is marked
-  rv.turnEnded(worker("bau"), {}); await tick(); assert.equal(count(), 3);
+  // once per worker: two turn ends racing the setup start one review, and a marked worker is not reviewed again
+  rv.turnEnded(worker("bau", "WR"), {}); rv.turnEnded(worker("bau", "WR"), {}); await tick(); assert.equal(count(), 4, "one review, not two"); created.pop();
+  rv.turnEnded(worker("bau", "W1", { reviewedAt: now }), {}); await tick(); assert.equal(count(), 3);
   await rv.sweep([{ id: "W1", status: "idle", issueRun: { ...created[0].issueRun, effort: "bau", finishedAt: now, reviewedAt: now } }] as any); assert.equal(count(), 3);
 
   // a PR with a Self-review section passes that step; a protected path is never merged by the reviewer
@@ -116,11 +118,17 @@ try {
   assert.ok(steps("review").some(m => m.startsWith("fail:")));
 
   // a worker whose turn errored after it opened its PR (a provider limit late in the turn) is still reviewed
-  prs = [{ number: 40, body: "## Self-review\nok" }];
+  prs = [{ number: 40, body: "## Self-review\nok", head: { sha: "h40" } }];
   const errBefore = count();
   rv.turnEnded({ id: "WX", issueRun: { ...created[0].issueRun, key: "o/webapp#15", number: 15, effort: "bau" } } as any, { is_error: true }); await tick();
   assert.equal(count(), errBefore + 1, "errored worker with an open PR gets a reviewer");
   assert.equal(created.at(-1).issueRun.worker, "WX"); assert.equal(created.at(-1).issueRun.reviews, 1);
+  // the same worker, back from a redo that pushed, is reviewed again by this server: the first review's claim is released
+  comments = [{ body: "Review: CHANGES REQUESTED\nx", created_at: new Date(now).toISOString() }]; headAt = now + 1000;
+  rv.turnEnded({ id: "RX", issueRun: { key: "o/webapp#15", repo: "o/webapp", number: 15, effort: "bau", role: "review", pr: 40, branch: created[0].issueRun.branch, worker: "WX", startedAt: now, reviews: 1 } } as any, {}); await tick();
+  rv.turnEnded({ id: "WX", issueRun: { ...created[0].issueRun, key: "o/webapp#15", number: 15, effort: "bau", reviews: 1, redoing: true } } as any, {}); await tick();
+  assert.equal(count(), errBefore + 2, "a redone worker gets a second review"); assert.equal(created.at(-1).issueRun.reviews, 2);
+  created.pop(); comments = [];
   // a worker that died before marking finishedAt (an older build) is picked up by the sweep
   await rv.sweep([{ id: "WY", status: "idle", issueRun: { ...created[0].issueRun, key: "o/webapp#16", number: 16, effort: "bau" } }] as any);
   assert.equal(count(), errBefore + 2, "sweep reviews idle workers without finishedAt");
@@ -137,10 +145,23 @@ try {
   assert.ok(marks.some(m => m.id === "RV" && m.patch.outcome === "changes"), "the reviewer's end is judged once");
   assert.ok(ev.read({ step: "redo" as any }).events.some(e => e.kind === "start"));
   rv.turnEnded(redo({ outcome: "changes" }), {}); await tick(); assert.equal(sent.length, sentBefore + 1, "an already judged reviewer is not judged again");
-  // the worker pushes its fixes; its turn end records the redo and starts review number 2
+  // the worker ends its turn without pushing: no review of the same commit; it is asked to push, then a person decides
+  headAt = now - 1000;
+  const w50 = (extra: any = {}) => ({ id: "W50", issueRun: { ...created[0].issueRun, key: "o/webapp#50", number: 50, effort: "bau", reviews: 1, redoing: true, ...extra } }) as any;
+  const nb = count(), ns = sent.length;
+  rv.turnEnded(w50(), {}); await tick();
+  assert.equal(count(), nb, "an unchanged branch is not reviewed again"); assert.equal(sent.at(-1).id, "W50"); assert.match(sent.at(-1).text, /no new commit since the reviewer requested changes/);
+  assert.ok(marks.some(m => m.id === "W50" && m.patch.nudges === 1)); assert.ok(steps("redo").some(m => /^fail:no commit on PR #40 since the last review: worker asked to push \(1 of 2\)/.test(m)));
+  rv.turnEnded(w50({ nudges: 1 }), {}); await tick(); assert.equal(sent.length, ns + 2);
+  rv.turnEnded(w50({ nudges: 2 }), {}); await tick();
+  assert.equal(sent.length, ns + 2, "no third reminder"); assert.equal(count(), nb);
+  assert.ok(steps("redo").some(m => /still has no commit after the last review: a person decides/.test(m)));
+  assert.ok(marks.some(m => m.id === "W50" && m.patch.reviewedAt), "the worker is parked");
+  // the worker pushes its fixes; the next review records the redo and starts review number 2
+  headAt = now + 1000;
   const rb = count();
   rv.turnEnded({ id: "W50", issueRun: { ...created[0].issueRun, key: "o/webapp#50", number: 50, effort: "bau", reviews: 1, redoing: true } } as any, {}); await tick();
-  assert.ok(ev.read({ step: "redo" as any }).events.some(e => e.kind === "ok"), "redo end recorded");
+  assert.ok(steps("redo").includes("ok:worker pushed new commits to PR #40"), "redo end recorded");
   assert.equal(count(), rb + 1); assert.equal(created.at(-1).issueRun.reviews, 2); assert.match(created.at(-1).title, /review PR#40 #2/);
   // an old verdict (before this reviewer started) does not count: no verdict -> retry, the worker is cleared for a fresh reviewer
   comments = [{ body: "Review: CHANGES REQUESTED\nold", created_at: new Date(now - 3_600_000).toISOString() }];
