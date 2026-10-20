@@ -105,6 +105,7 @@ export function createReviewer(deps: ReviewDeps) {
     const worker = run.worker;
     if (!worker) { ev?.record({ step: kind === "redo" ? "redo" : "review", kind: "info", ref: run.key, msg: "reviewer has no worker thread on record: a person decides" }); return; }
     if ((run.reviews ?? 0) >= MAX_REVIEWS) { ev?.record({ step: kind === "redo" ? "redo" : "review", kind: "info", ref: run.key, msg: `${MAX_REVIEWS} reviews without a merge: a person decides` }); return; }
+    claimed.delete(worker); // the worker is cleared for another review, so this process must not keep it claimed
     if (kind === "retry") { deps.runner.mark(worker, { reviewedAt: undefined }); return; } // the next sweep starts a fresh reviewer
     deps.runner.send(worker, redoPrompt(run, run.pr!, verdict));
     deps.runner.mark(worker, { reviewedAt: undefined, redoing: true });

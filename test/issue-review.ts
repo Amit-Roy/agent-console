@@ -147,6 +147,9 @@ try {
   rv.turnEnded(redo({ reviews: 2 }), {}); await tick();
   assert.ok(steps("review").some(m => /^fail:reviewer posted no verdict on PR #9/.test(m)));
   assert.ok(marks.some(m => m.id === "W50" && "reviewedAt" in m.patch && m.patch.reviewedAt === undefined && !("redoing" in m.patch)));
+  const rr = count();
+  await rv.sweep([{ id: "W50", status: "idle", issueRun: { ...created[0].issueRun, role: "work", key: "o/webapp#50", number: 50, effort: "bau", reviews: 2, reviewedAt: undefined } }] as any);
+  assert.equal(count(), rr + 1, "a worker released by a retry is reviewed again without a restart");
   // after MAX_REVIEWS a person decides: no more redo
   comments = [{ body: "Review: CHANGES REQUESTED\nstill wrong", created_at: new Date(now).toISOString() }];
   const s3 = sent.length;
