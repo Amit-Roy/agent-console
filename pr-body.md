@@ -19,15 +19,15 @@
 - Rendered video with npx hyperframes render (passed hyperframes check)
 
 ## Architecture before
-- ![Architecture before](https://8802--main--nefro-dev-ssdnodes--Amit-Roy.nefro-dev-coder.duckdns.org/before.png)
+- ![Architecture before](https://raw.githubusercontent.com/Amit-Roy/agent-console/issue-79-create-a-brag-video-about-agent-console-7b35a172/pr-evidence/before.png)
 
 ## Architecture after
-- ![Architecture after](https://8802--main--nefro-dev-ssdnodes--Amit-Roy.nefro-dev-coder.duckdns.org/after.png)
+- ![Architecture after](https://raw.githubusercontent.com/Amit-Roy/agent-console/issue-79-create-a-brag-video-about-agent-console-7b35a172/pr-evidence/after.png)
 
 ## Screenshot evidence
 - Evidence type: motion
 - Animated GIF shows the 20s brag video playing through all 6 storyboard scenes: new thread dialog → composer with slash menu → streaming response with tool cards → file viewer with syntax highlighting → usage dashboard charts → context meter compaction → outro tagline
-- ![Changed behavior](https://8802--main--nefro-dev-ssdnodes--Amit-Roy.nefro-dev-coder.duckdns.org/brag-full.gif)
+- ![Changed behavior](https://raw.githubusercontent.com/Amit-Roy/agent-console/issue-79-create-a-brag-video-about-agent-console-7b35a172/pr-evidence/brag-full.gif)
 
 ## Self-review
 - Test first: test/brag-video.test.ts failed before video existed, passes after render
@@ -38,3 +38,4 @@
 - Checked: tone=polished, format=landscape per plan
 - Fixed: CSS transitions removed, contrast issues resolved, content overlap fixed
 - Test that failed first: test/brag-video.test.ts (brag.mp4 not found)
+- A Sonnet or Sol review must approve this PR before merge
