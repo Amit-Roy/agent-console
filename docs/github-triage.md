@@ -1,0 +1,160 @@
+# Automatic GitHub triage
+
+The webhook worker classifies open issues and pull requests by effort and priority. It uses a small model through Pi and falls back to subscription models when needed. Each item gets one maintained planning comment with a book of work, estimated implementation tokens, and level of design. It does not implement changes, open pull requests, or merge.
+
+## Labels
+
+Each item receives one effort label and one priority label. Existing labels outside these two families are preserved.
+
+| Label | Meaning |
+| --- | --- |
+| `Eff: Trivial` | Level of design is none. |
+| `Eff: BAU` | Level of design is light. |
+| `Eff: Deep` | Level of design is detailed. |
+| `Pri: P0` | A confirmed current outage, data loss, or active security incident. |
+| `Pri: P1` | Work that unblocks delivery, improves essential reliability, or substantially reduces babysitting. |
+| `Pri: P2` | A useful workflow enhancement that does not block delivery. |
+| `Pri: P3` | Polish or speculative optimization. |
+
+The model extracts evidence and proposes work steps. Versioned code computes labels, design requirements, and token ranges from those inputs. Every scored metric requires an exact quote from the issue title, body, or changed file path. Unsupported metrics remain explicitly unknown.
+
+## Planning scorecard
+
+The comment records these metrics and their evidence:
+
+| Metric | Scale |
+| --- | --- |
+| Breadth | 0: isolated text/config; 1: one component; 2: several components; 3: cross-system integration. |
+| Complexity | 0: mechanical; 1: standard; 2: state/concurrency/recovery; 3: architecture/protocol. |
+| Uncertainty | 0: explicit approach and checks; 1: bounded choices; 2: investigation; 3: unresolved feasibility/dependencies. |
+| Risk | 0: cosmetic; 1: reversible functionality; 2: auth/data/deployment; 3: irreversible change or active exposure. |
+| Impact | 0: polish/speculation; 1: ordinary convenience; 2: repeated manual work removed; 3: shipping or essential workflow unblocked. |
+| Urgency | 0: explicitly no deadline/incident; 1: explicit near-term deadline; 2: confirmed current outage, data loss, or security incident. |
+| Frequency | 0: explicitly once; 1: explicitly occasional; 2: explicitly daily, repeated, per-build, or per-session. |
+
+Unknown values use visible planning assumptions: breadth 1, complexity 1, uncertainty 2, risk 1, impact 1, urgency 0, frequency 0. These assumptions are never presented as evidence.
+
+Effort follows the **level of design**: none is Trivial, light is BAU, detailed is Deep. Design comes from the planning scores below, so effort never depends on predicted tokens. Issue bodies predict far more tokens than the chat requests the model trained on, so token terciles labelled nearly every issue Deep.
+
+The token quote is a rough guide only. **Pre-work complexity → predicted tokens → token quote**: four evidence-backed features enter a learned nonnegative log-work equation. Historical session usage trains work coefficients; raw input/output totals never establish task complexity. Complete scope uses P50; unknown or extrapolated scope uses P95 by explicit policy.
+
+Quotes show P50, P80, and P95 scenarios, plus P80−P50 reserve. Generated tokens, non-cached input, and cached replay are separate. The current model remains experimental and under-covers its small held-out sample. These quantiles are not guaranteed completion probabilities. See [the model, formula, and initial evidence](triage-effort-pricing.md).
+
+Urgency is the priority label: 3 is P0, 2 is P1, 1 is P2, 0 is P3. Code computes it from impact (0–3), workflow frequency, and stated timing, and clamps the sum to 0–2. Frequency 2 adds one and frequency 0 subtracts one; impact 0 ignores frequency. A stated deadline adds one and an explicit "no deadline" subtracts one. Urgency 3 needs a confirmed current incident with impact of at least 2, or a stated deadline when urgency is already 2. Historical token consumption does not enter priority.
+
+Frequency means how often the app user meets the problem in their workflow. Pi infers it from the request plus the repository's `PRODUCT.md` (or `README.md`), which the worker fetches and sends as untrusted `repoContext`. An inferred frequency must quote the repo text it relies on, and the worker rejects quotes that do not appear in it. Editing `PRODUCT.md` changes the source fingerprint, so every item is re-assessed. Without a product description, frequency stays unknown and counts as 1. Pi cannot infer deadlines.
+
+A planning entry that fails validation (a quote that is not verbatim, a missing repo quote, an inferred deadline) becomes unknown. It does not void the answer. When a substantive request comes back with every planning metric unknown, the next model in the chain gets one try; the sparse answer is kept if no model does better. Nemotron spends part of its token budget on reasoning, so triage allows 8,192 output tokens and 150 seconds, and retries 429 responses after 3, 8, and 15 seconds before falling back.
+
+Design is detailed for breadth 3, complexity 3, uncertainty 3, or risk at least 2. No separate design is needed only for breadth 0, complexity 0, uncertainty at most 1, and risk at most 1. Other work needs a light design. The book of work contains one to five proposed steps, each with an observable acceptance check.
+
+Calibration uses one sample per canonical inactive session. Initial user messages before the first agent response are the only input text. Outcomes aggregate recorded whole-session usage, including later follow-ups and measured failures. Console/native mirrors and child sessions are deduplicated. Training groups must complete before target requests start. Newer related-session groups remain held out, and errors and coverage stay visible. Whole-session snapshots are not human hours or a guarantee that a session will never resume.
+
+`bin/github-triage calibrate` extracts private history, reuses a private feature cache, fits the offline numerical model, validates a candidate artifact, and atomically promotes the model. The default artifact is `~/.config/agent-console/triage-effort-model.json`, mode 0600. Original requests remain local except credential-checked pre-work text sent to the configured small-model providers for feature extraction. No source requests are posted to GitHub or committed.
+
+The production watchdog recovers the receiver first, then schedules daily calibration in the background. Failed fitting keeps the previous model and retries at most hourly. Scratch workers never scan production history. A missing artifact fails before invoking a triage model. `AGENT_CONSOLE_TRIAGE_EFFORT_MODEL` selects the artifact; `AGENT_CONSOLE_TRIAGE_PYTHON` selects the offline interpreter. See [setup and reproduction](triage-effort-pricing.md#operation-and-reproduction).
+
+The comment uses an ownership marker, scorecard version, and source fingerprint. Retries update the same account-owned comment instead of adding duplicates. User comments are preserved. Changed issue text, PR commits, or a new scorecard version makes the report stale.
+
+The comment opens with the two labels, then shows only the book of work, a P50/P80/P95 token table, and the level of design. Evidence, open questions, token accounting, and scoring rules sit in collapsed sections. Missing metrics appear once, each with the next question to ask.
+
+Pi writes the work steps and cites quotes for each metric. The skill at `skills/github-triage/SKILL.md` is injected into Pi's prompt and separates planning inference from the frozen pricing predictors. Pi may mark a planning metric `inferred` with a rationale. It may not infer urgency or frequency. Code derives labels, design level, and token counts; Pi cannot set them.
+
+### Drift repair
+
+Each rendered assessment is stored with the source fingerprint and a revision hash of the scorecard version plus the effort model. Reconciliation compares the live comment and labels with that stored assessment. A hand-edited comment or a wrong label is repaired from the stored assessment without a model call. A changed source or a recalibrated model produces a new revision, which triggers a fresh assessment and updates the same comment id. `status` reports detected and repaired drift plus calibration freshness and coverage.
+
+## Setup
+
+The worker is a separate process on port 7077. The Console keeps its existing authentication and loopback listener. Install dependencies before starting the worker.
+
+```sh
+npm ci
+uv venv --managed-python --python 3.13 ~/.local/share/agent-console/triage-venv
+uv pip install --python ~/.local/share/agent-console/triage-venv/bin/python -r requirements-triage.txt
+bin/github-triage configure Amit-Roy/agent-console https://github-webhook.nefro-dev-coder.duckdns.org/api/github/webhook
+bin/github-triage calibrate
+bin/github-triage start
+waitfor -t 15 port 7077
+bin/github-triage status
+```
+
+Configuration is stored in `~/.config/agent-console/github-triage.json`, with mode 0600. Setup generates a private signing secret. The comma-separated repository argument is an explicit allowlist; configure every repository before registering its webhook.
+
+### All owned repositories
+
+Issue #5 uses the existing Pi worker and subscription fallbacks. This keeps the current calibrated scorecards and local CLI credentials in one place; no per-repository Actions workflow or additional Copilot integration is required.
+
+To cover all repositories owned by the authenticated personal account:
+
+```sh
+bin/github-triage configure --owner Amit-Roy https://github-webhook.nefro-dev-coder.duckdns.org/api/github/webhook
+bin/github-triage sync
+bin/github-triage reconcile
+```
+
+Owner discovery paginates GitHub's authenticated owned-repository list. It includes private repositories and forks when issues are enabled and the account has repository administration permission. It excludes archived, disabled, issues-disabled, and other owners' repositories. Organization and collaborator repositories still require an explicit allowlist entry.
+
+Configuration preserves the signing secret, deployment repository, listener settings, and existing allowed repositories. A failed discovery page leaves the previous configuration intact. Newly discovered repositories are added atomically before webhook registration. The running receiver reloads the allowlist on each request, so additions do not interrupt active jobs. When first upgrading an existing worker to this version, run `bin/github-triage restart` before syncing.
+
+`sync` creates missing hooks and repairs event subscriptions without duplicating existing hooks. It preserves other subscribed events and includes `workflow_run` for the deployment repository. `register` also repairs the signing secret on an existing hook. The production watchdog repeats discovery and hook repair with its five-minute reconciliation cycle, so newly created repositories join automatically. Registration failures are retried on the next watchdog run.
+
+Saved allowlist entries are retained even when they no longer qualify for discovery. Remove retired entries from the private configuration explicitly. To return to a fixed allowlist and stop discovery, run `configure owner/repo[,owner/repo] URL`.
+
+For the existing VPS, install the narrow Caddy route using the versioned routing script:
+
+```sh
+ssh vps 'python3 -' < scripts/github-triage-caddy.py
+```
+
+The route accepts only POST requests for the webhook hostname and exact path. A host timer refreshes the workspace container IP and supervises the separate triage worker every 60 seconds. Other routes retain Coder authentication. Never add the webhook hostname to `AGENT_CONSOLE_PUBLIC_HOST`.
+
+Register the webhook and classify the existing backlog:
+
+```sh
+bin/github-triage register
+bin/github-triage backfill
+bin/github-triage status
+```
+
+Registration uses the existing `gh` login and requires repository webhook administration permission. The subscription fallback models use existing local CLI credentials. No new API keys are required.
+
+## Events and recovery
+
+Issue creation, edits, and reopening trigger triage. Pull request creation, edits, reopening, new commits, and readiness for review also trigger it. Removing a managed label triggers repair. Label additions do not trigger another model call, so the worker's own writes cannot loop. Repair skips an item once both managed label families are complete. Reconciliation preserves complete labels when the report matches the current source and scorecard version; stale or missing reports cause a fresh assessment. Managed-label changes made while a model is running are preserved.
+
+The receiver verifies the HMAC signature before parsing the payload, checks the repository allowlist, and saves a delivery ID in SQLite before acknowledging it. Duplicate deliveries do not start duplicate jobs. The worker fetches the current GitHub item instead of trusting its supplied URLs or contents. Closed items are skipped.
+
+The queue runs one job at a time, retries temporary failures a bounded number of times, and recovers interrupted work after restart. The database is stored beside the private configuration. Logs and the PID file live in `~/.cache/agent-console/github-triage/`.
+
+`bin/agent-console start` also starts the configured worker for the normal production instance. Scratch and mock Console instances do not start it. Console restarts do not stop active triage jobs. The existing Coder startup script calls Console start after workspace boot; the host watchdog also recovers a crashed or missing worker without restarting Console.
+
+The enabled `agent-console-github-triage-caddy.timer` starts at host boot and runs every 60 seconds. It uses `docker exec --user coder` only when the workspace is already running. It sets the running container's Docker policy to `unless-stopped`, so host/Docker restarts restore running workspaces while intentional stops remain stopped, following [Docker's restart policy](https://docs.docker.com/engine/containers/start-containers-automatically/). The Coder template records the same policy for future rebuilds. It never starts or restarts a deliberately stopped workspace.
+
+Every five minutes, the watchdog performs signed local reconciliation. It scans open items, skips queued/running work, and enqueues missing labels or missing/stale comments. This repairs events missed during downtime without relying on GitHub redelivery. Healthy complete items do not trigger model calls. An immediate scan follows watchdog recovery of a missing worker. The watchdog checks every 60 seconds with up to five seconds of timer slack; startup, an active scan, and GitHub/model processing add latency. Missed events are found by the next eligible five-minute scan after the workspace returns.
+
+The signed local `/reconcile` endpoint is not exposed through the public Caddy route. Check or run repairs manually:
+
+```sh
+bin/github-triage status
+bin/github-triage reconcile
+ssh vps 'systemctl is-enabled agent-console-github-triage-caddy.timer; systemctl is-active agent-console-github-triage-caddy.timer'
+```
+
+To load updated worker code, use the dedicated restart command. It waits for active work to finish before starting the replacement:
+
+```sh
+bin/github-triage restart
+```
+
+`AGENT_CONSOLE_TRIAGE_CONFIG` and `AGENT_CONSOLE_TRIAGE_RUN` override the private configuration and runtime paths for isolated checks.
+
+The CLI tests kill and recover an isolated worker and verify that healthy workers keep their PID. Host supervisor tests cover IP changes, restart policy, and preservation of intentionally stopped workspaces. Full host/workspace reboot tests require an external maintenance window; do not restart the workspace from an agent running inside it.
+
+## CI and deploy
+
+`.github/workflows/ci.yml` runs `npm test` against a mock scratch server, then `test/pi-e2e-ui.ts`. That smoke test drives the browser through a real `pi --mode rpc` child whose model is a local OpenAI-compatible stub, so CI needs no secrets and spends no quota.
+
+Deploy is opt-in. Set `"deploy": "owner/repo"` in `github-triage.json` (it must be in the allowlist) and subscribe the webhook to `workflow_run`. When the `CI` workflow passes on a push to `main`, the worker fast-forwards its own checkout, runs `bin/agent-console restart-when-idle`, and restarts itself. A dirty or diverged checkout fails the pull and skips both restarts; see `~/.cache/agent-console/github-triage/deploy.log`. Pull-request runs, failed runs, other branches and other workflows never deploy.
+
+`.devcontainer/devcontainer.json` pins a small Node 24 image. Without it, Codespaces prebuilds pull the multi-gigabyte `universal` image and take about 25 minutes per push.

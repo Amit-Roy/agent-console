@@ -1,0 +1,50 @@
+#!/usr/bin/env node
+// Keep subscription credentials isolated while sharing the existing brain instructions.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { spawnSync } from "node:child_process";
+
+const profiles = {
+  sunny: { email: "sunny.amit.roy@gmail.com", dir: process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude") },
+  nefro: { email: "nefro.amit.roy@gmail.com", dir: path.join(os.homedir(), ".claude-nefro") },
+};
+const [account, action = "status", ...args] = process.argv.slice(2);
+if (!Object.hasOwn(profiles, account) || !["setup", "login", "status"].includes(action) || args.length) {
+  console.error("Usage: bin/claude-account <sunny|nefro> [setup|login|status]");
+  process.exit(2);
+}
+const profile = profiles[account];
+if (action === "setup" || action === "login") {
+  fs.mkdirSync(profile.dir, { recursive: true, mode: 0o700 });
+  if (account === "nefro") {
+    // Account state, credentials, native sessions, and cloud connectors stay private.
+    const shared = ["CLAUDE.md", "settings.json", "skills", "agents", "RTK.md"];
+    for (const name of shared) {
+      const source = path.join(profiles.sunny.dir, name);
+      const target = path.join(profile.dir, name);
+      if (!fs.existsSync(source)) continue;
+      const existing = fs.lstatSync(target, { throwIfNoEntry: false });
+      if (existing) {
+        if (!existing.isSymbolicLink() || fs.readlinkSync(target) !== source) {
+          console.error(`Cannot replace existing ${target}. Move it aside before setup.`);
+          process.exit(1);
+        }
+      } else fs.symlinkSync(source, target);
+    }
+  }
+}
+if (action === "setup") {
+  console.log(`${account}: shared brain configuration is ready; credentials remain separate.`);
+  process.exit(0);
+}
+const env = { ...process.env };
+// An explicit default directory changes the CLI's legacy ~/.claude.json lookup.
+if (account === "nefro") env.CLAUDE_CONFIG_DIR = profile.dir;
+for (const name of ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDECODE"]) delete env[name];
+const command = action === "login"
+  ? ["auth", "login", "--claudeai", "--email", profile.email]
+  : ["auth", "status"];
+const result = spawnSync("claude", command, { env, stdio: "inherit" });
+if (result.error) console.error(result.error.message);
+process.exit(result.status ?? 1);
