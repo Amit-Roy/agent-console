@@ -88,6 +88,11 @@ const automationLog = createEventLog({ file: path.join(DATA_DIR, "automation-eve
 automationLog.recoverOpenRuns();
 const recordUsage = usageEvents(automationLog);
 usage.subscribe((provider, u) => { broadcast({ t: "usage", provider, usage: u }); recordUsage(provider, u); });
+// Auto-resume quota-paused threads when a usage window resets
+usage.subscribeWindowReset((provider, windowLabel) => {
+  const resumed = threads.resumeQuotaPaused(provider, windowLabel);
+  if (resumed) console.log(`[quota-resume] ${provider} ${windowLabel}: resumed ${resumed} thread(s)`);
+});
 const triageBridge = createTriageBridge({ dbPath: path.join(DATA_DIR, "github-triage.sqlite"), events: automationLog });
 setInterval(() => triageBridge.poll(), 30_000).unref();
 const automation = automationApi({

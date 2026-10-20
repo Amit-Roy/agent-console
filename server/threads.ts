@@ -64,6 +64,7 @@ export interface Thread {
   operation?: "compact";
   lastCompactedAt?: number;
   archived?: number; // when it was archived: it leaves the working list until unarchived or sent to again
+  quotaPaused?: { provider: string; windowLabel: string; resetsAt: number }; // paused due to quota exhaustion; auto-resume when window resets
   schedule?: { task: string; run: string }; // a scheduled task's run: the sidebar files it under its task
   issueRun?: IssueRun; // started by window-dispatch for a GitHub issue
   cost: number;
@@ -430,10 +431,27 @@ export class Threads {
     if (!t || !!t.archived === archived) return;
     if (archived) t.archived = Date.now();
     else delete t.archived;
+    // Clearing quotaPaused on archive prevents stale resume on unarchive
+    if (archived) delete t.quotaPaused;
     if (archived && this.live.get(id)?.warm) this.kill(id, "archive");
     this.refreshIdleCompaction(t);
     this.persist();
     this.emit({ t: "thread", thread: t });
+  }
+
+  /** Resume all non-archived threads that are quota-paused for the given provider and window. */
+  resumeQuotaPaused(provider: string, windowLabel: string) {
+    let resumed = 0;
+    for (const t of this.threads.values()) {
+      if (t.archived) continue;
+      if (t.quotaPaused?.provider === provider && t.quotaPaused?.windowLabel === windowLabel) {
+        delete t.quotaPaused;
+        if (t.status === "running") continue; // the user already continued it; send would throw and abort the other resumes
+        try { this.send(t.id, "Continue.", { auto: "quota-resume" }); resumed++; }
+        catch (error) { console.error(`[quota-resume] ${t.id}: ${error instanceof Error ? error.message : error}`); }
+      }
+    }
+    return resumed;
   }
 
   update(id: string, patch: { claudeAccount?: string; mode?: Mode; model?: string; effort?: string; advisor?: string; title?: string; idleCompaction?: boolean }) {
@@ -780,6 +798,22 @@ export class Threads {
       }
       if (live?.compactWait) { clearTimeout(live.compactWait); live.compactWait = undefined; }
       this.finishTurn(t, ev);
+      // Mark thread as quota-paused if turn ended due to rate limit and quota is exhausted
+      if (ev.is_error && !t.archived && !t.quotaPaused) {
+        const errMsg = String(ev.error?.message ?? ev.error ?? "");
+        const isRateLimit = /\b429\b|rate.?limit|too many requests|usage.?limit|quota/i.test(errMsg);
+        if (isRateLimit) {
+          const providerKey = t.provider === "claude" ? claudeUsageKey(t.claudeAccount) : t.provider;
+          if (usage.exhausted(providerKey)) {
+            const u = usage.get(providerKey);
+            const window = u?.windows.find(w => w.used >= w.limit && w.resetsAt && w.resetsAt > Date.now());
+            if (window) {
+              t.quotaPaused = { provider: providerKey, windowLabel: window.label, resetsAt: window.resetsAt };
+              this.touch(t);
+            }
+          }
+        }
+      }
       if (!compacting) {
         t.lastProviderActivityAt = Math.max(Date.now(), t.lastUserActivityAt ?? 0);
         if (ev.is_error) t.idleCompactionConsumedAt = t.lastUserActivityAt;
@@ -915,7 +949,7 @@ export class Threads {
   // While a turn is running a message either steers it (delivered to the agent now, picked up after its current tool call) or waits in
   // a queue for the turn to end. `mode: "queue"` forces the queue; so does an agent that cannot take input mid-turn.
   // `instructions` go to the agent after the text but stay out of the transcript bubble; `scheduled` labels a scheduled run's prompt.
-  send(id: string, text: string, opts: { auto?: "brain" | "subagent"; attachments?: unknown; mode?: "steer" | "queue"; delivery?: "queued"; questionAnswer?: true; queuedAt?: number; instructions?: string; scheduled?: string } = {}) {
+  send(id: string, text: string, opts: { auto?: "brain" | "subagent" | "quota-resume"; attachments?: unknown; mode?: "steer" | "queue"; delivery?: "queued"; questionAnswer?: true; queuedAt?: number; instructions?: string; scheduled?: string } = {}) {
     const t = this.threads.get(id);
     if (!t) throw new Error("Unknown thread");
     if (!opts.auto && !opts.questionAnswer && this.command(t, text, opts.attachments)) return;
@@ -929,6 +963,7 @@ export class Threads {
       }
     }
     if (!opts.auto) {
+      delete t.quotaPaused; // the user continued by hand: no auto "Continue." later
       t.lastUserActivityAt = Math.max(Date.now(), (t.lastUserActivityAt ?? 0) + 1);
       this.idleCompactionTimers.cancel(id);
       delete t.idleCompactionDueAt;
