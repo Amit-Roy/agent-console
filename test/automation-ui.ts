@@ -86,6 +86,10 @@ try {
     ok("PR workflow phases are labelled", (await page.locator('[data-pipeline="pr"] .phase h3').allInnerTexts()).map(t => t.toLowerCase()).join("|") === "1. issue to labels|2. labels to pull request|3. premium review and merge");
     ok("window opener is its own workflow", JSON.stringify(await inPipe("windows")) === JSON.stringify(["opener", "usage"]));
     ok("review and redo loop", (await page.locator('[data-pipeline="pr"] .link.loop[data-to="redo"]').count()) === 1);
+    ok("review loop is boxed with its label", (await page.locator('[data-pipeline="pr"] .cycle [data-step]').evaluateAll((b) => b.map((x) => x.dataset.step).join())) === "review,redo"
+      && /3 reviews at most/.test(await page.locator('[data-pipeline="pr"] .cycle .cap').innerText()));
+    ok("loop arrows name their conditions", (await page.locator('[data-pipeline="pr"] .link.loop[data-to="redo"]').innerText()).replace(/\s+/g, " ").trim() === "changes requested new commits pushed"
+      && (await page.locator('[data-pipeline="pr"] .link[data-to="merge"]').innerText()).trim() === "approved");
     ok("each workflow lists its own triggers", (await page.locator('[data-pipeline="pr"] .ptrig').innerText()).includes("GitHub webhook") && (await page.locator('[data-pipeline="windows"] .ptrig').innerText()).includes("Window opener tick"));
     const state = (s: string) => page.getAttribute(`[data-step="${s}"]`, "data-state");
     ok("worker is the active step", (await state("worker")) === "active");

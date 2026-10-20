@@ -8,9 +8,10 @@ export type StepState = "idle" | "active" | "ok" | "failed" | "abandoned" | "dis
 export type EventKind = "start" | "ok" | "fail" | "info" | "abandoned";
 
 export interface FlowNode { id: StepId; label: string; icon: string; kind: "trigger" | "source" | "decision" | "action" | "agent" | "gate"; hint: string }
-export interface FlowEdge { from: StepId; to: StepId }
-/** A workflow the dashboard draws on its own: its phases run left to right, each phase's steps in order. */
-export interface Pipeline { id: string; label: string; hint: string; phases: { label: string; steps: StepId[] }[] }
+export interface FlowEdge { from: StepId; to: StepId; label?: string } // label: the condition for taking this edge
+/** A workflow the dashboard draws on its own: its phases run left to right, each phase's steps in order.
+ *  A phase's loop is a run of its steps that repeats; the dashboard boxes them with the loop's label. */
+export interface Pipeline { id: string; label: string; hint: string; phases: { label: string; steps: StepId[]; loop?: { steps: StepId[]; label: string } }[] }
 
 /** The workflows, entrypoint first. The UI draws exactly this; adding a stage is adding a node here and placing it in a pipeline. */
 export const FLOW: { nodes: FlowNode[]; edges: FlowEdge[]; pipelines: Pipeline[] } = {
@@ -25,7 +26,7 @@ export const FLOW: { nodes: FlowNode[]; edges: FlowEdge[]; pipelines: Pipeline[]
     { id: "self_review", label: "Self-review", icon: "check", kind: "gate", hint: "Worker checks its diff with the coding-standards skill" },
     { id: "pr", label: "Pull request", icon: "pr", kind: "action", hint: "Branch pushed, PR opened" },
     { id: "review", label: "Premium review", icon: "eye", kind: "agent", hint: "Claude or Codex reviews Trivial and BAU PRs and posts a verdict" },
-    { id: "redo", label: "Worker redo", icon: "redo", kind: "agent", hint: "Changes requested: the worker fixes the branch, then the PR is reviewed again (3 reviews at most)" },
+    { id: "redo", label: "Worker redo", icon: "redo", kind: "agent", hint: "Changes requested: the worker fixes and pushes the same branch, then the PR is reviewed again (3 reviews at most). No new commit: the worker is asked to push, twice at most" },
     { id: "merge", label: "Merge", icon: "merge", kind: "action", hint: "Squash merge when approved" },
     { id: "apply", label: "Apply", icon: "rocket", kind: "action", hint: "agent-console, dotfiles, brain: pull and restart" },
   ],
@@ -33,13 +34,13 @@ export const FLOW: { nodes: FlowNode[]; edges: FlowEdge[]; pipelines: Pipeline[]
     { from: "triage", to: "dispatcher" }, { from: "opener", to: "usage" }, { from: "usage", to: "dispatcher" },
     { from: "dispatcher", to: "router" }, { from: "router", to: "worktree" }, { from: "worktree", to: "worker" },
     { from: "worker", to: "self_review" }, { from: "self_review", to: "pr" }, { from: "pr", to: "review" },
-    { from: "review", to: "redo" }, { from: "redo", to: "review" }, { from: "review", to: "merge" }, { from: "merge", to: "apply" },
+    { from: "review", to: "redo", label: "changes requested" }, { from: "redo", to: "review", label: "new commits pushed" }, { from: "review", to: "merge", label: "approved" }, { from: "merge", to: "apply" },
   ],
   pipelines: [
     { id: "pr", label: "PR workflow", hint: "From a new issue to a merged pull request", phases: [
       { label: "Issue to labels", steps: ["triage"] },
       { label: "Labels to pull request", steps: ["dispatcher", "router", "worktree", "worker", "self_review", "pr"] },
-      { label: "Premium review and merge", steps: ["review", "redo", "merge", "apply"] },
+      { label: "Premium review and merge", steps: ["review", "redo", "merge", "apply"], loop: { steps: ["review", "redo"], label: "Review loop · 3 reviews at most, then a person decides" } },
     ] },
     { id: "windows", label: "Window opener", hint: "Starts Claude and Codex 5-hour windows overnight and reads their usage; the dispatcher plans from these readings", phases: [
       { label: "Quota windows", steps: ["opener", "usage"] },

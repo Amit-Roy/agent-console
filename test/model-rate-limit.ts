@@ -26,11 +26,13 @@ try {
   await Promise.all([low, medium, high]);
   assert.deepEqual(order, ["interactive", "triage", "label"]);
 
-  const inspect = new DatabaseSync(path.join(dir, "priority"));
-  await gate.acquire(); // a fresh start guarantees the next request is still queued when it is cancelled
+  // A long interval keeps the next request queued when it is cancelled, however late a loaded host resolves the first.
+  const slow = make("cancel", { intervalMs: 5000 });
+  const inspect = new DatabaseSync(path.join(dir, "cancel"));
+  await slow.acquire();
   const before = inspect.prepare("SELECT next_at FROM admission").get();
   const cancel = new AbortController();
-  const pending = gate.acquire({ signal: cancel.signal, priority: "interactive" });
+  const pending = slow.acquire({ signal: cancel.signal, priority: "interactive" });
   cancel.abort();
   await assert.rejects(pending, { name: "AbortError" });
   assert.deepEqual(inspect.prepare("SELECT next_at FROM admission").get(), before);

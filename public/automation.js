@@ -30,7 +30,7 @@ const ICONS = {
   rocket: "M9.5 2.5c2.5 0 4 1.5 4 4-1.2 3-3.5 4.5-5.5 5l-3-3c.5-2 2-4.3 4.5-6zM6 10l-2.5 2.5M5 7.5 3 8l1.5-2.5M8.5 11 8 13l2.5-1.5",
   redo: "M3 8a5 5 0 0 1 8.5-3.5L13 6M13 2.5V6H9.5M13 8a5 5 0 0 1-8.5 3.5L3 10M3 13.5V10h3.5",
   next: "M2.5 8h10M9 4.5 12.5 8 9 11.5",
-  loop: "M2.5 6h10M9.5 3 12.5 6 9.5 9M13.5 10h-10M6.5 7 3.5 10l3 3",
+  back: "M13.5 8h-10M7 4.5 3.5 8 7 11.5",
 };
 const icon = (name) => {
   const s = svg("svg", { class: "ico", viewBox: "0 0 16 16", "aria-hidden": "true" });
@@ -74,8 +74,8 @@ function stepNode(n) {
   return b;
 }
 
-// One panel per workflow; inside it the phases in order, each a chain of steps. A step that loops back to the one before it
-// (review and redo) gets a two-way link.
+// One panel per workflow; inside it the phases in order, each a chain of steps. A phase's loop (review and redo) is a box
+// with a caption; its steps get a two-way link. Each arrow shows its edge's condition.
 function buildPipeline(s, p) {
   const sec = panel(p.label, p.hint);
   sec.classList.add("pipeline");
@@ -92,23 +92,39 @@ function buildPipeline(s, p) {
     }
     sec.append(ul);
   }
-  const back = new Set(s.flow.edges.map((e) => `${e.from}>${e.to}`));
+  const edges = new Map(s.flow.edges.map((e) => [`${e.from}>${e.to}`, e]));
+  const arrow = (name, label) => {
+    const a = el("span", "arrow");
+    a.append(icon(name));
+    if (label) a.append(el("span", "", label));
+    return a;
+  };
   const phases = el("ol", "phases");
   p.phases.forEach((ph, i) => {
     const li = el("li", "phase");
     li.append(el("h3", "", `${i + 1}. ${ph.label}`));
     const chain = el("div", "chain");
+    let box;
     ph.steps.forEach((id, j) => {
       const n = s.flow.nodes.find((x) => x.id === id);
       if (!n) return;
+      const inLoop = ph.loop?.steps.includes(id);
       if (j) {
-        const prev = ph.steps[j - 1], loop = back.has(`${id}>${prev}`);
-        const link = el("span", `link${loop ? " loop" : ""}`);
+        // A step after a loop leaves from the loop step that links to it; inside the loop, steps link both ways.
+        const prev = (!inLoop && ph.loop?.steps.find((x) => edges.has(`${x}>${id}`))) || ph.steps[j - 1];
+        const fwd = edges.get(`${prev}>${id}`), back = inLoop && box && edges.get(`${id}>${prev}`);
+        const link = el("span", `link${back ? " loop" : ""}`);
         link.dataset.to = id;
-        link.append(icon(loop ? "loop" : "next"));
-        chain.append(link);
+        link.append(arrow("next", fwd?.label));
+        if (back) link.append(arrow("back", back.label));
+        (inLoop && box ? box : chain).append(link);
       }
-      chain.append(stepNode(n));
+      if (inLoop && !box) {
+        box = el("div", "cycle");
+        box.append(el("span", "cap", ph.loop.label));
+        chain.append(box);
+      }
+      (inLoop ? box : chain).append(stepNode(n));
     });
     li.append(chain);
     phases.append(li);
