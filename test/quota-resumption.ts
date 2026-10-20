@@ -6,12 +6,19 @@ import path from "node:path";
 const data = fs.mkdtempSync(path.join(os.tmpdir(), "ac-quota-resumption-"));
 process.env.AGENT_CONSOLE_DATA = data;
 process.env.AGENT_CONSOLE_MOCK = "1";
+process.env.AGENT_CONSOLE_BRAIN = path.join(data, "no-brain");
+process.env.AGENT_CONSOLE_LABELS = "0";
 
 fs.mkdirSync(path.join(data, "logs"), { recursive: true });
 fs.mkdirSync(path.join(data, "pi-sessions"), { recursive: true });
 
 const { usage, ProviderUsage } = await import("../server/usage.ts");
 const { Threads } = await import("../server/threads.ts");
+const { PROVIDERS } = await import("../server/providers/index.ts");
+
+// Preserve provider IDs for quota isolation while keeping readiness and resumed turns local.
+const mock = PROVIDERS.get("mock")!;
+for (const id of ["claude", "codex"]) PROVIDERS.set(id, { ...mock, id });
 
 function createThread(threads: Threads, provider: string, model = "sonnet"): string {
   const t = threads.create({ provider, cwd: data, model, title: `test-${provider}` });

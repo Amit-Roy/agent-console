@@ -226,6 +226,7 @@ export function createFileViewer(apiFetch, report = () => {}) {
     controller?.abort(); generation++; treeGeneration++;
     for (const request of treeControllers) request.abort(); treeControllers.clear();
     if (imageObjectUrl) URL.revokeObjectURL(imageObjectUrl); imageObjectUrl = null;
+    stopMedia();
     if (restoreFocus?.isConnected) restoreFocus.focus({ preventScroll: true });
   });
   retry.onclick = () => { if (current) { current = { ...current, openedAt: performance.now(), module_ms: 0 }; load(current); } };
@@ -381,11 +382,36 @@ export function createFileViewer(apiFetch, report = () => {}) {
     body.classList.add("is-image"); body.append(image); status.textContent = `${image.naturalWidth.toLocaleString()} × ${image.naturalHeight.toLocaleString()} · Image`;
     return { bytes: blob.size, imageNetwork: receivedAt - at, imageDecode: readyAt - decodeAt, readyAt, receivedAt };
   }
+  // A closed dialog keeps its body, so playback must stop explicitly.
+  function stopMedia() { for (const media of body.querySelectorAll("audio, video")) media.pause(); }
+  async function renderMedia(file, token, signal) {
+    const parsed = new URL(file.url, location.origin);
+    if (parsed.origin !== location.origin || !/^\/api\/file-media\?/.test(parsed.pathname + parsed.search)) throw new Error("Invalid media URL.");
+    const video = /^video\//.test(file.media_type);
+    const media = el(video ? "video" : "audio", "file-viewer-media");
+    media.controls = true; media.preload = "metadata"; media.playsInline = true;
+    media.setAttribute("aria-label", file.name);
+    const at = performance.now();
+    const ready = new Promise((resolve, reject) => {
+      media.addEventListener("loadedmetadata", resolve, { once: true });
+      media.addEventListener("error", () => reject(new Error(video ? "This video cannot be played here." : "This audio cannot be played here.")), { once: true });
+      signal.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
+    });
+    media.src = parsed.pathname + parsed.search;
+    body.classList.add("is-image"); body.append(media);
+    await ready;
+    if (token !== generation || !dialog.open) return {};
+    const readyAt = performance.now(), length = Number.isFinite(media.duration) ? media.duration : 0;
+    const clock = `${Math.floor(length / 60)}:${String(Math.floor(length % 60)).padStart(2, "0")}`;
+    status.textContent = video && media.videoWidth ? `${media.videoWidth} × ${media.videoHeight} · ${clock} · Video` : `${clock} · ${video ? "Video" : "Audio"}`;
+    return { bytes: file.bytes, imageNetwork: readyAt - at, readyAt, receivedAt: readyAt };
+  }
   async function load(request) {
     resetEdit();
     controller?.abort(); controller = new AbortController();
     const token = ++generation, at = request.openedAt || performance.now();
     if (imageObjectUrl) URL.revokeObjectURL(imageObjectUrl); imageObjectUrl = null;
+    stopMedia();
     content = ""; currentTextFile = null; source.hidden = true; copy.disabled = true; wrap.disabled = true;
     title.textContent = request.ref.path.split("/").at(-1) || request.ref.path;
     path.textContent = request.ref.imageUrl ? "Attached image" : request.ref.path; path.title = path.textContent;
@@ -413,6 +439,11 @@ export function createFileViewer(apiFetch, report = () => {}) {
           imageStats = await renderImage(file.url, file.name, token, controller.signal); applyMeta(file);
           receivedAt = imageStats.receivedAt || receivedAt; decodedAt = imageStats.readyAt || performance.now();
           roundtrip_ms += imageStats.imageNetwork || 0; decode_ms += imageStats.imageDecode || 0;
+        }
+        else if (file.kind === "media") {
+          imageStats = await renderMedia(file, token, controller.signal); applyMeta(file);
+          receivedAt = imageStats.receivedAt || receivedAt; decodedAt = imageStats.readyAt || performance.now();
+          roundtrip_ms += imageStats.imageNetwork || 0;
         }
         else {
           if (typeof file.content !== "string") throw new Error("The server returned an invalid file.");
