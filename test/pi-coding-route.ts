@@ -29,9 +29,10 @@ for (const errorMessage of ["401 Unauthorized", "403 Forbidden", "Invalid tool s
 }
 assert.equal(routeCodingRequest({ ...request, reason: "retry", failed: { model: direct, message: { errorMessage: "429" } } }, context([direct, paid])).model, direct);
 for (const reason of ["user", "continuation", "direct"]) {
-  assert.equal(routeCodingRequest({ ...request, reason, previous: { model: router }, messages }, context()).model, router);
+  assert.equal(routeCodingRequest({ ...request, reason, previous: { model: router }, messages }, context()).model, direct);
 }
 assert.equal(routeCodingRequest({ ...request, reason: "retry", failed: { model: router, message: { errorMessage: "429" } } }, context()).model, router);
+assert.equal(routeCodingRequest({ ...request, previous: { model: router } }, context([router])).model, router);
 
 // OpenRouter daily limits recover through the same approved NVIDIA model.
 for (const errorMessage of ["daily-quota exhausted", "Rate limit exceeded: free-models-per-day.", "MODEL_PROVIDER_QUOTA_EXHAUSTED"]) {
@@ -42,7 +43,7 @@ for (const errorMessage of ["daily-quota exhausted", "Rate limit exceeded: free-
   assert.equal(routeCodingRequest(retry, context([router, paid])).model, router, "no paid fallback");
   const next = routeCodingRequest({ ...request, previous: { model: router }, state: recovered.state }, context());
   assert.equal(next.model, direct, "a new prompt drops the exhausted provider's previous success");
-  assert.deepEqual(next.state.exhaustedProviders, []);
+  assert.deepEqual(next.state.retryProviders, []);
 }
 const firstFallback = routeCodingRequest({ ...request, reason: "retry", failed: { model: direct, message: { errorMessage: "429" } } }, context());
 const exhaustedFallback = routeCodingRequest({ ...request, reason: "retry", state: firstFallback.state, failed: { model: router, message: { errorMessage: "free-models-per-day" } } }, context());

@@ -23,24 +23,20 @@ export function routeCodingRequest(request, ctx) {
   // Pi persists route state on the session branch. Track failures only within
   // one retry sequence so two failing providers cannot bounce indefinitely.
   const retryProviders = request.reason === "retry" ? [...(request.state?.retryProviders ?? [])] : [];
-  const exhaustedProviders = request.reason === "user" ? [] : [...(request.state?.exhaustedProviders ?? [])];
   const error = failed?.message?.errorMessage;
   const canFallback = approved(failed?.model) && (failed.model.provider === "nvidia" && transientProviderError(error) ||
     failed.model.provider === "openrouter" && exhaustedProviderQuota(error));
-  if (approved(failed?.model) && canFallback) {
-    if (!retryProviders.includes(failed.model.provider)) retryProviders.push(failed.model.provider);
-    if (exhaustedProviderQuota(error) && !exhaustedProviders.includes(failed.model.provider)) exhaustedProviders.push(failed.model.provider);
-  }
-  const sticky = failed?.model ?? request.previous?.model;
-  const resetExhausted = request.reason === "user" && request.state?.exhaustedProviders?.includes(sticky?.provider);
-  let model = approved(sticky) && !resetExhausted ? find(sticky.provider, sticky.id) : undefined;
+  if (canFallback && !retryProviders.includes(failed.model.provider)) retryProviders.push(failed.model.provider);
+  // Every new request tries direct NVIDIA first; only a retry stays on its failed model.
+  const sticky = failed?.model;
+  let model = approved(sticky) ? find(sticky.provider, sticky.id) : undefined;
   if (canFallback) {
     const alternative = failed.model.provider === "nvidia" ? router : direct;
     if (alternative && !retryProviders.includes(alternative.provider)) model = alternative;
   }
   model ??= direct ?? router;
   if (!model) throw new Error("Pi automation is blocked: no approved coding provider is authenticated.");
-  return { model, thinkingLevel: request.thinkingLevel ?? "off", state: { retryProviders, exhaustedProviders } };
+  return { model, thinkingLevel: request.thinkingLevel ?? "off", state: { retryProviders } };
 }
 
 export default function codingRoute(pi) {

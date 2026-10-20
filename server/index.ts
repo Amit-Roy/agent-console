@@ -3,6 +3,7 @@ import { MODEL_REQUEST_PRIORITIES } from "./providers/model-rate-limit.ts";
 import "./privacy.ts";
 import { usage, refreshRouterUsage, refreshUsage, readCodexUsage } from "./usage.ts";
 import { hostMetrics, hostProcesses, hostKill, hostPorts, hostProcessDetail } from "./host.ts";
+import { startHostSampler, hostHistory, hostDu, hostDuRescan } from "./host-history.ts";
 import { createDispatcher, startIssue, defaultDirs } from "./window-dispatch.ts";
 import { route as routeWork } from "./automation/router.ts";
 import { createOpener } from "./window-opener.ts";
@@ -402,6 +403,9 @@ app.get("/api/host/metrics", hostMetrics);
 app.get("/api/host/processes", hostProcesses);
 app.get("/api/host/processes/:pid/detail", hostProcessDetail);
 app.get("/api/host/ports", hostPorts);
+app.get("/api/host/history", hostHistory);
+app.get("/api/host/du", hostDu);
+app.post("/api/host/du/rescan", sameOrigin, hostDuRescan);
 app.post("/api/host/processes/:pid/kill", express.json({ limit: "1kb" }), sameOrigin, hostKill);
 app.get("/uploads/:thread/:id/:name", (req, res) => {
   const { thread, id, name } = req.params;
@@ -596,6 +600,7 @@ if (acodeSettings) {
 server.listen(PORT, HOST, () => {
   if (PID_FILE) fs.writeFileSync(PID_FILE, String(process.pid)); // only the process that holds the port may claim it
   startModelRateBroker(PORT); // same rule: a scratch server that lost the port must not repoint the live broker
+  startHostSampler(); // 5 s host samples for the Host page's history charts
   console.log(`agent-console listening on http://${HOST}:${PORT}`);
   console.log(CODER_HOSTS.length ? `auth: Coder SSO for ${CODER_HOSTS.join(", ")} (password cookie still works elsewhere)` : "auth: password only");
   if (process.env.AGENT_CONSOLE_SHOW_PASSWORD) console.log(`password: ${PASSWORD}`);
