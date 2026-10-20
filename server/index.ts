@@ -39,6 +39,7 @@ import { dashboard } from "./analytics.ts";
 import { pricing, rates } from "./api-pricing.ts";
 import { contextAllocation } from "./context-allocation.ts";
 import { headroom } from "./headroom.ts";
+import { createDoctor } from "./doctor.ts";
 import { LatencyStore } from "./latency.ts";
 import { fileMedia, fileTree, fileViewer } from "./files.ts";
 import { createAcodeBridge } from "./acode.ts";
@@ -243,6 +244,18 @@ const sameOrigin: express.RequestHandler = (req, res, next) => {
   } catch {}
   res.status(403).json({ error: "Cross-site request refused." });
 };
+const doctor = createDoctor(threads);
+app.get("/doctor", (_req, res) => res.sendFile(path.join(ROOT, "public", "doctor.html")));
+app.get("/api/doctor", async (_req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  try { res.json(await doctor.inspect()); }
+  catch { res.status(503).json({ error: "Setup checks are temporarily unavailable." }); }
+});
+app.post("/api/doctor", sameOrigin, async (_req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  try { res.json(await doctor.repair()); }
+  catch { res.status(503).json({ error: "Setup repair could not finish. Check again for current status." }); }
+});
 // Browser push is opt-in per device. Both writes require a same-origin session.
 app.get("/api/notifications", (_req, res) => {
   res.setHeader("Cache-Control", "no-store");
