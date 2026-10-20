@@ -13,6 +13,7 @@ export interface RouteRequest {
   usage: Record<string, ProviderUsage>;
   active: readonly { provider: string; role: string }[]; // automation threads running now
   now: number;
+  premium?: boolean; // non-Deep work given an expiring premium slot: Sonnet or Sol, never Pi
   flags?: { bauOnPi?: boolean };
   failures?: Record<string, number>; // recent failed runs per provider
 }
@@ -35,6 +36,7 @@ const PI_CONCURRENCY = 3, PI_FAILURE_LIMIT = 3, LOAD_PENALTY = 10, GOOD = 20;
 function candidates(req: RouteRequest): Route[] | undefined {
   if (req.role === "review") return req.effort === "deep" ? undefined : [SONNET, SOL("low")];
   if (req.role === "debug") return [SONNET, SOL("medium"), PI];
+  if (req.premium && req.effort !== "deep") return [SONNET, SOL("low")];
   if (req.effort === "trivial") return [PI];
   if (req.effort === "bau") return req.flags?.bauOnPi ? [PI] : [SONNET, SOL("low")];
   return [{ ...OPUS, effort: "medium" }, SOL("high")];

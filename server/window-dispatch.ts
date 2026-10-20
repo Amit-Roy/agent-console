@@ -21,6 +21,8 @@ export interface Config {
   enabled: boolean;      // false = plan and log only
   dryRun: boolean;
   leadMinutes: number;   // assign only inside the last N minutes of a 5-hour window
+  lowUsagePct: number;   // a window used less than this opens earlier: more quota would otherwise expire
+  lowUsageLeadMinutes: number; // lead time for such a window
   maxUsedPct: number;    // skip a window that is already this full: nothing would be wasted
   perWindow: number;     // issues handed to one provider per window
   repos: string[];
@@ -28,9 +30,9 @@ export interface Config {
   authors: string[];     // only issues opened by these GitHub logins are dispatched: issue text steers an unattended agent
 }
 export interface Issue { repo: string; number: number; title: string; labels: string[] }
-export interface Decision { key: string; issue: Issue; effort: Effort; route: Route; window?: { provider: string; resetsAt: number; used: number }; reason: string }
+export interface Decision { key: string; issue: Issue; effort: Effort; route: Route; premium?: boolean; window?: { provider: string; resetsAt: number; used: number }; reason: string }
 
-export const DEFAULTS: Config = { enabled: false, dryRun: true, leadMinutes: 90, maxUsedPct: 90, perWindow: 2, repos: ["Amit-Roy/agent-console"], authors: ["Amit-Roy"], routing: { mode: "shadow", bauOnPi: false } };
+export const DEFAULTS: Config = { enabled: false, dryRun: true, leadMinutes: 90, lowUsagePct: 60, lowUsageLeadMinutes: 180, maxUsedPct: 90, perWindow: 2, repos: ["Amit-Roy/agent-console"], authors: ["Amit-Roy"], routing: { mode: "shadow", bauOnPi: false } };
 
 // Issue #10: BAU = Sonnet medium or Sol low; Deep = Opus medium or Sol high; Trivial = any cheap Pi model, reviewed by a better one.
 export const ROUTES: Record<Effort, Route[]> = {
@@ -47,18 +49,21 @@ export function effortOf(labels: string[]): Effort | undefined {
   return hit.length === 1 ? hit[0][0] : undefined;
 }
 const rank = (labels: string[]) => { const i = Object.values(PRIORITY_LABELS).findIndex(l => labels.includes(l)); return i < 0 ? 9 : i; };
+const EFFORT_ORDER: Effort[] = ["deep", "bau", "trivial"];
 
 export function fiveHour(u: ProviderUsage | undefined, now: number): (UsageWindow & { resetsAt: number }) | undefined {
   const w = u?.windows.find(x => x.label === "5-hour" && x.resetsAt);
   return w && w.resetsAt! > now ? w as UsageWindow & { resetsAt: number } : undefined;
 }
 
-// A provider has expiring quota when its window ends within the lead time. `full` marks a window at or above maxUsedPct:
-// big work skips it, but trivial work (small, reviewed) does not need the room check.
+// A provider has expiring quota when its window ends within the lead time, longer for a window used below lowUsagePct.
+// `full` marks a window at or above maxUsedPct: big work skips it, but trivial work (small, reviewed) does not need the room check.
 export function expiring(u: ProviderUsage | undefined, now: number, cfg: Config) {
   const w = fiveHour(u, now);
-  if (!w || w.resetsAt - now > cfg.leadMinutes * 60_000) return undefined;
+  if (!w) return undefined;
   const pct = w.limit ? w.used / w.limit * 100 : 100;
+  const lead = pct < cfg.lowUsagePct ? Math.max(cfg.leadMinutes, cfg.lowUsageLeadMinutes) : cfg.leadMinutes;
+  if (w.resetsAt - now > lead * 60_000) return undefined;
   return { resetsAt: w.resetsAt, used: pct, full: pct >= cfg.maxUsedPct };
 }
 
@@ -74,28 +79,44 @@ export function plan(input: { now: number; usage: Record<string, ProviderUsage>;
     if (e) room.set(p, { ...e, left: cfg.perWindow });
   }
   const out: Decision[] = [];
-  let piLeft = cfg.perWindow;
+  const minutes = (w: { resetsAt: number }) => Math.round((w.resetsAt - input.now) / 60_000);
   // Deep work first: it needs the most quota, so it gets first pick of what is expiring.
-  for (const effort of ["deep", "bau", "trivial"] as Effort[]) {
-    for (const issue of open.filter(i => effortOf(i.labels) === effort)) {
+  // Premium slots left without Deep work take the next issue by priority, then effort, on the BAU premium models.
+  const byPriority = open.filter(i => effortOf(i.labels) !== "deep")
+    .sort((a, b) => rank(a.labels) - rank(b.labels) || EFFORT_ORDER.indexOf(effortOf(a.labels)!) - EFFORT_ORDER.indexOf(effortOf(b.labels)!) || a.number - b.number);
+  const fill = new Set<Issue>();
+  for (const issue of [...open.filter(i => effortOf(i.labels) === "deep"), ...byPriority]) {
+    const effort = effortOf(issue.labels)!;
+    const pool = effort === "deep" ? ROUTES.deep : ROUTES.bau;
+    const route = pool.find(r => { const w = room.get(r.provider); return !!w && w.left > 0 && !w.full; });
+    if (!route) continue;
+    const w = room.get(route.provider)!;
+    w.left--;
+    fill.add(issue);
+    out.push({
+      key: issueKey(issue), issue, effort, route, premium: true,
+      window: { provider: route.provider, resetsAt: w.resetsAt, used: Math.round(w.used) },
+      reason: `${route.provider} window ends in ${minutes(w)} min at ${Math.round(w.used)}% used${effort === "deep" ? "" : "; no Deep work left"}`,
+    });
+  }
+  let piLeft = cfg.perWindow;
+  for (const effort of ["bau", "trivial"] as Effort[]) {
+    for (const issue of open.filter(i => effortOf(i.labels) === effort && !fill.has(i))) {
       // Live Pi workers use their own capacity; premium review can wait until the PR is ready.
       if (cfg.routing.mode === "live" && (effort === "trivial" || (effort === "bau" && cfg.routing.bauOnPi))) {
         if (piLeft-- > 0) out.push({ key: issueKey(issue), issue, effort, route: ROUTES.trivial[0], reason: "Pi work is independent of premium reset windows" });
         continue;
       }
-      // Trivial work runs on Pi but needs a Sonnet/Sol reviewer, so it also draws on an expiring window.
-      const pool = effort === "trivial" ? REVIEWERS : ROUTES[effort];
-      const route = pool.find(r => { const w = room.get(r.provider); return !!w && w.left > 0 && (effort === "trivial" || !w.full); });
+      // Trivial work runs on Pi but needs a Sonnet/Sol reviewer, so it also draws on an expiring window, even a full one.
+      if (effort !== "trivial") continue; // BAU had its premium chance above
+      const route = REVIEWERS.find(r => { const w = room.get(r.provider); return !!w && w.left > 0; });
       if (!route) continue;
       const w = room.get(route.provider)!;
       w.left--;
       out.push({
-        key: issueKey(issue), issue, effort,
-        route: effort === "trivial" ? ROUTES.trivial[0] : route,
+        key: issueKey(issue), issue, effort, route: ROUTES.trivial[0],
         window: { provider: route.provider, resetsAt: w.resetsAt, used: Math.round(w.used) },
-        reason: effort === "trivial"
-          ? `${route.provider} window ends in ${Math.round((w.resetsAt - input.now) / 60_000)} min at ${Math.round(w.used)}% used; reviewer ${route.model}`
-          : `${route.provider} window ends in ${Math.round((w.resetsAt - input.now) / 60_000)} min at ${Math.round(w.used)}% used`,
+        reason: `${route.provider} window ends in ${minutes(w)} min at ${Math.round(w.used)}% used; reviewer ${route.model}`,
       });
     }
   }
@@ -231,6 +252,8 @@ export function loadConfig(file = path.join(DATA_DIR, "window-dispatch.json")): 
     enabled: raw.enabled === true,
     dryRun: raw.dryRun !== false,
     leadMinutes: num(raw.leadMinutes, DEFAULTS.leadMinutes, 5, 300),
+    lowUsagePct: num(raw.lowUsagePct, DEFAULTS.lowUsagePct, 0, 100),
+    lowUsageLeadMinutes: num(raw.lowUsageLeadMinutes, DEFAULTS.lowUsageLeadMinutes, 5, 300),
     maxUsedPct: num(raw.maxUsedPct, DEFAULTS.maxUsedPct, 1, 100),
     perWindow: num(raw.perWindow, DEFAULTS.perWindow, 1, 10),
     routing: { mode: raw.routing?.mode === "live" ? "live" : "shadow", bauOnPi: raw.routing?.bauOnPi === true },
@@ -281,7 +304,7 @@ export function createDispatcher(opts: {
       let deferred = 0;
       const active = [...(opts.active?.() ?? [])];
       for (let d of planned) {
-        const rr = routeWork({ role: "work", effort: d.effort, usage: opts.usage(), active, now: now(), flags: { bauOnPi: cfg.routing.bauOnPi }, failures: opts.failures?.() });
+        const rr = routeWork({ role: "work", effort: d.effort, premium: d.premium, usage: opts.usage(), active, now: now(), flags: { bauOnPi: cfg.routing.bauOnPi }, failures: opts.failures?.() });
         const shadow = { decision: rr.decision, route: rr.route, why: rr.why };
         ev?.record({ step: "router", kind: rr.decision === "defer" ? "info" : "ok", ref: d.key, msg: `${cfg.routing.mode}: ${rr.decision}${rr.route ? ` ${rr.route.provider}/${rr.route.model}` : ""} — ${rr.why}`, data: { legacy: d.route, router: rr.route } });
         if (cfg.routing.mode === "live") {
@@ -308,7 +331,7 @@ export function createDispatcher(opts: {
           ev?.record({ step: "worktree", kind: "fail", run: wt, ref: d.key, msg: error });
         }
       }
-      ev?.record({ step: "dispatcher", kind: "ok", run, msg: `picked ${picked.length}${deferred ? `, deferred ${deferred}` : ""}${picked.length || deferred ? "" : " (no eligible Pi work or premium window in its last " + cfg.leadMinutes + " min with room)"}` });
+      ev?.record({ step: "dispatcher", kind: "ok", run, msg: `picked ${picked.length}${deferred ? `, deferred ${deferred}` : ""}${picked.length || deferred ? "" : ` (no eligible Pi work or premium window in its last ${cfg.leadMinutes} min, ${cfg.lowUsageLeadMinutes} below ${cfg.lowUsagePct}% used, with room)`}` });
       return picked;
     } catch (e: any) {
       ev?.record({ step: "dispatcher", kind: "fail", run, msg: String(e?.message ?? e) });
