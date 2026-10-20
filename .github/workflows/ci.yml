@@ -76,6 +76,8 @@ jobs:
           for _ in $(seq 60); do curl -s -o /dev/null http://127.0.0.1:7070/login && exit 0; sleep 0.5; done
           cat "$RUNNER_TEMP/server.log"; exit 1
       - run: npm test
+      - name: Composer scrolling regression
+        run: node test/composer-scroll-ui.ts
       - name: Pi end-to-end smoke
         run: node test/pi-e2e-ui.ts
       - name: Server log

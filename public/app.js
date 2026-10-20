@@ -2559,6 +2559,7 @@ $("input").addEventListener("keydown", (e) => {
 });
 function sizeInput() {
   const box = $("input");
+  const scrollTop = box.scrollTop;
   box.style.height = "auto";
   const viewport = window.visualViewport?.height || window.innerHeight;
   const line = parseFloat(getComputedStyle(box).lineHeight);
@@ -2566,6 +2567,30 @@ function sizeInput() {
   const reserve = $("head").offsetHeight + $("composer").offsetHeight - box.offsetHeight
     + parseFloat(chat.paddingTop) + parseFloat(chat.paddingBottom) + line;
   box.style.height = Math.max(line, Math.min(box.scrollHeight, viewport * 0.35, viewport - reserve)) + "px";
+  // Measuring at full height clears the editable's scroll position. Restore it before revealing the caret.
+  box.scrollTop = scrollTop;
+  const selection = getSelection();
+  if (document.activeElement !== box || !selection?.focusNode || !box.contains(selection.focusNode)) return;
+  const caret = document.createRange();
+  caret.setStart(selection.focusNode, selection.focusOffset);
+  caret.collapse(true);
+  let rect = caret.getBoundingClientRect();
+  // Blank lines need their newline or placeholder <br> to supply the range's bounds.
+  if (!rect.height && selection.focusNode.nodeType === Node.TEXT_NODE
+      && selection.focusNode.textContent[selection.focusOffset] === "\n") {
+    caret.setEnd(selection.focusNode, selection.focusOffset + 1);
+    rect = caret.getBoundingClientRect();
+  }
+  const next = selection.focusNode.nodeType === Node.TEXT_NODE
+    ? selection.focusNode.nextSibling : selection.focusNode.childNodes[selection.focusOffset];
+  if (!rect.height && next?.nodeName === "BR") {
+    caret.selectNode(next);
+    rect = caret.getBoundingClientRect();
+  }
+  if (!rect.height) return;
+  const bounds = box.getBoundingClientRect();
+  if (rect.bottom > bounds.bottom) box.scrollTop += rect.bottom - bounds.bottom;
+  else if (rect.top < bounds.top) box.scrollTop -= bounds.top - rect.top;
 }
 $("input").addEventListener("input", () => {
   saveDraft();
