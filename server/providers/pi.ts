@@ -10,7 +10,7 @@ import { childEnv } from "./env.ts";
 import { parseJson, spawnLines, type Proc } from "./proc.ts";
 import { piQuestions } from "./pi-questions.ts";
 import { piRateEnv } from "./pi-rate-env.ts";
-import { CODING_ROUTE, DIRECT_CODING } from "./pi-coding-route.mjs";
+import { CODING_ROUTE, DIRECT_CODING_MODELS } from "./pi-coding-route.mjs";
 import { defaultPiModel } from "./pi-model.ts";
 import { retryEvent } from "../turn-timing.ts";
 import { acquireModelRequest } from "./model-rate-client.ts";
@@ -31,6 +31,8 @@ const contexts = new Map<string, number>(); // "provider/model" -> context windo
 const NVIDIA_FREE_MODELS = new Set([
   "meta/llama-3.2-11b-vision-instruct",
   "nvidia/nemotron-3-super-120b-a12b",
+  "nvidia/nemotron-3-ultra-550b-a55b",
+  "nvidia/nemotron-3.5-lightning-30b-a3b",
   "nvidia/nemotron-3.5-super-vl-120b-a12b",
   "openai/gpt-oss-20b",
   "stepfun-ai/step-5-preview",
@@ -216,7 +218,7 @@ export const pi: Provider = {
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     // Only unattended NVIDIA coding runs use the host router. Manual model
     // choices and explicit OpenRouter selections retain their exact provider.
-    const routed = !!t.issueRun && t.model === `nvidia/${DIRECT_CODING}`;
+    const routed = !!t.issueRun && DIRECT_CODING_MODELS.some(id => t.model === `nvidia/${id}`);
     const args = ["--mode", "rpc", "--model", routed ? CODING_ROUTE : t.model, "--session-dir", dir, "--extension", QUESTIONS_EXTENSION, "--extension", TOOLS_EXTENSION];
     if (routed) args.push("--extension", CODING_ROUTE_EXTENSION);
     if (fs.readdirSync(dir).length) args.push("--continue");
