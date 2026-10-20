@@ -207,9 +207,15 @@ Adding an agent: implement `Provider` (`server/providers/types.ts`), emit canoni
     REAL=1 npm test          # also one real Claude turn (uses a little subscription quota)
     npm run test:ui          # real Chromium (playwright): themes, viewports, fonts, menus incl. the agent picker, code blocks, contrast, slash menu, PWA installability. Needs a thread with tool cards and a Claude command cache (a live server has them)
 
-To test on a scratch instance without touching your threads:
-    BRAIN_NUDGE_AFTER=2 AGENT_CONSOLE_MOCK=1 AGENT_CONSOLE_DATA=/tmp/ac-test PORT=7071 node server/index.ts &   # then BASE=http://127.0.0.1:7071 AGENT_CONSOLE_DATA=/tmp/ac-test PORT=7071 npm test
-Kill it by pid. `pkill -f "node server/index.ts"` also kills your real server.
+To test on a scratch instance without touching your threads, use a fresh data directory and a dedicated run directory. Setting a fixed password keeps the same server-friendly auth setup for the browser and the local tests, and keeping the server in a separate `AGENT_CONSOLE_RUN` means you can stop it by PID only:
+    tmp=$(mktemp -d)
+    mkdir -p "$tmp/data" "$tmp/run"
+    cp -a "${AGENT_CONSOLE_DATA:-$HOME/.config/agent-console}/uploads" "$tmp/data/" 2>/dev/null || true
+    BRAIN_NUDGE_AFTER=2 AGENT_CONSOLE_MOCK=1 AGENT_CONSOLE_DATA="$tmp/data" AGENT_CONSOLE_RUN="$tmp/run" AGENT_CONSOLE_BRAIN="$tmp/no-brain" AGENT_CONSOLE_AUTH=password AGENT_CONSOLE_PASSWORD=dev-pass PORT=7071 node server/index.ts &
+    BASE=http://127.0.0.1:7071 AGENT_CONSOLE_DATA="$tmp/data" AGENT_CONSOLE_RUN="$tmp/run" AGENT_CONSOLE_AUTH=password AGENT_CONSOLE_PASSWORD=dev-pass PORT=7071 npm test
+    kill "$(cat "$tmp/run/pid")"
+
+UI suites use a fresh seeded scratch copy of the data dir (keep `uploads/`), `AGENT_CONSOLE_MOCK=1`, and ports 7071–7075. Never use `pkill -f` on a scratch server because it can kill the real instance too.
 
 ## Layout
 `server/` Node 24 (TypeScript via native type stripping, no build) · `public/` vanilla ES modules (`app.js`, `menu.js`, `render.js`), marked + DOMPurify + highlight.js · `bin/agent-console` process control
