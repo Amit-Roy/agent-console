@@ -11,17 +11,52 @@
 <header class="dh">
   <a class="btn ghost back" href="/" aria-label="Back to the console"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M10 3.5 5.5 8l4.5 4.5"/></svg><span>Console</span></a>
   <h1>Host</h1>
-  <div id="live" class="live" aria-live="polite"><span class="dot" aria-hidden="true"></span><span id="liveLabel">Live · updates every 2 s</span><button type="button" class="btn sm ghost" id="pause" aria-pressed="false">Pause</button></div>
+  <div id="live" class="live" aria-live="polite"><span class="dot" aria-hidden="true"></span><span id="liveLabel">Live</span><button type="button" class="btn sm ghost" id="pause" aria-pressed="false">Pause</button></div>
 </header>
-<main id="hm" aria-live="polite" aria-busy="true">
-  <p class="muted" id="status">Loading host metrics…</p>
+<main id="hm" aria-busy="true">
+  <p class="hmeta" id="meta"></p>
+  <section class="dials" id="dials" aria-label="Current usage"></section>
+  <section class="panel" id="history" aria-label="Usage over time">
+    <div class="head"><h2>History</h2>
+      <div class="range" id="range" role="group" aria-label="Time range">
+        <button type="button" data-range="300" aria-pressed="true">5m</button><button type="button" data-range="3600" aria-pressed="false">1h</button><button type="button" data-range="43200" aria-pressed="false">12h</button><button type="button" data-range="86400" aria-pressed="false">24h</button>
+      </div>
+    </div>
+    <div class="charts">
+      <figure><figcaption>CPU and memory <span id="cap-cpu"></span></figcaption><div class="cv"><canvas id="ch-cpu" role="img" aria-label="CPU and memory percent over time"></canvas></div></figure>
+      <figure><figcaption>Network <span id="cap-net"></span></figcaption><div class="cv"><canvas id="ch-net" role="img" aria-label="Network throughput over time"></canvas></div></figure>
+      <figure><figcaption>Disk I/O <span id="cap-io"></span></figcaption><div class="cv"><canvas id="ch-io" role="img" aria-label="Disk read and write throughput over time"></canvas></div></figure>
+    </div>
+  </section>
+  <section class="panel" id="procs" aria-label="Processes">
+    <div class="head"><h2>Processes <span class="hcount" id="proc-count"></span></h2>
+      <div class="htools">
+        <input type="search" id="proc-filter" placeholder="Filter" aria-label="Filter processes" autocomplete="off">
+        <div class="range" id="proc-sort" role="group" aria-label="Sort processes">
+          <button type="button" data-sort="cpu" aria-pressed="true">CPU</button><button type="button" data-sort="mem" aria-pressed="false">Memory</button><button type="button" data-sort="label" aria-pressed="false">Name</button>
+        </div>
+      </div>
+    </div>
+    <div class="rows" id="proc-rows"></div>
+    <button type="button" class="btn sm ghost hmore" id="proc-more" hidden></button>
+  </section>
+  <section class="panel" id="ports" aria-label="Listening ports">
+    <div class="head"><h2>Ports <span class="hcount" id="port-count"></span></h2></div>
+    <div class="rows" id="port-rows"></div>
+  </section>
+  <section class="panel" id="storage" aria-label="Storage">
+    <div class="head"><h2>Storage</h2><button type="button" class="btn sm ghost" id="du-rescan">Rescan</button></div>
+    <div id="mounts"></div>
+    <nav class="crumbs" id="du-crumbs" aria-label="Folder path"></nav>
+    <div class="rows" id="du-rows"></div>
+    <p class="note" id="du-note"></p>
+  </section>
 </main>
-<div id="tip" role="tooltip" hidden></div>
-<div id="toast" role="status" aria-live="polite" hidden></div>
-<div id="proc-modal" class="modal" hidden aria-hidden="true" role="dialog" aria-modal="true">
+<div id="toast" role="status" aria-live="polite"></div>
+<div id="proc-modal" class="modal" hidden role="dialog" aria-modal="true" aria-labelledby="pm-title">
   <div class="modal-backdrop"></div>
-  <div class="modal-card" onclick="event.stopPropagation()">
-    <button class="btn sm ghost" aria-label="Close">&times;</button>
+  <div class="modal-card">
+    <button type="button" class="btn sm ghost close" aria-label="Close">&times;</button>
     <div class="modal-body" id="proc-modal-body"></div>
   </div>
 </div>
