@@ -1,0 +1,16 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="light dark"><title>Search sessions · Agent Console</title>
+<link rel="icon" href="/icon.svg"><link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/session-search.css">
+</head><body class="session-search">
+<header><a class="btn ghost" href="/">← Console</a><h1>Search sessions</h1></header>
+<main>
+<form id="session-search-form" role="search">
+<label for="session-query">Search all conversations</label>
+<div class="search-fields"><input id="session-query" type="search" placeholder="Words, or a PR link to find who raised it" required maxlength="500" autocomplete="off">
+<select id="session-provider" aria-label="Provider"><option value="">All providers</option><option value="claude">Claude</option><option value="codex">Codex</option><option value="pi">Pi</option></select>
+<button class="btn primary" type="submit">Search</button></div>
+</form>
+<p id="search-status" role="status" aria-live="polite">Search messages and tool output, including archived sessions. Paste a GitHub PR link to find the session that raised it.</p>
+<ol id="session-results" aria-label="Matching messages"></ol>
+</main><script type="module" src="/session-search.js"></script></body></html>

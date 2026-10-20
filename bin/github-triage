@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -eu
+DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+export PATH="$HOME/.local/bin:$PATH"
+exec node "$DIR/scripts/github-triage.ts" "$@"

@@ -1,0 +1,29 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>Host · Agent Console</title>
+<link rel="icon" href="/icon.svg"><link rel="apple-touch-icon" href="/icon-192.png">
+<meta name="theme-color" content="#eeeef2" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0b0b0d" media="(prefers-color-scheme: dark)">
+<link rel="preload" href="/fonts/inter-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/dashboard.css"><link rel="stylesheet" href="/host.css"></head>
+<body class="host">
+<header class="dh">
+  <a class="btn ghost back" href="/" aria-label="Back to the console"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M10 3.5 5.5 8l4.5 4.5"/></svg><span>Console</span></a>
+  <h1>Host</h1>
+  <div id="live" class="live" aria-live="polite"><span class="dot" aria-hidden="true"></span><span id="liveLabel">Live · updates every 2 s</span><button type="button" class="btn sm ghost" id="pause" aria-pressed="false">Pause</button></div>
+</header>
+<main id="hm" aria-live="polite" aria-busy="true">
+  <p class="muted" id="status">Loading host metrics…</p>
+</main>
+<div id="tip" role="tooltip" hidden></div>
+<div id="toast" role="status" aria-live="polite" hidden></div>
+<div id="proc-modal" class="modal" hidden aria-hidden="true" role="dialog" aria-modal="true">
+  <div class="modal-backdrop"></div>
+  <div class="modal-card" onclick="event.stopPropagation()">
+    <button class="btn sm ghost" aria-label="Close">&times;</button>
+    <div class="modal-body" id="proc-modal-body"></div>
+  </div>
+</div>
+<script type="module" src="/host.js"></script>
+</body></html>
