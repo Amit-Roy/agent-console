@@ -10,6 +10,7 @@ import { setupNotifications } from "/notifications.js";
 import { createChatSearch } from "/chat-search.js";
 import { createSchedules, REPEAT_ITEMS, DAY_ITEMS } from "/schedules.js";
 import { createAutoLane } from "/automation-lane.js";
+import { autoCandidates, autoPick } from "/auto-pick.js";
 
 composerField($("input"));
 
@@ -438,6 +439,42 @@ async function finishSignIn() {
 }
 $("d-signin-finish").onclick = finishSignIn;
 $("d-code").onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); finishSignIn(); } };
+// Auto: Sonnet or Sol at medium effort, on whichever five-hour window would otherwise leave the most allowance unused.
+const autoUsable = (r) => !!prov(r.provider)?.ok && prov(r.provider).models?.includes(r.model) && (!r.account || !!claudeAccount(r.account).ready);
+const autoName = (r) => r.provider === "claude" ? `Claude · ${claudeAccount(r.account).label}` : provLabel(r.provider);
+const AUTO_HINT = "Sonnet or Sol medium, on the allowance closest to going unused.";
+const resetClock = (at) => new Date(at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+function renderAutoPanel() {
+  const list = autoCandidates(state.usage, Date.now(), autoUsable), best = autoPick(list);
+  const head = el("div", "auto-line hdr");
+  head.append(el("span", "", "5-hour"), el("span", "", "Left"), el("span", "", "Resets"));
+  $("d-auto-panel").replaceChildren(head, ...list.map(c => {
+    const row = el("div", `auto-line${c === best ? " best" : ""}${c.blocked ? " off" : ""}`);
+    row.title = c.blocked ? `Skipped: ${c.blocked}` : c === best ? "Auto picks this one" : "";
+    row.append(el("span", "", autoName(c.route)), el("span", "", c.known ? `${Math.round(c.left)}% left` : "Unknown"), el("span", "", c.resetsAt ? `${resetClock(c.resetsAt)} · ${resetsText(c.resetsAt).replace(/^Resets in /, "")}` : "No reset"));
+    return row;
+  }));
+}
+$("d-auto-info").onclick = () => {
+  const open = $("d-auto-panel").hidden;
+  if (open) renderAutoPanel();
+  $("d-auto-panel").hidden = !open;
+  $("d-auto-info").setAttribute("aria-expanded", String(open));
+};
+$("d-auto").onclick = () => {
+  const best = autoPick(autoCandidates(state.usage, Date.now(), autoUsable));
+  if (!best) return void ($("d-auto-note").textContent = "No signed-in agent has five-hour allowance left.");
+  const r = best.route;
+  menus.dProv.setValue(r.provider);
+  fillDialog(r.provider);
+  if (r.account) menus.dAccount.setValue(r.account);
+  menus.dModel.setValue(r.model);
+  dialogEffort(r.model, r.provider);
+  menus.dEffort.setValue(r.effort);
+  syncDialogAccount();
+  $("d-auto-note").textContent = `${autoName(r)} · ${menus.dModel.items().find(i => i.value === r.model)?.label || r.model} · medium. ${best.known ? `${Math.round(best.left)}% left${best.resetsAt ? `, ${resetsText(best.resetsAt).toLowerCase()}` : ""}` : "Usage unknown"}.`;
+  if (!$("d-auto-panel").hidden) renderAutoPanel();
+};
 function fillDialog(id) {
   const p = prov(id);
   if (!p) return;
@@ -2632,6 +2669,9 @@ let dialogTask = null; // "new" or the task being edited; null for a new thread
 function setDialogKind(task) {
   const wasTask = dialogTask !== null;
   dialogTask = task;
+  $("d-auto-panel").hidden = true;
+  $("d-auto-info").setAttribute("aria-expanded", "false");
+  $("d-auto-note").textContent = AUTO_HINT;
   const isTask = task !== null, editing = isTask && task !== "new";
   $("task-fields").hidden = $("save-field").hidden = !isTask;
   $("dlg-title").textContent = editing ? "Edit scheduled task" : isTask ? "New scheduled task" : "New thread";
