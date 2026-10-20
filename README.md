@@ -12,7 +12,7 @@ Browser front end for Claude, Pi, and Codex agents running on this machine. No r
 
 1. `npm install`
 2. `bin/agent-console start` — listens on `127.0.0.1:7070`
-3. `bin/agent-console url` — get the Coder proxy URL (HTTPS)
+3. `bin/agent-console url` — get the console URL (HTTPS)
 4. `bin/agent-console password` — get your sign-in password (generated once, stored at `~/.config/agent-console/password`)
 
 Open the URL, sign in, create a thread. You're running.
@@ -55,7 +55,11 @@ Open the URL, sign in, create a thread. You're running.
 
 ## Install as an app
 
-Open the Coder URL in Chrome → address-bar install icon (or ⋮ → Cast, save and share → Install page as app; Android: ⋮ → Install app). Own window, launcher icon, maskable Android icon. Regenerate icons: `npm run icons`.
+Open the console URL in Chrome → address-bar install icon (or ⋮ → Cast, save and share → Install page as app; Android: ⋮ → Install app). Own window, launcher icon, maskable Android icon. Regenerate icons: `npm run icons`.
+
+This instance uses [console.nefro-dev-coder.duckdns.org](https://console.nefro-dev-coder.duckdns.org/).
+Coder still provides GitHub SSO and workspace management. See [URL routing, rollout, and rollback](docs/console-url.md).
+Set `AGENT_CONSOLE_URL` in the environment or Console environment file to make the URL command print an authenticated alias; otherwise it uses `VSCODE_PROXY_URI`.
 
 ## Security model
 

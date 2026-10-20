@@ -46,5 +46,5 @@ case "${1:-status}" in
   restart-when-idle) (cd "$DIR" && exec setsid nohup flock --close -n "$RUN/idle-restart.lock" node scripts/idle-restart.mjs) </dev/null >>"$RUN/idle-restart.log" 2>&1 & echo "restart scheduled: it happens when no thread is running (log: $RUN/idle-restart.log)" ;;
   status) running && echo "up (pid $(cat "$RUN/pid"))" || echo down ;;
   password) cat "$HOME/.config/agent-console/password" 2>/dev/null || echo "(created on first start)" ;;
-  url) echo "$(echo "${VSCODE_PROXY_URI:-}" | sed "s/{{port}}/$PORT/")" ;;
+  url) PORT=$PORT node "$DIR/scripts/console-url.ts" ;;
 esac
