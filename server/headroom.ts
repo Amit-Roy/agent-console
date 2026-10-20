@@ -145,7 +145,13 @@ export const headroom = {
     return stopping;
   },
   url: () => (enabled() && active && !latched && healthy ? URL_ : undefined),
-  state: () => ({ enabled: enabled(), running: enabled() && active && !latched && healthy, url: URL_, owned: !!child, error: healthy ? undefined : lastError }),
+  async probe(refreshRouting = false) {
+    const responding = await live();
+    // Inspection is observational. Repair can invalidate routing, never clear a breaker or enable it.
+    if (refreshRouting && !responding && healthy) { healthy = false; lastError ??= "Headroom proxy is unreachable"; }
+    return { ...headroom.state(), reachable: responding };
+  },
+  state: () => ({ latched, enabled: enabled(), running: enabled() && active && !latched && healthy, url: URL_, owned: !!child, error: healthy ? undefined : lastError }),
   async stats(): Promise<any | null> {
     if (!headroom.url()) return null;
     try {

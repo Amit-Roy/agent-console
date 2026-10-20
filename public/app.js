@@ -2920,6 +2920,7 @@ createMenu({
     { value: "dashboard", label: "Usage dashboard", icon: "chart" },
     { value: "automation", label: "Automation dashboard", icon: "play" },
     { value: "host", label: "Host dashboard", icon: "terminal" },
+    { value: "doctor", label: "Doctor", desc: "Check and repair the setup", icon: "alert" },
     { value: "reload", label: "Reload page", icon: "refresh" },
     { value: "restart", label: "Restart server…", desc: "Once every thread is idle", icon: "power" },
   ],
@@ -2927,6 +2928,7 @@ createMenu({
     if (v === "dashboard") location.href = $("dash-link").href;
     else if (v === "automation") location.href = $("auto-link").href;
     else if (v === "host") location.href = $("host-link").href;
+    else if (v === "doctor") location.href = "/doctor";
     else if (v === "task") { setLane("tasks"); openTaskDialog(); }
     else (v === "new" ? $("new") : $(v)).click();
   },

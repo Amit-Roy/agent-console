@@ -1,4 +1,5 @@
 import os from "node:os";
+import { headroom } from "./headroom.ts";
 import { isAutomationPiModel, selectAutomationPiModel } from "./providers/pi-model.ts";
 import { assertAutomationSandbox } from "./automation/sandbox.ts";
 import { normalizeClaudeAccount, requireClaudeAccount, claudeUsageKey, type ClaudeAccount } from "./providers/claude-accounts.ts";
@@ -169,6 +170,8 @@ interface TurnState { start: number; tools: Record<string, number>; usage?: any;
 interface Live {
   agent: Agent;
   aborted: boolean;
+  proxyUrl?: string;
+  recycleRouting?: boolean;
   warm?: boolean; // spawned ahead of a send and not used yet
   held?: any[]; // events from a starting or warm agent, replayed once a send uses it
   interrupting?: NodeJS.Timeout; // Stop asked the harness to end the turn; swallow events until its result
@@ -623,7 +626,11 @@ export class Threads {
       // A model removed from the approved list (retired upstream) is re-selected, not kept: the run continues on a working model.
       if (t.provider === "pi") t.model = selectAutomationPiModel(prov.models(), isAutomationPiModel(t.model) ? t.model : undefined);
     }
-    const live: Live = { agent: undefined as unknown as Agent, aborted: false, spawnAt: Date.now(), warm, held: [] };
+    const proxy = headroom.url();
+    const inherited = (t.provider === "claude" ? process.env.ANTHROPIC_BASE_URL : process.env.OPENAI_BASE_URL)?.replace(/\/+$/, "");
+    const managed = t.provider === "claude" ? headroom.state().url : `${headroom.state().url}/v1`;
+    const proxyUrl = ["claude", "codex"].includes(t.provider) && (!inherited || inherited === managed) ? proxy : undefined;
+    const live: Live = { agent: undefined as unknown as Agent, aborted: false, spawnAt: Date.now(), warm, held: [], proxyUrl };
     const ready = () => {
       if (live.readyAt != null) return;
       live.readyAt = Date.now();
@@ -795,6 +802,7 @@ export class Threads {
         else if (!queued && !this.questions.list(t.id).length) this.notify(t, "finished");
       }
       this.touch(t);
+      this.recycleRouting(t.id);
       brainCommit(); // agents may have written wiki pages this turn; keep the shared brain's git history current
       if (t.status === "idle" && (!ev.is_error || parseCommand(this.queues.get(t.id)?.[0]?.text || "")?.name === "compact")) this.drain(t.id);
       if (t.status === "idle" && !ev.is_error) this.wake(t);
@@ -942,6 +950,7 @@ export class Threads {
       delete t.replayLimit;
     }
     if (!opts.auto) delete t.archived; // writing to an archived thread puts it back to work (touch below persists it)
+    this.recycleRouting(id);
     let live = this.live.get(id);
     if (live?.interrupting) { this.kill(id, "stop"); live = undefined; } // its interrupted turn has not ended yet
     const cold = !live || !live.agent.alive; // a pre-warmed agent counts as warm
@@ -1184,8 +1193,61 @@ export class Threads {
     if (t?.background) { delete t.background; this.emit({ t: "thread", thread: t }); } // the tasks died with the process
   }
 
+  private staleRouting(live: Live) {
+    return live.recycleRouting || !!live.proxyUrl && live.proxyUrl !== headroom.url();
+  }
+
+  private recycleRouting(id: string) {
+    const live = this.live.get(id), t = this.threads.get(id);
+    if (!live || !t || !this.staleRouting(live)) return false;
+    live.recycleRouting = true;
+    // Background subagents and running turns retain their process until they finish.
+    if (t.status !== "idle" || t.background || t.operation) return false;
+    this.kill(id, "stale-proxy-routing");
+    return true;
+  }
+
+  routingHealth() {
+    let idle = 0, active = 0, silent = 0;
+    for (const [id, live] of this.live) {
+      const t = this.threads.get(id);
+      if (!t) continue;
+      if (this.staleRouting(live)) {
+        if (t.status === "idle" && !t.background && !t.operation) idle++;
+        else active++;
+      }
+      if (this.staleTurn(t, live)) silent++;
+    }
+    return { idle, active, silent };
+  }
+
+  private staleTurn(t: Thread, live: Live) {
+    return t.status === "running" && !t.background && !this.questions.list(t.id).some(q => !q.async) &&
+      Date.now() - Math.max(live.heardAt ?? 0, live.spawnAt ?? 0, this.turns.get(t.id)?.start ?? 0) > TURN_STALE_MS;
+  }
+
+  repairStaleTurns() {
+    let fixed = 0;
+    for (const [id, live] of this.live) {
+      const t = this.threads.get(id);
+      if (t && this.staleTurn(t, live)) { this.expire(t); fixed++; }
+    }
+    return fixed;
+  }
+
+  repairRouting() {
+    let fixed = 0, deferred = 0;
+    for (const [id, live] of this.live) {
+      if (!this.staleRouting(live)) continue;
+      if (this.recycleRouting(id)) fixed++;
+      else deferred++;
+    }
+    return { fixed, deferred };
+  }
+
   // free memory from idle agent processes; sessions resume on the next message
   sweep(memAvailable = os.freemem() / os.totalmem()) {
+    this.repairRouting();
     const idle: [string, number][] = [];
     for (const [id, live] of this.live) {
       const t = this.threads.get(id);
