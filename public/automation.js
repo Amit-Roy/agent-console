@@ -1,4 +1,5 @@
-// Automation dashboard: the workflow as boxes with icons, the active step, a log per step, triggers, failures and git hooks.
+// Automation dashboard: each workflow (PR workflow, window opener) as its own panel of phases and boxes with icons, the active
+// step, a log per step, triggers, failures and git hooks.
 // Everything comes from GET /api/automation (see server/automation/contracts.ts); the page holds no state of its own.
 const $ = (id) => document.getElementById(id);
 const el = (tag, cls, text) => {
@@ -27,6 +28,9 @@ const ICONS = {
   eye: "M1.75 8s2.25-4.5 6.25-4.5S14.25 8 14.25 8s-2.25 4.5-6.25 4.5S1.75 8 1.75 8zM8 9.75a1.75 1.75 0 1 0 0-3.5 1.75 1.75 0 0 0 0 3.5z",
   merge: "M4.5 5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM4.5 14a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM11.5 11a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM4.5 5v6M4.5 5.5c0 2.2 2.2 3 5.5 3",
   rocket: "M9.5 2.5c2.5 0 4 1.5 4 4-1.2 3-3.5 4.5-5.5 5l-3-3c.5-2 2-4.3 4.5-6zM6 10l-2.5 2.5M5 7.5 3 8l1.5-2.5M8.5 11 8 13l2.5-1.5",
+  redo: "M3 8a5 5 0 0 1 8.5-3.5L13 6M13 2.5V6H9.5M13 8a5 5 0 0 1-8.5 3.5L3 10M3 13.5V10h3.5",
+  next: "M2.5 8h10M9 4.5 12.5 8 9 11.5",
+  loop: "M2.5 6h10M9.5 3 12.5 6 9.5 9M13.5 10h-10M6.5 7 3.5 10l3 3",
 };
 const icon = (name) => {
   const s = svg("svg", { class: "ico", viewBox: "0 0 16 16", "aria-hidden": "true" });
@@ -34,11 +38,6 @@ const icon = (name) => {
   return s;
 };
 
-// Where each step sits on a wide screen: [column, row]. The phone layout ignores this and lists steps in flow order.
-const LAYOUT = {
-  triage: [0, 0], opener: [0, 1], usage: [1, 1], dispatcher: [2, 0], router: [3, 0], worktree: [4, 0], worker: [5, 0],
-  self_review: [5, 2], pr: [4, 2], review: [3, 2], merge: [2, 2], apply: [1, 2],
-};
 const STATE_TEXT = { idle: "Idle", active: "Working", ok: "OK", failed: "Failed", abandoned: "Abandoned", disabled: "Off" };
 
 const time = (ts) => new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
@@ -62,34 +61,60 @@ async function getJson(url, init) {
   return body;
 }
 
-// ---------- flow ----------
-function buildFlow(s) {
-  const flow = el("div", "flow-wrap");
-  const grid = el("div");
-  grid.id = "flow";
-  const edges = svg("svg", { id: "edges", "aria-hidden": "true" });
-  const defs = svg("defs");
-  const marker = svg("marker", { id: "arrow", viewBox: "0 0 10 10", refX: "9", refY: "5", markerWidth: "7", markerHeight: "7", orient: "auto-start-reverse" });
-  marker.append(svg("path", { d: "M0 1.5 10 5 0 8.5z" }));
-  defs.append(marker);
-  edges.append(defs);
-  grid.append(edges);
-  for (const n of s.flow.nodes) {
-    const b = el("button", "node");
-    b.type = "button";
-    b.dataset.step = n.id;
-    b.title = n.hint;
-    const [c, r] = LAYOUT[n.id] || [0, 0];
-    b.style.gridColumn = String(c + 1);
-    b.style.gridRow = String(r + 1);
-    const ni = el("span", "ni");
-    ni.append(icon(n.icon));
-    b.append(ni, el("span", "nl", n.label), el("span", "ns"));
-    b.onclick = () => openDrawer(n.id);
-    grid.append(b);
+// ---------- workflows ----------
+function stepNode(n) {
+  const b = el("button", "node");
+  b.type = "button";
+  b.dataset.step = n.id;
+  b.title = n.hint;
+  const ni = el("span", "ni");
+  ni.append(icon(n.icon));
+  b.append(ni, el("span", "nl", n.label), el("span", "ns"));
+  b.onclick = () => openDrawer(n.id);
+  return b;
+}
+
+// One panel per workflow; inside it the phases in order, each a chain of steps. A step that loops back to the one before it
+// (review and redo) gets a two-way link.
+function buildPipeline(s, p) {
+  const sec = panel(p.label, p.hint);
+  sec.classList.add("pipeline");
+  sec.dataset.pipeline = p.id;
+  const trig = s.triggers.filter((t) => t.pipeline === p.id);
+  if (trig.length) {
+    const ul = el("ul", "ptrig");
+    for (const t of trig) {
+      const li = el("li", t.enabled ? "" : "off");
+      li.dataset.trigger = t.id;
+      li.title = t.detail;
+      li.append(el("span", "k", t.kind), el("span", "", t.label), el("span", "w"));
+      ul.append(li);
+    }
+    sec.append(ul);
   }
-  flow.append(grid);
-  return flow;
+  const back = new Set(s.flow.edges.map((e) => `${e.from}>${e.to}`));
+  const phases = el("ol", "phases");
+  p.phases.forEach((ph, i) => {
+    const li = el("li", "phase");
+    li.append(el("h3", "", `${i + 1}. ${ph.label}`));
+    const chain = el("div", "chain");
+    ph.steps.forEach((id, j) => {
+      const n = s.flow.nodes.find((x) => x.id === id);
+      if (!n) return;
+      if (j) {
+        const prev = ph.steps[j - 1], loop = back.has(`${id}>${prev}`);
+        const link = el("span", `link${loop ? " loop" : ""}`);
+        link.dataset.to = id;
+        link.append(icon(loop ? "loop" : "next"));
+        chain.append(link);
+      }
+      chain.append(stepNode(n));
+    });
+    li.append(chain);
+    phases.append(li);
+  });
+  sec.append(phases);
+  return sec;
 }
 
 function updateFlow(s) {
@@ -105,29 +130,11 @@ function updateFlow(s) {
       if (!badge) { badge = el("span", "badge"); b.append(badge); }
       badge.textContent = String(st.failures);
     } else badge?.remove();
+    document.querySelector(`.link[data-to="${st.id}"]`)?.classList.toggle("live", st.state === "active");
   }
-  drawEdges(s);
-}
-
-function drawEdges(s) {
-  const grid = $("flow"), edges = $("edges");
-  if (!grid || !edges || getComputedStyle(edges).display === "none") return;
-  for (const p of [...edges.querySelectorAll("path.e")]) p.remove();
-  const g = grid.getBoundingClientRect();
-  const rect = (id) => {
-    const r = document.querySelector(`[data-step="${id}"]`)?.getBoundingClientRect();
-    return r && { l: r.left - g.left, r: r.right - g.left, t: r.top - g.top, b: r.bottom - g.top, mx: (r.left + r.right) / 2 - g.left, my: (r.top + r.bottom) / 2 - g.top };
-  };
-  const state = new Map(s.steps.map((x) => [x.id, x.state]));
-  for (const e of s.flow.edges) {
-    const a = rect(e.from), b = rect(e.to);
-    if (!a || !b) continue;
-    let d;
-    if (Math.abs(a.my - b.my) < 8) d = b.mx > a.mx ? `M${a.r} ${a.my}H${b.l - 4}` : `M${a.l} ${a.my}H${b.r + 4}`; // same row
-    else if (Math.abs(a.mx - b.mx) < 8) d = b.my > a.my ? `M${a.mx} ${a.b}V${b.t - 4}` : `M${a.mx} ${a.t}V${b.b + 4}`; // same column
-    else d = `M${b.mx > a.mx ? a.r : a.l} ${a.my}Q${b.mx} ${a.my} ${b.mx} ${b.my > a.my ? b.t - 4 : b.b + 4}`;
-    const p = svg("path", { d, class: `e${state.get(e.to) === "active" ? " live" : ""}`, "marker-end": "url(#arrow)" });
-    edges.append(p);
+  for (const t of s.triggers) {
+    const w = document.querySelector(`[data-trigger="${t.id}"] .w`);
+    if (w) w.textContent = t.enabled ? (t.lastAt ? when(t.lastAt, s.now) : "waiting") : "off";
   }
 }
 
@@ -145,10 +152,10 @@ function panel(title, sub) {
 const empty = (text) => el("div", "empty-c", text);
 
 function triggersPanel(s) {
-  const p = panel("Triggers", "What starts work");
+  const p = panel("Other triggers", "Scheduled prompts and manual starts outside the workflows above");
   const ul = el("ul", "rows");
   ul.id = "triggers";
-  for (const t of s.triggers) {
+  for (const t of s.triggers.filter((x) => !x.pipeline)) {
     const li = el("li");
     li.append(el("span", "a", t.label), el("span", "b", t.enabled ? (t.lastAt ? when(t.lastAt, s.now) : "waiting") : "off"), el("span", "c", `${t.kind} · ${t.detail}`));
     ul.append(li);
@@ -231,19 +238,14 @@ function render(s) {
   const main = $("am");
   main.setAttribute("aria-busy", "false");
   $("mode").replaceChildren(modeChip("Dispatcher", s.config.dispatch), modeChip("Opener", s.config.opener));
-  if (!$("flow")) {
-    main.replaceChildren(panelWith(buildFlow(s)), el("div", "cols"), el("div", "cols"));
+  if (!main.querySelector(".pipeline")) {
+    main.replaceChildren(...s.flow.pipelines.map((p) => buildPipeline(s, p)), el("div", "cols"), el("div", "cols"));
   }
   updateFlow(s);
   const [a, b] = main.querySelectorAll(".cols");
   a.replaceChildren(failuresPanel(s), triggersPanel(s));
   b.replaceChildren(runsPanel(s), hooksPanel(s), configPanel(s));
   if (openStep) fillDrawerFacts(openStep);
-}
-function panelWith(node) {
-  const p = panel("Workflow", "Click a step for its log. Pulsing means it is working now.");
-  p.append(node);
-  return p;
 }
 
 // ---------- drawer ----------
@@ -334,5 +336,4 @@ async function refresh() {
 await refresh();
 setInterval(() => { if (!document.hidden) refresh(); }, 5000);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
-let resizing;
-addEventListener("resize", () => { clearTimeout(resizing); resizing = setTimeout(() => snap && drawEdges(snap), 80); });
+
