@@ -25,6 +25,7 @@ process.stdin.on('data', chunk => {
       note('turn/started', {turn: {id: 't1'}});
       note('item/completed', {item: {id: 'spawn', type: 'subAgentActivity', kind: 'started', agentThreadId: 'kid', agentPath: 'worker'}});
       note('turn/completed', {turn: {id: 't1', status: 'completed'}});
+      setTimeout(() => note('item/started', {item: {id: 'k-msg', type: 'agentMessage'}}, 'kid'), 50);
       setTimeout(() => note('turn/completed', {turn: {id: 'k1', status: 'failed', error: {message: 'usage limit reached'}}}, 'kid'), 100);
     }
   }
@@ -44,5 +45,6 @@ try {
   assert.deepEqual(counts, [1, 0], "background task count must return to 0 when the subagent fails");
   assert.ok(collected.some(e => e.subtype === "task_notification" && e.status === "failed" && /usage limit/.test(e.summary)));
   assert.ok(/failed: usage limit reached/.test(collected.find(e => e.type === "subagent_wake").text));
-  console.log("PASS codex subagent failure clears background count and wakes the parent");
+  assert.deepEqual(collected.filter(e => e.subtype === "task_updated").map(e => e.task_id), ["kid"], "child progress is a throttled proof of life");
+  console.log("PASS codex subagent failure clears background count and wakes the parent; child progress is reported");
 } finally { agent.kill(); await Promise.race([exit, new Promise(r => setTimeout(r, 2000))]); fs.rmSync(scratch, { recursive: true, force: true }); }
