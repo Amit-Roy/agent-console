@@ -27,7 +27,7 @@ Use this on one diff at a time: your own before you open the PR, or a PR you wer
 
 **Safety.** No secret, token, key or password in code, tests, logs or messages. No shell built from strings; pass argument arrays. User and issue text never reaches a command line or a path unchecked. Errors are caught where something can be done about them, and never swallow a failure silently.
 
-**Repo rules.** Work happens in its own worktree. Never push to the default branch of a repo that uses PRs. Protected paths (`server/window-dispatch.ts`, `server/window-opener.ts`, `server/issue-review.ts`, `server/automation/`, `skills/`, `server/auth.ts`, `server/threads.ts`, `server/providers/`, `scripts/auto-sandbox.py`, `bin/`, `.github/`, `package.json`) are never auto-merged.
+**Repo rules.** Work happens in its own worktree. Never push to the default branch of a repo that uses PRs. Protected paths (`server/window-dispatch.ts`, `server/window-opener.ts`, `server/issue-review.ts`, `server/automation/`, `skills/`, `server/auth.ts`, `server/threads.ts`, `server/providers/`, `scripts/auto-sandbox.py`, `bin/`, `.github/`, `package.json`) are never auto-merged by a Pi reviewer; a premium reviewer (any provider but Pi) may merge them.
 
 ## Which reference to read
 

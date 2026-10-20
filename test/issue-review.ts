@@ -85,12 +85,18 @@ try {
   rv.turnEnded(worker("bau", "W1", { reviewedAt: now }), {}); await tick(); assert.equal(count(), 3);
   await rv.sweep([{ id: "W1", status: "idle", issueRun: { ...created[0].issueRun, effort: "bau", finishedAt: now, reviewedAt: now } }] as any); assert.equal(count(), 3);
 
-  // a PR with a Self-review section passes that step; a protected path is never merged by the reviewer
+  // a PR with a Self-review section passes that step; a protected path is not merged by a Pi reviewer
+  const premiumRouting = routing;
+  routing = () => ({ v: 1, decision: "route", route: { provider: "pi", model: "m", effort: "low" }, alternatives: [], why: "" });
   prs = [{ number: 8, body: "x\n\n## Self-review\nchecked; failed first: t" }]; files = ["server/window-dispatch.ts"];
   await rv.sweep([{ id: "W2", status: "idle", issueRun: { ...created[0].issueRun, key: "o/webapp#44", number: 44, effort: "trivial", finishedAt: now } }] as any);
   assert.notEqual(created.at(-1).cwd, r.cwd, "each review receives a fresh private checkout");
   assert.ok(steps("self_review").includes("ok:Self-review section present"));
   assert.match(sent.at(-1).text, /Do not merge it/); assert.doesNotMatch(sent.at(-1).text, /gh pr merge 8/);
+  // a premium reviewer may merge the same protected path
+  routing = premiumRouting;
+  await rv.sweep([{ id: "W2b", status: "idle", issueRun: { ...created[0].issueRun, key: "o/webapp#48", number: 48, effort: "trivial", finishedAt: now } }] as any);
+  assert.match(sent.at(-1).text, /gh pr merge 8 --repo o\/webapp --squash/); assert.doesNotMatch(sent.at(-1).text, /Do not merge it/);
   files = ["src/a.ts"];
 
   // deferral: no review model has room now; the sweep tries again later

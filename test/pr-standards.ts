@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { mayMergeProtected } from "../server/automation/policy.ts";
 import { PROTECTED, isProtected, skillDir, selfReviewBlock, reviewPrompt } from "../server/automation/review-prompts.ts";
 import { issuePrompt } from "../server/window-dispatch.ts";
 
@@ -21,6 +22,7 @@ for (const p of PROTECTED) assert.ok(skill.includes("`" + p + "`"), `skill lists
 assert.equal(isProtected(["README.md", "docs/x.md"]), false);
 for (const f of ["server/window-dispatch.ts", "server/automation/router.ts", "skills/pr-standards/SKILL.md", "package.json", "bin/agent-console", ".github/workflows/ci.yml", "server/auth.ts"]) assert.equal(isProtected(["docs/x.md", f]), true, f);
 assert.equal(isProtected(["server/automation-notes.md"]), false, "a name that merely starts the same is not protected");
+assert.equal(mayMergeProtected("claude"), true); assert.equal(mayMergeProtected("codex"), true); assert.equal(mayMergeProtected("pi"), false);
 
 // skills are read from the main checkout, never from the worktree under review
 assert.equal(skillDir("/home/u"), "/home/u/repos/agent-console/skills/pr-standards");
