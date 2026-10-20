@@ -34,18 +34,38 @@ const historyFile = path.join(DATA_DIR, "usage-history.jsonl");
 let values: Record<string, ProviderUsage> = {};
 try { values = JSON.parse(fs.readFileSync(file, "utf8")); } catch {}
 let notify = (_provider: string, _usage: ProviderUsage) => {};
+let notifyWindowReset = (_provider: string, _windowLabel: string, _usage: ProviderUsage) => {};
+// Track which windows have already fired notifyWindowReset to avoid duplicate notifications
+const firedResets = new Set<string>();
 export const usage = {
   all: () => values,
   get: (provider: string) => values[provider],
   subscribe(fn: typeof notify) { notify = fn; },
+  subscribeWindowReset(fn: typeof notifyWindowReset) { notifyWindowReset = fn; },
   record(provider: string, sample: Omit<ProviderUsage, "updatedAt">, updatedAt = Date.now()) {
     if (values[provider]?.updatedAt > updatedAt) return;
-    const rows = historyRows(provider, values[provider], { ...sample, updatedAt });
+    const prev = values[provider];
+    const rows = historyRows(provider, prev, { ...sample, updatedAt });
     values[provider] = { ...sample, updatedAt };
     // Latest-only usage.json cannot show how much of an expired window went unused; the history can.
     if (rows.length) try { fs.appendFileSync(historyFile, rows.map(r => JSON.stringify(r)).join("\n") + "\n", { mode: 0o600 }); } catch {}
     fs.writeFileSync(file, JSON.stringify(values), { mode: 0o600 });
     notify(provider, values[provider]);
+    // Detect window reset: a window that was exhausted (used >= limit) is now not exhausted
+    if (prev) {
+      for (const prevWindow of prev.windows) {
+        const wasExhausted = prevWindow.used >= prevWindow.limit;
+        const newWindow = values[provider].windows.find(w => w.label === prevWindow.label);
+        const isNowAvailable = newWindow && newWindow.used < newWindow.limit;
+        if (wasExhausted && isNowAvailable) {
+          const key = `${provider}:${prevWindow.label}:${prevWindow.resetsAt ?? 0}`;
+          if (!firedResets.has(key)) {
+            firedResets.add(key);
+            notifyWindowReset(provider, prevWindow.label, values[provider]);
+          }
+        }
+      }
+    }
   },
   exhausted(provider: string) {
     return values[provider]?.windows.some(w => w.used >= w.limit && (!w.resetsAt || w.resetsAt > Date.now())) ?? false;
