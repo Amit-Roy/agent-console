@@ -129,6 +129,16 @@ store.delete(3);
 await svc.threadTurnEnded(threadList[1]); await svc.flush();
 assert.equal(store.get(3)!.length, 1);
 
+// git runs once per cwd, not per thread per sync; a turn end refreshes it
+const gitCalls: string[] = [];
+const shared = [...threadList, { id: "manual-2", provider: "codex", title: "Chat 2", createdAt: 0, cwd: "/w" }];
+const cached = make({ threads: () => shared, git: async (cwd: string, ...args: string[]) => { gitCalls.push(cwd); return args[0] === "rev-parse" ? "manual-branch" : "git@github.com:Amit-Roy/agent-console.git"; } });
+await cached.syncByNumber(repo, 3); await cached.syncByNumber(repo, 3);
+assert.equal(gitCalls.length, 2, "one rev-parse and one remote lookup for the shared cwd");
+await cached.threadTurnEnded(threadList[1]); await cached.flush();
+assert.equal(gitCalls.length, 4, "turn end refreshes the thread's cwd");
+cached.close();
+
 // failures are logged, never thrown
 const broken = make({ github: async () => { throw new Error("boom token=secret"); } });
 await assert.doesNotReject(broken.threadTurnEnded(threadList[0]));
