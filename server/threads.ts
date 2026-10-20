@@ -83,6 +83,9 @@ const IDLE_KILL_MS = 30 * 60 * 1000;
 // prompt and makes no model request (verified per harness). At most WARM_MAX unused processes; unused ones are reaped sooner.
 const WARM_MAX = Number(process.env.AGENT_CONSOLE_WARM_MAX ?? 2);
 const WARM_IDLE_MS = 10 * 60 * 1000;
+// Background tasks keep an idle thread's agent alive and block restart-when-idle. Claude caps a background command at 2 hours
+// and a working subagent reports progress, so tasks silent for longer than this are hung: the sweep kills the agent.
+const BACKGROUND_STALE_MS = Number(process.env.AGENT_CONSOLE_BACKGROUND_STALE_MS ?? 135 * 60 * 1000);
 
 // First-party turn timing (metadata only, never sent anywhere). Unavailable storage must never affect a turn.
 let timing: TurnTimingStore | undefined;
@@ -139,6 +142,7 @@ interface Live {
   compactWait?: NodeJS.Timeout;
   spawnAt?: number; // process lifecycle for turn timing: spawn -> first process output, and why it ended
   readyAt?: number;
+  heardAt?: number; // last event from the process, including progress noise
   exitReason?: string;
   model?: string; // resolved model id the process announced
   wakes?: string[]; // subagent results waiting for the agent to be free (harnesses that do not wake themselves)
@@ -583,6 +587,7 @@ export class Threads {
     const ctx: AgentCtx = {
       event: (ev) => {
         if (fromProcess(ev)) ready();
+        live.heardAt = Date.now();
         if (live.aborted) return;
         if (live.interrupting) { if (ev.type === "result") { clearTimeout(live.interrupting); live.interrupting = undefined; } return; }
         if (live.held) { if (live.held.length < 500) live.held.push(ev); }
@@ -1129,14 +1134,19 @@ export class Threads {
       this.live.delete(id);
       live.agent.kill();
     }
+    const t = this.threads.get(id);
+    if (t?.background) { delete t.background; this.emit({ t: "thread", thread: t }); } // the tasks died with the process
   }
 
   // free memory from idle agent processes; sessions resume on the next message
   sweep() {
     for (const [id, live] of this.live) {
       const t = this.threads.get(id);
-      if (t && t.status === "idle" && !t.background && Date.now() - Math.max(t.updatedAt, live.spawnAt!) > (live.warm ? WARM_IDLE_MS : IDLE_KILL_MS)) this.kill(id, "idle");
+      if (t && t.status === "idle" && t.background && Date.now() - (live.heardAt ?? live.spawnAt!) > BACKGROUND_STALE_MS) this.kill(id, "stale-background");
+      else if (t && t.status === "idle" && !t.background && Date.now() - Math.max(t.updatedAt, live.spawnAt!) > (live.warm ? WARM_IDLE_MS : IDLE_KILL_MS)) this.kill(id, "idle");
     }
+    // no process left to finish them
+    for (const t of this.threads.values()) if (t.background && !this.live.has(t.id)) { delete t.background; this.emit({ t: "thread", thread: t }); }
   }
 
   shutdown() {

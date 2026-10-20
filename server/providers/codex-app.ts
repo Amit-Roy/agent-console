@@ -79,6 +79,7 @@ export function startCodexApp(t: ThreadSpec, ctx: AgentCtx, translate: (row: any
   let total: any, baseline: any;
   // Subagents by thread id. Codex does not start a parent turn when one finishes after the parent's turn ended, so we do.
   const children = new Map<string, { path: string; call: string; text: string; done?: boolean; failed?: string }>();
+  let heartbeat = 0; // child progress never reaches ctx.event otherwise; the stale-background sweep needs proof of life
   let unseen: string[] = []; // finished while the parent turn ran, before the parent model looked again
   const backgroundChanged = () => ctx.event({ type: "system", subtype: "background_tasks_changed", tasks: [...children].filter(([, c]) => !c.done).map(([id, c]) => ({ task_id: id, description: c.path })) });
   const subagentDone = (id: string) => {
@@ -146,6 +147,7 @@ export function startCodexApp(t: ThreadSpec, ctx: AgentCtx, translate: (row: any
     const v = r.params || {};
     if (v.threadId && v.threadId !== session) {
       const child = children.get(v.threadId);
+      if (child && !child.done && Date.now() - heartbeat > 60_000) { heartbeat = Date.now(); ctx.event({ type: "system", subtype: "task_updated", task_id: v.threadId }); }
       if (child && r.method === "item/completed" && v.item?.type === "agentMessage" && typeof v.item.text === "string") child.text = v.item.text;
       // A subagent that dies (usage exhausted, crash) never sends subAgentActivity "completed"; without this it counts as background work forever.
       const failure = r.method === "turn/completed" && ["failed", "interrupted"].includes(v.turn?.status) ? v.turn?.error?.message || `turn ${v.turn.status}`
