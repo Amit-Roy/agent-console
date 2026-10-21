@@ -50,6 +50,15 @@ const HOST = "127.0.0.1"; // never listen publicly; Coder's port proxy is the on
 const HOME = os.homedir();
 const REPOS = path.join(HOME, "repos");
 
+// Boot timing instrumentation
+const BOOT_DEBUG = process.env.AGENT_CONSOLE_BOOT_DEBUG === "1";
+const bootStart = Date.now();
+const bootPhase = (name: string) => {
+  if (BOOT_DEBUG) console.timeLog("agent-console-boot", name);
+};
+if (BOOT_DEBUG) console.time("agent-console-boot");
+bootPhase("constants");
+
 const clients = new Set<WebSocket>();
 const subscriptions = new WeakMap<WebSocket, string>();
 const broadcast = (msg: unknown) => {
@@ -70,12 +79,16 @@ const threads = new Threads(broadcast, notice => {
 const schedules = new Schedules(threads, broadcast);
 const sessionSearch = new SessionSearch(DATA_DIR);
 void sessionSearch.warm().catch(() => console.warn("Session search index will retry on the next query."));
+bootPhase("session-search");
+
 // Agent tools (Pi extension providers/console-tools.mjs) call back over loopback with a per-process secret, never the session cookie
 const TOOL_TOKEN = crypto.randomBytes(24).toString("base64url");
 process.env.AGENT_CONSOLE_TOOL_URL = `http://${HOST}:${PORT}/api/agent-tools`;
 process.env.AGENT_CONSOLE_TOOL_TOKEN = TOOL_TOKEN;
 const acode = createAcodeBridge(id => threads.get(id));
 const acodeSettings = acodeConfig();
+
+bootPhase("initial-setup");
 let latency: LatencyStore | undefined;
 try { latency = new LatencyStore(path.join(DATA_DIR, "latency.sqlite")); }
 catch { console.warn("Local latency storage is unavailable."); }
@@ -580,13 +593,7 @@ wss.on("connection", (ws) => {
 });
 
 void refreshPiModels();
-await headroom.start();
-
-if (acodeSettings) {
-  const bridgeServer = acodePublicApp(acode, ROOT).listen(acodeSettings.port, HOST);
-  // a scratch server reads the same env file as the live one: exiting here made agents hunt down the port's owner, the live server
-  bridgeServer.on("error", () => console.error(`Acode bridge port ${acodeSettings.port} is in use (normally by the live server); Acode Edit is off in this one.`));
-}
+bootPhase("pi-models");
 
 server.listen(PORT, HOST, () => {
   if (PID_FILE) fs.writeFileSync(PID_FILE, String(process.pid)); // only the process that holds the port may claim it
@@ -594,7 +601,17 @@ server.listen(PORT, HOST, () => {
   console.log(`agent-console listening on http://${HOST}:${PORT}`);
   console.log(CODER_HOSTS.length ? `auth: Coder SSO for ${CODER_HOSTS.join(", ")} (password cookie still works elsewhere)` : "auth: password only");
   if (process.env.AGENT_CONSOLE_SHOW_PASSWORD) console.log(`password: ${PASSWORD}`);
+  bootPhase("server-ready");
 });
+
+await headroom.start();
+bootPhase("headroom-done");
+
+if (acodeSettings) {
+  const bridgeServer = acodePublicApp(acode, ROOT).listen(acodeSettings.port, HOST);
+  // a scratch server reads the same env file as the live one: exiting here made agents hunt down the port's owner, the live server
+  bridgeServer.on("error", () => console.error(`Acode bridge port ${acodeSettings.port} is in use (normally by the live server); Acode Edit is off in this one.`));
+}
 
 // A hash of the code this process loaded. Open tabs compare it on reconnect and reload themselves when the server was replaced
 // (`bin/agent-console restart-when-idle` -> scripts/idle-restart.mjs).
