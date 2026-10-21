@@ -10,21 +10,21 @@ const out = process.env.OUT || "/tmp/auto-issue-groups-evidence";
 fs.mkdirSync(out, { recursive: true });
 const html = `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Auto issue grouping browser fixture</title><link rel="stylesheet" href="/style.css">
-<style>body{margin:0;padding:24px;background:var(--s0);color:var(--t1)}#fixture{max-width:420px;margin:auto}.fixture-note{color:var(--t3);font-size:12px}h1{font-size:20px}#lane-auto-dot{display:inline-block}.thread-list{padding:0;list-style:none}</style>
+<style>body{margin:0;padding:24px;background:var(--s0);color:var(--t1)}#fixture{max-width:var(--side-w);margin:auto}.fixture-note{color:var(--t3);font-size:12px}h1{font-size:20px}#lane-auto-dot{display:inline-block}.thread-list{padding:0;list-style:none}</style>
 <svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs><symbol id="i-chev-right" viewBox="0 0 16 16"><path d="m6 4 4 4-4 4"/></symbol></defs></svg>
 <section id="fixture"><h1>Auto <span id="lane-auto-dot" class="dot running"></span></h1><p class="fixture-note">Browser fixture · production Auto lane and styles · seeded issue work</p><ul id="autos" class="thread-list auto-list" aria-label="Automated runs"></ul></section>
 <script type="module">
 import { createAutoLane } from '/automation-lane.js';
 const now = Date.now();
 const make = (id, title, issueRun, extra = {}) => ({ id, title, issueRun, provider: 'codex', model: 'gpt-6.1-sol', status: 'idle', updatedAt: now, ...extra });
-const run = (role, extra = {}) => ({ key: 'Owner/console#42', repo: 'Owner/console', number: 42, effort: 'bau', role, ...extra });
+const run = (role, extra = {}) => ({ key: 'Amit-Roy/agent-console#43', repo: 'Amit-Roy/agent-console', number: 43, effort: 'bau', role, ...extra });
 const state = { current: null, threads: new Map([
-  ['work', make('work', 'Fix issue #42 export', run('work'), { updatedAt: now - 1000 })],
-  ['review', make('review', 'Review PR #79 for issue #42', run('review', { key: 'old-review-key', repo: 'owner/CONSOLE' }), { status: 'running' })],
-  ['retry', make('retry', 'Retry issue #42 export', run('work', { key: 'legacy-retry-key' }), { updatedAt: now - 2000 })],
-  ['other', make('other', 'Other repository issue #42', run('work', { repo: 'Owner/other', key: 'Owner/other#42' }))],
-  ['debug', make('debug', 'Automation debug', run('debug', { repo: 'Owner/console', number: 0, key: 'automation#debug' }))],
-  ['archived', make('archived', 'Archived issue #42 work', run('work'), { archived: now })],
+  ['work', make('work', 'Fix issue #43 export', run('work'), { updatedAt: now - 1000 })],
+  ['review', make('review', 'Review PR #79 for issue #43', run('review', { key: 'old-review-key', repo: 'Amit-Roy/agent-console' }), { status: 'running' })],
+  ['retry', make('retry', 'Retry issue #43 export', run('work', { key: 'legacy-retry-key', repo: 'amit-roy/AGENT-CONSOLE' }), { updatedAt: now - 2000 })],
+  ['other', make('other', 'Other repository issue #43', run('work', { repo: 'Amit-Roy/other', key: 'Amit-Roy/other#43' }))],
+  ['debug', make('debug', 'Automation debug', run('debug', { repo: 'Amit-Roy/agent-console', number: 0, key: 'automation#debug' }))],
+  ['archived', make('archived', 'Archived issue #43 work', run('work'), { archived: now })],
   ['plain', make('plain', 'Plain chat', undefined)],
 ]) };
 const opened = [], nav = [];
@@ -54,15 +54,15 @@ try {
     page.on("pageerror", error => errors.push(error.message));
     await page.goto(base);
     await page.waitForSelector(".auto-group-toggle");
-    const group = page.locator('.auto-group[data-issue="owner/console#42"]');
+    const group = page.locator('.auto-group[data-issue="amit-roy/agent-console#43"]');
     const toggle = group.locator(".auto-group-toggle");
     assert.equal(await page.locator(".auto-group").count(), 3, `${name}: canonical issue, separate repository, and debug groups`);
     assert.equal(await group.locator("li[data-thread]").count(), 3, `${name}: work, review, and retry share one issue`);
     assert.equal(await page.locator('li[data-thread="archived"],li[data-thread="plain"]').count(), 0);
-    assert.equal(await page.locator('.auto-group[data-issue="owner/other#42"]').count(), 1);
+    assert.equal(await page.locator('.auto-group[data-issue="amit-roy/other#43"]').count(), 1);
     assert.ok((await page.locator(".auto-group").allTextContents()).some(text => text.includes("automation#debug")), `${name}: debug fallback retained`);
-    assert.match(await toggle.innerText(), /#42/);
-    assert.match(await toggle.innerText(), /console/i);
+    assert.equal(await toggle.locator(".k").textContent(), "Amit-Roy/agent-console#43");
+    assert.equal(await toggle.locator(".k").evaluate(element => element.scrollWidth <= element.clientWidth && element.scrollHeight <= element.clientHeight), true, `${name}: complete repository and issue label fits sidebar width`);
     assert.match(await toggle.innerText(), /3/);
     assert.equal(await toggle.getAttribute("aria-expanded"), "false");
     assert.equal(await group.locator(".auto-runs").isVisible(), false);
