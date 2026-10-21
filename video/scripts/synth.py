@@ -1,4 +1,4 @@
-"""Synthesize the agent-console brag soundtrack: 128 BPM, 12 bars, A minor.
+"""Synthesize the agent-console feature-tour soundtrack: 128 BPM, 48 bars (90 s), A minor.
 
 Usage: python3 -I synth.py <out-dir>
 Writes music.wav (bed) and sfx.wav (hits/tick/chime) as 48 kHz stereo 24-bit.
@@ -10,7 +10,7 @@ SR = 48000
 BPM = 128
 BEAT = 60 / BPM
 BAR = BEAT * 4
-BARS = 12
+BARS = 48
 DUR = BAR * BARS
 N = int(DUR * SR) + SR  # 1 s tail headroom, trimmed later
 rng = np.random.default_rng(7)
@@ -157,14 +157,36 @@ CHORDS = [
 ARP = [0, 2, 3, 1, 2, 3, 1, 2]  # indices into voicing, 8th notes
 
 music = np.zeros((N, 2))
-# Sections (bar indices): 0-1 intro, 2-5 groove, 6-7 breakdown, 8-10 groove, 11 final hit
+# Section per bar. Chapters are 4 bars; breakdowns sit under the lid scene, the scheduled-task clock and session search.
+INTRO = {0, 1}
+BREAK = {6, 7, 22, 23, 38, 39}
+FINAL = 47
+# second-half chapters move to Am Em F G and add a lead line so 90 s does not loop the same 4 bars
+PROG_B = set(range(26, 38)) | set(range(40, 47))
+LEAD = set(range(10, 22)) | set(range(26, 38)) | set(range(40, 47))
+CHORDS_B = [
+    (45, [57, 60, 64, 69]),
+    (40, [55, 59, 64, 67]),
+    (41, [57, 60, 65, 69]),
+    (43, [55, 59, 62, 67]),
+]
+# lead motif per chord: (8th-note step, semitone offset over chord root + 24, length in 8ths)
+MOTIF = [(0, 0, 2), (3, 7, 1), (4, 12, 2), (6, 10, 2)]
+
+
+def lead(m, length):
+    n = int(length * SR)
+    x = saw(midi(m), n, 0.003) * 0.5 + np.sin(2 * np.pi * midi(m) * t_(n)) * 0.5
+    y = lp2(x, 1400 + 2600 * np.exp(-t_(n) * 6))
+    return y * env_adsr(n, 0.01, 0.15, 0.6, 0.08, length - 0.08) * 0.16
+
+
 for bar in range(BARS):
     t0 = bar * BAR
-    root, voicing = CHORDS[bar % 4]
-    intro = bar < 2
-    breakdown = bar in (6, 7)
-    final = bar == 11
-    # pad everywhere, brighter in grooves
+    root, voicing = (CHORDS_B if bar in PROG_B else CHORDS)[bar % 4]
+    intro = bar in INTRO
+    breakdown = bar in BREAK
+    final = bar == FINAL
     if not final:
         place(music, pad(voicing, BAR + 0.6, 0.6 if intro else (0.8 if breakdown else 1.4)), t0, 0.9)
     if final:
@@ -172,7 +194,6 @@ for bar in range(BARS):
         place(music, kick(), t0, 1.0)
         place(music, bass_note(root, BAR * 0.9), t0, 1.0)
         continue
-    # arp: intro gets it sparse and filtered, grooves full
     for k in range(8):
         if intro and k % 2:
             continue
@@ -181,7 +202,6 @@ for bar in range(BARS):
     if intro:
         place(music, bass_note(root, BAR), t0, 0.8)
         continue
-    # bass: 8ths, octave bounce
     for k in range(8):
         if breakdown and k % 4:
             continue
@@ -190,6 +210,9 @@ for bar in range(BARS):
         place(music, bass_note(m, length), t0 + k * BEAT / 2, 0.9 if breakdown else 1.0)
     if breakdown:
         continue
+    if bar in LEAD and bar % 2 == 0:
+        for step, off, ln in MOTIF:
+            place(music, lead(root + 24 + off, ln * BEAT / 2), t0 + step * BEAT / 2, 1.0, pan=-0.1)
     for b in range(4):
         place(music, kick(), t0 + b * BEAT, 1.0)
         if b in (1, 3):
@@ -198,7 +221,7 @@ for bar in range(BARS):
         for s in (1, 3):
             place(music, hat(), t0 + b * BEAT + s * BEAT / 4, 0.45, pan=-0.25)
 
-# risers into the drops (bar 2 and bar 8)
+
 def riser(length):
     n = int(length * SR)
     t = t_(n)
@@ -206,12 +229,15 @@ def riser(length):
     y = lp(x, 500 + 9000 * (t / length) ** 2)
     return y * (t / length) ** 2.2 * 0.35
 
-place(music, riser(BAR), 1 * BAR, 0.9)
-place(music, riser(BAR), 7 * BAR, 0.9)
 
-# sidechain pump on non-kick content (simple: duck everything 60 ms after each beat in grooves)
+# risers into every drop out of the intro or a breakdown
+for b in (1, 7, 23, 39):
+    place(music, riser(BAR), b * BAR, 0.9)
+
 duck = np.ones(N)
-for bar in list(range(2, 6)) + list(range(8, 11)):
+for bar in range(BARS):
+    if bar in INTRO or bar in BREAK or bar == FINAL:
+        continue
     for b in range(4):
         i = int((bar * BAR + b * BEAT) * SR)
         n = int(BEAT * SR)
@@ -220,7 +246,6 @@ for bar in list(range(2, 6)) + list(range(8, 11)):
 music *= duck[:, None]
 
 music = reverb(music, 2.4, 0.22)
-# tame naive-oscillator aliasing: gentle 2-pole lowpass on the bus
 music = np.stack([lp2(music[:, c], 11000) for c in range(2)], axis=1)
 
 # ---- sfx (separate stem so it can be retimed later) ------------------------
@@ -262,11 +287,15 @@ def tap():
 
 SFX_TIMES = dict(
     stamps=[(0.12, 45), (0.12 + 2 * BEAT, 41), (0.12 + 4 * BEAT, 48), (6 * BEAT, 33)],
-    ticks=[11.25 + k * BEAT / 2 for k in range(14)],
-    chime=[14.2],
+    # chapter title slams: models, files, Acode, schedules, triage, usage, host, search, recap
+    chapters=[(b * BAR, m) for b, m in ((10, 45), (14, 41), (18, 48), (22, 43), (26, 45), (30, 40), (34, 41), (38, 43), (40, 45))],
+    ticks=[11.25 + k * BEAT / 2 for k in range(14)] + [22 * BAR + k * BEAT / 2 for k in range(14)],
+    chime=[14.2, 23.6 * BAR],
 )
 for t0, m in SFX_TIMES["stamps"]:
     place(sfx, stamp(m), t0, 0.9)
+for t0, m in SFX_TIMES["chapters"]:
+    place(sfx, stamp(m), t0 + 0.02, 0.7)
 for t0 in SFX_TIMES["ticks"]:
     place(sfx, tick(), t0, 0.8, pan=0.2)
 for t0 in SFX_TIMES["chime"]:
