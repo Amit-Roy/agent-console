@@ -5,6 +5,7 @@ import { usage, refreshRouterUsage, refreshUsage, readCodexUsage } from "./usage
 import { hostMetrics, hostProcesses, hostKill, hostPorts, hostProcessDetail } from "./host.ts";
 import { startToolPriority } from "./tool-priority.ts";
 import { startHostSampler, hostHistory, hostDu, hostDuRescan } from "./host-history.ts";
+import { Ideas, IdeaError } from "./ideas.ts";
 import { createDispatcher, startIssue, defaultDirs, resumeDue } from "./window-dispatch.ts";
 import { route as routeWork } from "./automation/router.ts";
 import { createOpener } from "./window-opener.ts";
@@ -74,6 +75,7 @@ const threads = new Threads(broadcast, notice => {
   void notifications?.notify(notice).catch(() => console.warn("Browser notification delivery failed."));
 });
 const schedules = new Schedules(threads, broadcast);
+const ideas = new Ideas();
 const sessionSearch = new SessionSearch(DATA_DIR);
 // Agent tools (Pi extension providers/console-tools.mjs) call back over loopback with a per-process secret, never the session cookie
 const TOOL_TOKEN = crypto.randomBytes(24).toString("base64url");
@@ -464,6 +466,19 @@ app.get("/api/host/history", hostHistory);
 app.get("/api/host/du", hostDu);
 app.post("/api/host/du/rescan", sameOrigin, hostDuRescan);
 app.post("/api/host/processes/:pid/kill", express.json({ limit: "1kb" }), sameOrigin, hostKill);
+// App ideas: index.md + one markdown file per idea in a private git repo (server/ideas.ts). Adding commits, so same-origin only.
+const ideaError = (res: express.Response, e: any) => res.status(e instanceof IdeaError ? e.status : 500).json({ error: e instanceof IdeaError ? e.message : "App ideas are unavailable." });
+app.get("/api/ideas", (_req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  try { res.json(ideas.list()); } catch (e) { ideaError(res, e); }
+});
+app.get("/api/ideas/:slug", (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  try { res.json(ideas.read(req.params.slug)); } catch (e) { ideaError(res, e); }
+});
+app.post("/api/ideas", sameOrigin, express.json({ limit: "4kb" }), async (req, res) => {
+  try { res.status(201).json(await ideas.add({ name: req.body?.name, line: req.body?.line })); } catch (e) { ideaError(res, e); }
+});
 app.get("/uploads/:thread/:id/:name", (req, res) => {
   const { thread, id, name } = req.params;
   if (!isId(thread) || !isId(id) || !SAFE_NAME.test(name)) return void res.status(404).end();
