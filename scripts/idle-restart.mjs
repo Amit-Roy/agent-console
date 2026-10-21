@@ -53,6 +53,9 @@ const check = setInterval(async () => {
       execFileSync(process.execPath, ["--check", "--input-type=module"], { input: source, stdio: "pipe" });
     }
   } catch (e) { give(`Restart cancelled: the new code does not parse.\n${String(e.stderr ?? e).slice(0, 800)}`, 1); }
+  // Build the bundle while the old server still answers, so the supervisor finds it fresh and the gap stays short.
+  try { execFileSync(process.execPath, [path.join(ROOT, "scripts", "bundle-server.mjs")], { stdio: "pipe" }); }
+  catch (e) { console.log(`Bundle failed; the new server runs from source.\n${String(e.stderr ?? e).slice(0, 800)}`); }
   // Syntax validation can take seconds. A different restart may have completed meanwhile.
   if (read() !== original) give("Server was already restarted; nothing to do.", 0);
   console.log("All threads idle. Restarting Agent Console.");

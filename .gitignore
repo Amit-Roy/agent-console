@@ -1,4 +1,5 @@
 node_modules/
+.bundle/
 *.log
 .env
 test/tmp/

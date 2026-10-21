@@ -133,7 +133,7 @@ BRAIN_NUDGE_AFTER=2 AGENT_CONSOLE_MOCK=1 AGENT_CONSOLE_DATA=/tmp/ac-test PORT=70
 BASE=http://127.0.0.1:7071 AGENT_CONSOLE_DATA=/tmp/ac-test PORT=7071 npm test
 ```
 
-Kill it by pid. `pkill -f "node server/index.ts"` also kills your real server.
+Kill it by pid. `pkill -f server/index.ts` also kills your real server (it runs `node .bundle/server/index.ts.mjs`, a bundle that `bin/agent-console` rebuilds whenever a source is newer).
 
 Isolated checks: `node test/latency.ts`, `node test/history-wire.ts`, `npm run test:transport`, `npm run test:cache`, `npm run test:queue-ui`, `npm run test:files`.
 
