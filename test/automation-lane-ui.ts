@@ -12,7 +12,7 @@ const html = `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="v
 <title>Auto issue grouping browser fixture</title><link rel="stylesheet" href="/style.css">
 <style>body{margin:0;padding:24px;background:var(--s0);color:var(--t1)}#fixture{max-width:var(--side-w);margin:auto}.fixture-note{color:var(--t3);font-size:12px}h1{font-size:20px}#lane-auto-dot{display:inline-block}.thread-list{padding:0;list-style:none}</style>
 <svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs><symbol id="i-chev-right" viewBox="0 0 16 16"><path d="m6 4 4 4-4 4"/></symbol></defs></svg>
-<section id="fixture"><h1>Auto <span id="lane-auto-dot" class="dot running"></span></h1><p class="fixture-note">Browser fixture · production Auto lane and styles · seeded issue work</p><ul id="autos" class="thread-list auto-list" aria-label="Automated runs"></ul></section>
+<section id="fixture"><h1>Auto <span id="lane-auto-dot" class="dot running"></span></h1><p class="fixture-note">Browser fixture · production Auto lane and styles · seeded issue work</p><ul id="autos" class="thread-list auto-list" aria-label="Automated runs"></ul><div id="auto-archive" hidden><button id="auto-archive-toggle" class="side-label side-toggle" type="button" aria-expanded="false" aria-controls="auto-archived"><svg class="ico" aria-hidden="true"><use href="#i-chev-right"/></svg><span>Archived</span><span id="auto-archive-count" class="count"></span></button><ul id="auto-archived" class="thread-list auto-list" aria-label="Archived automated runs" hidden></ul></div></section>
 <script type="module">
 import { createAutoLane } from '/automation-lane.js';
 const now = Date.now();
@@ -47,8 +47,9 @@ assert.ok(address && typeof address !== "string");
 const base = `http://127.0.0.1:${address.port}`;
 const browser = await chromium.launch();
 try {
-  for (const [name, viewport] of [["desktop", { width: 1280, height: 900 }], ["phone", { width: 390, height: 844 }]] as const) {
-    const context = await browser.newContext({ viewport, colorScheme: "dark", recordVideo: { dir: out, size: viewport } });
+  for (const [device, viewport] of [["desktop", { width: 1280, height: 900 }], ["phone", { width: 390, height: 844 }]] as const) for (const colorScheme of ["dark", "light"] as const) {
+    const name = `${device}-${colorScheme}`;
+    const context = await browser.newContext({ viewport, colorScheme, recordVideo: { dir: out, size: viewport } });
     const page = await context.newPage();
     const errors: string[] = [];
     page.on("pageerror", error => errors.push(error.message));
@@ -57,13 +58,16 @@ try {
     const group = page.locator('.auto-group[data-issue="amit-roy/agent-console#43"]');
     const toggle = group.locator(".auto-group-toggle");
     assert.equal(await page.locator(".auto-group").count(), 3, `${name}: canonical issue, separate repository, and debug groups`);
-    assert.equal(await group.locator("li[data-thread]").count(), 3, `${name}: work, review, and retry share one issue`);
-    assert.equal(await page.locator('li[data-thread="archived"],li[data-thread="plain"]').count(), 0);
+    assert.equal(await group.locator("li[data-thread]").count(), 4, `${name}: work, review, retry, and archived history share one issue`);
+    assert.equal(await page.locator('li[data-thread="plain"]').count(), 0);
+    assert.equal(await page.locator('#autos li[data-thread="archived"]').count(), 1);
+    assert.equal(await page.locator("#auto-archived .auto-group").count(), 0, `${name}: mixed issue never duplicates into archive`);
+    assert.equal(await page.locator("#auto-archive").isVisible(), false);
     assert.equal(await page.locator('.auto-group[data-issue="amit-roy/other#43"]').count(), 1);
     assert.ok((await page.locator(".auto-group").allTextContents()).some(text => text.includes("automation#debug")), `${name}: debug fallback retained`);
     assert.equal(await toggle.locator(".k").textContent(), "Amit-Roy/agent-console#43");
     assert.equal(await toggle.locator(".k").evaluate(element => element.scrollWidth <= element.clientWidth && element.scrollHeight <= element.clientHeight), true, `${name}: complete repository and issue label fits sidebar width`);
-    assert.match(await toggle.innerText(), /3/);
+    assert.match(await toggle.innerText(), /4/);
     assert.equal(await toggle.getAttribute("aria-expanded"), "false");
     assert.equal(await group.locator(".auto-runs").isVisible(), false);
     assert.equal(await toggle.locator(".dot.running").isVisible(), true, `${name}: collapsed issue still shows running work`);
@@ -92,6 +96,31 @@ try {
     await toggle.click();
     await page.evaluate(() => (window as any).fixture.lane.render());
     assert.equal(await toggle.getAttribute("aria-expanded"), "false", `${name}: current group can remain manually collapsed`);
+    await page.evaluate(() => { const { state, lane } = (window as any).fixture; state.current = "archived"; lane.render(); });
+    assert.equal(await group.locator('li[data-thread="archived"]').isVisible(), true, `${name}: archived current member opens its live issue`);
+    assert.equal(await page.locator("#auto-archive-toggle").getAttribute("aria-expanded"), "false", `${name}: selecting archived member of live issue does not open archive`);
+    await page.screenshot({ path: path.join(out, `${name}-mixed-live.png`) });
+    await page.waitForTimeout(700);
+    await page.evaluate(() => { const { state, lane } = (window as any).fixture; state.current = null; for (const thread of state.threads.values()) if (thread.issueRun?.repo?.toLowerCase() === "amit-roy/agent-console" && thread.issueRun.number === 43) { thread.archived = Date.now(); thread.status = "idle"; } lane.render(); });
+    assert.equal(await page.locator('#autos .auto-group[data-issue="amit-roy/agent-console#43"]').count(), 0);
+    assert.equal(await page.locator('#auto-archived .auto-group[data-issue="amit-roy/agent-console#43"]').count(), 1, `${name}: complete issue moves together`);
+    assert.equal(await page.locator("#auto-archive-count").textContent(), "1", `${name}: archive counts issues, not runs`);
+    await page.locator("#auto-archive-toggle").click();
+    await page.screenshot({ path: path.join(out, `${name}-all-archived.png`) });
+    await page.waitForTimeout(700);
+    await page.evaluate(() => { const { state, lane } = (window as any).fixture; state.threads.get("review").status = "running"; lane.render(); });
+    assert.equal(await group.locator("li[data-thread]").count(), 4, `${name}: archived running work returns whole issue to Live`);
+    assert.equal(await page.locator("#auto-archived .auto-group").count(), 0);
+    assert.equal(await page.locator("#lane-auto-dot").isVisible(), true);
+    await page.screenshot({ path: path.join(out, `${name}-running-live.png`) });
+    await page.waitForTimeout(700);
+    await page.evaluate(() => { const { state, lane } = (window as any).fixture; state.threads.get("review").status = "idle"; state.threads.get("review").background = 1; lane.render(); });
+    assert.equal(await group.locator("li[data-thread]").count(), 4, `${name}: archived background work keeps whole issue Live`);
+    assert.equal(await page.locator("#auto-archived .auto-group").count(), 0);
+    await page.evaluate(() => { const { state, lane } = (window as any).fixture; state.threads.get("review").background = 0; lane.render(); });
+    assert.equal(await page.locator('#autos .auto-group[data-issue="amit-roy/agent-console#43"]').count(), 0);
+    assert.equal(await page.locator('#auto-archived .auto-group[data-issue="amit-roy/agent-console#43"]').count(), 1);
+    await page.waitForTimeout(700);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, `${name}: no horizontal overflow`);
     assert.deepEqual(errors, []);
     const video = page.video();
@@ -103,4 +132,4 @@ try {
   await browser.close();
   await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
 }
-console.log("PASS Auto issue groups: canonical identity, collapse and keyboard controls, live updates, selection, desktop and phone.");
+console.log("PASS Auto issue groups: exclusive Live/archive membership, complete issue transitions, running/background work, canonical identity, selection, keyboard controls, desktop/phone light/dark.");
