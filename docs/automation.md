@@ -42,7 +42,11 @@ Every stage writes to `automation-events.jsonl` in the Console data directory (m
 
 `/automation` (link in the Auto lane and the sidebar menu). It shows each workflow in its own panel (PR workflow with its three phases, then the window opener), with the triggers that start it; steps are boxes with icons: the working step pulses, a failed step is red with a count, a disabled one is dashed. Click a step for its log, newest first. Panels list failures, other triggers (scheduled tasks, the Debug button), runs, the git hooks in dispatched worktrees and the settings. It refreshes every 5 seconds. On a phone each phase becomes a vertical list.
 
-The sidebar has a third lane, **Auto**, for threads the automation started, grouped by issue with a role chip (work, review, debug). They no longer appear in the Threads lane; notifications still arrive.
+The sidebar has a third lane, **Auto**, for threads the automation started, grouped by issue with a role chip (work, review, debug). Its **Archived** section keeps completed runs readable and uses its own saved expand/collapse setting. Automated runs stay separate from the Threads lane.
+
+At startup and every five minutes, GitHub reconciliation archives all idle runs for an issue when the issue is closed or an associated PR is merged. This includes older workers without a recorded PR, stalled workers, and finished reviewers. Running threads and background children finish before archiving. A closed PR without a merge does not archive an open issue. GitHub errors leave uncertain runs visible for the next sweep.
+
+An idle run is not necessarily complete. Workers stop after two recovery turns, three reviews, or two push reminders; these limits leave unresolved work visible. Deep work currently has no second reviewer or automatic worker recovery. Archiving does not reset those limits or declare an unresolved issue complete.
 
 API (all behind the normal sign-in; every envelope has `v: 1`, unknown fields are ignored, a newer `v` is refused):
 
