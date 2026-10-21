@@ -162,6 +162,10 @@ try {
     await page.waitForTimeout(700);
     await page.evaluate(() => { const { state, lane } = (window as any).fixture; state.threads.get("review").status = "idle"; state.threads.get("review").background = 1; lane.render(); });
     assert.equal(await group.locator("li[data-thread]").count(), 4, `${name}: archived background work keeps whole issue Live`);
+    await page.screenshot({ path: path.join(out, `${name}-background-live.png`) });
+    assert.equal(await toggle.locator(".dot.running").isVisible(), true, `${name}: collapsed issue shows background work behind the lane dot`);
+    assert.match(await toggle.getAttribute("aria-label"), /1 running/);
+    assert.equal(await group.locator('li[data-thread="review"] .dot.running').count(), 1, `${name}: idle run with background tasks shows busy`);
     assert.equal(await page.locator("#auto-archived .auto-group").count(), 0);
     await page.evaluate(() => { const { state, lane } = (window as any).fixture; state.threads.get("review").background = 0; lane.render(); });
     assert.equal(await page.locator('#autos .auto-group[data-issue="amit-roy/agent-console#43"]').count(), 0);

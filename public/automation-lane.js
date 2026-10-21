@@ -17,6 +17,8 @@ export function createAutoLane({ state, openThread, setNav, provLabel, ago, assi
   };
   const issueKey = (run) => run.repo && Number.isSafeInteger(run.number) && run.number > 0
     ? `${run.repo.toLowerCase()}#${run.number}` : run.key;
+  // background tasks keep an idle run's agent alive: show it as busy everywhere the lane-tab dot counts it, like the Threads list
+  const busy = (t) => t.status === "running" || !!t.background;
   function render() {
     if (menuOpen) { renderPending = true; return; }
     renderPending = false;
@@ -41,7 +43,7 @@ export function createAutoLane({ state, openThread, setNav, provLabel, ago, assi
       }
       lastCurrent = state.current;
     }
-    $("lane-auto-dot").hidden = !runs.some((t) => t.status === "running" || t.background);
+    $("lane-auto-dot").hidden = !runs.some(busy);
     $("auto-archive").hidden = !archived.size;
     $("auto-archive-count").textContent = archived.size || "";
     $("auto-archive-toggle").setAttribute("aria-expanded", String(archiveOpen));
@@ -63,7 +65,7 @@ export function createAutoLane({ state, openThread, setNav, provLabel, ago, assi
       const toggle = el("button", "auto-group-toggle");
       toggle.type = "button";
       toggle.title = key;
-      const running = list.filter((t) => t.status === "running").length;
+      const running = list.filter(busy).length;
       toggle.setAttribute("aria-label", `${key}, ${list.length} run${list.length === 1 ? "" : "s"}${running ? `, ${running} running` : ""}`);
       const children = el("ul", "auto-runs");
       children.id = `${ul.id}-runs-${list[0].id}`;
@@ -116,7 +118,7 @@ export function createAutoLane({ state, openThread, setNav, provLabel, ago, assi
         li.tabIndex = 0;
         li.title = `${t.title}\n${provLabel(t.provider)} · ${t.model}`;
         if (t.id === state.current) li.setAttribute("aria-current", "true");
-        const dot = el("span", `dot ${t.status}`);
+        const dot = el("span", `dot ${t.background ? "running" : t.status}`);
         dot.setAttribute("aria-hidden", "true");
         const meta = el("div", "meta");
         meta.append(el("span", `tag role role-${t.issueRun.role}`, t.issueRun.premiumAssignment ? "premium" : ROLE[t.issueRun.role] || t.issueRun.role), el("span", "tag", t.issueRun.effort), el("span", "tag", provLabel(t.provider)));
@@ -125,6 +127,7 @@ export function createAutoLane({ state, openThread, setNav, provLabel, ago, assi
         meta.append(time);
         li.append(dot, el("div", "t", t.title), meta);
         if (t.status === "running") li.append(el("span", "sr-only", "Running"));
+        else if (t.background) li.append(el("span", "sr-only", "Background tasks working"));
         const pick = () => { setNav(false); openThread(t.id); };
         li.onclick = pick;
         li.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } };
