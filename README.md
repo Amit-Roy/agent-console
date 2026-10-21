@@ -1,8 +1,8 @@
 # agent-console
 
-[![Watch the Agent Console launch video: laptop and Android workflows](docs/brag/brag.jpg)](docs/brag/brag.mp4)
+[![Watch the Agent Console feature tour: laptop and Android workflows](docs/brag/brag.jpg)](docs/brag/brag.mp4)
 
-[Watch the 22.5-second video](docs/brag/brag.mp4) · Claude Code, Codex, and Pi, from your laptop or phone.
+[Watch the 90-second tour](docs/brag/brag.mp4) · Claude Code, Codex, and Pi, from your laptop or phone: models, files, Acode, schedules, GitHub triage, usage and host dashboards, search.
 
 Browser front end for Claude, Pi, and Codex agents running on this machine. No remote desktop. Installable as a PWA.
 
