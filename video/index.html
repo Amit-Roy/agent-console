@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=1920, height=1080" />
-    <title>agent-console — brag</title>
+    <title>agent-console — feature tour</title>
     <script src="assets/vendor/gsap.min.js"></script>
     <style>
       @font-face {
@@ -148,15 +148,42 @@
       #s5 .headline { color: var(--ink); text-shadow: none; }
       #s5 .headline.hot { color: #d13a0c; }
 
+
+      /* ---------- feature chapters ---------- */
+      .chapter { opacity: 0; }
+      .ch-text { position: absolute; left: 120px; top: 250px; width: 600px; }
+      .ch-pl { display: block; margin-bottom: 28px; }
+      .ch-h { font-size: 84px; font-stretch: 72%; letter-spacing: -0.025em; line-height: 1.0; white-space: nowrap; }
+      .ch-notes { list-style: none; margin-top: 44px; line-height: 2.1; font-size: 18px; color: #b9b4ab; }
+      .ch-notes b { color: var(--signal); font-weight: 600; margin-right: 6px; }
+      .chapter .laptop { left: 0; top: 0; }
+      .chapter .phone { left: 0; top: 0; }
+      .chapter .swap { opacity: 0; }
+      .chapter.paper .ch-h.fringe { color: var(--ink); text-shadow: none; }
+      .chapter.paper .ch-h.hot { color: #d13a0c; text-shadow: none; }
+      .chapter.paper .mono { color: #57534e; }
+      .chapter.paper .ch-notes { color: #3d3a36; }
+      .chapter.paper .bezel { border-color: rgba(10, 10, 11, 0.85); }
+      .chapter.paper .base, .chapter.paper .notch { border-color: rgba(10, 10, 11, 0.6); }
+
+      /* ---------- recap grid ---------- */
+      #recap { opacity: 0; }
+      .tile { position: absolute; width: 400px; height: 250px; border: 1.5px solid rgba(238, 233, 223, 0.55); background: #111; overflow: hidden; }
+      .tile img { width: 100%; height: 100%; object-fit: cover; object-position: 0 0; }
+      .tile span { position: absolute; left: 0; bottom: 0; padding: 6px 10px; background: rgba(10, 10, 11, 0.86); font-size: 15px; color: var(--bone); }
+      .tile span b { color: var(--signal); font-weight: 600; margin-right: 6px; }
+      #recap-h { position: absolute; left: 0; right: 0; top: 486px; text-align: center; font-size: 150px; font-weight: 900; font-stretch: 100%; letter-spacing: -0.03em; white-space: nowrap; opacity: 0; }
+      #s6-list { position: absolute; left: 164px; top: 722px; font-size: 18px; color: var(--ash); white-space: nowrap; }
+
       /* ---------- S6 outro ---------- */
       #s6-title { position: absolute; left: 150px; top: 330px; font-size: 230px; font-weight: 900; font-stretch: 100%; letter-spacing: -0.035em; white-space: nowrap; }
       #s6-sub { position: absolute; left: 160px; top: 628px; font-size: 64px; white-space: nowrap; }
-      #s6-mono { position: absolute; left: 164px; top: 756px; font-size: 20px; color: var(--ash); white-space: nowrap; }
+      #s6-mono { position: absolute; left: 164px; top: 770px; font-size: 20px; color: var(--ash); white-space: nowrap; }
       #s6-mono b { color: var(--bone); font-weight: 600; }
     </style>
   </head>
   <body>
-    <div data-hf-id="hf-f87d" id="root" data-composition-id="main" data-start="0" data-width="1920" data-height="1080" data-duration="22.5">
+    <div data-hf-id="hf-f87d" id="root" data-composition-id="main" data-start="0" data-width="1920" data-height="1080" data-duration="90">
       <!-- grounds -->
       <div data-hf-id="hf-kbnh" id="grid" class="layer"></div>
       <div data-hf-id="hf-i139" id="paper" class="layer"></div>
@@ -240,11 +267,187 @@
       <video data-hf-id="hf-ybf5" id="v-question" src="assets/clips/phone-question.mp4" muted playsinline data-start="15" data-duration="3.75" data-playback-rate="1.0222" data-track-index="7" style="position: absolute; left: 1080px; top: 110px; width: 350px; height: 777px; object-fit: cover; border-radius: 38px"></video>
 
       <!-- S6: outro -->
-      <section data-hf-id="hf-tvdb" id="s6" class="clip layer" data-start="18.75" data-duration="3.75" data-track-index="3">
+      <section data-hf-id="hf-tvdb" id="s6" class="clip layer" data-start="82.5" data-duration="7.5" data-track-index="3">
         <div data-hf-id="hf-pwsi" id="s6-title" class="fringe">agent-console</div>
         <div data-hf-id="hf-fy5b" id="s6-sub" class="serif">Claude Code, Codex and Pi — from any device.</div>
+        <div id="s6-list" class="mono">threads · steer · questions · models · files · acode · schedules · triage · usage · host · search</div>
         <div data-hf-id="hf-s58f" id="s6-mono" class="mono">self-hosted · your machine, your logins · <b data-hf-id="hf-v4pk">bin/agent-console start</b></div>
       </section>
+
+      <!-- CH. 01 · models: untimed wrapper; media inside carry their own timing -->
+      <div id="c1" class="chapter layer">
+        <div class="ch-text">
+          <span class="mono ch-pl">CH. 01 · models</span>
+          <div class="ch-h display fringe ch-l1">Pick the agent.</div>
+          <div class="ch-h display hot ch-l2">Pick the model.</div>
+          <ul class="mono ch-notes"><li><b>●</b> Claude Code · Codex · Pi</li><li><b>●</b> model + effort per thread</li><li><b>●</b> plan / accept edits / bypass</li></ul>
+        </div>
+        <div class="laptop ch-laptop" id="c1-laptop">
+          <div class="bezel"></div>
+          <div class="screen">
+            <img src="assets/clips/tour-models.png" alt="" />
+            <video id="c1-v" data-playback-rate="1.17" src="assets/clips/tour-models.mp4" muted playsinline data-start="18.7500" data-duration="7.5000" data-track-index="5"></video>
+          </div>
+          <div class="base"></div>
+          <div class="notch"></div>
+        </div>
+      </div>
+      <!-- CH. 02 · file viewer: untimed wrapper; media inside carry their own timing -->
+      <div id="c2" class="chapter layer">
+        <div class="ch-text">
+          <span class="mono ch-pl">CH. 02 · file viewer</span>
+          <div class="ch-h display fringe ch-l1">Click a path.</div>
+          <div class="ch-h display hot ch-l2">Read it. Play it.</div>
+          <ul class="mono ch-notes"><li><b>●</b> syntax highlight · line refs</li><li><b>●</b> audio + video, seekable stream</li><li><b>●</b> images, diffs, copy, wrap</li></ul>
+        </div>
+        <div class="laptop ch-laptop" id="c2-laptop">
+          <div class="bezel"></div>
+          <div class="screen">
+            <img src="assets/clips/tour-files.png" alt="" />
+            <video id="c2-v" src="assets/clips/tour-files.mp4" muted playsinline data-start="26.2500" data-duration="7.5000" data-track-index="5"></video>
+          </div>
+          <div class="base"></div>
+          <div class="notch"></div>
+        </div>
+        <div class="phone ch-phone" id="c2-phone">
+          <div class="bezel"></div>
+          <div class="screen">
+            <img src="assets/clips/tour-media.png" alt="" />
+            <video id="c2-pv" data-media-start="0.4" data-playback-rate="1.4" src="assets/clips/tour-media.mp4" muted playsinline data-start="30.0000" data-duration="3.7500" data-track-index="6"></video>
+          </div>
+          <div class="cam"></div>
+        </div>
+      </div>
+      <!-- CH. 03 · acode: untimed wrapper; media inside carry their own timing -->
+      <div id="c3" class="chapter layer paper">
+        <div class="ch-text">
+          <span class="mono ch-pl">CH. 03 · acode</span>
+          <div class="ch-h display fringe ch-l1">Edit on the phone.</div>
+          <div class="ch-h display hot ch-l2">Save to the server.</div>
+          <ul class="mono ch-notes"><li><b>●</b> Edit hands the file to Acode</li><li><b>●</b> saves back to the machine</li><li><b>●</b> project tree over a private bridge</li></ul>
+        </div>
+        <div class="phone ch-phone" id="c3-phone">
+          <div class="bezel"></div>
+          <div class="screen">
+            <img src="assets/clips/tour-acode.png" alt="" />
+            <video id="c3-pv" src="assets/clips/tour-acode.mp4" muted playsinline data-start="33.7500" data-duration="7.5000" data-track-index="6"></video>
+          </div>
+          <div class="cam"></div>
+        </div>
+      </div>
+      <!-- CH. 04 · scheduled tasks: untimed wrapper; media inside carry their own timing -->
+      <div id="c4" class="chapter layer">
+        <div class="ch-text">
+          <span class="mono ch-pl">CH. 04 · scheduled tasks</span>
+          <div class="ch-h display fringe ch-l1">Set it once.</div>
+          <div class="ch-h display hot ch-l2">It runs on time.</div>
+          <ul class="mono ch-notes"><li><b>●</b> manual · hourly · daily · weekdays · weekly</li><li><b>●</b> every run is an ordinary thread</li><li><b>●</b> reports commit to agent-outputs/</li></ul>
+        </div>
+        <div class="laptop ch-laptop" id="c4-laptop">
+          <div class="bezel"></div>
+          <div class="screen">
+            <img src="assets/clips/tour-schedules.png" alt="" />
+            <video id="c4-v" data-playback-rate="1.35" src="assets/clips/tour-schedules.mp4" muted playsinline data-start="41.2500" data-duration="7.5000" data-track-index="5"></video>
+          </div>
+          <div class="base"></div>
+          <div class="notch"></div>
+        </div>
+      </div>
+      <!-- CH. 05 · github triage: untimed wrapper; media inside carry their own timing -->
+      <div id="c5" class="chapter layer">
+        <div class="ch-text">
+          <span class="mono ch-pl">CH. 05 · github triage</span>
+          <div class="ch-h display fringe ch-l1">Triage runs itself.</div>
+          <div class="ch-h display hot ch-l2">Effort. Priority.</div>
+          <ul class="mono ch-notes"><li><b>●</b> signed webhook · labels issues and PRs</li><li><b>●</b> token telemetry comment per PR</li><li><b>●</b> CI fails a PR without one</li></ul>
+        </div>
+        <div class="laptop ch-laptop" id="c5-laptop">
+          <div class="bezel"></div>
+          <div class="screen">
+            <img src="assets/clips/tour-automation.png" alt="" />
+            <video id="c5-v" data-playback-rate="1.44" src="assets/clips/tour-automation.mp4" muted playsinline data-start="48.7500" data-duration="7.5000" data-track-index="5"></video>
+          </div>
+          <div class="base"></div>
+          <div class="notch"></div>
+        </div>
+      </div>
+      <!-- CH. 06 · usage & savings: untimed wrapper; media inside carry their own timing -->
+      <div id="c6" class="chapter layer">
+        <div class="ch-text">
+          <span class="mono ch-pl">CH. 06 · usage & savings</span>
+          <div class="ch-h display fringe ch-l1">Every token,</div>
+          <div class="ch-h display hot ch-l2">accounted for.</div>
+          <ul class="mono ch-notes"><li><b>●</b> today · 7 · 30 · 90 days</li><li><b>●</b> API-equivalent cost per model</li><li><b>●</b> RTK + Headroom savings, heatmap</li></ul>
+        </div>
+        <div class="laptop ch-laptop" id="c6-laptop">
+          <div class="bezel"></div>
+          <div class="screen">
+            <img src="assets/clips/tour-dashboard.png" alt="" />
+            <video id="c6-v" data-playback-rate="1.1" src="assets/clips/tour-dashboard.mp4" muted playsinline data-start="56.2500" data-duration="7.5000" data-track-index="5"></video>
+          </div>
+          <div class="base"></div>
+          <div class="notch"></div>
+        </div>
+        <div class="phone ch-phone" id="c6-phone">
+          <div class="bezel"></div>
+          <div class="screen">
+            <img src="assets/clips/tour-dashboard-phone.png" alt="" />
+            <video id="c6-pv" data-media-start="0.5" data-playback-rate="1.9" src="assets/clips/tour-dashboard-phone.mp4" muted playsinline data-start="60.0000" data-duration="3.7500" data-track-index="6"></video>
+          </div>
+          <div class="cam"></div>
+        </div>
+      </div>
+      <!-- CH. 07 · host & context: untimed wrapper; media inside carry their own timing -->
+      <div id="c7" class="chapter layer">
+        <div class="ch-text">
+          <span class="mono ch-pl">CH. 07 · host & context</span>
+          <div class="ch-h display fringe ch-l1">Watch the machine.</div>
+          <div class="ch-h display hot ch-l2">Watch the context.</div>
+          <ul class="mono ch-notes"><li><b>●</b> CPU · memory · disk dials, history</li><li><b>●</b> context meter turns amber as it fills</li><li><b>●</b> continue vs compact, priced</li></ul>
+        </div>
+        <div class="laptop ch-laptop" id="c7-laptop">
+          <div class="bezel"></div>
+          <div class="screen">
+            <img src="assets/clips/tour-host.png" alt="" />
+            <video id="c7-v1" data-media-start="1.4" data-playback-rate="1.5" src="assets/clips/tour-host.mp4" muted playsinline data-start="63.7500" data-duration="3.7500" data-track-index="5"></video>
+            <img class="swap" id="c7-still2" src="assets/clips/tour-context.png" alt="" />
+            <video id="c7-v2" data-media-start="0.5" data-playback-rate="1.9" src="assets/clips/tour-context.mp4" muted playsinline data-start="67.5000" data-duration="3.7500" data-track-index="6"></video>
+          </div>
+          <div class="base"></div>
+          <div class="notch"></div>
+        </div>
+      </div>
+      <!-- CH. 08 · session search: untimed wrapper; media inside carry their own timing -->
+      <div id="c8" class="chapter layer paper">
+        <div class="ch-text">
+          <span class="mono ch-pl">CH. 08 · session search</span>
+          <div class="ch-h display fringe ch-l1">Find anything.</div>
+          <div class="ch-h display hot ch-l2">Every agent.</div>
+          <ul class="mono ch-notes"><li><b>●</b> local BM25 · archives + tool output</li><li><b>●</b> Ctrl/Cmd+F inside a thread</li></ul>
+        </div>
+        <div class="laptop ch-laptop" id="c8-laptop">
+          <div class="bezel"></div>
+          <div class="screen">
+            <img src="assets/clips/tour-search.png" alt="" />
+            <video id="c8-v" data-playback-rate="1.53" src="assets/clips/tour-search.mp4" muted playsinline data-start="71.2500" data-duration="3.7500" data-track-index="5"></video>
+          </div>
+          <div class="base"></div>
+          <div class="notch"></div>
+        </div>
+      </div>
+
+      <!-- recap (bars 40-43): every chapter on one sheet -->
+      <div id="recap" class="layer">
+        <div class="tile" id="tile0" style="left: 120px; top: 150px"><img src="assets/clips/tour-models.png" alt="" /><span class="mono"><b>01</b>models</span></div>
+        <div class="tile" id="tile1" style="left: 550px; top: 150px"><img src="assets/clips/tour-files.png" alt="" /><span class="mono"><b>02</b>files</span></div>
+        <div class="tile" id="tile2" style="left: 980px; top: 150px"><img src="assets/clips/tour-acode.png" alt="" /><span class="mono"><b>03</b>acode</span></div>
+        <div class="tile" id="tile3" style="left: 1410px; top: 150px"><img src="assets/clips/tour-schedules.png" alt="" /><span class="mono"><b>04</b>schedules</span></div>
+        <div class="tile" id="tile4" style="left: 120px; top: 660px"><img src="assets/clips/tour-automation.png" alt="" /><span class="mono"><b>05</b>triage</span></div>
+        <div class="tile" id="tile5" style="left: 550px; top: 660px"><img src="assets/clips/tour-dashboard.png" alt="" /><span class="mono"><b>06</b>usage</span></div>
+        <div class="tile" id="tile6" style="left: 980px; top: 660px"><img src="assets/clips/tour-host.png" alt="" /><span class="mono"><b>07</b>host</span></div>
+        <div class="tile" id="tile7" style="left: 1410px; top: 660px"><img src="assets/clips/tour-search.png" alt="" /><span class="mono"><b>08</b>search</span></div>
+        <div id="recap-h" class="hot">One console.</div>
+      </div>
 
       <!-- spark + fuse lines -->
       <svg data-hf-id="hf-3qea" id="fuse-svg" viewBox="0 0 1920 1080">
@@ -253,19 +456,20 @@
         <path data-hf-id="hf-49xc" id="f1c" class="hair" d="M 0 0" />
         <path data-hf-id="hf-e898" id="f3" class="fuse" d="M 0 0" />
         <path data-hf-id="hf-5dbs" id="f6" class="fuse" d="M 160 606 L 1760 606" />
+        <path id="f-ch" class="fuse" d="M 0 0" />
       </svg>
       <div data-hf-id="hf-2p7g" id="spark"></div>
 
       <div data-hf-id="hf-tk3v" id="crop" class="layer">
         <div data-hf-id="hf-hjv8" class="cm tl"></div><div data-hf-id="hf-be1e" class="cm tr"></div><div data-hf-id="hf-ai5y" class="cm bl"></div><div data-hf-id="hf-9xyo" class="cm br"></div>
-        <div data-hf-id="hf-3vu5" class="cm-label mono" style="left: 136px; top: 62px">agent-console · brag</div>
+        <div data-hf-id="hf-3vu5" class="cm-label mono" style="left: 136px; top: 62px">agent-console · feature tour</div>
         <div data-hf-id="hf-9gug" class="cm-label mono" style="right: 136px; bottom: 62px; text-align: right">sheet 1 of 1</div>
       </div>
 
       <div data-hf-id="hf-48ym" id="grain" class="layer"></div>
 
-      <audio data-hf-id="hf-6aj2" id="a-music" src="assets/audio/music.wav" data-start="0" data-duration="22.5" data-volume="0.9"></audio>
-      <audio data-hf-id="hf-6k0b" id="a-sfx" src="assets/audio/sfx.wav" data-start="0" data-duration="22.5" data-volume="0.8"></audio>
+      <audio data-hf-id="hf-6aj2" id="a-music" src="assets/audio/music.wav" data-start="0" data-duration="90" data-volume="0.9"></audio>
+      <audio data-hf-id="hf-6k0b" id="a-sfx" src="assets/audio/sfx.wav" data-start="0" data-duration="90" data-volume="0.8"></audio>
     </div>
 
     <script>
@@ -307,7 +511,7 @@
       }
 
       // ---- grounds: grain crawls in steps (film), grid breathes slightly
-      tl.fromTo("#grain", { backgroundPosition: "0px 0px" }, { backgroundPosition: "512px 1024px", duration: 22.5, ease: "steps(270)" }, 0);
+      tl.fromTo("#grain", { backgroundPosition: "0px 0px" }, { backgroundPosition: "512px 1024px", duration: 90, ease: "steps(1080)" }, 0);
       tl.fromTo("#grid", { scale: 1.06 }, { scale: 1, duration: 3.75, ease: "power2.out" }, 0);
 
       // ---- S1 hook: three names stamp on beats, hairlines converge, "One console."
@@ -329,7 +533,7 @@
       // crop marks: present at the bookends, fly out at the drop, close back in for the outro
       tl.fromTo(".cm", { scale: 1 }, { scale: 1, duration: 0.01 }, 0);
       tl.to("#crop", { opacity: 0, scale: 1.08, duration: 0.35, ease: "power3.in" }, BAR * 2 - 0.2);
-      tl.fromTo("#crop", { opacity: 0, scale: 1.08 }, { opacity: 1, scale: 1, duration: 0.6, ease: "expo.out", immediateRender: false }, BAR * 10);
+      tl.fromTo("#crop", { opacity: 0, scale: 1.08 }, { opacity: 1, scale: 1, duration: 0.6, ease: "expo.out", immediateRender: false }, BAR * 44);
 
       // ---- S2 reveal (3.75): laptop with the real desktop UI
       const T2 = BAR * 2;
@@ -396,13 +600,63 @@
       tl.set("#grid", { opacity: 1 }, BAR * 10);
 
       // ---- S6 outro (18.75): title, fuse underline, final hit on bar 11
-      const T6 = BAR * 10;
+      const T6 = BAR * 44;
       tl.fromTo("#s6-title", { opacity: 0, fontStretch: "125%" }, { opacity: 1, fontStretch: "100%", duration: 0.7, ease: "expo.out" }, T6 + 0.05);
       tl.set("#spark", { opacity: 1, x: 160, y: 606 }, T6 + 0.5);
       fuse("#f6", T6 + 0.5, BAR - 0.5, "power2.inOut");
+      tl.to("#spark", { opacity: 0, duration: 0.3 }, T6 + BAR + 0.1);
+      tl.fromTo("#s6-list", { opacity: 0 }, { opacity: 1, duration: 0.5 }, T6 + BAR);
       tl.fromTo("#s6-sub", { opacity: 0, y: 14 }, { opacity: 1, y: 0, duration: 0.5, ease: "expo.out" }, T6 + 0.6);
-      tl.fromTo("#s6-mono", { opacity: 0 }, { opacity: 1, duration: 0.4 }, T6 + 1.2);
-      tl.fromTo("#s6-title", { scale: 1 }, { scale: 1.015, duration: 0.12, ease: "power2.out", yoyo: true, repeat: 1, transformOrigin: "0% 50%", immediateRender: false }, BAR * 11);
+      tl.fromTo("#s6-mono", { opacity: 0 }, { opacity: 1, duration: 0.4 }, T6 + 2 * BAR);
+      tl.fromTo("#s6-title", { scale: 1 }, { scale: 1.015, duration: 0.12, ease: "power2.out", yoyo: true, repeat: 1, transformOrigin: "0% 50%", immediateRender: false }, BAR * 47);
+
+      // ---- feature chapter: devices settle in on the downbeat, title stamps, notes tick in on beats, fuse links text to screen
+      function chapter(id, t0, len, hasLaptop, hasPhone, phoneAt, paper) {
+        const solo = hasPhone && !hasLaptop;
+        tl.set(id, { opacity: 1 }, t0);
+        tl.set(id, { opacity: 0 }, t0 + len);
+        if (paper) {
+          tl.set(["#paper", "#paper-grid"], { opacity: 1 }, t0);
+          tl.set(["#grid", "#vignette"], { opacity: 0 }, t0);
+          tl.set(["#paper", "#paper-grid"], { opacity: 0 }, t0 + len);
+          tl.set(["#grid", "#vignette"], { opacity: 1 }, t0 + len);
+        }
+        tl.fromTo(`${id} .ch-pl`, { opacity: 0 }, { opacity: 1, duration: 0.3 }, t0 + 0.05);
+        tl.fromTo(`${id} .ch-l1`, { opacity: 0, scale: 1.12 }, { opacity: 1, scale: 1, duration: 0.32, ease: "expo.out", transformOrigin: "0% 50%" }, t0 + 0.02);
+        tl.fromTo(`${id} .ch-l2`, { opacity: 0, x: -24 }, { opacity: 1, x: 0, duration: 0.4, ease: "expo.out" }, t0 + 2 * BEAT);
+        tl.fromTo(`${id} .ch-notes li`, { opacity: 0, x: -12 }, { opacity: 1, x: 0, duration: 0.3, ease: "power3.out", stagger: BEAT }, t0 + 4 * BEAT);
+        if (hasLaptop) {
+          tl.fromTo(`${id}-laptop`, { x: 780, y: 230, scale: 0.92, opacity: 0 }, { x: 780, y: 200, scale: 0.94, opacity: 1, duration: 0.6, ease: "expo.out" }, t0);
+          if (hasPhone) tl.to(`${id}-laptop`, { x: 740, y: 190, scale: 0.8, duration: 0.7, ease: "expo.inOut" }, t0 + phoneAt - 0.35);
+        }
+        if (hasPhone) {
+          const x = solo ? 1240 : 1500, y = solo ? 150 : 250, sc = solo ? 1 : 0.86;
+          tl.fromTo(`${id}-phone`, { x, y: 1120, scale: sc }, { x, y, scale: sc, duration: 0.8, ease: "expo.out" }, t0 + phoneAt);
+        }
+        tl.to(`${id} .ch-text`, { opacity: 0, duration: 0.22, ease: "power2.in" }, t0 + len - 0.3);
+        tl.to([`${id}-laptop`, `${id}-phone`].filter((s) => $(s)), { opacity: 0, y: "-=20", duration: 0.25, ease: "power2.in" }, t0 + len - 0.28);
+        tl.set(`${id} .ch-text`, { opacity: 1 }, t0 + len);
+      }
+      // ---- feature chapters (bars 10-39)
+      chapter("#c1", BAR * 10, BAR * 4, true, false, BAR * 0, false);
+      chapter("#c2", BAR * 14, BAR * 4, true, true, BAR * 2, false);
+      chapter("#c3", BAR * 18, BAR * 4, false, true, BAR * 0, true);
+      chapter("#c4", BAR * 22, BAR * 4, true, false, BAR * 0, false);
+      chapter("#c5", BAR * 26, BAR * 4, true, false, BAR * 0, false);
+      chapter("#c6", BAR * 30, BAR * 4, true, true, BAR * 2, false);
+      chapter("#c7", BAR * 34, BAR * 4, true, false, BAR * 0, false);
+      chapter("#c8", BAR * 38, BAR * 2, true, false, BAR * 0, true);
+
+      // context half of CH. 07 swaps the laptop screen at bar 36
+      tl.set("#c7-still2", { opacity: 1 }, BAR * 36);
+
+      // ---- recap (bars 40-43): tiles stamp on beats, then "One console." over the sheet
+      const TR = BAR * 40;
+      tl.set("#recap", { opacity: 1 }, TR);
+      tl.fromTo(".tile", { opacity: 0, scale: 1.08 }, { opacity: 1, scale: 1, duration: 0.3, ease: "expo.out", stagger: BEAT }, TR);
+      tl.to(".tile", { opacity: 0.28, duration: 0.4, ease: "power2.inOut" }, TR + 9 * BEAT);
+      tl.fromTo("#recap-h", { opacity: 0, fontStretch: "125%" }, { opacity: 1, fontStretch: "100%", duration: 0.5, ease: "expo.out" }, TR + 9 * BEAT);
+      tl.to("#recap", { opacity: 0, duration: 0.25, ease: "power2.in" }, BAR * 44 - 0.25);
 
       window.__timelines["main"] = tl;
       }
