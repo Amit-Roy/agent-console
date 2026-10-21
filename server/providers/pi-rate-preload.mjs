@@ -1,4 +1,5 @@
 import http from "node:http";
+import { AsyncLocalStorage } from "node:async_hooks";
 // Node preloads this module before Pi loads its provider SDKs. Every model HTTP
 // attempt, including SDK retries and subsequent tool turns, uses one shared gate.
 const originalFetch = globalThis.fetch.bind(globalThis);
@@ -117,9 +118,14 @@ export function installPiRateLimit() {
       tails.set(this, pending);
     };
   };
-  let transport = originalFetch;
+  // Assigned fetches, oldest first. A replacement may wrap the gated fetch it
+  // read earlier; a call from inside a transport uses the previous one, ungated.
+  const transports = [originalFetch];
+  const depth = new AsyncLocalStorage();
   const rateLimitedFetch = async function rateLimitedFetch(input, init) {
-    if (!await isModelRequest(input, init)) return transport(input, init);
+    const level = depth.getStore() ?? 0;
+    const transport = (request, options) => depth.run(level + 1, () => transports[Math.max(0, transports.length - 1 - level)](request, options));
+    if (level > 0 || !await isModelRequest(input, init)) return transport(input, init);
     const signal = init?.signal ?? (input instanceof Request ? input.signal : undefined);
     try {
       await gate("acquire", modelProvider(input), signal);
@@ -150,7 +156,7 @@ export function installPiRateLimit() {
   Object.defineProperty(globalThis, "fetch", {
     configurable: true, enumerable: true,
     get: () => rateLimitedFetch,
-    set: value => { if (typeof value === "function" && value !== rateLimitedFetch) transport = value; },
+    set: value => { if (typeof value === "function" && value !== rateLimitedFetch) transports.push(value); },
   });
 }
 

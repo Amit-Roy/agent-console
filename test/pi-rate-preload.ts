@@ -63,7 +63,8 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 const base = ${JSON.stringify(base)};
 // Pi replaces fetch and WebSocket with undici's after preload; both must stay gated.
-${undici ? `const {default: undici} = await import(${JSON.stringify(undici)}); undici.install();` : "globalThis.fetch = globalThis.fetch.bind(globalThis);"}
+${undici ? `const {default: undici} = await import(${JSON.stringify(undici)}); undici.install();` : ""}
+const gated = globalThis.fetch; globalThis.fetch = (input, init) => gated(input, init);
 const paths = ['/v1/responses','/v1/messages','/models/a:streamGenerateContent','/models/a:generateContent','/api/generate','/model/a/converse-stream','/publishers/anthropic/models/claude:streamRawPredict','/publishers/anthropic/models/claude:rawPredict'];
 for (const p of paths) await fetch(base+p,{method:'POST',body:'{}'});
 await fetch(new Request(base+'/vendor-custom',{method:'POST',body:JSON.stringify({model:'fixture',messages:[]})}));
