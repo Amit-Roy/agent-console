@@ -316,6 +316,54 @@ try {
   recovering.issueRun.redoing = true; pull = { merged: true, state: "closed" };
   await recovery.sweep([recovering]); assert.equal(resumed, 4, "merged redo PR never receives more fixes");
 
+  // A premium assignment can claim the issue while PR evidence is still loading.
+  let reviewAllowed = true, releaseFiles!: () => void, filesStarted!: () => void;
+  const waitingFiles = new Promise<void>(resolve => { filesStarted = resolve; });
+  const racing = createReviewer({
+    github: async (method, endpoint) => {
+      if (/\/pulls\/\d+\/files/.test(endpoint)) {
+        filesStarted();
+        await new Promise<void>(resolve => { releaseFiles = resolve; });
+      }
+      return gh(method, endpoint);
+    },
+    runner, dirs, route: routing, canReview: () => reviewAllowed,
+  });
+  prs = [{ number: 7, body: "## Self-review\nchecked" }];
+  const beforeAssignment = count();
+  const pendingReview = racing.sweep([{ ...worker("bau", "assignment-race"), status: "idle" }] as any);
+  await waitingFiles;
+  reviewAllowed = false;
+  releaseFiles();
+  await pendingReview;
+  assert.equal(count(), beforeAssignment, "assignment claim during GitHub wait prevents a second agent");
+  await racing.sweep([{ ...worker("bau", "assignment-race"), status: "idle" }] as any);
+  assert.equal(count(), beforeAssignment, "active assignment also prevents a new review at entry");
+
+  // Ownership acquired during verdict reads must also prevent a push nudge.
+  reviewAllowed = true;
+  let releaseCommit!: () => void, commitStarted!: () => void;
+  const waitingCommit = new Promise<void>(resolve => { commitStarted = resolve; });
+  const racingNudge = createReviewer({
+    github: async (_method, endpoint) => {
+      if (/\/pulls\?/.test(endpoint)) return [{ number: 7, head: { sha: "abc" } }];
+      if (/\/commits\//.test(endpoint)) {
+        commitStarted();
+        await new Promise<void>(resolve => { releaseCommit = resolve; });
+        return { commit: { committer: { date: new Date(now).toISOString() } } };
+      }
+      if (/\/comments/.test(endpoint)) return [{ body: "Review: CHANGES REQUESTED", created_at: new Date(now + 1000).toISOString() }];
+      throw new Error(`unexpected ${endpoint}`);
+    }, runner, dirs, route: routing, canReview: () => reviewAllowed,
+  });
+  const sendsBeforeAssignment = sent.length;
+  const pendingNudge = racingNudge.sweep([{ ...worker("bau", "nudge-assignment-race", { reviews: 1 }), status: "idle" }] as any);
+  await waitingCommit;
+  reviewAllowed = false;
+  releaseCommit();
+  await pendingNudge;
+  assert.equal(sent.length, sendsBeforeAssignment, "assignment claim during verdict wait prevents worker nudge");
+
   // setup failures are logged, contained and retried
   const bad = createReviewer({ github: (async () => { throw new Error("gh down"); }) as any, runner, dirs, log: m => logs.push(m), route: routing, events: ev });
   bad.turnEnded(worker("bau", "W9"), {}); await tick(); assert.match(logs.at(-1)!, /could not start: gh down/);

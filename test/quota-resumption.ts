@@ -181,6 +181,23 @@ assert.doesNotThrow(() => threads.resumeQuotaPaused("codex", "weekly"));
 assert.ok(!threads.get(busyThread)?.quotaPaused && !threads.get(idleThread)?.quotaPaused, "both pauses cleared");
 pass("Running quota-paused thread does not abort resume");
 
+// An active premium owner holds its paused sibling without consuming the saved pause.
+const heldSibling = createThread(threads, "codex");
+const unrelatedSibling = createThread(threads, "codex");
+const pausedOwner = createThread(threads, "codex");
+for (const id of [heldSibling, unrelatedSibling, pausedOwner]) threads.get(id)!.quotaPaused = { provider: "codex", windowLabel: "assignment", resetsAt: Date.now() + 1000 };
+let ownerRunning = true;
+const eligible = (t: { id: string }) => t.id === pausedOwner || !ownerRunning || t.id !== heldSibling;
+resumedThreads.length = 0;
+assert.equal(threads.resumeQuotaPaused("codex", "assignment", eligible), 2, "owner and unrelated issue resume while assignment holds its sibling");
+assert.deepEqual(resumedThreads, [unrelatedSibling, pausedOwner]);
+assert.ok(threads.get(heldSibling)!.quotaPaused, "held sibling retains its pending quota resume");
+ownerRunning = false;
+assert.equal(threads.resumeQuotaPaused("codex", "assignment", eligible), 1, "held sibling resumes after owner releases issue");
+assert.deepEqual(resumedThreads, [unrelatedSibling, pausedOwner, heldSibling]);
+assert.ok(!threads.get(heldSibling)!.quotaPaused);
+pass("Premium ownership defers sibling quota resume without losing it");
+
 threads.shutdown();
 fs.rmSync(data, { recursive: true, force: true });
 console.log("All quota resumption tests passed");
