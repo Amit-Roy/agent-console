@@ -79,8 +79,10 @@ export function installPiRateLimit() {
   };
   // Codex can reuse one WebSocket across turns. Gate each model message rather
   // than only the connection handshake, preserving the native socket class.
-  const websocket = globalThis.WebSocket;
-  if (websocket) {
+  const patchedSockets = new WeakSet();
+  const patchWebSocket = websocket => {
+    if (typeof websocket !== "function" || patchedSockets.has(websocket)) return;
+    patchedSockets.add(websocket);
     const send = websocket.prototype.send;
     const tails = new WeakMap();
     const observed = new WeakSet();
@@ -114,9 +116,10 @@ export function installPiRateLimit() {
       }).finally(() => this.removeEventListener("close", closed));
       tails.set(this, pending);
     };
-  }
-  globalThis.fetch = async function rateLimitedFetch(input, init) {
-    if (!await isModelRequest(input, init)) return originalFetch(input, init);
+  };
+  let transport = originalFetch;
+  const rateLimitedFetch = async function rateLimitedFetch(input, init) {
+    if (!await isModelRequest(input, init)) return transport(input, init);
     const signal = init?.signal ?? (input instanceof Request ? input.signal : undefined);
     try {
       await gate("acquire", modelProvider(input), signal);
@@ -131,10 +134,24 @@ export function installPiRateLimit() {
       throw error;
     }
     signal?.throwIfAborted();
-    const response = await originalFetch(input, init);
+    const response = await transport(input, init);
     if (response.status === 429) await gate("cooldown", modelProvider(input), undefined, response.headers.get("retry-after"));
     return response;
   };
+  // Pi installs undici's fetch and WebSocket after this preload runs. Each later
+  // assignment becomes the transport behind the gate instead of replacing it.
+  let websocket = globalThis.WebSocket;
+  patchWebSocket(websocket);
+  Object.defineProperty(globalThis, "WebSocket", {
+    configurable: true, enumerable: false,
+    get: () => websocket,
+    set: value => { patchWebSocket(value); websocket = value; },
+  });
+  Object.defineProperty(globalThis, "fetch", {
+    configurable: true, enumerable: true,
+    get: () => rateLimitedFetch,
+    set: value => { if (typeof value === "function" && value !== rateLimitedFetch) transport = value; },
+  });
 }
 
 installPiRateLimit();
