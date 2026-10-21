@@ -67,9 +67,12 @@ try {
     ok("Threads lane shows only the plain chat", (await page.locator("#threads li:not(.empty-list) .t").allInnerTexts()).join("|") === "Plain chat");
     await page.click("#lane-auto");
     ok("Auto lane is selected and visible", (await page.getAttribute("#lane-auto", "aria-selected")) === "true" && await page.locator("#pane-auto").isVisible());
+    const issue = page.locator('#autos .auto-group[data-issue="o/r#5"]');
+    const toggle = issue.locator(".auto-group-toggle");
+    if (await toggle.getAttribute("aria-expanded") === "false") await toggle.click();
     const rows = (await page.locator("#autos li[data-thread] .t").allInnerTexts()).filter(t => !t.startsWith("ac:debug")); // a debug thread from an earlier viewport belongs here too
     ok("both runs of the issue are listed", rows.length === 2 && rows.includes("r:5 Fix the export") && rows.includes("r:5 review PR#9"), rows.join("|"));
-    ok("rows are grouped by issue with a header", (await page.locator("#autos li.auto-group").allInnerTexts()).join("|").includes("o/r#5"));
+    ok("rows are grouped by issue with a header", await issue.count() === 1 && (await toggle.innerText()).includes("#5"));
     const page_roles = (await page.locator("#autos .role").allInnerTexts()).map(s => s.toLowerCase());
     ok("role chips", ["review", "work"].every(r => (page_roles).includes(r)));
     ok("the lane tab has a dot for running work (hidden while all idle)", (await page.locator("#lane-auto-dot").count()) === 1 && !(await page.locator("#lane-auto-dot").isVisible()));
