@@ -3,7 +3,7 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { githubRequest, type GithubRequest } from "./github-triage.ts";
 import { addWorktree, defaultDirs, installPrOnlyHook, topicOf, type IssueRun, type IssueRunner } from "./window-dispatch.ts";
-import { DIRECT_REPOS, isProtected } from "./automation/policy.ts";
+import { DIRECT_REPOS, isProtected, mayMergeProtected } from "./automation/policy.ts";
 import { pushPrompt, redoPrompt, reviewPrompt } from "./automation/review-prompts.ts";
 import type { RouteResponse } from "./automation/router.ts";
 import type { EventLog } from "./automation/events.ts";
@@ -11,7 +11,7 @@ import { isAutomationPiModel } from "./providers/pi-model.ts";
 
 // Trivial and BAU work runs on Pi, so a premium model (Sonnet or Sol, chosen by the router) reviews the PR before it merges.
 // When the worker's turn ends and its branch has an open PR, a reviewer thread starts in a detached worktree of the PR head.
-// The reviewer may fix small things, merges only what it approves, and never merges a PR that touches a protected path. The PR
+// The reviewer may fix small things, merges only what it approves, and never merges a PR that touches a protected path unless it is a premium reviewer. The PR
 // author and the reviewer share one GitHub account, so the verdict is a PR comment, not a formal approval.
 // A "Review: CHANGES REQUESTED" verdict goes back to the worker, which fixes the branch; its next turn end starts another review.
 // A reviewer that ends without a verdict is retried. Both loops stop after MAX_REVIEWS reviews of one worker: then a person decides.
@@ -142,7 +142,7 @@ export function createReviewer(deps: ReviewDeps) {
     }
     const files = await github("GET", `repos/${run.repo}/pulls/${pr.number}/files?per_page=100`);
     const names: string[] = Array.isArray(files) ? files.map((f: any) => String(f.filename)) : [];
-    const guarded = !Array.isArray(files) || names.length >= 100 || isProtected(names); // too many files to list: treat as protected
+    const guarded = !Array.isArray(files) || names.length >= 100 || (isProtected(names) && !mayMergeProtected(answer.route.provider)); // too many files to list: treat as protected
     const attempt = randomUUID().slice(0, 8);
     const wt = addWorktree({ repo: name, dirs, dirName: `${name}-review-${run.number}-${attempt}`, branch: `review-${run.number}-${attempt}`, git });
     const { cwd } = wt;
@@ -153,7 +153,7 @@ export function createReviewer(deps: ReviewDeps) {
     const reviews = (run.reviews ?? 0) + 1;
     const made = deps.runner.create({ ...answer.route, cwd, mode: "bypassPermissions", title: `${topicOf(run.repo)}:${run.number} review PR#${pr.number}${reviews > 1 ? ` #${reviews}` : ""}`, issueRun: { ...run, role: "review", pr: pr.number, worker: t.id, startedAt: now(), reviewedAt: undefined, finishedAt: undefined, reviews, redoing: undefined } });
     deps.runner.mark(t.id, { pr: pr.number, reviewedAt: now(), reviews, nudges: 0 });
-    ev?.record({ step: "review", kind: "start", run: `review:${made.id}`, ref: run.key, msg: `${answer.route.provider}/${answer.route.model}${guarded ? " (protected paths: no merge)" : ""}`, data: { thread: made.id, pr: pr.number } });
+    ev?.record({ step: "review", kind: "start", run: `review:${made.id}`, ref: run.key, msg: `${answer.route.provider}/${answer.route.model}${guarded ? " (merge authorization or file list unverified)" : ""}`, data: { thread: made.id, pr: pr.number } });
     deps.runner.send(made.id, reviewPrompt(run, pr.number, base, { protected: guarded }));
     return true;
   }
@@ -221,7 +221,7 @@ export function createReviewer(deps: ReviewDeps) {
       if (!verdict) { ev?.record({ step: "review", kind: "fail", run: id, ref: run.key, msg: `reviewer posted no verdict on PR #${run.pr}` }); judged("no-verdict"); again(run, "retry"); return; }
       if (verdict.approved) {
         ev?.record({ step: "review", kind: "ok", run: id, ref: run.key, msg: "reviewer approved" });
-        ev?.record({ step: "merge", kind: "info", ref: run.key, msg: `PR #${run.pr} approved but not merged (protected paths or merge failed): a person merges` });
+        ev?.record({ step: "merge", kind: "info", ref: run.key, msg: `PR #${run.pr} approved but not merged: required checks or merge command need attention` });
         judged("approved");
         return;
       }
