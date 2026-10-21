@@ -552,20 +552,15 @@ async function runThreadAction(id, action) {
   } else if (action === "create-issue") {
     const draft = $("input").value?.trim();
     if (!draft) { toast("No text in composer to create issue from."); return; }
-    // Extract repo name from thread cwd: /home/user/repos/owner-repo -> owner-repo
-    const t = state.threads.get(state.current);
-    const repoPath = t?.cwd ?? "";
-    const repoMatch = repoPath.match(/\/repos\/([^/]+)\/([^/]+)$/);
-    const repoOwner = repoMatch ? repoMatch[1] : "";
-    const repoName = repoMatch ? repoMatch[2] : "";
-    const ghRepo = repoOwner && repoName ? `${repoOwner}/${repoName}` : "";
-    const ghPath = ghRepo ? `/${ghRepo}/issues/new` : "new";
     const reqId = `create-issue-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    // Open new tab synchronously on click (phone popup-blocker guard); set location after WS response
-    const openIssueTab = () => {
-      const win = window.open(`https://github.com${ghPath}?title=&body=`, "_blank", "noopener,noreferrer");
-      if (!win) return; // popup blocked
-      // Listen for WS reply and set title/body after pi editing
+    const t = state.threads.get(state.current);
+    // Resolve repo from server git remote (not cwd regex)
+    let ghPath = "new";
+    const onRepoDone = (owner, repo) => {
+      if (owner && repo) ghPath = `/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/new`;
+      // Open blank tab synchronously (popup-blocker guard); set location after pi editing reply
+      const win = window.open("", "_blank");
+      if (!win) { toast("Popup blocked. Allow popups to create issues."); return; }
       const listener = (m) => {
         if (m?.cid !== reqId) return; // match correlation id only
         ws?.removeEventListener("message", listener);
@@ -575,17 +570,30 @@ async function runThreadAction(id, action) {
           const body = m.body ?? draft;
           win.location.href = `https://github.com${ghPath}?title=${encodeURIComponent(title)}&body=${encodeURIComponent(body)}`;
         } else if (m.t === "create_issue_error") {
+          win.close();
           toast(`Failed to create issue: ${m.message}`);
         }
       };
       ws?.addEventListener("message", listener);
       const timeoutId = setTimeout(() => {
         ws?.removeEventListener("message", listener);
+        win.close();
         toast("Issue creation timed out.");
       }, 30_000);
       send({ t: "create_issue", draft, cid: reqId });
     };
-    openIssueTab();
+    send({ t: "get_repo", thread: state.current, cid: `${reqId}-repo` });
+    const repoListener = (m) => {
+      if (m?.cid !== `${reqId}-repo`) return;
+      ws?.removeEventListener("message", repoListener);
+      if (m.t === "get_repo_done") onRepoDone(m.owner, m.repo);
+      else onRepoDone("", "");
+    };
+    ws?.addEventListener("message", repoListener);
+    const repoTimeoutId = setTimeout(() => {
+      ws?.removeEventListener("message", repoListener);
+      onRepoDone("", "");
+    }, 30_000);
   }
 }
 

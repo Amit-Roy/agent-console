@@ -301,7 +301,7 @@ export async function piEditIssueDraft(draft: string): Promise<{title: string, b
   for (const { provider, model } of providers) {
     let dir: string | undefined;
     try {
-      const env: NodeJS.ProcessEnv = { ...childEnv(), PI_CODING_AGENT_DIR: "/tmp", PI_OFFLINE: "1", PI_TELEMETRY: "0" };
+      const env: NodeJS.ProcessEnv = { ...childEnv(), PI_CODING_AGENT_DIR: dir ?? "/tmp", PI_OFFLINE: "1", PI_TELEMETRY: "0" };
       dir = fs.mkdtempSync(path.join("/tmp", "ac-issue-pi-"));
       fs.writeFileSync(path.join(dir, "prompt.txt"), prompt, { mode: 0o600 });
       fs.writeFileSync(path.join(dir, "system.txt"), systemPrompt, { mode: 0o600 });
@@ -321,9 +321,13 @@ export async function piEditIssueDraft(draft: string): Promise<{title: string, b
           }
         } catch (parseError) {
           // Invalid JSON from pi - continue to next provider
+          continue;
         }
+      } else {
+        // No answer from pi; try next provider
+        continue;
       }
-      // Success path: pi ran (even if output was invalid); no need to continue
+      // pi returned a valid response; no need to try next provider
       return { title: draft.trim().slice(0, 100), body: draft.trim() };
     } catch (error) {
       lastError = error as Error;
@@ -337,6 +341,6 @@ export async function piEditIssueDraft(draft: string): Promise<{title: string, b
     }
   }
   
-  // If all providers failed, return the original draft with a flag indicating pi editing failed
-  return { title: draft.trim().slice(0, 100), body: draft.trim() };
+  // If all providers failed, return the original draft with explicit failure flag
+  return { title: draft.trim().slice(0, 100), body: draft.trim(), _piFailed: true };
 }

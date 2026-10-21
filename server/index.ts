@@ -471,22 +471,42 @@ wss.on("connection", (ws) => {
           return reply({ t: "created", thread: t });
         }
         case "create_issue": {
-      try {
-        const draft = typeof m.draft === "string" ? m.draft.slice(0, 500) : "";
-        if (!draft.trim()) return reply({ t: "create_issue_error", message: "Empty draft" });
-        const { title, body } = await piEditIssueDraft(draft);
-        if (!title && !body) return reply({ t: "create_issue_error", message: "Pi returned no edit" });
-        return reply({ t: "create_issue_done", title, body });
-      } catch (e: any) {
-        return reply({ t: "create_issue_error", message: e?.message ?? String(e) });
-      }
-    }
+          try {
+            const draft = typeof m.draft === "string" ? m.draft.slice(0, 500) : "";
+            if (!draft.trim()) return reply({ t: "create_issue_error", message: "Empty draft" });
+            const result = await piEditIssueDraft(draft);
+            if (!result) return reply({ t: "create_issue_error", message: "Pi returned no edit" });
+            if (result._piFailed) {
+              return reply({ t: "create_issue_error", message: "Pi editing failed; using original draft as-is." });
+            }
+            const { title, body } = result;
+            return reply({ t: "create_issue_done", title, body });
+          } catch (e: any) {
+            return reply({ t: "create_issue_error", message: e?.message ?? String(e) });
+          }
+        }
         case "send":
           if (typeof m.cid === "string" && !firstDelivery(m.cid)) return reply({ t: "ack", cid: m.cid });
           if (typeof m.text === "string" && (m.text.trim() || (Array.isArray(m.attachments) && m.attachments.length))) {
             threads.send(m.thread, m.text.slice(0, 100_000), { attachments: m.attachments, mode: m.mode === "steer" ? "steer" : "queue" });
           }
           return typeof m.cid === "string" && reply({ t: "ack", cid: m.cid });
+        case "get_repo": {
+          const t = threads.get(m.thread);
+          if (!t || !t.cwd) return reply({ t: "get_repo_error", message: "No thread or cwd" });
+          try {
+            const { execSync } = await import("node:child_process");
+            const remote = execSync(`git -C "${t.cwd}" remote -v`, { encoding: "utf8", timeout: 10_000 }).trim();
+            // Parse remote URL: origin  https://github.com/owner/repo.git (push)
+            const match = remote.match(/^origin\s+(https?:\/\/)?(?:www\.)?github\.com\/([^/]+)\/([^.]+)/);
+            if (match) {
+              return reply({ t: "get_repo_done", owner: match[2], repo: match[3] });
+            }
+            return reply({ t: "get_repo_done", owner: "", repo: t.cwd.split("/").pop() || "" });
+          } catch (e: any) {
+            return reply({ t: "get_repo_error", message: e?.message ?? String(e) });
+          }
+        }
         case "steer_queued":
           return threads.steerQueued(m.thread, m.id);
         case "compact":
