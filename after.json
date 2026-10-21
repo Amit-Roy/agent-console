@@ -1,0 +1,16 @@
+{
+  "title": "Agent Console - Research Task Flow",
+  "subtitle": "PI as a subagent",
+  "note": "Research task delegation to PI subagent",
+  "direction": "row",
+  "items": [
+    {"id": "user", "label": "User", "tech": "Human", "icon": "user", "color": "blue", "status": "unchanged"},
+    {"id": "main-agent", "label": "Main Agent", "tech": "Claude/Codex", "icon": "brain", "color": "blue", "status": "unchanged"},
+    {"id": "pi-subagent", "label": "PI Subagent", "tech": "Pi", "icon": "cpu", "color": "purple", "status": "added"}
+  ],
+  "edges": [
+    {"from": "user", "to": "main-agent", "label": "research task", "step": 1, "status": "unchanged"},
+    {"from": "main-agent", "to": "pi-subagent", "label": "delegate research", "step": 2, "status": "added"},
+    {"from": "pi-subagent", "to": "main-agent", "label": "results", "step": 3, "status": "added"}
+  ]
+}

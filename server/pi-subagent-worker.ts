@@ -7,10 +7,7 @@ import { piRateEnv } from "./providers/pi-rate-env.ts";
 import { parseJson, spawnLines, type Proc } from "./providers/proc.ts";
 import { piQuestions } from "./providers/pi-questions.ts";
 import { piTranslator } from "./providers/pi.ts";
-import { harnessInstructions } from "./providers/brain.ts";
-import { retryEvent } from "./turn-timing.ts";
-import { acquireModelRequest } from "./providers/model-rate-client.ts";
-import { IMAGE_ONLY_PROMPT, type AgentCtx, type Attachment } from "./providers/types.ts";
+import { type AgentCtx } from "./providers/types.ts";
 import { DATA_DIR } from "./auth.ts";
 
 export interface ResearchTaskRequest {
@@ -26,6 +23,7 @@ export interface ResearchTaskResult {
   provider: string;
   model: string;
   phase: "delegated" | "completed" | "failed";
+  finalText?: string;
 }
 
 const QUESTIONS_EXTENSION = fileURLToPath(new URL("./pi-questions-extension.mjs", import.meta.url));
@@ -33,20 +31,27 @@ const TOOLS_EXTENSION = fileURLToPath(new URL("./console-tools.mjs", import.meta
 
 const DEFAULT_MODEL = "nvidia/nvidia/nemotron-3-super-120b-a12b";
 
-const DEFAULT_REQUEST: ResearchTaskRequest = { task: "", cwd: process.cwd() };
-
 function validateRequest(req: Partial<ResearchTaskRequest>): ResearchTaskRequest {
-  const task = typeof req.task === "string" ? req.task : DEFAULT_REQUEST.task;
-  const cwd = typeof req.cwd === "string" ? req.cwd : DEFAULT_REQUEST.cwd;
-  if (!fs.existsSync(cwd)) fs.mkdirSync(cwd, { recursive: true });
+  const task = typeof req.task === "string" && req.task.trim().length > 0 ? req.task.trim() : "";
+  if (!task) throw new Error("research task must not be empty");
+
+  const cwd = typeof req.cwd === "string" ? req.cwd : process.cwd();
+  try {
+    fs.accessSync(cwd, fs.constants.R_OK | fs.constants.W_OK);
+  } catch {
+    throw new Error(`cwd not accessible: ${cwd}`);
+  }
+
   return { task, cwd, model: req.model ?? DEFAULT_MODEL, mode: req.mode ?? "bypassPermissions" };
 }
 
 /**
  * Processes a research task by delegating it to a PI subagent.
- * Spawns a PI agent, sends the research task, and returns structured results.
+ * Spawns a PI agent, sends the research task, and returns structured results including
+ * the PI's final text output.
  * @param req The research task request with task description and working directory.
- * @returns A promise that resolves to the structured result with notes and index paths.
+ * @returns A promise that resolves to the structured result with notes, index paths,
+ *   provider, model, phase, and PI final text.
  */
 export async function processResearchTask(req: ResearchTaskRequest): Promise<ResearchTaskResult> {
   const { task, cwd, model = DEFAULT_MODEL, mode = "bypassPermissions" } = validateRequest(req);
@@ -64,6 +69,7 @@ export async function processResearchTask(req: ResearchTaskRequest): Promise<Res
   let resolved = false;
   let result: ResearchTaskResult | undefined;
   let notesContent = "";
+  let failureReason = "";
 
   const ctx: AgentCtx = {
     event(ev: any) {
@@ -75,19 +81,23 @@ export async function processResearchTask(req: ResearchTaskRequest): Promise<Res
           provider: "pi",
           model,
           phase: ev.subtype === "error" ? "failed" : "completed",
+          finalText: notesContent,
         };
       }
     },
     commands() {},
     exited(info: any) {
       if (!resolved) {
+        const reason = failureReason || info.stderr || `exit code ${info.code}`;
         result = {
           notesPath,
           indexPath,
           provider: "pi",
           model,
           phase: "failed",
+          finalText: undefined,
         };
+        failureReason = reason;
       }
     },
   };
@@ -108,43 +118,60 @@ export async function processResearchTask(req: ResearchTaskRequest): Promise<Res
   }, (line) => {
     const r = parseJson(line);
     if (!r || questions.handle(r)) return;
-    
+
     if (r.type === "message_end" && r.message?.role === "assistant") {
       const text = r.message.content?.[0]?.text;
       if (text) notesContent = text;
     }
-    
+
+    if (r.type === "auto_retry_end" && r.success === false) {
+      failureReason = String(r.finalError ?? "auto retry failed");
+    }
+
     translate(r);
   });
 
-  // Send the research task
-  const prompt = `Research: ${task}
+  // Send the research task using the proper prompt envelope from pi.ts
+  const n = 0;
+  const id = `p${n + 1}`;
+  proc.write(JSON.stringify({ id, type: "prompt", message: task }) + "\n");
 
-Write your findings to 'research-notes.md' in the current directory.
-Create an index 'index.json' in the current directory.
-When done, exit.`;
-  proc.write(JSON.stringify({ type: "prompt", prompt: prompt }) + "\n");
-
-  // Wait for result
+  // Wait for result with timeout
+  let timedOut = false;
   const timeout = setTimeout(() => {
-    if (!resolved && proc) proc.abort();
+    timedOut = true;
+    if (proc) {
+      failureReason = "timeout after 60s waiting for PI subagent result";
+      proc.abort();
+    }
   }, 60_000);
 
-  while (!resolved && proc?.alive()) {
+  while (!resolved && !timedOut && proc?.alive()) {
     await new Promise(resolve => setTimeout(resolve, 100));
   }
   clearTimeout(timeout);
 
   if (!result) {
-    result = { notesPath, indexPath, provider: "pi", model, phase: "failed" };
+    result = {
+      notesPath,
+      indexPath,
+      provider: "pi",
+      model,
+      phase: timedOut ? "failed" : "failed",
+      finalText: undefined,
+    };
   }
 
-  // Ensure files exist even if PI didn't produce them (fallback)
-  if (!fs.existsSync(notesPath)) {
-    fs.writeFileSync(notesPath, notesContent || `# Research: ${task}\n\nPI subagent result.`);
-  }
-  if (!fs.existsSync(indexPath)) {
-    fs.writeFileSync(indexPath, JSON.stringify([{ id: "1", title: task, description: task, status: result.phase, provider: "pi", model }]));
+  // Copy files from sessionDir to cwd if they exist (only on success)
+  if (result.phase === "completed") {
+    const sessionNotesPath = join(sessionDir, "research-notes.md");
+    const sessionIndexPath = join(sessionDir, "index.json");
+    if (fs.existsSync(sessionNotesPath)) {
+      fs.copyFileSync(sessionNotesPath, notesPath);
+    }
+    if (fs.existsSync(sessionIndexPath)) {
+      fs.copyFileSync(sessionIndexPath, indexPath);
+    }
   }
 
   return result;
