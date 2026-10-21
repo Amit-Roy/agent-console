@@ -219,6 +219,41 @@ The Agent Console uses a component-based approach with vanilla JavaScript. Key c
 
 This design system is documented in `docs/design-system.md`. Component usage should be documented in the respective component's code or in the `docs/` folder.
 
+## Scope: Component and Token Inventory (In/Out)
+
+Each token and component is explicitly scoped as **In** (published, supported) or **Out** (not in this version, may be added later).
+
+### Tokens — All In
+- Typography: font families (UI, Text, Mono), font sizes (f-xs through f-2xl, fm-xs, fm-sm), weights (fw-reg, fw-med, fw-semi, fw-text), letter spacing (ls-xs through ls-2xl) — **In**
+- Spacing: sp-1 through sp-8 — **In**
+- Border Radius: r-xs through r-full — **In**
+- Durations & Easing: dur-1 through dur-3, ease — **In**
+- Layout: col, side-w, control heights, icon size — **In**
+- Colors (light + dark): surfaces (s0–s3, pop, code-bg, code-head), text (t1–t3), accent/fill/on-fill, status (ok/warn/bad/stop), hover/press/edge/scrim, shadows, focus, visualization series (viz-1–6), syntax highlighting (hl-kw–hl-meta) — **In**
+
+### Components — All In
+- Button, Input/Textarea, Checkbox/Radio, Select, Modal/Dialog, Card, Sidebar, TabBar, ChatBubble, Composer, Notification, Badge — **In**
+
+### Out of Scope (v0)
+- Data grid / table component — **Out**
+- Date picker / calendar — **Out**
+- Tooltip / popover — **Out**
+- Accordion / disclosure — **Out**
+- Carousel / slider — **Out**
+- Tree view — **Out**
+- Virtual list — **Out**
+- Form validation library — **Out**
+
+## Icon-Pack Style Constraint
+
+The design system mandates a single icon pack for visual consistency. All icons use **Lucide** (via inline SVG glyphs) with the following constraints:
+
+- **Stroke weight**: `1.5` (defined by `--ico-stroke: 1.5`), matching the Lucide default for 24×24 canvas.
+- **Size**: `1rem` (defined by `--ico: 1rem`), scales with text size.
+- **No fills**: Icons must be stroke-only; filled variants are not used in the UI layer.
+- **Color**: Icons inherit `currentColor` from the parent, ensuring they follow the token color system (`--accent`, `--t1`, `--t2`, status colors).
+- **No external icon fonts**: No Font Awesome, Material Icons, or similar. Lucide SVGs are inlined via the `icon_markup` helper in architecture diagrams and the UI components.
+
 ## Publishing
 
 The design system is published as an npm package to GitHub Packages. See `package.json` for the package configuration.
