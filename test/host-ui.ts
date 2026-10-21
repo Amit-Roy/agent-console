@@ -20,7 +20,7 @@ for (const [name, viewport, scheme] of [["desktop-light", { width: 1280, height:
   const dials = await page.locator(".dial .c .l").allInnerTexts();
   check(`${name}: dials`, dials.join("|").toUpperCase() === "CPU|MEMORY|DISK|LOAD", dials.join("|"));
   check(`${name}: dial values`, (await page.locator(".dial .c .v").allInnerTexts()).every(v => v.trim().length > 0));
-  await page.waitForFunction(() => document.querySelectorAll(".charts canvas").length === 3 && !!(globalThis as any).Chart);
+  await page.waitForFunction(() => document.querySelectorAll(".charts canvas").length === 4 && !!(globalThis as any).Chart);
   check(`${name}: history ranges`, (await page.locator("#range button").allInnerTexts()).join("|") === "5m|1h|12h|24h");
   await page.click('#range button[data-range="86400"]');
   check(`${name}: range switch`, await page.locator('#range button[data-range="86400"]').getAttribute("aria-pressed") === "true");
