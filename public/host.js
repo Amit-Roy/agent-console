@@ -172,7 +172,9 @@ async function loadHistory() {
   $("cap-net").textContent = p.length ? `peak in ${rate(peak(p, ix("rx")))} · out ${rate(peak(p, ix("tx")))}` : "";
   $("cap-io").textContent = p.length ? `peak read ${rate(peak(p, ix("rd")))} · write ${rate(peak(p, ix("wr")))}` : "";
   const c1 = css("--viz-1"), c2 = css("--viz-2"), c3 = css("--viz-3");
-  drawChart("ch-cpu", [series("CPU", c1, col("cpu"), true), series("Memory", c2, col("mem"), false)], pct, 100);
+  $("cap-mem").textContent = p.length ? `avg ${pct(mean(p, ix("mem")))} · peak ${pct(peak(p, ix("mem")))} · swap peak ${pct(peak(p, ix("swap")))}` : "";
+  drawChart("ch-cpu", [series("CPU", c1, col("cpu"), true)], pct, 100);
+  drawChart("ch-mem", [series("Memory", c2, col("mem"), true), series("Swap", c3, col("swap"), false)], pct, 100);
   drawChart("ch-net", [series("In", c2, col("rx"), true), series("Out", c3, col("tx"), false)], rate);
   drawChart("ch-io", [series("Read", c1, col("rd"), true), series("Write", c3, col("wr"), false)], rate);
 }
