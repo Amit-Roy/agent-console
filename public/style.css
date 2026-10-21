@@ -1106,6 +1106,9 @@ body.login{display:grid;place-items:center;overflow:auto;padding:var(--sp-4)}
 /* Auto lane: threads started by automation, grouped by issue */
 .auto-list{list-style:none;margin:0;padding:0}
 .auto-list>li.auto-group{display:block;padding:0;cursor:default;background:transparent}
+.auto-group-header{display:flex;align-items:center}
+.auto-group-header>.auto-group-toggle{flex:1;min-width:0}
+.auto-group-more{flex:none;min-width:2.75rem;min-height:2.75rem;color:var(--t2)}
 .auto-group-toggle{display:flex;align-items:center;gap:var(--sp-2);width:100%;min-height:2.75rem;padding:var(--sp-2) var(--sp-3);border:0;border-radius:var(--r-sm);background:transparent;color:var(--t1);font:var(--fw-med) var(--f-md);text-align:left;cursor:pointer}
 .auto-group-toggle:hover{background:var(--hover)}
 .auto-group-toggle:focus-visible{outline-offset:-2px}

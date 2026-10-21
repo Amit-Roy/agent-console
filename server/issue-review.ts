@@ -27,6 +27,7 @@ type Marker = { mark(threadId: string, patch: Partial<IssueRun>): void };
 export interface ReviewDeps {
   github?: GithubRequest;
   runner: IssueRunner & Marker;
+  canReview?: (t: ThreadLike) => boolean; // Explicit premium ownership supersedes automatic review and redo.
   canResume?: (t: ThreadLike) => boolean; // Capacity and live-dispatch gates for resuming existing workers.
   route: (effort: IssueRun["effort"]) => RouteResponse; // the router's answer for a review of this effort
   events?: EventLog;
@@ -117,6 +118,7 @@ export function createReviewer(deps: ReviewDeps) {
   async function review(t: ThreadLike & { issueRun: IssueRun }, recover: boolean): Promise<boolean> {
     const run = t.issueRun, name = run.repo.split("/")[1], owner = run.repo.split("/")[0];
     const prs = await github("GET", `repos/${run.repo}/pulls?state=open&head=${encodeURIComponent(`${owner}:${run.branch}`)}`);
+    if (deps.canReview?.(t) === false) return false;
     const pr = Array.isArray(prs) ? prs[0] : undefined;
     if (!pr || !Number.isSafeInteger(pr.number)) {
       if (!run.missingPr) once(`${t.id}:nopr`, () => {
@@ -132,6 +134,7 @@ export function createReviewer(deps: ReviewDeps) {
       : ev?.record({ step: "self_review", kind: "fail", ref: run.key, msg: `PR #${pr.number} has no Self-review section` }));
     if ((run.reviews ?? 0) > 0) {
       const pushed = await pushedSinceVerdict(run, pr);
+      if (deps.canReview?.(t) === false) return false;
       if (pushed === "no") { nudge(t, pr.number); return false; } // its turn end comes back here
       if (pushed === "yes") once(`${t.id}:pushed:${run.reviews}`, () => ev?.record({ step: "redo", kind: "ok", run: `redo:${t.id}`, ref: run.key, msg: `worker pushed new commits to PR #${pr.number}` }));
     }
@@ -141,6 +144,7 @@ export function createReviewer(deps: ReviewDeps) {
       return false;
     }
     const files = await github("GET", `repos/${run.repo}/pulls/${pr.number}/files?per_page=100`);
+    if (deps.canReview?.(t) === false) return false;
     const names: string[] = Array.isArray(files) ? files.map((f: any) => String(f.filename)) : [];
     const guarded = !Array.isArray(files) || names.length >= 100 || (isProtected(names) && !mayMergeProtected(answer.route.provider)); // too many files to list: treat as protected
     const attempt = randomUUID().slice(0, 8);
@@ -160,7 +164,7 @@ export function createReviewer(deps: ReviewDeps) {
 
   async function attempt(t: ThreadLike, recover = false) {
     const run = t.issueRun;
-    if (t.archived || !run || run.role !== "work" || run.effort === "deep" || run.reviewedAt || run.stalled || !run.branch || claimed.has(t.id)) return;
+    if (deps.canReview?.(t) === false || t.archived || !run || run.role !== "work" || run.effort === "deep" || run.reviewedAt || run.stalled || !run.branch || claimed.has(t.id)) return;
     if ((run.reviews ?? 0) >= MAX_REVIEWS) { once(`${t.id}:max`, () => ev?.record({ step: "review", kind: "info", ref: run.key, msg: `${MAX_REVIEWS} reviews without a merge: a person decides` })); return; }
     claimed.add(t.id); // a second turn ending while the first review is being set up must not start another
     try { if (!(await review(t as ThreadLike & { issueRun: IssueRun }, recover))) claimed.delete(t.id); }
@@ -184,6 +188,7 @@ export function createReviewer(deps: ReviewDeps) {
   /** Send the worker back to the branch: a retry of the review (no verdict) or a redo of the work (changes requested). */
   function again(run: IssueRun, kind: "retry" | "redo", verdict = "") {
     const worker = run.worker;
+    if (deps.canReview?.({ id: worker ?? "", issueRun: run }) === false) return;
     if (!worker) { ev?.record({ step: kind === "redo" ? "redo" : "review", kind: "info", ref: run.key, msg: "reviewer has no worker thread on record: a person decides" }); return; }
     if ((run.reviews ?? 0) >= MAX_REVIEWS) { ev?.record({ step: kind === "redo" ? "redo" : "review", kind: "info", ref: run.key, msg: `${MAX_REVIEWS} reviews without a merge: a person decides` }); return; }
     if (kind === "retry") { deps.runner.mark(worker, { reviewedAt: undefined }); claimed.delete(worker); return; } // the next sweep starts a fresh reviewer

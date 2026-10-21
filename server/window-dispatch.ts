@@ -174,6 +174,7 @@ export function issuePrompt(d: Decision, branch: string, base: string): string {
 
 export type IssueRun = {
   key: string; repo: string; number: number; effort: string; role: "work" | "review" | "debug"; branch?: string; base?: string; pr?: number; reviewedAt?: number; finishedAt?: number;
+  premiumAssignment?: boolean; // Explicit premium owner started through the issue dialog.
   recoveries?: number; // Bounded resumptions of incomplete worker turns, preserved across restarts.
   retryAt?: number;   // Earliest time another worker recovery may start.
   rerouted?: boolean; // work: its recoveries were reset once because its Pi model was retired upstream

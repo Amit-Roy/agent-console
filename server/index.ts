@@ -16,6 +16,7 @@ import { createEventLog } from "./automation/events.ts";
 import { createTriageBridge } from "./automation/triage-bridge.ts";
 import { usageEvents } from "./automation/usage-events.ts";
 import { automationApi, scanHooks } from "./automation/snapshot.ts";
+import { canonicalIssue, createPremiumAssigner } from "./automation/assign.ts";
 import { startDebug } from "./automation/debug.ts";
 import { loadConfig as loadDispatchConfig } from "./window-dispatch.ts";
 import { loadOpenerConfig } from "./window-opener.ts";
@@ -98,6 +99,11 @@ const automation = automationApi({
   runs: () => threads.list().filter(t => t.issueRun && !t.archived).map(t => ({ thread: t.id, key: t.issueRun!.key, role: t.issueRun!.role, effort: t.issueRun!.effort, state: t.status, title: t.title })),
   schedules: () => schedules.list().map(t => ({ id: t.id, title: t.title, schedule: describe(t), enabled: t.enabled })),
 });
+const assignPremium = createPremiumAssigner({
+  threads: () => threads.list(), providers: providerInfo, dataDir: DATA_DIR, dirs: defaultDirs(),
+  runner: { create: o => threads.create(o), send: (id, text) => threads.send(id, text), remove: id => threads.remove(id) },
+});
+const assignedOwner = (t: { issueRun?: { repo: string; number: number } }) => !!t.issueRun && assignPremium.active(canonicalIssue(t.issueRun));
 // One upserted token-usage comment per GitHub issue/PR the finished thread links to (repos = the triage allowlist).
 if (process.env.AGENT_CONSOLE_MOCK !== "1") {
   const triageRepos = (): string[] => {
@@ -116,9 +122,10 @@ if (process.env.AGENT_CONSOLE_MOCK !== "1") {
     start: d => startIssue(d, { create: o => threads.create(o), send: (id, text) => threads.send(id, text) }),
   });
   const reviewer = createReviewer({
+    canReview: t => !assignedOwner(t),
     canResume: t => {
       const live = threads.get(t.id);
-      if (!live || live.archived || live.status === "running") return false;
+      if (!live || live.archived || live.status === "running" || assignedOwner(live)) return false;
       const cfg = loadDispatchConfig();
       if (!cfg.enabled || cfg.dryRun || cfg.routing.mode !== "live") return false;
       const answer = routeWork({ role: "work", effort: t.issueRun!.effort as any, usage: usage.all(), active: activeRuns(), now: Date.now(), flags: { bauOnPi: cfg.routing.bauOnPi } });
@@ -128,7 +135,7 @@ if (process.env.AGENT_CONSOLE_MOCK !== "1") {
     route: effort => routeWork({ role: "review", effort: effort as any, usage: usage.all(), active: activeRuns(), now: Date.now() }),
     events: automationLog,
   });
-  threads.onIssueTurnEnd = (t, ev) => reviewer.turnEnded(t, ev);
+  threads.onIssueTurnEnd = (t, ev) => { if (!assignedOwner(t)) return reviewer.turnEnded(t, ev); };
   // Threads stopped by an exhausted premium quota continue late in a later window, when Deep issues would also start.
   const resumeQuotaPaused = () => {
     const cfg = loadDispatchConfig();
@@ -136,7 +143,7 @@ if (process.env.AGENT_CONSOLE_MOCK !== "1") {
     for (const provider of resumeDue(usage.all(), Date.now(), cfg)) {
       const waiting = threads.list().filter(t => t.quotaPaused?.provider === provider && !t.archived).length;
       if (!waiting) continue;
-      const resumed = cfg.dryRun ? 0 : threads.resumeQuotaPaused(provider);
+      const resumed = cfg.dryRun ? 0 : threads.resumeQuotaPaused(provider, undefined, t => !!t.issueRun?.premiumAssignment || !assignedOwner(t));
       automationLog.record({ step: "dispatcher", kind: "ok", msg: `${cfg.dryRun ? "dry run: would resume" : "resumed"} ${cfg.dryRun ? waiting : resumed} quota-paused ${provider} thread(s)` });
     }
   };
@@ -144,7 +151,7 @@ if (process.env.AGENT_CONSOLE_MOCK !== "1") {
   let automationSweep: Promise<void> | undefined;
   const sweepAutomation = () => automationSweep ??= (async () => {
     await archiver.sweep();
-    await reviewer.sweep(threads.list());
+    await reviewer.sweep(threads.list().filter(t => !assignedOwner(t)));
   })().catch(() => {}).finally(() => { automationSweep = undefined; });
   void sweepAutomation();
   setInterval(() => {
@@ -406,6 +413,12 @@ app.get("/api/automation", (req, res) => {
 if (process.env.AGENT_CONSOLE_MOCK === "1") { // UI tests add events after start-up; never exists on a real server
   app.post("/api/automation/_mock/event", express.json(), (req, res) => { try { res.json(automationLog.record(req.body)); } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); } });
 }
+app.post("/api/automation/assign", sameOrigin, express.json({ limit: "4kb" }), async (req, res) => {
+  try {
+    const { v, repo, number, provider, model, effort, mode, claudeAccount } = req.body ?? {};
+    res.json(await assignPremium({ v, repo, number, provider, model, effort, mode, claudeAccount }));
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
 app.post("/api/automation/debug", sameOrigin, express.json({ limit: "4kb" }), (req, res) => {
   try {
     const mock = process.env.AGENT_CONSOLE_MOCK === "1"; // the mock server has no real agents: debug runs on the mock provider

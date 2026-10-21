@@ -1,11 +1,13 @@
 // The Auto lane: threads the automation started (issue work, PR reviews, debugging), grouped by the issue they serve.
 // They are ordinary threads, so opening, replying and forking work as usual; they just do not crowd the Threads lane.
 import { $, el, icon } from "/render.js";
+import { createMenu } from "/menu.js";
 
 const ROLE = { work: "work", review: "review", debug: "debug" };
 
-export function createAutoLane({ state, openThread, setNav, provLabel, ago }) {
+export function createAutoLane({ state, openThread, setNav, provLabel, ago, assignPremium }) {
   const expanded = new Set();
+  let menuOpen = false, renderPending = false;
   let lastCurrent;
   let archiveOpen = !!localStorage.getItem("ac_auto_archive_open");
   $("auto-archive-toggle").onclick = () => {
@@ -16,6 +18,8 @@ export function createAutoLane({ state, openThread, setNav, provLabel, ago }) {
   const issueKey = (run) => run.repo && Number.isSafeInteger(run.number) && run.number > 0
     ? `${run.repo.toLowerCase()}#${run.number}` : run.key;
   function render() {
+    if (menuOpen) { renderPending = true; return; }
+    renderPending = false;
     const runs = [...state.threads.values()].filter((t) => t.issueRun).sort((a, b) => b.updatedAt - a.updatedAt);
     const groups = new Map();
     for (const t of runs) {
@@ -46,7 +50,8 @@ export function createAutoLane({ state, openThread, setNav, provLabel, ago }) {
     renderList($("auto-archived"), archived);
   }
   function renderList(ul, groups, emptyMessage) {
-    const focusedIssue = ul.contains(document.activeElement) && document.activeElement.classList.contains("auto-group-toggle")
+    const focusedClass = document.activeElement?.classList.contains("auto-group-more") ? "auto-group-more" : "auto-group-toggle";
+    const focusedIssue = ul.contains(document.activeElement) && document.activeElement.classList.contains(focusedClass)
       ? document.activeElement.closest(".auto-group")?.dataset.issue : undefined;
     ul.replaceChildren();
     if (!groups.size && emptyMessage) ul.append(el("li", "empty-list", emptyMessage));
@@ -81,9 +86,29 @@ export function createAutoLane({ state, openThread, setNav, provLabel, ago }) {
         toggle.append(dot);
       }
       sync();
-      head.append(toggle, children);
+      const header = el("div", "auto-group-header");
+      header.append(toggle);
+      if (/^[\w.-]+\/[\w.-]+$/.test(run.repo) && Number.isSafeInteger(run.number) && run.number > 0) {
+        const more = el("button", "btn icon ghost auto-group-more");
+        more.type = "button";
+        more.title = "Issue actions";
+        more.setAttribute("aria-label", `Actions for ${label}`);
+        more.append(icon("more"));
+        createMenu({
+          trigger: more, kind: "menu", label: `Actions for ${label}`, align: "end", renderTrigger: () => {},
+          items: [{ value: "show", label: "Show issue" }, { value: "premium", label: "Assign to premium" }],
+          onOpen: () => { menuOpen = true; },
+          onClose: () => { menuOpen = false; if (renderPending) queueMicrotask(render); },
+          onSelect: (value) => {
+            if (value === "show") window.open(`https://github.com/${run.repo}/issues/${run.number}`, "_blank", "noopener,noreferrer");
+            else assignPremium?.({ repo: run.repo, number: run.number });
+          },
+        });
+        header.append(more);
+      }
+      head.append(header, children);
       ul.append(head);
-      if (focusedIssue === key) toggle.focus();
+      if (focusedIssue === key) header.querySelector(`.${focusedClass}`)?.focus();
       for (const t of list) {
         const li = el("li", t.id === state.current ? "sel" : "");
         li.dataset.thread = t.id;
@@ -93,7 +118,7 @@ export function createAutoLane({ state, openThread, setNav, provLabel, ago }) {
         const dot = el("span", `dot ${t.status}`);
         dot.setAttribute("aria-hidden", "true");
         const meta = el("div", "meta");
-        meta.append(el("span", `tag role role-${t.issueRun.role}`, ROLE[t.issueRun.role] || t.issueRun.role), el("span", "tag", t.issueRun.effort), el("span", "tag", provLabel(t.provider)));
+        meta.append(el("span", `tag role role-${t.issueRun.role}`, t.issueRun.premiumAssignment ? "premium" : ROLE[t.issueRun.role] || t.issueRun.role), el("span", "tag", t.issueRun.effort), el("span", "tag", provLabel(t.provider)));
         const time = el("time", "", ago(t.updatedAt));
         time.dateTime = new Date(t.updatedAt).toISOString();
         meta.append(time);
