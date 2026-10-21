@@ -552,21 +552,40 @@ async function runThreadAction(id, action) {
   } else if (action === "create-issue") {
     const draft = $("input").value?.trim();
     if (!draft) { toast("No text in composer to create issue from."); return; }
+    // Extract repo name from thread cwd: /home/user/repos/owner-repo -> owner-repo
+    const t = state.threads.get(state.current);
+    const repoPath = t?.cwd ?? "";
+    const repoMatch = repoPath.match(/\/repos\/([^/]+)\/([^/]+)$/);
+    const repoOwner = repoMatch ? repoMatch[1] : "";
+    const repoName = repoMatch ? repoMatch[2] : "";
+    const ghRepo = repoOwner && repoName ? `${repoOwner}/${repoName}` : "";
+    const ghPath = ghRepo ? `/${ghRepo}/issues/new` : "new";
     const reqId = `create-issue-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const onReply = (m) => {
-      if (m.t === "create_issue_done") {
-        ws?.removeEventListener("message", onReply);
-        const title = m.title ?? draft.slice(0, 100);
-        const body = m.body ?? draft;
-        const url = `https://github.com/new?title=${encodeURIComponent(title)}&body=${encodeURIComponent(body)}`;
-        window.open(url, "_blank", "noopener,noreferrer");
-      } else if (m.t === "create_issue_error") {
-        ws?.removeEventListener("message", onReply);
-        toast(`Failed to create issue: ${m.message}`);
-      }
+    // Open new tab synchronously on click (phone popup-blocker guard); set location after WS response
+    const openIssueTab = () => {
+      const win = window.open(`https://github.com${ghPath}?title=&body=`, "_blank", "noopener,noreferrer");
+      if (!win) return; // popup blocked
+      // Listen for WS reply and set title/body after pi editing
+      const listener = (m) => {
+        if (m?.cid !== reqId) return; // match correlation id only
+        ws?.removeEventListener("message", listener);
+        clearTimeout(timeoutId);
+        if (m.t === "create_issue_done") {
+          const title = m.title ?? draft.slice(0, 100);
+          const body = m.body ?? draft;
+          win.location.href = `https://github.com${ghPath}?title=${encodeURIComponent(title)}&body=${encodeURIComponent(body)}`;
+        } else if (m.t === "create_issue_error") {
+          toast(`Failed to create issue: ${m.message}`);
+        }
+      };
+      ws?.addEventListener("message", listener);
+      const timeoutId = setTimeout(() => {
+        ws?.removeEventListener("message", listener);
+        toast("Issue creation timed out.");
+      }, 30_000);
+      send({ t: "create_issue", draft, cid: reqId });
     };
-    ws?.addEventListener("message", onReply);
-    send({ t: "create_issue", draft, cid: reqId });
+    openIssueTab();
   }
 }
 

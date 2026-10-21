@@ -471,13 +471,16 @@ wss.on("connection", (ws) => {
           return reply({ t: "created", thread: t });
         }
         case "create_issue": {
-          try {
-            const { title, body } = await piEditIssueDraft(m.draft ?? "");
-            return reply({ t: "create_issue_done", title, body });
-          } catch (e: any) {
-            return reply({ t: "create_issue_error", message: e?.message ?? String(e) });
-          }
-        }
+      try {
+        const draft = typeof m.draft === "string" ? m.draft.slice(0, 500) : "";
+        if (!draft.trim()) return reply({ t: "create_issue_error", message: "Empty draft" });
+        const { title, body } = await piEditIssueDraft(draft);
+        if (!title && !body) return reply({ t: "create_issue_error", message: "Pi returned no edit" });
+        return reply({ t: "create_issue_done", title, body });
+      } catch (e: any) {
+        return reply({ t: "create_issue_error", message: e?.message ?? String(e) });
+      }
+    }
         case "send":
           if (typeof m.cid === "string" && !firstDelivery(m.cid)) return reply({ t: "ack", cid: m.cid });
           if (typeof m.text === "string" && (m.text.trim() || (Array.isArray(m.attachments) && m.attachments.length))) {
