@@ -5,7 +5,7 @@ import { createMenu } from "/menu.js";
 
 const ROLE = { work: "work", review: "review", debug: "debug" };
 
-export function createAutoLane({ state, openThread, setNav, provLabel, ago, assignPremium }) {
+export function createAutoLane({ state, openThread, setNav, provLabel, ago, assignPremium, debugIssue }) {
   const expanded = new Set();
   let menuOpen = false, renderPending = false;
   let lastCurrent;
@@ -96,12 +96,13 @@ export function createAutoLane({ state, openThread, setNav, provLabel, ago, assi
         more.append(icon("more"));
         createMenu({
           trigger: more, kind: "menu", label: `Actions for ${label}`, align: "end", renderTrigger: () => {},
-          items: [{ value: "show", label: "Show issue" }, { value: "premium", label: "Assign to premium" }],
+          items: [{ value: "show", label: "Show issue" }, { value: "premium", label: "Assign to premium" }, { value: "debug", label: "Debug" }],
           onOpen: () => { menuOpen = true; },
           onClose: () => { menuOpen = false; if (renderPending) queueMicrotask(render); },
           onSelect: (value) => {
             if (value === "show") window.open(`https://github.com/${run.repo}/issues/${run.number}`, "_blank", "noopener,noreferrer");
-            else assignPremium?.({ repo: run.repo, number: run.number });
+            else if (value === "premium") assignPremium?.({ repo: run.repo, number: run.number });
+            else debugIssue?.({ repo: run.repo, number: run.number });
           },
         });
         header.append(more);

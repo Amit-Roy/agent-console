@@ -741,6 +741,20 @@ dialog[open]{animation:pop var(--dur-3) var(--ease)}
 dialog::backdrop{background:var(--scrim);-webkit-backdrop-filter:blur(4px);backdrop-filter:blur(4px)}
 dialog h2{font:var(--fw-semi) var(--f-xl);letter-spacing:var(--ls-xl);margin-bottom:var(--sp-1)}
 dialog .sub{font:var(--fw-reg) var(--f-md);color:var(--t2)}
+.job-debug{width:min(48rem,calc(100vw - var(--sp-8)));max-height:85dvh;overflow:auto;overflow-wrap:anywhere}
+.job-debug-actions{margin:var(--sp-4) 0;justify-content:flex-end}
+.job-debug button{min-height:44px}
+.job-debug h3{font:var(--fw-semi) var(--f-lg);margin:var(--sp-5) 0 var(--sp-3)}
+.job-debug-summary{font:var(--fw-med) var(--f-md);margin-bottom:var(--sp-2)}
+.job-debug-workflow,.job-debug-events{padding-left:var(--sp-5)}
+.job-debug-workflow li,.job-debug-events li{padding:var(--sp-2) 0}
+.job-debug-workflow .tag{margin-left:var(--sp-2)}
+.job-debug-workflow p{margin-top:var(--sp-1)}
+.job-debug-runs details{border-bottom:1px solid var(--edge);padding:var(--sp-2) 0}
+.job-debug-runs summary{cursor:pointer;min-height:44px;padding:var(--sp-2) 0}
+.job-debug-runs details>p,.job-debug-runs details>button{margin:var(--sp-2) 0}
+.job-debug-meta,.job-debug-record{font:var(--fw-reg) var(--f-sm);font-family:var(--font-mono);white-space:pre-wrap;overflow-wrap:anywhere}
+.job-debug-error{color:var(--stop);margin-bottom:var(--sp-3)}
 .fld{display:block;margin-top:var(--sp-4)}
 .fld>.lbl{display:block;margin-bottom:var(--sp-2);font:var(--fw-med) var(--f-sm);letter-spacing:var(--ls-sm);color:var(--t2)}
 .callout{margin-top:var(--sp-4);padding:var(--sp-3) var(--sp-4);border-radius:var(--r-sm);background:var(--warn-tint);color:var(--warn);font:var(--fw-reg) var(--f-md);letter-spacing:var(--ls-md);display:flex;gap:var(--sp-3);align-items:flex-start}
