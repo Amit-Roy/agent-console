@@ -71,8 +71,10 @@ jobs:
           data="$(mktemp -d)"
           # Tests mint session cookies from the same data directory's secret.
           echo "AGENT_CONSOLE_DATA=$data" >>"$GITHUB_ENV"
+          # Production runs the bundle (bin/agent-console supervise); test that, not the sources.
+          node scripts/bundle-server.mjs
           AGENT_CONSOLE_MOCK=1 AGENT_CONSOLE_DATA="$data" AGENT_CONSOLE_RUN="$data/run" AGENT_CONSOLE_BRAIN="$data/no-brain" \
-            PORT=7070 nohup node server/index.ts >"$RUNNER_TEMP/server.log" 2>&1 &
+            PORT=7070 nohup node .bundle/server/index.ts.mjs >"$RUNNER_TEMP/server.log" 2>&1 &
           for _ in $(seq 60); do curl -s -o /dev/null http://127.0.0.1:7070/login && exit 0; sleep 0.5; done
           cat "$RUNNER_TEMP/server.log"; exit 1
       - run: npm test
