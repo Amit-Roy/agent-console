@@ -42,7 +42,7 @@ try {
   inspect.close();
 
   const providers = make("providers", { intervalMs: 10 });
-  const until = providers.report429("0.12", "nvidia");
+  const until = providers.report429("1", "nvidia");
   let nvidiaStarted = 0;
   const nvidia = providers.acquire({ provider: "nvidia" }).then(() => { nvidiaStarted = Date.now(); });
   await providers.acquire({ provider: "openrouter" });
