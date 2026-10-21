@@ -1104,9 +1104,15 @@ body.login{display:grid;place-items:center;overflow:auto;padding:var(--sp-4)}
 @media (forced-colors:active){.tb-bar{forced-color-adjust:none;background:CanvasText!important}.tb-row.err .tb-bar{background:repeating-linear-gradient(135deg,CanvasText 0 3px,Canvas 3px 6px)!important}}
 
 /* Auto lane: threads started by automation, grouped by issue */
-.auto-list .auto-group{display:flex;align-items:baseline;justify-content:space-between;gap:var(--sp-2);margin:var(--sp-3) 0 var(--sp-1);padding:0 var(--sp-3);color:var(--t2);font:var(--fw-med) var(--f-xs);letter-spacing:var(--ls-sm);cursor:default;background:transparent}
-.auto-list .auto-group:first-child{margin-top:var(--sp-1)}
-.auto-list .auto-group .k{color:var(--t1);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.auto-list .auto-group .n{color:var(--t3);flex:none}
+.auto-list{list-style:none;margin:0;padding:0}
+.auto-list>li.auto-group{display:block;padding:0;cursor:default;background:transparent}
+.auto-group-toggle{display:flex;align-items:center;gap:var(--sp-2);width:100%;min-height:2.75rem;padding:var(--sp-2) var(--sp-3);border:0;border-radius:var(--r-sm);background:transparent;color:var(--t1);font:var(--fw-med) var(--f-md);text-align:left;cursor:pointer}
+.auto-group-toggle:hover{background:var(--hover)}
+.auto-group-toggle:focus-visible{outline-offset:-2px}
+.auto-group-toggle>.ico{flex:none;width:.75rem;height:.75rem;color:var(--t2)}
+.auto-group-toggle[aria-expanded=true]>.ico{transform:rotate(90deg)}
+.auto-group-toggle .k{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.auto-group-toggle .n{margin-left:auto;color:var(--t2);font:var(--fw-reg) var(--f-xs);flex:none}
+.auto-runs{list-style:none;margin:0 0 var(--sp-2);padding:0 0 0 var(--sp-3)}
 .auto-list .tag.role{text-transform:capitalize}
 .auto-list .tag.role-review{color:var(--accent)}
