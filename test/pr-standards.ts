@@ -40,7 +40,7 @@ assert.ok(block.length < 2000);
 // The reviewer cannot apply changes to shared checkouts; deployment belongs to the host.
 const normal = reviewPrompt(run, 7, "main", { protected: false });
 assert.match(normal, /gh pr merge 7 --repo o\/agent-console --squash/); assert.match(normal, /at most 20 changed lines/); assert.match(normal, /git push origin HEAD:refs\/heads\/issue-9-x/);
-assert.match(normal, /evidence/i); assert.match(normal, /gh pr checks 7 --repo o\/agent-console --required --watch/); assert.match(normal, /--match-head-commit/);
+assert.match(normal, /evidence/i); assert.match(normal, /gh pr checks 7 --repo o\/agent-console --watch/); assert.match(normal, /--match-head-commit/);
 assert.match(normal, /host-side application/); assert.match(normal, /read-only/); assert.doesNotMatch(normal, /git merge --ff-only|restart-when-idle/); assert.match(normal, /Self-review/); assert.ok(normal.includes(skillDir()));
 const guarded = reviewPrompt(run, 7, "main", { protected: true });
 assert.doesNotMatch(guarded, /gh pr merge 7/); assert.match(guarded, /Do not merge/); assert.match(guarded, /blocker/i);
