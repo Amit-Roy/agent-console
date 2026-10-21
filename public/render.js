@@ -551,26 +551,27 @@ export function enhance(root, mounts = []) {
   mountMedia(root, mounts);
 }
 
-/** Strip YAML frontmatter (--- ... ---) from markdown source. Returns { content, frontmatter }. */
+/** Strip YAML frontmatter (--- ... ---) from markdown source. Returns content string with frontmatter removed. */
 export function stripFrontmatter(src) {
-  if (!src) return { content: src, frontmatter: null };
-  const lines = src.split('\n');
-  if (!/^---$/.test(lines[0])) return { content: src, frontmatter: null };
+  if (!src) return src;
+  const lines = src.split(/\r?\n/);
+  if (!/^---\s*$/.test(lines[0])) return src;
   let end = -1;
   for (let i = 1; i < lines.length; i++) {
-    if (/^---$/.test(lines[i]) || /^\.\.\.$/.test(lines[i])) { end = i; break; }
+    if (/^---\s*$/.test(lines[i]) || /^\.\.\.$/.test(lines[i])) { end = i; break; }
   }
-  if (end === -1) return { content: src, frontmatter: null };
-  const frontmatter = lines.slice(1, end).join('\n');
-  const content = lines.slice(end + 1).join('\n');
-  return { content, frontmatter };
+  if (end === -1) return src;
+  const body = lines.slice(1, end).join('\n');
+  // Only strip when body looks like frontmatter (key: value lines) or is empty.
+  if (body && !/^[^\S\r\n]*[a-zA-Z_]+\s*:/m.test(body)) return src;
+  return lines.slice(end + 1).join('\n');
 }
 
 /** Markdown source -> sanitised, highlighted, enhanced DOM inside `target`. Media/chart nodes survive re-renders (streaming) when unchanged. */
 export function renderMarkdown(src, target) {
   const old = new Map();
   for (const n of target.querySelectorAll("[data-keep]")) { if (!old.has(n.dataset.keep)) old.set(n.dataset.keep, []); old.get(n.dataset.keep).push(n); }
-  const { content } = stripFrontmatter(src || "");
+  const content = stripFrontmatter(src || "");
   const frag = DOMPurify.sanitize(md.parse(content), { RETURN_DOM_FRAGMENT: true, FORBID_ATTR: ["autoplay"] });
   const mounts = [];
   kept = old;
