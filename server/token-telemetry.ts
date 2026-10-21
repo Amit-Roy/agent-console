@@ -71,6 +71,9 @@ export type RenderResponse = { version: 1; body: string; measured: boolean };
 
 const fmt = (n: number) => n.toLocaleString("en-US");
 type Sum = { input: number; cached: number; output: number; turns: number; measuredTurns: number };
+type Sample = ReturnType<typeof accountingSamples>[number];
+const counter = (value: unknown) => typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+const hasTokens = (sample: Sample | undefined) => counter(sample?.in) != null && counter(sample?.out) != null;
 function summarize(samples: TelemetryRun["samples"]): Sum {
   const s: Sum = { input: 0, cached: 0, output: 0, turns: 0, measuredTurns: 0 };
   for (const sample of samples ?? []) {
@@ -135,6 +138,23 @@ export function createTelemetryService(options: TelemetryOptions) {
   const threads = options.threads ?? (() => JSON.parse(fs.readFileSync(threadsFile, "utf8")));
   const logFile = (id: string) => path.join(options.dataDir, "logs", `${id}.jsonl`);
   const readLog = (id: string) => { try { return fs.readFileSync(logFile(id), "utf8"); } catch { return null; } };
+  // App-server usage reaches the turn ledger without being written to the conversation log.
+  function codexLedger() {
+    const ledger = new Map<string, Map<number, Sample>>();
+    let raw: string;
+    try { raw = fs.readFileSync(path.join(options.dataDir, "turns.jsonl"), "utf8"); } catch { return ledger; }
+    for (const line of raw.split("\n")) {
+      try {
+        const row = JSON.parse(line);
+        if (row.accounting !== 2 || row.provider !== "codex" || typeof row.thread !== "string" || !Number.isFinite(row.ts)) continue;
+        const sample: Sample = { ts: row.ts, accounting: 2, in: counter(row.in), out: counter(row.out), cache: counter(row.cache) };
+        const turns = ledger.get(row.thread) ?? new Map<number, Sample>();
+        if (hasTokens(sample) || !hasTokens(turns.get(row.ts))) turns.set(row.ts, sample);
+        ledger.set(row.thread, turns);
+      } catch {} // An incomplete append must not hide earlier completed turns.
+    }
+    return ledger;
+  }
   // Logs are append-only: a log whose size and mtime are unchanged yields the same facts and samples, so scan it once.
   type LogScan = { size: number; mtimeMs: number; texts: string[]; raised: ThreadFacts["raised"]; samples?: ReturnType<typeof accountingSamples> };
   const scans = new Map<string, LogScan>();
@@ -204,12 +224,23 @@ export function createTelemetryService(options: TelemetryOptions) {
     const existing = await findComment(req.repo, req.number);
     if (existing && req.createOnly) return { status: "unchanged" as const };
     const runs: TelemetryRun[] = [];
+    const ledger = codexLedger();
     for (const raw of threads()) {
       const { t, facts } = await prepared(raw);
       if (!linkThread({ thread: facts, repos, item: req }).linked) continue;
       const scan = scanLog(t.id);
       if (scan && !scan.samples) { const log = readLog(t.id); if (log != null) scan.samples = accountingSamples(log, { id: t.id, provider: t.provider, model: t.model, createdAt: t.createdAt }); }
-      runs.push({ thread: t.id, title: t.title, provider: t.provider, model: t.model, createdAt: t.createdAt, samples: scan?.samples ?? null });
+      let samples = scan?.samples ?? null;
+      const stored = t.provider === "codex" ? ledger.get(t.id) : undefined;
+      if (stored) {
+        const turns = new Map(samples?.map(sample => [sample.ts, sample]));
+        for (const [ts, sample] of stored) {
+          if (ts < (t.createdAt ?? 0)) continue;
+          if (hasTokens(sample) || !hasTokens(turns.get(ts))) turns.set(ts, sample);
+        }
+        samples = [...turns.values()];
+      }
+      runs.push({ thread: t.id, title: t.title, provider: t.provider, model: t.model, createdAt: t.createdAt, samples });
     }
     const { body } = renderTelemetry({ repo: req.repo, number: req.number, runs });
     if (body.length > 60_000) throw new Error("Telemetry comment exceeds size limit");
