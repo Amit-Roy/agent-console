@@ -176,6 +176,9 @@ export type IssueRun = {
   key: string; repo: string; number: number; effort: string; role: "work" | "review" | "debug"; branch?: string; base?: string; pr?: number; reviewedAt?: number; finishedAt?: number;
   recoveries?: number; // Bounded resumptions of incomplete worker turns, preserved across restarts.
   retryAt?: number;   // Earliest time another worker recovery may start.
+  rerouted?: boolean; // work: its recoveries were reset once because its Pi model was retired upstream
+  stalled?: number;   // work: recoveries ran out without a PR; the sweep leaves it until a person runs a turn
+  missingPr?: number; // work: when "no open PR" was logged, so a restart does not log it again
   reviews?: number;   // work: reviews started so far, capped by MAX_REVIEWS; review: which of them this is
   redoing?: boolean;  // work: the worker is fixing review findings
   nudges?: number;    // work: times the worker was asked to push because the PR had no commit after the last verdict
