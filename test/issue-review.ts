@@ -269,13 +269,35 @@ try {
   await recovery.sweep([recovering]); assert.equal(resumed, 2);
   recovering.status = "idle"; now += 15 * 60_000;
   await createReviewer(recoveryDeps).sweep([recovering]); assert.equal(resumed, 2, "restart preserves recovery cap");
-  recovering.issueRun.recoveries = 0; recovering.issueRun.retryAt = 0;
+  assert.ok(recovering.issueRun.stalled, "an exhausted worker is marked stalled");
+  const stalledLogs = () => ev.read({ step: "worker" as any }).events.filter(e => /a person decides/.test(e.msg ?? "")).length;
+  const stalledOnce = stalledLogs(), noPrLogs = () => steps("pr").filter(m => /no open PR/.test(m)).length, noPrOnce = noPrLogs();
+  assert.ok(recovering.issueRun.missingPr, "the missing PR is logged durably");
+  await createReviewer(recoveryDeps).sweep([recovering]); now += 15 * 60_000;
+  await createReviewer(recoveryDeps).sweep([recovering]);
+  assert.equal(resumed, 2); assert.equal(stalledLogs(), stalledOnce, "a stalled worker is not logged again after a restart");
+  assert.equal(noPrLogs(), noPrOnce, "a restart does not log the missing PR again");
+
+  // A worker whose Pi model was retired upstream spent its recoveries on 404s: it gets one fresh budget.
+  recovering.issueRun.stalled = undefined; recovering.model = "nvidia/nvidia/nemotron-3-super-120b-a12b";
+  await createReviewer(recoveryDeps).sweep([recovering]);
+  assert.equal(resumed, 3, "a retired model resets the recovery budget");
+  assert.equal(recovering.issueRun.recoveries, 1); assert.equal(recovering.issueRun.rerouted, true);
+  recovering.status = "idle"; now += 15 * 60_000; recovering.issueRun.recoveries = 2;
+  await createReviewer(recoveryDeps).sweep([recovering]);
+  assert.equal(resumed, 3, "the budget resets only once per worker"); assert.ok(recovering.issueRun.stalled);
+
+  // A person's turn on a stalled worker clears the stall, so its PR is reviewed and recovery restarts.
+  const personal = createReviewer(recoveryDeps);
+  personal.turnEnded(recovering, {}); await tick();
+  assert.equal(recovering.issueRun.stalled, undefined); assert.equal(recovering.issueRun.recoveries, 0);
+  recovering.issueRun.recoveries = 0; recovering.issueRun.retryAt = 0; recovering.issueRun.stalled = undefined; delete recovering.model;
   recovering.issueRun.redoing = true; recovering.issueRun.pr = 40;
-  await recovery.sweep([recovering]); assert.equal(resumed, 3, "failed redo resumes worker before another review");
+  await recovery.sweep([recovering]); assert.equal(resumed, 4, "failed redo resumes worker before another review");
 
   recovering.status = "idle"; recovering.issueRun.recoveries = 0; recovering.issueRun.retryAt = 0;
   recovering.issueRun.redoing = true; pull = { merged: true, state: "closed" };
-  await recovery.sweep([recovering]); assert.equal(resumed, 3, "merged redo PR never receives more fixes");
+  await recovery.sweep([recovering]); assert.equal(resumed, 4, "merged redo PR never receives more fixes");
 
   // setup failures are logged, contained and retried
   const bad = createReviewer({ github: (async () => { throw new Error("gh down"); }) as any, runner, dirs, log: m => logs.push(m), route: routing, events: ev });
