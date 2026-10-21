@@ -1,0 +1,83 @@
+{
+  "title": "File reading flow after fix",
+  "subtitle": "PNG preview works with blocking reads in openScoped",
+  "direction": "row",
+  "items": [
+    {
+      "id": "open-scoped",
+      "group": "openScoped",
+      "sub": "File handle opening",
+      "status": "unchanged",
+      "icon": "file-text",
+      "color": "blue",
+      "items": [
+        {
+          "id": "blocking-reads",
+          "label": "Blocking reads (O_NONBLOCK removed)",
+          "tech": "fs.open() without O_NONBLOCK",
+          "desc": "Reads block until full bytes are available",
+          "icon": "check-circle",
+          "status": "added",
+          "color": "slate"
+        },
+        {
+          "id": "read-header",
+          "label": "Read file header",
+          "tech": "handle.read(16 bytes)",
+          "desc": "Returns full 16 bytes reliably",
+          "icon": "file",
+          "status": "unchanged",
+          "color": "slate"
+        }
+      ]
+    },
+    {
+      "id": "image-type",
+      "label": "imageType() detection",
+      "tech": "server/files.ts",
+      "desc": "Correctly detects PNG signature when 8+ bytes available",
+      "icon": "image",
+      "status": "unchanged",
+      "color": "slate"
+    },
+    {
+      "id": "file-viewer",
+      "group": "file-viewer",
+      "sub": "Client-side rendering",
+      "status": "unchanged",
+      "icon": "monitor",
+      "color": "blue",
+      "items": [
+        {
+          "id": "image-render",
+          "label": "Renders as image",
+          "tech": "file-viewer.js",
+          "desc": "PNG displayed as inline image preview",
+          "icon": "image",
+          "status": "added",
+          "color": "slate"
+        }
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "from": "blocking-reads",
+      "to": "read-header",
+      "label": "ensures full bytes",
+      "status": "added"
+    },
+    {
+      "from": "read-header",
+      "to": "image-type",
+      "label": "sufficient bytes",
+      "status": "unchanged"
+    },
+    {
+      "from": "image-type",
+      "to": "image-render",
+      "label": "PNG detected",
+      "status": "added"
+    }
+  ]
+}

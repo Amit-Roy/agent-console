@@ -1,0 +1,83 @@
+{
+  "title": "File reading flow before fix",
+  "subtitle": "PNG preview fails due to O_NONBLOCK flag in openScoped",
+  "direction": "row",
+  "items": [
+    {
+      "id": "open-scoped",
+      "group": "openScoped",
+      "sub": "File handle opening",
+      "status": "unchanged",
+      "icon": "file-text",
+      "color": "blue",
+      "items": [
+        {
+          "id": "o-nonblock",
+          "label": "O_NONBLOCK flag",
+          "tech": "fs.open() flag",
+          "desc": "Non-blocking file reads may return fewer bytes than requested",
+          "icon": "alert-circle",
+          "status": "unchanged",
+          "color": "slate"
+        },
+        {
+          "id": "read-header",
+          "label": "Read file header",
+          "tech": "handle.read(16 bytes)",
+          "desc": "May return fewer than 8 bytes on some systems",
+          "icon": "file",
+          "status": "unchanged",
+          "color": "slate"
+        }
+      ]
+    },
+    {
+      "id": "image-type",
+      "label": "imageType() detection",
+      "tech": "server/files.ts",
+      "desc": "Returns null when header < 8 bytes; PNG not detected",
+      "icon": "image",
+      "status": "unchanged",
+      "color": "slate"
+    },
+    {
+      "id": "file-viewer",
+      "group": "file-viewer",
+      "sub": "Client-side rendering",
+      "status": "unchanged",
+      "icon": "monitor",
+      "color": "blue",
+      "items": [
+        {
+          "id": "text-render",
+          "label": "Falls back to text",
+          "tech": "file-viewer.js",
+          "desc": "PNG displayed as binary text instead of image",
+          "icon": "type",
+          "status": "unchanged",
+          "color": "slate"
+        }
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "from": "o-nonblock",
+      "to": "read-header",
+      "label": "causes fewer bytes",
+      "status": "unchanged"
+    },
+    {
+      "from": "read-header",
+      "to": "image-type",
+      "label": "insufficient bytes",
+      "status": "unchanged"
+    },
+    {
+      "from": "image-type",
+      "to": "text-render",
+      "label": "PNG not detected",
+      "status": "unchanged"
+    }
+  ]
+}
