@@ -5,11 +5,11 @@ import { completeLabel } from "./small-model.ts";
 // One small call: no tools, no MCP, no hooks.
 
 export const MAX_INPUT = 100_000; // chars of user text per call; the oldest messages fall off first
-const MAX_WORDS = 5;
-export const MAX_TITLE = 30; // chars: a sidebar row shows about this many before it truncates
+const MAX_WORDS = 4;
+export const MAX_TITLE = 20; // chars: limited to width displayable on Android (issue #11)
 
 const PROMPT = (messages: string[]) =>
-  `Write a title of 2 to 4 words, at most ${MAX_TITLE} characters, for a chat from its user messages below, oldest first. Later messages matter more: name what the chat is about now. Reply with ONLY the title: no quotes, no trailing punctuation, no explanation.\n\nMessages:\n${messages.map((m) => `- ${m}`).join("\n")}`;
+  `Write a title of 2 to 3 words, at most ${MAX_TITLE} characters, for a chat from its user messages below, oldest first. Later messages matter more: name what the chat is about now. Reply with ONLY the title: no quotes, no trailing punctuation, no explanation. Keep it concise for Android display.\n\nMessages:\n${messages.map((m) => `- ${m}`).join("\n")}`;
 
 /** One user message as plain text for naming: media references dropped, whitespace collapsed. */
 export function titleText(message: unknown): string {
@@ -36,10 +36,12 @@ export function cleanTitle(raw: unknown): string | undefined {
   let t = String(raw ?? "").split("\n").map((l) => l.trim()).find(Boolean) ?? "";
   t = t.replace(/^(?:title|name)\s*:\s*/i, "").replace(/^[#>*\-\s"'“”‘’`]+|[\s"'“”‘’`*.!:;,]+$/g, "").replace(/\s+/g, " ");
   const words = t.split(" ");
-  if (!t || words.length > MAX_WORDS + 4) return undefined; // a sentence, not a title
-  let kept = words.slice(0, MAX_WORDS);
+  if (!t || words.length > MAX_WORDS + 3) return undefined; // a sentence, not a title
+  let kept = words.slice(0, MAX_WORDS - 1);
   while (kept.length > 1 && kept.join(" ").length > MAX_TITLE) kept.pop(); // drop whole words rather than cut one
+  // Also ensure final title fits strict Android budget
   return kept.join(" ").slice(0, MAX_TITLE).trimEnd();
+  // Final truncation to exact Android-safe length
 }
 
 /** Deterministic stand-in for tests (AGENT_CONSOLE_MOCK=1): the first few words of the latest message. */

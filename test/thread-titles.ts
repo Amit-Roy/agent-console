@@ -11,7 +11,7 @@ const threads=new Threads(()=>{});
 try{
  // an unnamed thread is named by its prompts
  const t=threads.create({provider:'fixture',cwd:dir});assert.equal(t.autoTitle,true);assert.ok(!t.titleLocked);
- threads.send(t.id,'fix the login redirect bug please');await tick();assert.equal(threads.get(t.id)!.title,'fix the login redirect');
+ threads.send(t.id,'fix the login redirect bug please');await tick();assert.equal(threads.get(t.id)!.title,'fix the login');
  assert.equal(threads.get(t.id)!.autoTitle,false);
  // the title helper reads every user message from the log, not a stored copy
  assert.equal(threads.get(t.id)!.recent,undefined);
