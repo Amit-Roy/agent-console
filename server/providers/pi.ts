@@ -74,11 +74,18 @@ export function refreshPiModels(): Promise<string[]> {
       return resolve(cached);
     }
     execFile("pi", ["--list-models"], { env, timeout: 20_000, maxBuffer: 4 << 20 }, (err, stdout, stderr) => {
-      if (!err) cached = parsePiModels(stdout + stderr, env.AGENT_CONSOLE_PI_ALL === "1");
+      if (!err) {
+        cached = parsePiModels(stdout + stderr, env.AGENT_CONSOLE_PI_ALL === "1");
+        try { fs.writeFileSync(MODELS_FILE, stdout + stderr, { mode: 0o600 }); } catch {}
+      }
       resolve(cached);
     });
   });
 }
+// `pi --list-models` takes seconds and the server runs it only after it listens. Until it answers, use the list the previous
+// process saw, so Pi is ready the moment the server is.
+const MODELS_FILE = path.join(DATA_DIR, "pi-models.txt");
+try { const env = childEnv(); if (!env.AGENT_CONSOLE_PI_MODELS) cached = parsePiModels(fs.readFileSync(MODELS_FILE, "utf8"), env.AGENT_CONSOLE_PI_ALL === "1"); } catch {}
 
 const CAP: Record<string, string> = { bash: "Bash", read: "Read", write: "Write", edit: "Edit", grep: "Grep", find: "Glob", ls: "Glob" };
 
