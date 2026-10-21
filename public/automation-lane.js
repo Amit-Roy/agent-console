@@ -17,35 +17,39 @@ export function createAutoLane({ state, openThread, setNav, provLabel, ago }) {
     ? `${run.repo.toLowerCase()}#${run.number}` : run.key;
   function render() {
     const runs = [...state.threads.values()].filter((t) => t.issueRun).sort((a, b) => b.updatedAt - a.updatedAt);
+    const groups = new Map();
+    for (const t of runs) {
+      const key = issueKey(t.issueRun);
+      const list = groups.get(key) || [];
+      list.push(t);
+      groups.set(key, list);
+    }
+    const live = new Map(), archived = new Map();
+    for (const [key, list] of groups) {
+      const target = list.some((t) => !t.archived || t.status === "running" || t.background) ? live : archived;
+      target.set(key, list);
+    }
     if (state.current !== lastCurrent) {
       const current = runs.find((t) => t.id === state.current);
       if (current) {
         expanded.add(issueKey(current.issueRun));
-        if (current.archived) archiveOpen = true;
+        if (archived.has(issueKey(current.issueRun))) archiveOpen = true;
       }
       lastCurrent = state.current;
     }
-    $("lane-auto-dot").hidden = !runs.some((t) => !t.archived && t.status === "running");
-    const archived = runs.filter((t) => t.archived);
-    $("auto-archive").hidden = !archived.length;
-    $("auto-archive-count").textContent = archived.length || "";
+    $("lane-auto-dot").hidden = !runs.some((t) => t.status === "running" || t.background);
+    $("auto-archive").hidden = !archived.size;
+    $("auto-archive-count").textContent = archived.size || "";
     $("auto-archive-toggle").setAttribute("aria-expanded", String(archiveOpen));
     $("auto-archived").hidden = !archiveOpen;
-    renderList($("autos"), runs.filter((t) => !t.archived), archived.length ? "Everything is archived." : "Nothing started automatically yet.");
+    renderList($("autos"), live, archived.size ? "Everything is archived." : "Nothing started automatically yet.");
     renderList($("auto-archived"), archived);
   }
-  function renderList(ul, runs, emptyMessage) {
+  function renderList(ul, groups, emptyMessage) {
     const focusedIssue = ul.contains(document.activeElement) && document.activeElement.classList.contains("auto-group-toggle")
       ? document.activeElement.closest(".auto-group")?.dataset.issue : undefined;
     ul.replaceChildren();
-    if (!runs.length && emptyMessage) ul.append(el("li", "empty-list", emptyMessage));
-    const groups = new Map();
-    for (const t of runs) {
-      const key = issueKey(t.issueRun);
-      const g = groups.get(key) || [];
-      g.push(t);
-      groups.set(key, g);
-    }
+    if (!groups.size && emptyMessage) ul.append(el("li", "empty-list", emptyMessage));
     for (const [key, list] of groups) {
       const head = el("li", "auto-group");
       head.dataset.issue = key;
