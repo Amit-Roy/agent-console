@@ -33,7 +33,8 @@
           body: JSON.stringify({ path }),
         });
       } catch (error) {
-        showError(error);
+        // Acode probes files such as index.html and tsconfig.json; report real failures only.
+        if (error.status !== 404) showError(error);
         throw error;
       }
       if (typeof remote.token !== "string" || typeof remote.content !== "string" || typeof remote.revision !== "string") {
@@ -75,7 +76,10 @@
           url: uri, uri, isDirectory: directory, isFile: !directory, isLink: false,
           canRead: true, canWrite: !directory, size: remote ? new TextEncoder().encode(remote.content).length : 0 };
       },
-      async exists() { await this.stat(); return true; },
+      async exists() {
+        try { await this.stat(); return true; }
+        catch (error) { if (error.status === 404) return false; throw error; }
+      },
       async readFile(encoding) {
         const { project, path } = locate();
         const remote = await projectFile(project, path);
@@ -130,13 +134,13 @@
     });
     const result = await response.json().catch(() => ({}));
     if (!response.ok) {
-      if (response.status === 409) {
-        throw new Error("This file changed on the server. Your edits remain open. Reopen the file from Agent Console to compare changes.");
-      }
-      if (response.status === 401 || response.status === 410) {
-        throw new Error("Editing access expired. Tap Edit in Agent Console again. Your edits remain open.");
-      }
-      throw new Error(result.error || result.message || `Request failed (${response.status}).`);
+      const error = new Error(response.status === 409
+        ? "This file changed on the server. Your edits remain open. Reopen the file from Agent Console to compare changes."
+        : response.status === 401 || response.status === 410
+          ? "Editing access expired. Tap Edit in Agent Console again. Your edits remain open."
+          : result.error || result.message || `Request failed (${response.status}).`);
+      error.status = response.status;
+      throw error;
     }
     return result;
   }
