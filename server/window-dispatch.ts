@@ -69,6 +69,16 @@ export function expiring(u: ProviderUsage | undefined, now: number, cfg: Config)
   return { resetsAt: w.resetsAt, used: pct, full: pct >= cfg.maxUsedPct };
 }
 
+/** Pure: premium usage keys (claude, claude:<account>, codex) whose quota-paused threads may continue now. Same gate as Deep
+ *  work: the 5-hour window is expiring and below maxUsedPct, and no window is still exhausted. */
+export function resumeDue(usage: Record<string, ProviderUsage>, now: number, cfg: Config): string[] {
+  return Object.entries(usage).filter(([p, u]) => {
+    if (!/^(claude|codex)(:|$)/.test(p) || u.windows.some(w => w.used >= w.limit && (!w.resetsAt || w.resetsAt > now))) return false;
+    const e = expiring(u, now, cfg);
+    return !!e && !e.full;
+  }).map(([p]) => p);
+}
+
 /** Pure: which open issues to start now. `done` holds keys already assigned (any window). */
 export function plan(input: { now: number; usage: Record<string, ProviderUsage>; issues: Issue[]; done: Set<string>; cfg?: Partial<Config> }): Decision[] {
   const cfg = { ...DEFAULTS, ...input.cfg };

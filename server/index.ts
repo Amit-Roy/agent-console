@@ -5,7 +5,7 @@ import { usage, refreshRouterUsage, refreshUsage, readCodexUsage } from "./usage
 import { hostMetrics, hostProcesses, hostKill, hostPorts, hostProcessDetail } from "./host.ts";
 import { startToolPriority } from "./tool-priority.ts";
 import { startHostSampler, hostHistory, hostDu, hostDuRescan } from "./host-history.ts";
-import { createDispatcher, startIssue, defaultDirs } from "./window-dispatch.ts";
+import { createDispatcher, startIssue, defaultDirs, resumeDue } from "./window-dispatch.ts";
 import { route as routeWork } from "./automation/router.ts";
 import { createOpener } from "./window-opener.ts";
 import { claudeAccounts } from "./providers/claude-accounts.ts";
@@ -88,11 +88,6 @@ const automationLog = createEventLog({ file: path.join(DATA_DIR, "automation-eve
 automationLog.recoverOpenRuns();
 const recordUsage = usageEvents(automationLog);
 usage.subscribe((provider, u) => { broadcast({ t: "usage", provider, usage: u }); recordUsage(provider, u); });
-// Auto-resume quota-paused threads when a usage window resets
-usage.subscribeWindowReset((provider, windowLabel) => {
-  const resumed = threads.resumeQuotaPaused(provider, windowLabel);
-  if (resumed) console.log(`[quota-resume] ${provider} ${windowLabel}: resumed ${resumed} thread(s)`);
-});
 const triageBridge = createTriageBridge({ dbPath: path.join(DATA_DIR, "github-triage.sqlite"), events: automationLog });
 setInterval(() => triageBridge.poll(), 30_000).unref();
 const automation = automationApi({
@@ -133,7 +128,18 @@ if (process.env.AGENT_CONSOLE_MOCK !== "1") {
     events: automationLog,
   });
   threads.onIssueTurnEnd = (t, ev) => reviewer.turnEnded(t, ev);
-  setInterval(() => { dispatcher.tick().catch(() => {}); reviewer.sweep(threads.list()).catch(() => {}); }, 5 * 60_000).unref();
+  // Threads stopped by an exhausted premium quota continue late in a later window, when Deep issues would also start.
+  const resumeQuotaPaused = () => {
+    const cfg = loadDispatchConfig();
+    if (!cfg.enabled) return;
+    for (const provider of resumeDue(usage.all(), Date.now(), cfg)) {
+      const waiting = threads.list().filter(t => t.quotaPaused?.provider === provider && !t.archived).length;
+      if (!waiting) continue;
+      const resumed = cfg.dryRun ? 0 : threads.resumeQuotaPaused(provider);
+      automationLog.record({ step: "dispatcher", kind: "ok", msg: `${cfg.dryRun ? "dry run: would resume" : "resumed"} ${cfg.dryRun ? waiting : resumed} quota-paused ${provider} thread(s)` });
+    }
+  };
+  setInterval(() => { dispatcher.tick().catch(() => {}); reviewer.sweep(threads.list()).catch(() => {}); resumeQuotaPaused(); }, 5 * 60_000).unref();
   const opener = createOpener({
     usage: () => usage.all(), events: automationLog,
     refresh: readCodexUsage,

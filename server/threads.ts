@@ -64,7 +64,7 @@ export interface Thread {
   operation?: "compact";
   lastCompactedAt?: number;
   archived?: number; // when it was archived: it leaves the working list until unarchived or sent to again
-  quotaPaused?: { provider: string; windowLabel: string; resetsAt: number }; // paused due to quota exhaustion; auto-resume when window resets
+  quotaPaused?: { provider: string; windowLabel: string; resetsAt: number }; // paused due to quota exhaustion; auto-resumes late in a later window (see resumeDue)
   schedule?: { task: string; run: string }; // a scheduled task's run: the sidebar files it under its task
   issueRun?: IssueRun; // started by window-dispatch for a GitHub issue
   cost: number;
@@ -439,12 +439,12 @@ export class Threads {
     this.emit({ t: "thread", thread: t });
   }
 
-  /** Resume all non-archived threads that are quota-paused for the given provider and window. */
-  resumeQuotaPaused(provider: string, windowLabel: string) {
+  /** Resume all non-archived threads quota-paused on the given provider (usage key), optionally only those paused by one window. */
+  resumeQuotaPaused(provider: string, windowLabel?: string) {
     let resumed = 0;
     for (const t of this.threads.values()) {
       if (t.archived) continue;
-      if (t.quotaPaused?.provider === provider && t.quotaPaused?.windowLabel === windowLabel) {
+      if (t.quotaPaused?.provider === provider && (!windowLabel || t.quotaPaused.windowLabel === windowLabel)) {
         delete t.quotaPaused;
         if (t.status === "running") continue; // the user already continued it; send would throw and abort the other resumes
         try { this.send(t.id, "Continue.", { auto: "quota-resume" }); resumed++; }
