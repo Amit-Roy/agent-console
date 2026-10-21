@@ -78,6 +78,7 @@ vm.runInNewContext(source, {
       : [{ name: "nested", path: "nested", type: "directory" }, { name: "sibling.js", path: "sibling.js", type: "file" }],
       ...(paginated && !url.includes("cursor=") ? { next: "page-2" } : {}),
     }) };
+    if (url.endsWith("/open") && JSON.parse(options.body).path === "tsconfig.json") return { ok: false, status: 404, json: async () => ({ error: "File not found." }) };
     if (url.endsWith("/open") && projectExpired) return { ok: false, status: 401, json: async () => ({ error: "Expired" }) };
     if (url.endsWith("/open")) return { ok: true, json: async () => ({ token: "sibling-token", name: "sibling.js", path: "/tmp/sibling.js", content: "sibling", revision: "sibling-r1" }) };
     if (gate) await gate;
@@ -206,6 +207,11 @@ assert.equal(await save(sibling), true);
 assert.equal(calls.at(-1)!.options.headers.Authorization, "Bearer sibling-token");
 assert.deepEqual(JSON.parse(calls.at(-1)!.options.body), { content: "sibling edited", revision: "sibling-r1" });
 await assert.rejects(siblingFs.createFile("test"), /create, rename/);
+const alertsBeforeProbe = alerts.length;
+const probe = provider!(folders[0].url + "tsconfig.json");
+assert.equal(await probe.exists(), false);
+await assert.rejects(probe.stat(), /File not found/);
+assert.equal(alerts.length, alertsBeforeProbe, "missing-file probes stay silent");
 sibling.events.close({ preventDefault() {} });
 projectExpired = true;
 await assert.rejects(siblingFs.stat(), /Tap Edit/);
