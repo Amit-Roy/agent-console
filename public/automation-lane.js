@@ -36,7 +36,7 @@ export function createAutoLane({ state, openThread, setNav, provLabel, ago }) {
       const head = el("li", "auto-group");
       head.dataset.issue = key;
       const run = list[0].issueRun;
-      const label = run.repo && Number.isSafeInteger(run.number) && run.number > 0 ? `#${run.number} · ${run.repo.split("/").at(-1)}` : key;
+      const label = run.repo && Number.isSafeInteger(run.number) && run.number > 0 ? `${run.repo}#${run.number}` : key;
       const toggle = el("button", "auto-group-toggle");
       toggle.type = "button";
       toggle.title = key;

@@ -1111,7 +1111,7 @@ body.login{display:grid;place-items:center;overflow:auto;padding:var(--sp-4)}
 .auto-group-toggle:focus-visible{outline-offset:-2px}
 .auto-group-toggle>.ico{flex:none;width:.75rem;height:.75rem;color:var(--t2)}
 .auto-group-toggle[aria-expanded=true]>.ico{transform:rotate(90deg)}
-.auto-group-toggle .k{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.auto-group-toggle .k{min-width:0;overflow-wrap:anywhere;white-space:normal}
 .auto-group-toggle .n{margin-left:auto;color:var(--t2);font:var(--fw-reg) var(--f-xs);flex:none}
 .auto-runs{list-style:none;margin:0 0 var(--sp-2);padding:0 0 0 var(--sp-3)}
 .auto-list .tag.role{text-transform:capitalize}
