@@ -1,4 +1,4 @@
-"""Synthesize the agent-console feature-tour soundtrack: 128 BPM, 48 bars (90 s), A minor.
+"""Synthesize the agent-console feature-tour soundtrack: 128 BPM, 64 bars (120 s), A minor.
 
 Usage: python3 -I synth.py <out-dir>
 Writes music.wav (bed) and sfx.wav (hits/tick/chime) as 48 kHz stereo 24-bit.
@@ -10,7 +10,7 @@ SR = 48000
 BPM = 128
 BEAT = 60 / BPM
 BAR = BEAT * 4
-BARS = 48
+BARS = 64
 DUR = BAR * BARS
 N = int(DUR * SR) + SR  # 1 s tail headroom, trimmed later
 rng = np.random.default_rng(7)
@@ -159,11 +159,11 @@ ARP = [0, 2, 3, 1, 2, 3, 1, 2]  # indices into voicing, 8th notes
 music = np.zeros((N, 2))
 # Section per bar. Chapters are 4 bars; breakdowns sit under the lid scene, the scheduled-task clock and session search.
 INTRO = {0, 1}
-BREAK = {6, 7, 22, 23, 38, 39}
-FINAL = 47
+BREAK = {6, 7, 30, 31, 54, 55}
+FINAL = 63
 # second-half chapters move to Am Em F G and add a lead line so 90 s does not loop the same 4 bars
-PROG_B = set(range(26, 38)) | set(range(40, 47))
-LEAD = set(range(10, 22)) | set(range(26, 38)) | set(range(40, 47))
+PROG_B = set(range(34, 54)) | set(range(56, 63))
+LEAD = set(range(14, 30)) | set(range(34, 54)) | set(range(56, 63))
 CHORDS_B = [
     (45, [57, 60, 64, 69]),
     (40, [55, 59, 64, 67]),
@@ -231,7 +231,7 @@ def riser(length):
 
 
 # risers into every drop out of the intro or a breakdown
-for b in (1, 7, 23, 39):
+for b in (1, 7, 31, 55):
     place(music, riser(BAR), b * BAR, 0.9)
 
 duck = np.ones(N)
@@ -287,10 +287,10 @@ def tap():
 
 SFX_TIMES = dict(
     stamps=[(0.12, 45), (0.12 + 2 * BEAT, 41), (0.12 + 4 * BEAT, 48), (6 * BEAT, 33)],
-    # chapter title slams: models, files, Acode, schedules, triage, usage, host, search, recap
-    chapters=[(b * BAR, m) for b, m in ((10, 45), (14, 41), (18, 48), (22, 43), (26, 45), (30, 40), (34, 41), (38, 43), (40, 45))],
-    ticks=[11.25 + k * BEAT / 2 for k in range(14)] + [22 * BAR + k * BEAT / 2 for k in range(14)],
-    chime=[14.2, 23.6 * BAR],
+    # chapter title slams: models, auto-pick, files, inline media, Acode, schedules, Auto, triage, fork, usage, host, search, recap
+    chapters=[(b * BAR, m) for b, m in ((10, 45), (14, 41), (18, 48), (22, 43), (26, 45), (30, 40), (34, 41), (38, 43), (42, 45), (46, 40), (50, 41), (54, 43), (56, 45))],
+    ticks=[11.25 + k * BEAT / 2 for k in range(14)] + [30 * BAR + k * BEAT / 2 for k in range(14)],
+    chime=[14.2, 31.6 * BAR],
 )
 for t0, m in SFX_TIMES["stamps"]:
     place(sfx, stamp(m), t0, 0.9)
