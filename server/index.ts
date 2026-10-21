@@ -427,10 +427,10 @@ app.post("/api/automation/assign", sameOrigin, express.json({ limit: "4kb" }), a
     res.json(await assignPremium({ v, repo, number, provider, model, effort, mode, claudeAccount }));
   } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
 });
-app.post("/api/automation/debug", sameOrigin, express.json({ limit: "4kb" }), (req, res) => {
+app.post("/api/automation/debug", sameOrigin, express.json({ limit: "4kb" }), async (req, res) => {
   try {
     const mock = process.env.AGENT_CONSOLE_MOCK === "1"; // the mock server has no real agents: debug runs on the mock provider
-    const out = startDebug({ v: req.body?.v, focus: req.body?.focus, note: req.body?.note }, {
+    const out = await startDebug({ v: req.body?.v, focus: req.body?.focus, note: req.body?.note }, {
       api: automation, log: automationLog, usage: () => usage.all(), dirs: defaultDirs(),
       active: () => threads.list().filter(t => t.issueRun && t.status === "running").map(t => ({ provider: t.provider, role: t.issueRun!.role })),
       runner: { create: o => threads.create(mock ? { ...o, provider: "mock", model: "echo", effort: "default" } : o), send: (id, text) => threads.send(id, text) },

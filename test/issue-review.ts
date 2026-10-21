@@ -9,6 +9,7 @@ import { route as realRoute } from "../server/automation/router.ts";
 import { startIssue, ROUTES } from "../server/window-dispatch.ts";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "ac-review-"));
+// Synchronous Git keeps review setup inside one tick; production uses async Git, covered by test/window-dispatch.ts.
 const run = (cwd: string, ...a: string[]) => execFileSync("git", ["-C", cwd, "-c", "user.name=t", "-c", "user.email=t@t", ...a], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 const tick = () => new Promise(r => setTimeout(r, 30));
 let now = 1_800_000_000_000;
@@ -25,13 +26,13 @@ try {
   const dec = (effort: any, repo = "o/webapp", number = 42): any => ({ key: `${repo}#${number}`, issue: { repo, number, title: "Fix totals", labels: [] }, effort, route: ROUTES.trivial[0], reason: "" });
 
   // PR-only: a started worktree refuses a push to the default branch but allows a branch push
-  const started = startIssue(dec("trivial"), runner, dirs);
+  const started = await startIssue(dec("trivial"), runner, dirs);
   fs.writeFileSync(path.join(started.cwd, "b"), "2"); run(started.cwd, "add", "b"); run(started.cwd, "commit", "-qm", "work");
   assert.throws(() => run(started.cwd, "push", "origin", "HEAD:main"), /Blocked/, "default branch is refused");
   run(started.cwd, "push", "-q", "origin", `HEAD:refs/heads/${started.branch}`);
   assert.equal(created[0].issueRun.role, "work");
   run(main, "commit", "-q", "--allow-empty", "-m", "local"); run(main, "push", "-q", "origin", "HEAD:main"); // the main checkout still works
-  const bauStart = startIssue(dec("bau", "o/webapp", 43), runner, dirs);
+  const bauStart = await startIssue(dec("bau", "o/webapp", 43), runner, dirs);
   assert.ok(fs.existsSync(path.join(run(bauStart.cwd, "rev-parse", "--absolute-git-dir"), "ac-hooks", "pre-push")), "non-direct repo BAU is PR-only too");
 
   // --- the reviewer ---------------------------------------------------------------------------------------------
@@ -49,7 +50,7 @@ try {
   let routing: any = (effort: any) => realRoute({ role: "review", effort, usage: {}, active: [], now });
   const logs: string[] = [];
   const applied: any[] = [];
-  const rv = createReviewer({ github: gh as any, runner, dirs, events: ev, log: m => logs.push(m), route: (e: any) => routing(e), applied: (name: string, sha: string) => { applied.push([name, sha]); return sha === "good"; }, now: () => now });
+  const rv = createReviewer({ git: run, github: gh as any, runner, dirs, events: ev, log: m => logs.push(m), route: (e: any) => routing(e), applied: (name: string, sha: string) => { applied.push([name, sha]); return sha === "good"; }, now: () => now });
   const worker = (effort: string, id = "W1", extra = {}) => ({ id, issueRun: { ...created[0].issueRun, effort, ...extra } });
   const count = () => created.length;
 
@@ -230,7 +231,7 @@ try {
     },
     send() { if (rejectSend) throw new Error("worker unavailable"); },
   };
-  const loop = createReviewer({ github: gh as any, runner: loopRunner, dirs, events: ev, route: routing, now: () => now });
+  const loop = createReviewer({ git: run, github: gh as any, runner: loopRunner, dirs, events: ev, route: routing, now: () => now });
   prs = [{ number: 40, body: "## Self-review\nok" }];
   pull = { merged: false, state: "open" };
   comments = [{ body: "Review: CHANGES REQUESTED\nFix totals", created_at: new Date(now).toISOString() }];
@@ -255,7 +256,7 @@ try {
   const recovering: any = { id: "RECOVER", status: "idle", provider: "pi", issueRun: { ...created[0].issueRun, effort: "bau" } };
   let resumed = 0, allowed = true, issueState = "open";
   let issueRead: (() => Promise<void>) | undefined;
-  const recoveryDeps = {
+  const recoveryDeps = { git: run,
     github: (async (method: string, url: string) => {
       if (/\/issues\/\d+$/.test(url)) { await issueRead?.(); return { state: issueState }; }
       return gh(method, url);
@@ -319,7 +320,7 @@ try {
   // A premium assignment can claim the issue while PR evidence is still loading.
   let reviewAllowed = true, releaseFiles!: () => void, filesStarted!: () => void;
   const waitingFiles = new Promise<void>(resolve => { filesStarted = resolve; });
-  const racing = createReviewer({
+  const racing = createReviewer({ git: run,
     github: async (method, endpoint) => {
       if (/\/pulls\/\d+\/files/.test(endpoint)) {
         filesStarted();
@@ -344,7 +345,7 @@ try {
   reviewAllowed = true;
   let releaseCommit!: () => void, commitStarted!: () => void;
   const waitingCommit = new Promise<void>(resolve => { commitStarted = resolve; });
-  const racingNudge = createReviewer({
+  const racingNudge = createReviewer({ git: run,
     github: async (_method, endpoint) => {
       if (/\/pulls\?/.test(endpoint)) return [{ number: 7, head: { sha: "abc" } }];
       if (/\/commits\//.test(endpoint)) {
@@ -365,7 +366,7 @@ try {
   assert.equal(sent.length, sendsBeforeAssignment, "assignment claim during verdict wait prevents worker nudge");
 
   // setup failures are logged, contained and retried
-  const bad = createReviewer({ github: (async () => { throw new Error("gh down"); }) as any, runner, dirs, log: m => logs.push(m), route: routing, events: ev });
+  const bad = createReviewer({ git: run, github: (async () => { throw new Error("gh down"); }) as any, runner, dirs, log: m => logs.push(m), route: routing, events: ev });
   bad.turnEnded(worker("bau", "W9"), {}); await tick(); assert.match(logs.at(-1)!, /could not start: gh down/);
   assert.ok(steps("review").some(m => /^fail:.*gh down/.test(m)));
 } finally { fs.rmSync(root, { recursive: true, force: true }); }

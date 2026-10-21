@@ -1,8 +1,7 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
 import { githubRequest, type GithubRequest } from "./github-triage.ts";
-import { addWorktree, defaultDirs, installPrOnlyHook, topicOf, type IssueRun, type IssueRunner } from "./window-dispatch.ts";
+import { addWorktree, defaultDirs, defaultGit, installPrOnlyHook, topicOf, type Git, type IssueRun, type IssueRunner } from "./window-dispatch.ts";
 import { DIRECT_REPOS, isProtected, mayMergeProtected } from "./automation/policy.ts";
 import { pushPrompt, redoPrompt, reviewPrompt } from "./automation/review-prompts.ts";
 import type { RouteResponse } from "./automation/router.ts";
@@ -32,8 +31,8 @@ export interface ReviewDeps {
   route: (effort: IssueRun["effort"]) => RouteResponse; // the router's answer for a review of this effort
   events?: EventLog;
   dirs?: { repos: string; worktrees: string };
-  git?: (cwd: string, ...args: string[]) => string;
-  applied?: (repoName: string, sha: string) => boolean; // is the local checkout of a local-apply repo at the merge commit?
+  git?: Git;
+  applied?: (repoName: string, sha: string) => boolean | Promise<boolean>; // is the local checkout of a local-apply repo at the merge commit?
   log?: (msg: string) => void;
   now?: () => number;
 }
@@ -42,8 +41,8 @@ type ThreadLike = { id: string; provider?: string; model?: string; status?: stri
 export function createReviewer(deps: ReviewDeps) {
   const github = deps.github ?? githubRequest;
   const dirs = deps.dirs ?? defaultDirs();
-  const git = deps.git ?? ((cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", timeout: 60_000 }).trim());
-  const applied = deps.applied ?? ((name: string, sha: string) => { try { git(path.join(dirs.repos, name), "merge-base", "--is-ancestor", sha, "HEAD"); return true; } catch { return false; } });
+  const git = deps.git ?? defaultGit;
+  const applied = deps.applied ?? (async (name: string, sha: string) => { try { await git(path.join(dirs.repos, name), "merge-base", "--is-ancestor", sha, "HEAD"); return true; } catch { return false; } });
   const log = deps.log ?? (m => console.warn(m));
   const now = deps.now ?? Date.now;
   const ev = deps.events;
@@ -148,12 +147,12 @@ export function createReviewer(deps: ReviewDeps) {
     const names: string[] = Array.isArray(files) ? files.map((f: any) => String(f.filename)) : [];
     const guarded = !Array.isArray(files) || names.length >= 100 || (isProtected(names) && !mayMergeProtected(answer.route.provider)); // too many files to list: treat as protected
     const attempt = randomUUID().slice(0, 8);
-    const wt = addWorktree({ repo: name, dirs, dirName: `${name}-review-${run.number}-${attempt}`, branch: `review-${run.number}-${attempt}`, git });
+    const wt = await addWorktree({ repo: name, dirs, dirName: `${name}-review-${run.number}-${attempt}`, branch: `review-${run.number}-${attempt}`, git });
     const { cwd } = wt;
-    git(cwd, "fetch", "-q", "origin", run.branch!);
-    git(cwd, "checkout", "-q", "--detach", `origin/${run.branch}`);
+    await git(cwd, "fetch", "-q", "origin", run.branch!);
+    await git(cwd, "checkout", "-q", "--detach", `origin/${run.branch}`);
     const base = run.base ?? wt.base;
-    installPrOnlyHook(cwd, base, git); // Review fixes target the PR branch, never the default branch.
+    await installPrOnlyHook(cwd, base, git); // Review fixes target the PR branch, never the default branch.
     const reviews = (run.reviews ?? 0) + 1;
     const made = deps.runner.create({ ...answer.route, cwd, mode: "bypassPermissions", title: `${topicOf(run.repo)}:${run.number} review PR#${pr.number}${reviews > 1 ? ` #${reviews}` : ""}`, issueRun: { ...run, role: "review", pr: pr.number, worker: t.id, startedAt: now(), reviewedAt: undefined, finishedAt: undefined, reviews, redoing: undefined } });
     deps.runner.mark(t.id, { pr: pr.number, reviewedAt: now(), reviews, nudges: 0 });
@@ -217,7 +216,7 @@ export function createReviewer(deps: ReviewDeps) {
         judged("merged");
         if (!DIRECT_REPOS.includes(name)) return;
         const sha = String(pr.merge_commit_sha ?? "");
-        if (sha && applied(name, sha)) ev?.record({ step: "apply", kind: "ok", ref: run.key, msg: `${name} checkout is at the merge commit` });
+        if (sha && await applied(name, sha)) ev?.record({ step: "apply", kind: "ok", ref: run.key, msg: `${name} checkout is at the merge commit` });
         else ev?.record({ step: "apply", kind: "fail", ref: run.key, msg: `${name} checkout is not at the merge commit yet` });
         return;
       }

@@ -78,11 +78,11 @@ export function createPremiumAssigner(deps: AssignmentDeps) {
       const branch = pr?.head?.ref ?? `premium-issue-${req.number}-${randomUUID().slice(0, 8)}`;
       if (typeof branch !== "string" || branch.startsWith("-") || /[\s\x00-\x1f]/.test(branch)) throw new Error("Invalid pull request branch.");
       const attempt = randomUUID().slice(0, 8), name = related()[0].issueRun!.repo.split("/")[1];
-      const wt = addWorktree({ repo: name, dirs: deps.dirs, dirName: `${name}-premium-${req.number}-${attempt}`, branch, git });
+      const wt = await addWorktree({ repo: name, dirs: deps.dirs, dirName: `${name}-premium-${req.number}-${attempt}`, branch, git });
       let made: { id: string } | undefined;
       try {
-        if (pr) { git(wt.cwd, "fetch", "-q", "origin", `refs/heads/${branch}`); git(wt.cwd, "reset", "--hard", "FETCH_HEAD"); }
-        installPrOnlyHook(wt.cwd, wt.base, git);
+        if (pr) { await git(wt.cwd, "fetch", "-q", "origin", `refs/heads/${branch}`); await git(wt.cwd, "reset", "--hard", "FETCH_HEAD"); }
+        await installPrOnlyHook(wt.cwd, wt.base, git);
         const runs = related().map(t => ({ id: t.id, provider: t.provider, model: t.model, status: t.status, background: t.background, archived: t.archived, cwd: t.cwd, log: path.join(deps.dataDir, "logs", `${t.id}.jsonl`), lastRun: t.lastRun, quotaPaused: t.quotaPaused, issueRun: t.issueRun }));
         const prompt = [
           `You own the premium escalation for ${repo}#${req.number}. Continue its pending work to completion in this isolated private checkout.`,
@@ -97,7 +97,7 @@ export function createPremiumAssigner(deps: AssignmentDeps) {
         const thread = made = deps.runner.create({ provider: req.provider, model: req.model, effort: req.effort, mode: req.mode, ...(req.provider === "claude" ? { claudeAccount: req.claudeAccount ?? "sunny" } : {}), cwd: wt.cwd, title: `${topicOf(repo)}:${req.number} premium`, issueRun: { key, repo, number: req.number, effort: "deep", role: "debug", premiumAssignment: true, branch, base: pr?.base?.ref ?? wt.base, ...(pr ? { pr: pr.number } : {}) } });
         deps.runner.send(thread.id, prompt);
         return { v: 1, thread: thread.id };
-      } catch (error) { if (made) deps.runner.remove(made.id); wt.remove(); throw error; }
+      } catch (error) { if (made) deps.runner.remove(made.id); await wt.remove(); throw error; }
     } finally { pending.delete(key); }
   }
   return Object.assign(assign, { active });
