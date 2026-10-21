@@ -551,11 +551,27 @@ export function enhance(root, mounts = []) {
   mountMedia(root, mounts);
 }
 
+/** Strip YAML frontmatter (--- ... ---) from markdown source. Returns { content, frontmatter }. */
+export function stripFrontmatter(src) {
+  if (!src) return { content: src, frontmatter: null };
+  const lines = src.split('\n');
+  if (!/^---$/.test(lines[0])) return { content: src, frontmatter: null };
+  let end = -1;
+  for (let i = 1; i < lines.length; i++) {
+    if (/^---$/.test(lines[i]) || /^\.\.\.$/.test(lines[i])) { end = i; break; }
+  }
+  if (end === -1) return { content: src, frontmatter: null };
+  const frontmatter = lines.slice(1, end).join('\n');
+  const content = lines.slice(end + 1).join('\n');
+  return { content, frontmatter };
+}
+
 /** Markdown source -> sanitised, highlighted, enhanced DOM inside `target`. Media/chart nodes survive re-renders (streaming) when unchanged. */
 export function renderMarkdown(src, target) {
   const old = new Map();
   for (const n of target.querySelectorAll("[data-keep]")) { if (!old.has(n.dataset.keep)) old.set(n.dataset.keep, []); old.get(n.dataset.keep).push(n); }
-  const frag = DOMPurify.sanitize(md.parse(src || ""), { RETURN_DOM_FRAGMENT: true, FORBID_ATTR: ["autoplay"] });
+  const { content } = stripFrontmatter(src || "");
+  const frag = DOMPurify.sanitize(md.parse(content), { RETURN_DOM_FRAGMENT: true, FORBID_ATTR: ["autoplay"] });
   const mounts = [];
   kept = old;
   try { enhance(frag, mounts); } finally { kept = null; }
