@@ -50,12 +50,12 @@ assert.deepEqual(plan({ now, usage: { claude: win(95, 30), codex: win(10, 30) },
 assert.deepEqual(plan({ now, usage: { claude: win(10, 60) }, issues, done: new Set(["o/r#1", "o/r#2", "o/r#3", "o/r#4", "o/r#5"]) }), []);
 assert.deepEqual(plan({ now, usage: { claude: win(10, 60) }, issues: [{ ...issue(9, "BAU"), labels: ["bug"] }], done: new Set() }), [], "unlabelled issues wait for triage");
 
-// thread names: <repo>:<issue#> <short desc>, at most 30 characters (issue #11: Android width)
+// thread names: <repo>:<issue#> <short desc>, at most 20 characters (issue #11: Android width)
 assert.equal(topicOf("Amit-Roy/agent-console"), "ac");
 assert.equal(topicOf("o/brain"), "brain"); assert.equal(topicOf("o/portfolio-lab"), "pl"); assert.equal(topicOf("o/abcdefghijklmnop"), "abcdefghij");
-assert.equal(threadTitle({ repo: "Amit-Roy/agent-console", number: 10, title: "Identify unused reset windows" }), "ac:10 Identify unused reset");
-assert.equal(threadTitle({ repo: "o/brain", number: 3, title: "[Bug] feat: " + "word ".repeat(20) }).length <= 30, true);
-assert.equal(threadTitle({ repo: "o/r", number: 7, title: "x".repeat(80) }), "r:7 " + "x".repeat(26));
+assert.equal(threadTitle({ repo: "Amit-Roy/agent-console", number: 10, title: "Identify unused reset windows" }), "ac:10 Identify");
+assert.equal(threadTitle({ repo: "o/brain", number: 3, title: "[Bug] feat: " + "word ".repeat(20) }).length <= 20, true);
+assert.equal(threadTitle({ repo: "o/r", number: 7, title: "x".repeat(80) }), "r:7 " + "x".repeat(16));
 assert.equal(threadTitle({ repo: "o/r", number: 7, title: "" }), "r:7 issue");
 
 // prompts: PRs everywhere except the local-apply repos; trivial always needs a reviewer

@@ -22,5 +22,7 @@ try{
  // a title given at creation is a manual title
  const named=threads.create({provider:'fixture',cwd:dir,title:'agent-console:10 Idle windows'});assert.equal(named.titleLocked,true);
  threads.send(named.id,'completely different subject entirely');await tick();assert.equal(threads.get(named.id)!.title,'agent-console:10 Idle windows');
+ // 20-char cap (issue #11: Android width): long title truncated to MAX_TITLE
+ const capped=threads.create({provider:'fixture',cwd:path.join(dir,'capped')});threads.send(capped.id,'fix the login redirect bug please entirely');await tick();assert.ok(threads.get(capped.id)!.title!.length <= 20, 'title exceeds Android width');assert.equal(threads.get(capped.id)!.title,'fix the login');
 }finally{threads.shutdown();fs.rmSync(dir,{recursive:true,force:true});}
 console.log('PASS thread titles: first prompt names, history-based input, manual rename and creation title lock');

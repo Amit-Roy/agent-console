@@ -1,0 +1,97 @@
+{
+  "title": "Thread Naming Algorithm",
+  "subtitle": "Thread title generation for Android display width",
+  "direction": "row",
+  "items": [
+    {
+      "group": "Thread Naming",
+      "border": "solid",
+      "color": "indigo",
+      "icon": "text",
+      "direction": "row",
+      "items": [
+        {
+          "id": "max_title",
+          "label": "MAX_TITLE",
+          "tech": "JS const",
+          "desc": "Max char width (30)",
+          "icon": "ruler",
+          "color": "orange",
+          "status": "unchanged"
+        },
+        {
+          "id": "max_words",
+          "label": "MAX_WORDS",
+          "tech": "JS const",
+          "desc": "Max word count (5)",
+          "icon": "text",
+          "color": "orange",
+          "status": "unchanged"
+        },
+        {
+          "id": "clean_title",
+          "label": "cleanTitle()",
+          "tech": "JS function",
+          "desc": "Cleans model output",
+          "icon": "code",
+          "color": "orange",
+          "status": "unchanged"
+        },
+        {
+          "id": "prompt",
+          "label": "suggestTitle()",
+          "tech": "Template",
+          "desc": "LLM title prompt",
+          "icon": "terminal",
+          "color": "orange",
+          "status": "unchanged"
+        }
+      ]
+    },
+    {
+      "group": "Window Dispatch",
+      "border": "solid",
+      "color": "purple",
+      "icon": "grid",
+      "direction": "row",
+      "items": [
+        {
+          "id": "max_thread_title",
+          "label": "MAX_THREAD",
+          "tech": "JS const",
+          "desc": "Max char width (30)",
+          "icon": "ruler",
+          "color": "orange",
+          "status": "unchanged"
+        },
+        {
+          "id": "threadTitle",
+          "label": "threadTitle()",
+          "tech": "JS function",
+          "desc": "Generates issue title",
+          "icon": "terminal",
+          "color": "orange",
+          "status": "unchanged"
+        }
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "from": "max_title",
+      "to": "clean_title"
+    },
+    {
+      "from": "max_words",
+      "to": "clean_title"
+    },
+    {
+      "from": "prompt",
+      "to": "clean_title"
+    },
+    {
+      "from": "max_thread_title",
+      "to": "threadTitle"
+    }
+  ]
+}

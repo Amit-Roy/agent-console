@@ -5,6 +5,7 @@ import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { DATA_DIR } from "./auth.ts";
 import { EFFORT_LABELS, PRIORITY_LABELS, githubRequest, type GithubRequest } from "./github-triage.ts";
+import { MAX_TITLE } from "./providers/title.ts";
 import type { ProviderUsage, UsageWindow } from "./usage.ts";
 import type { EventLog } from "./automation/events.ts";
 import { route as routeWork } from "./automation/router.ts";
@@ -103,7 +104,6 @@ export function plan(input: { now: number; usage: Record<string, ProviderUsage>;
 }
 
 
-const MAX_THREAD_TITLE = 20; // limited to width displayable on Android (issue #11: Android)
 /** Short repo label for thread names: the name itself when short, else initials of a hyphenated name, else its first 10 characters. */
 export function topicOf(repo: string): string {
   const name = repo.split("/")[1] ?? repo;
@@ -112,10 +112,10 @@ export function topicOf(repo: string): string {
   return initials.length >= 2 && initials.length <= 6 ? initials : name.slice(0, 10);
 }
 
-/** Thread name: `<repo>:<issue#> <short desc>`, at most 20 characters. Limited for Android display. Created as a user-chosen title, so the auto-namer and later renames never touch it. */
+/** Thread name: `<repo>:<issue#> <short desc>`, at most ${MAX_TITLE} characters. Limited for Android display. Created as a user-chosen title, so the auto-namer and later renames never touch it. */
 export function threadTitle(issue: Pick<Issue, "repo" | "number" | "title">): string {
   const prefix = `${topicOf(issue.repo)}:${issue.number} `;
-  const room = Math.max(8, MAX_THREAD_TITLE - prefix.length);
+  const room = Math.max(8, MAX_TITLE - prefix.length);
   const words = issue.title.replace(/^\s*(?:\[[^\]]*\]|\w+:)\s*/, "").replace(/\s+/g, " ").trim().split(" ").filter(Boolean);
   let desc = "";
   for (const w of words) { if ((desc + " " + w).trim().length > room) break; desc = (desc + " " + w).trim(); }
