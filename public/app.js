@@ -11,6 +11,7 @@ import { setupNotifications } from "/notifications.js";
 import { createChatSearch } from "/chat-search.js";
 import { createSchedules, REPEAT_ITEMS, DAY_ITEMS } from "/schedules.js";
 import { createAutoLane } from "/automation-lane.js";
+import { openJobDebug } from "/automation-job-debug.js";
 import { autoCandidates, autoPick } from "/auto-pick.js";
 
 composerField($("input"));
@@ -671,7 +672,7 @@ const schedules = createSchedules({
 
 // ---------- threads UI ----------
 const cur = () => state.threads.get(state.current);
-const autoLane = createAutoLane({ state, openThread: (id) => openThread(id), setNav: (open) => setNav(open), provLabel: (id) => provLabel(id), ago: (ts) => ago(ts), assignPremium: openPremiumDialog });
+const autoLane = createAutoLane({ state, openThread: (id) => openThread(id), setNav: (open) => setNav(open), provLabel: (id) => provLabel(id), ago: (ts) => ago(ts), assignPremium: openPremiumDialog, debugIssue: (issue) => openJobDebug({ ...issue, openThread: (id) => { setNav(false); openThread(id); } }) });
 function ago(ts) {
   const s = Math.max(0, (Date.now() - ts) / 1000);
   if (s < 60) return "now";

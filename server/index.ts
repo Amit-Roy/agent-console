@@ -18,6 +18,7 @@ import { usageEvents } from "./automation/usage-events.ts";
 import { automationApi, scanHooks } from "./automation/snapshot.ts";
 import { canonicalIssue, createPremiumAssigner } from "./automation/assign.ts";
 import { startDebug } from "./automation/debug.ts";
+import { diagnoseJob, readJobError } from "./automation/job.ts";
 import { loadConfig as loadDispatchConfig } from "./window-dispatch.ts";
 import { loadOpenerConfig } from "./window-opener.ts";
 import express from "express";
@@ -413,6 +414,11 @@ app.get("/api/automation", (req, res) => {
 if (process.env.AGENT_CONSOLE_MOCK === "1") { // UI tests add events after start-up; never exists on a real server
   app.post("/api/automation/_mock/event", express.json(), (req, res) => { try { res.json(automationLog.record(req.body)); } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); } });
 }
+app.get("/api/automation/job", (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  try { res.json(diagnoseJob({ v: req.query.v === undefined ? undefined : Number(req.query.v), repo: req.query.repo as string, number: Number(req.query.number) }, { threads: () => threads.list(), events: () => automationLog.all(), lastError: id => readJobError(DATA_DIR, id) })); }
+  catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
 app.post("/api/automation/assign", sameOrigin, express.json({ limit: "4kb" }), async (req, res) => {
   try {
     const { v, repo, number, provider, model, effort, mode, claudeAccount } = req.body ?? {};

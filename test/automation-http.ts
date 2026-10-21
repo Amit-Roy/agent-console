@@ -50,10 +50,21 @@ try {
     child.stdout.on("data", chunk => { output = (output + chunk.toString()).slice(-2048); if (output.includes("agent-console listening on")) { clearTimeout(timer); resolve(); } });
   });
   assert.equal((await fetch(origin + "/api/automation")).status, 401);
+  assert.equal((await fetch(origin + "/api/automation/job?repo=o/r&number=2")).status, 401);
   assert.equal((await fetch(origin + "/api/automation/log?step=review")).status, 401);
   const login = await fetch(origin + "/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ password }) });
   const headers = { Cookie: login.headers.get("set-cookie")!.split(";")[0] };
   const get = (p: string) => fetch(origin + p, { headers });
+
+  const jobResponse = await get("/api/automation/job?v=1&repo=O/R&number=2");
+  assert.equal(jobResponse.status, 200); assert.equal(jobResponse.headers.get("cache-control"), "no-store");
+  const job = await jobResponse.json();
+  assert.equal(job.v, 1); assert.equal(job.repo, "o/r"); assert.equal(job.state, "blocked");
+  assert.equal(job.summary, "no checkout"); assert.equal(job.events.length, 1);
+  assert.equal(job.workflow.find((s: any) => s.id === "worktree").state, "failed");
+  assert.equal((await get("/api/automation/job?v=2&repo=o/r&number=2")).status, 400);
+  assert.equal((await get("/api/automation/job?repo=../r&number=2")).status, 400);
+  assert.equal((await get("/api/automation/job?repo=o/r&number=999")).status, 400);
 
   const res = await get("/api/automation");
   assert.equal(res.status, 200); assert.equal(res.headers.get("cache-control"), "no-store");
