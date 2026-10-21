@@ -41,7 +41,7 @@ try {
   const gh = async (_m: string, url: string) => {
     if (/\/issues\/\d+\/comments/.test(url)) return comments;
     if (/\/pulls\?state=open&head=/.test(url)) return prs;
-    if (/\/pulls\/\d+\/files/.test(url)) return files.map(filename => ({ filename }));
+    if (/\/pulls\/\d+\/files/.test(url)) return files?.map(filename => ({ filename })) ?? null;
     if (/\/pulls\/\d+$/.test(url)) return pull;
     if (/\/commits\/\w+$/.test(url)) return { commit: { committer: { date: new Date(headAt).toISOString() } } };
     throw new Error("unexpected " + url);
@@ -85,12 +85,29 @@ try {
   rv.turnEnded(worker("bau", "W1", { reviewedAt: now }), {}); await tick(); assert.equal(count(), 3);
   await rv.sweep([{ id: "W1", status: "idle", issueRun: { ...created[0].issueRun, effort: "bau", finishedAt: now, reviewedAt: now } }] as any); assert.equal(count(), 3);
 
-  // a PR with a Self-review section passes that step; a protected path is never merged by the reviewer
+  // a PR with a Self-review section passes that step; a protected path is not merged by a Pi reviewer
+  const premiumRouting = routing;
+  routing = () => ({ v: 1, decision: "route", route: { provider: "pi", model: "m", effort: "low" }, alternatives: [], why: "" });
   prs = [{ number: 8, body: "x\n\n## Self-review\nchecked; failed first: t" }]; files = ["server/window-dispatch.ts"];
   await rv.sweep([{ id: "W2", status: "idle", issueRun: { ...created[0].issueRun, key: "o/webapp#44", number: 44, effort: "trivial", finishedAt: now } }] as any);
   assert.notEqual(created.at(-1).cwd, r.cwd, "each review receives a fresh private checkout");
   assert.ok(steps("self_review").includes("ok:Self-review section present"));
   assert.match(sent.at(-1).text, /Do not merge it/); assert.doesNotMatch(sent.at(-1).text, /gh pr merge 8/);
+  // a premium reviewer may merge the same protected path
+  routing = premiumRouting;
+  await rv.sweep([{ id: "W2b", status: "idle", issueRun: { ...created[0].issueRun, key: "o/webapp#48", number: 48, effort: "trivial", finishedAt: now } }] as any);
+  assert.match(sent.at(-1).text, /gh pr merge 8 --repo o\/webapp --squash/); assert.doesNotMatch(sent.at(-1).text, /Do not merge it/);
+  // Incomplete file lists still block merging for every reviewer provider.
+  for (const provider of ["claude", "codex", "pi"]) {
+    routing = () => ({ v: 1, decision: "route", route: { provider, model: "m", effort: "low" }, alternatives: [], why: "" });
+    for (const unavailable of [false, true]) {
+      files = unavailable ? null as any : Array.from({ length: 100 }, (_, i) => `src/${i}.ts`);
+      await rv.sweep([{ id: `files-${provider}-${unavailable}`, status: "idle", issueRun: { ...created[0].issueRun, effort: "trivial", finishedAt: now } }] as any);
+      assert.match(sent.at(-1).text, /Do not merge it/);
+      assert.doesNotMatch(sent.at(-1).text, /gh pr merge 8/);
+    }
+  }
+  routing = premiumRouting;
   files = ["src/a.ts"];
 
   // deferral: no review model has room now; the sweep tries again later
@@ -175,10 +192,10 @@ try {
   assert.equal(sent.length, s3, "no redo after the cap"); assert.ok(ev.read({ step: "redo" as any }).events.some(e => /a person decides/.test(e.msg ?? "")));
   await rv.sweep([{ id: "W51", status: "idle", issueRun: { ...created[0].issueRun, key: "o/webapp#51", number: 51, effort: "bau", reviews: 3 } }] as any);
   assert.ok(steps("review").some(m => /3 reviews without a merge/.test(m)), "the worker is not reviewed a fourth time");
-  // approved but not merged (protected path): a person merges; nothing goes back to the worker
+  // An approved PR with a failed merge reports the blocker; no worker redo is needed.
   comments = [{ body: "Review: APPROVED", created_at: new Date(now).toISOString() }];
   rv.turnEnded(redo({ reviews: 1 }), {}); await tick();
-  assert.ok(steps("merge").some(m => /approved but not merged/.test(m))); assert.equal(sent.length, s3);
+  assert.ok(steps("merge").some(m => /approved but not merged/.test(m))); assert.ok(steps("merge").every(m => !/a person merges/.test(m))); assert.equal(sent.length, s3);
   // a reviewer whose end was missed (restart) is judged by the sweep
   pull = { merged: true, merge_commit_sha: "x" };
   await rv.sweep([redo({ reviews: 1 })]);
