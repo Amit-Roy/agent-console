@@ -15,6 +15,7 @@ fs.mkdirSync(path.join(data, "pi-sessions"), { recursive: true });
 const { usage, ProviderUsage } = await import("../server/usage.ts");
 const { Threads } = await import("../server/threads.ts");
 const { PROVIDERS } = await import("../server/providers/index.ts");
+const { resumeDue, DEFAULTS } = await import("../server/window-dispatch.ts");
 
 // Preserve provider IDs for quota isolation while keeping readiness and resumed turns local.
 const mock = PROVIDERS.get("mock")!;
@@ -118,32 +119,32 @@ simulateOtherError(threads, otherErrorThread);
 assert.ok(!threads.get(otherErrorThread)?.quotaPaused, "Non-rate-limit error should NOT mark thread as quota-paused");
 pass("Non-rate-limit error does not mark quota-paused");
 
-// Test 5: Quota resumption - when window resets, quota-paused thread is resumed via usage callback
+// Test 5: resumeDue uses the Deep-issue gate: last 180 min of a window below 60% used, last 90 min otherwise, never at 90%+
+const now0 = Date.now();
+const cfg = { ...DEFAULTS, enabled: true, dryRun: false };
+const win = (used: number, minutesLeft: number, label = "5-hour") => ({ label, used, limit: 100, unit: "%", resetsAt: now0 + minutesLeft * 60_000 });
+const at = (windows: any[]) => ({ windows, updatedAt: now0 });
+assert.deepEqual(resumeDue({ claude: at([win(10, 175)]) }, now0, cfg), ["claude"], "low-usage window resumes 180 min before its end");
+assert.deepEqual(resumeDue({ claude: at([win(10, 185)]) }, now0, cfg), [], "not before 180 min left");
+assert.deepEqual(resumeDue({ codex: at([win(70, 120)]) }, now0, cfg), [], "a busier window waits for the last 90 min");
+assert.deepEqual(resumeDue({ codex: at([win(70, 85)]) }, now0, cfg), ["codex"], "busier window resumes in its last 90 min");
+assert.deepEqual(resumeDue({ codex: at([win(95, 30)]) }, now0, cfg), [], "a window at maxUsedPct has no room");
+assert.deepEqual(resumeDue({ claude: at([win(10, 60), win(100, 3 * 24 * 60, "7-day")]) }, now0, cfg), [], "an exhausted 7-day window blocks");
+assert.deepEqual(resumeDue({ "claude:nefro": at([win(10, 60)]), pi: at([win(10, 60)]) }, now0, cfg), ["claude:nefro"], "premium usage keys only");
+assert.deepEqual(resumeDue({ claude: at([win(10, 175)]) }, now0, { ...cfg, lowUsageLeadMinutes: 120 }), [], "lead time follows the dispatch config");
+pass("resumeDue follows the Deep-issue window gate");
+
+// Test 6: a quota-paused thread resumes once, for any window label on its provider
 const resumeThread = createThread(threads, "codex", "gpt-6.1-sol");
 recordExhaustedUsage("codex");
 simulateQuotaExhausted(threads, resumeThread, "codex");
-assert.ok(threads.get(resumeThread)?.quotaPaused, "Thread should be quota-paused before reset");
-
-// Subscribe to window reset and verify the callback triggers resume
-let callbackFired = false;
-usage.subscribeWindowReset((provider, windowLabel) => {
-  callbackFired = true;
-  const resumed = threads.resumeQuotaPaused(provider, windowLabel);
-  assert.equal(resumed, 1, "One thread should be resumed via callback");
-});
-// Record reset with prevResetsAt in the past (window already reset)
-const prevResetsAt = Date.now() - 1000;
-recordResetUsage("codex", "5-hour", prevResetsAt);
-assert.ok(callbackFired, "subscribeWindowReset callback should have fired");
-assert.ok(!threads.get(resumeThread)?.quotaPaused, "quotaPaused should be cleared after resumption");
-assert.deepEqual(resumedThreads, [resumeThread], "The quota-paused thread should receive a resume message");
-pass("Quota-paused thread resumed via usage callback on window reset");
-
-// Test 6: Duplicate resume notifications are handled gracefully
-const resumed2 = threads.resumeQuotaPaused("codex", "5-hour");
-assert.equal(resumed2, 0, "Second resume call should resume nothing (already cleared)");
-assert.deepEqual(resumedThreads, [resumeThread], "No duplicate resume message sent");
-pass("Duplicate resume notifications handled gracefully");
+assert.ok(threads.get(resumeThread)?.quotaPaused, "Thread should be quota-paused");
+resumedThreads.length = 0;
+assert.equal(threads.resumeQuotaPaused("codex"), 1, "One thread resumed");
+assert.ok(!threads.get(resumeThread)?.quotaPaused, "quotaPaused cleared after resumption");
+assert.deepEqual(resumedThreads, [resumeThread], "The quota-paused thread receives a resume message");
+assert.equal(threads.resumeQuotaPaused("codex"), 0, "Second resume call resumes nothing");
+pass("Quota-paused thread resumed once");
 
 // Test 7: Archived thread should NOT be resumed even if quota-paused
 // Clear quotaPaused from test 1's thread so it doesn't interfere
@@ -153,76 +154,25 @@ const archivedResumeThread = createThread(threads, "claude", "sonnet");
 recordExhaustedUsage("claude");
 simulateQuotaExhausted(threads, archivedResumeThread, "claude");
 threads.archive(archivedResumeThread, true);
-const resumed3 = threads.resumeQuotaPaused("claude", "5-hour");
-assert.equal(resumed3, 0, "Archived thread should not be resumed; no other quota-paused threads exist");
+assert.equal(threads.resumeQuotaPaused("claude"), 0, "Archived thread should not be resumed; no other quota-paused threads exist");
 assert.ok(!threads.get(archivedResumeThread)?.quotaPaused, "quotaPaused should be cleared on archive");
 pass("Archived thread not resumed; quotaPaused cleared on archive");
 
-// Test 8: Usage module detects window reset and triggers resume callback (end-to-end)
-const windowResetThread = createThread(threads, "claude", "opus");
-recordExhaustedUsage("claude");
-simulateQuotaExhausted(threads, windowResetThread, "claude");
-assert.ok(threads.get(windowResetThread)?.quotaPaused, "Thread should be quota-paused before usage reset");
-resumedThreads.length = 0;
-callbackFired = false;
-usage.subscribeWindowReset((provider, windowLabel) => {
-  callbackFired = true;
-  const resumed = threads.resumeQuotaPaused(provider, windowLabel);
-  assert.equal(resumed, 1, "One thread should be resumed via callback");
-});
-const prevResetsAt2 = Date.now() - 1000;
-recordResetUsage("claude", "5-hour", prevResetsAt2);
-assert.ok(callbackFired, "subscribeWindowReset callback should have fired");
-assert.ok(!threads.get(windowResetThread)?.quotaPaused, "quotaPaused should be cleared after resumption");
-assert.deepEqual(resumedThreads, [windowResetThread], "The quota-paused thread should receive a resume message");
-pass("Usage module detects window reset and triggers resume callback end-to-end");
-
-// Test 9: Duplicate record() calls should not fire callback multiple times
-const dupThread = createThread(threads, "codex", "gpt-6.1-sol");
-recordExhaustedUsage("codex");
-simulateQuotaExhausted(threads, dupThread, "codex");
-resumedThreads.length = 0;
-callbackFired = false;
-let callbackCount = 0;
-usage.subscribeWindowReset((provider, windowLabel) => {
-  callbackCount++;
-  callbackFired = true;
-  const resumed = threads.resumeQuotaPaused(provider, windowLabel);
-  assert.equal(resumed, 1, "One thread should be resumed");
-});
-const prevResetsAt3 = Date.now() - 1000;
-recordResetUsage("codex", "5-hour", prevResetsAt3);
-// Call record again with same data - should not fire callback again
-recordResetUsage("codex", "5-hour", prevResetsAt3);
-assert.ok(callbackFired, "Callback should fire on first call");
-assert.equal(callbackCount, 1, "Callback should fire only once for duplicate records");
-assert.ok(!threads.get(dupThread)?.quotaPaused, "quotaPaused should be cleared after resumption");
-pass("Duplicate record() calls do not fire callback multiple times");
-
-// Test 10: Multiple providers - only affected provider's threads are resumed
+// Test 8: only the given provider's threads are resumed
 const multiThread = createThread(threads, "codex", "gpt-6.1-sol");
 recordExhaustedUsage("codex");
 simulateQuotaExhausted(threads, multiThread, "codex");
 recordExhaustedUsage("claude");
 const multiThread2 = createThread(threads, "claude", "sonnet");
 simulateQuotaExhausted(threads, multiThread2, "claude");
-assert.ok(threads.get(multiThread)?.quotaPaused);
-assert.ok(threads.get(multiThread2)?.quotaPaused);
 resumedThreads.length = 0;
-callbackFired = false;
-usage.subscribeWindowReset((provider, windowLabel) => {
-  callbackFired = true;
-  const resumed = threads.resumeQuotaPaused(provider, windowLabel);
-  assert.equal(resumed, 1, "One thread should be resumed via callback");
-});
-recordResetUsage("codex", "5-hour", Date.now() - 1000);
-assert.ok(callbackFired, "Callback should fire for codex window reset");
+assert.equal(threads.resumeQuotaPaused("codex"), 1);
 assert.ok(!threads.get(multiThread)?.quotaPaused, "Codex thread quotaPaused cleared");
 assert.ok(threads.get(multiThread2)?.quotaPaused, "Claude thread still quota-paused");
 assert.deepEqual(resumedThreads, [multiThread], "Only codex thread resumed");
 pass("Multiple providers - only affected provider's threads resumed");
 
-// Test 11: a running thread does not make resumeQuotaPaused throw or lose the other resumes
+// Test 9: a running thread does not make resumeQuotaPaused throw or lose the other resumes
 const busyThread = createThread(threads, "codex");
 const idleThread = createThread(threads, "codex");
 for (const id of [busyThread, idleThread]) threads.get(id)!.quotaPaused = { provider: "codex", windowLabel: "weekly", resetsAt: Date.now() + 1000 };
