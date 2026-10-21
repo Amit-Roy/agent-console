@@ -277,3 +277,53 @@ export function classifyTriage(input: TriageInput): Promise<TriageDecision> {
   classifier ??= createTriageClassifier();
   return classifier(input);
 }
+
+/** Run pi to edit/analyze a GitHub issue draft.
+ *  Returns { title, body } or null if pi failed. */
+export async function piEditIssueDraft(draft: string): Promise<{title: string, body: string} | null> {
+  if (!draft || draft.trim().length === 0) return null;
+  
+  const systemPrompt = `You are an issue editor. Given a GitHub issue draft, produce an improved title and body.
+  - The title should be concise (max 100 chars), descriptive, and follow GitHub issue title conventions.
+  - The body should be well-structured with clear description.
+  - Return ONLY a JSON object with "title" and "body" fields. No other text, no explanations.
+  - If the draft is insufficient, return the original draft as title and body.`;
+  
+  const prompt = `Edit this GitHub issue draft to produce a better title and body:\n\n${draft}\n\nReturn JSON: {"title":"...", "body":"..."}`;
+  
+  // Try NVIDIA pi first, then openrouter fallback
+  const providers = [
+    { provider: "nvidia", model: "nvidia/nemotron-3-super-120b-a12b" },
+    { provider: "openrouter", model: "nvidia/nemotron-3-super-120b-a12b:free" },
+  ];
+  
+  for (const { provider, model } of providers) {
+    try {
+      const env: NodeJS.ProcessEnv = { ...childEnv(), PI_CODING_AGENT_DIR: "/tmp", PI_OFFLINE: "1", PI_TELEMETRY: "0" };
+      const dir = fs.mkdtempSync(path.join("/tmp", "ac-issue-pi-"));
+      fs.writeFileSync(path.join(dir, "prompt.txt"), prompt, { mode: 0o600 });
+      fs.writeFileSync(path.join(dir, "system.txt"), systemPrompt, { mode: 0o600 });
+      fs.writeFileSync(path.join(dir, "models.json"), JSON.stringify(piTriageModelConfig(provider, model)), { mode: 0o600 });
+      fs.writeFileSync(path.join(dir, "settings.json"), JSON.stringify({ retry: { enabled: false }, defaultThinkingLevel: "off" }), { mode: 0o600 });
+      
+      const args = piTriageArgs(provider, model, systemPrompt);
+      const raw = await runTriageCommand("pi", args, prompt, dir, env, 150_000, 192_000, "pi-events");
+      
+      // Parse pi output
+      const answer = parsePiTriageOutput(raw);
+      if (answer) {
+        try {
+          const parsed = JSON.parse(answer);
+          if (typeof parsed.title === "string" && typeof parsed.body === "string") {
+            return { title: parsed.title.slice(0, 100), body: parsed.body };
+          }
+        } catch {}
+      }
+    } catch (error) {
+      // Continue to next provider
+    }
+  }
+  
+  // If all providers failed, return the original draft
+  return { title: draft.trim().slice(0, 100), body: draft.trim() };
+}

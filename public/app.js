@@ -468,6 +468,7 @@ const THREAD_ACTIONS = [
   { value: "economy", label: "Economy settings", desc: "Use medium effort and turn the advisor off; keep the selected model", icon: "sparkle" },
   { value: "fork", label: "Fork", desc: "Continue in a new thread", icon: "fork" },
   { value: "fork-recent", label: "Fork with recent context", desc: "Carry a short recent handoff; keep the full transcript available", icon: "fork" },
+  { value: "create-issue", label: "Create GitHub Issue", desc: "Open GitHub new issue page with typed text", icon: "compose" },
   { value: "download", label: "Download", desc: "Save as a Markdown file", icon: "download" },
   { value: "share", label: "Share", desc: "Send the conversation as text", icon: "share" },
   { value: "details", label: "Run details", desc: "Model, effort, tokens and load timings", icon: "code" },
@@ -548,6 +549,24 @@ async function runThreadAction(id, action) {
     } catch {
       toast("Sharing is not available here. Use Download instead.");
     }
+  } else if (action === "create-issue") {
+    const draft = $("input").value?.trim();
+    if (!draft) { toast("No text in composer to create issue from."); return; }
+    const reqId = `create-issue-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const onReply = (m) => {
+      if (m.t === "create_issue_done") {
+        ws?.removeEventListener("message", onReply);
+        const title = m.title ?? draft.slice(0, 100);
+        const body = m.body ?? draft;
+        const url = `https://github.com/new?title=${encodeURIComponent(title)}&body=${encodeURIComponent(body)}`;
+        window.open(url, "_blank", "noopener,noreferrer");
+      } else if (m.t === "create_issue_error") {
+        ws?.removeEventListener("message", onReply);
+        toast(`Failed to create issue: ${m.message}`);
+      }
+    };
+    ws?.addEventListener("message", onReply);
+    send({ t: "create_issue", draft, cid: reqId });
   }
 }
 

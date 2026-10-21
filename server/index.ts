@@ -23,6 +23,7 @@ import { fileURLToPath } from "node:url";
 import { WebSocketServer, type WebSocket } from "ws";
 import { authed, CODER_HOSTS, cookieFrom, limited, makeToken, passwordOk, PASSWORD, recordFail, setCookie, tokenValid } from "./auth.ts";
 import { providerInfo, refreshPiModels } from "./providers/index.ts";
+import { piEditIssueDraft } from "./providers/triage-model.ts";
 import { threadToMarkdown } from "./export.ts";
 import { Threads, turnTiming } from "./threads.ts";
 import { Schedules, describe } from "./schedules.ts";
@@ -468,6 +469,14 @@ wss.on("connection", (ws) => {
         case "create": {
           const t = threads.create({ provider: m.provider, claudeAccount: typeof m.claudeAccount === "string" ? m.claudeAccount : undefined, cwd: safeCwd(m.cwd), mode: m.mode, model: m.model, effort: m.effort, title: m.title });
           return reply({ t: "created", thread: t });
+        }
+        case "create_issue": {
+          try {
+            const { title, body } = await piEditIssueDraft(m.draft ?? "");
+            return reply({ t: "create_issue_done", title, body });
+          } catch (e: any) {
+            return reply({ t: "create_issue_error", message: e?.message ?? String(e) });
+          }
         }
         case "send":
           if (typeof m.cid === "string" && !firstDelivery(m.cid)) return reply({ t: "ack", cid: m.cid });
