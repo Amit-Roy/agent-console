@@ -671,7 +671,7 @@ const schedules = createSchedules({
 
 // ---------- threads UI ----------
 const cur = () => state.threads.get(state.current);
-const autoLane = createAutoLane({ state, openThread: (id) => openThread(id), setNav: (open) => setNav(open), provLabel: (id) => provLabel(id), ago: (ts) => ago(ts) });
+const autoLane = createAutoLane({ state, openThread: (id) => openThread(id), setNav: (open) => setNav(open), provLabel: (id) => provLabel(id), ago: (ts) => ago(ts), assignPremium: openPremiumDialog });
 function ago(ts) {
   const s = Math.max(0, (Date.now() - ts) / 1000);
   if (s < 60) return "now";
@@ -2784,7 +2784,13 @@ document.addEventListener("keydown", (e) => {
 // The new-thread dialog doubles as the scheduled-task editor: same agent, folder, model, effort and permission fields, plus the task's
 // name, instructions and schedule.
 let dialogTask = null; // "new" or the task being edited; null for a new thread
+let dialogAssignment = null;
+let assignmentPending = false;
+$("dlg").addEventListener("cancel", (event) => { if (assignmentPending) event.preventDefault(); });
 function setDialogKind(task) {
+  dialogAssignment = null;
+  $("d-assignment-error").hidden = true;
+  menus.dProv.setItems([...state.providers.values()].map(p => ({ value: p.id, label: p.label, disabled: !p.ok })), menus.dProv.value);
   const wasTask = dialogTask !== null;
   dialogTask = task;
   $("d-auto-panel").hidden = true;
@@ -2859,6 +2865,43 @@ function openForkDialog(id) {
   $("d-ok").textContent = "Fork thread";
   syncDialogAccount();
   $("dlg").showModal();
+}
+function openPremiumDialog(issue) {
+  setNav(false);
+  setDialogKind(null);
+  const providers = [...state.providers.values()].filter(p => ["claude", "codex"].includes(p.id));
+  const chosen = providers.find(p => p.ok);
+  if (!chosen) return void toast("No premium agent is ready. Sign in to Claude or Codex first.");
+  dialogAssignment = issue;
+  menus.dProv.setItems(providers.map(p => ({ value: p.id, label: p.label, disabled: !p.ok })), chosen.id);
+  fillDialog(chosen.id);
+  const related = [...state.threads.values()].filter(t => t.issueRun?.repo?.toLowerCase() === issue.repo.toLowerCase() && t.issueRun.number === issue.number);
+  $("dlg-title").textContent = "Assign to premium";
+  $("dlg-sub").textContent = `${issue.repo}#${issue.number} · ${related.length} related runs. The new session receives remaining work, current state, failed thread IDs and linked PRs.`;
+  $("cwd-field").hidden = true;
+  $("d-ok").textContent = "Start premium session";
+  $("dlg").showModal();
+}
+async function submitPremiumAssignment(settings, account) {
+  if (assignmentPending) return;
+  assignmentPending = true;
+  const issue = dialogAssignment;
+  const cancel = $("dform").querySelector('button[value="cancel"]');
+  cancel.disabled = true;
+  $("d-ok").disabled = true;
+  $("d-assignment-error").hidden = true;
+  try {
+    const { cwd, ...choice } = settings;
+    const response = await apiFetch("/api/automation/assign", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ v: 1, ...issue, ...choice, ...account }) });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || "Could not start a premium session.");
+    $("dlg").close();
+    dialogAssignment = null;
+    openThread(result.thread);
+  } catch (error) {
+    $("d-assignment-error").textContent = error.message;
+    $("d-assignment-error").hidden = false;
+  } finally { assignmentPending = false; cancel.disabled = false; syncDialogAccount(); }
 }
 function syncWhen() {
   const r = menus.dRepeat.value;
@@ -2941,6 +2984,10 @@ $("dform").addEventListener("submit", (e) => {
   if (e.submitter?.value !== "ok") return;
   const settings = { provider: menus.dProv.value, cwd: menus.dCwd.value, model: menus.dModel.value, effort: menus.dEffort.value, mode: menus.dMode.value };
   const account = settings.provider === "claude" ? { claudeAccount: menus.dAccount.value || "sunny" } : {};
+  if (dialogAssignment) {
+    e.preventDefault();
+    return void submitPremiumAssignment(settings, account);
+  }
   if (dialogFork) {
     const { cwd, ...pick } = settings;
     return void send({ t: "fork", thread: dialogFork, ...pick, ...account, context: menus.dContext.value });
