@@ -7,6 +7,7 @@ import { DIRECT_REPOS, isProtected } from "./automation/policy.ts";
 import { pushPrompt, redoPrompt, reviewPrompt } from "./automation/review-prompts.ts";
 import type { RouteResponse } from "./automation/router.ts";
 import type { EventLog } from "./automation/events.ts";
+import { isAutomationPiModel } from "./providers/pi-model.ts";
 
 // Trivial and BAU work runs on Pi, so a premium model (Sonnet or Sol, chosen by the router) reviews the PR before it merges.
 // When the worker's turn ends and its branch has an open PR, a reviewer thread starts in a detached worktree of the PR head.
@@ -15,10 +16,12 @@ import type { EventLog } from "./automation/events.ts";
 // A "Review: CHANGES REQUESTED" verdict goes back to the worker, which fixes the branch; its next turn end starts another review.
 // A reviewer that ends without a verdict is retried. Both loops stop after MAX_REVIEWS reviews of one worker: then a person decides.
 // A PR with no commit after the last verdict is not reviewed again: the worker is asked to push, MAX_NUDGES times at most.
+// A worker with no PR is resumed MAX_RECOVERIES times; then it is marked stalled and logged once, and a person decides.
 
 export { reviewPrompt };
 export const MAX_REVIEWS = 3;
 export const MAX_NUDGES = 2;
+export const MAX_RECOVERIES = 2;
 const VERDICT = /^\s*Review:\s*(APPROVED|CHANGES REQUESTED)\b/i;
 type Marker = { mark(threadId: string, patch: Partial<IssueRun>): void };
 export interface ReviewDeps {
@@ -33,7 +36,7 @@ export interface ReviewDeps {
   log?: (msg: string) => void;
   now?: () => number;
 }
-type ThreadLike = { id: string; provider?: string; status?: string; archived?: number; issueRun?: IssueRun };
+type ThreadLike = { id: string; provider?: string; model?: string; status?: string; archived?: number; issueRun?: IssueRun };
 
 export function createReviewer(deps: ReviewDeps) {
   const github = deps.github ?? githubRequest;
@@ -51,7 +54,17 @@ export function createReviewer(deps: ReviewDeps) {
   const resuming = new Set<string>();
   async function resume(t: ThreadLike): Promise<void> {
     const run = t.issueRun!;
-    if (!deps.canResume?.(t) || resuming.has(t.id) || (run.recoveries ?? 0) >= 2 || (run.retryAt ?? 0) > now()) return;
+    // Every turn on a model retired upstream fails at once, so those recoveries prove nothing about the task. Threads.start
+    // moves the worker to an approved model on its next turn; that turn gets a fresh budget, once per worker.
+    const retired = t.provider === "pi" && !!t.model && !isAutomationPiModel(t.model) && !run.rerouted;
+    const spent = retired ? 0 : run.recoveries ?? 0;
+    if (resuming.has(t.id) || (run.retryAt ?? 0) > now()) return;
+    if (spent >= MAX_RECOVERIES) {
+      deps.runner.mark(t.id, { stalled: now() });
+      ev?.record({ step: "worker", kind: "info", ref: run.key, msg: `worker stopped ${spent + 1} times without a PR: a person decides`, data: { thread: t.id } });
+      return;
+    }
+    if (!deps.canResume?.(t)) return;
     resuming.add(t.id);
     try {
       const issue = await github("GET", `repos/${run.repo}/issues/${run.number}`);
@@ -67,7 +80,8 @@ export function createReviewer(deps: ReviewDeps) {
       // GitHub reads yield to other turns and dispatch ticks; admission must still be valid now.
       if (t.archived || t.status === "running" || !deps.canResume?.(t)) return;
       // Persist admission before sending so concurrent sweeps and restarts cannot replay this recovery.
-      deps.runner.mark(t.id, { recoveries: (run.recoveries ?? 0) + 1, retryAt: now() + 15 * 60_000, finishedAt: undefined });
+      deps.runner.mark(t.id, { recoveries: spent + 1, retryAt: now() + 15 * 60_000, finishedAt: undefined, ...(retired ? { rerouted: true } : {}) });
+      if (retired) ev?.record({ step: "worker", kind: "info", ref: run.key, msg: `model ${t.model} is retired: worker resumes on an approved model`, data: { thread: t.id } });
       const task = run.redoing
         ? `Continue fixing the review findings on PR #${run.pr}. Read its comments first: gh pr view ${run.pr} --repo ${run.repo} --comments. Keep the same branch and PR; do not merge.`
         : `Continue issue #${run.number} in ${run.repo}. Read it first: gh issue view ${run.number} --repo ${run.repo} --comments. Complete the task, verify it, push branch ${run.branch}, and open its PR into ${run.base ?? "main"}. Do not merge.`;
@@ -104,7 +118,14 @@ export function createReviewer(deps: ReviewDeps) {
     const run = t.issueRun, name = run.repo.split("/")[1], owner = run.repo.split("/")[0];
     const prs = await github("GET", `repos/${run.repo}/pulls?state=open&head=${encodeURIComponent(`${owner}:${run.branch}`)}`);
     const pr = Array.isArray(prs) ? prs[0] : undefined;
-    if (!pr || !Number.isSafeInteger(pr.number)) { once(`${t.id}:nopr`, () => ev?.record({ step: "pr", kind: "fail", ref: run.key, msg: `no open PR for branch ${run.branch}` })); if (recover) await resume(t); return false; }
+    if (!pr || !Number.isSafeInteger(pr.number)) {
+      if (!run.missingPr) once(`${t.id}:nopr`, () => {
+        deps.runner.mark(t.id, { missingPr: now() });
+        ev?.record({ step: "pr", kind: "fail", ref: run.key, msg: `no open PR for branch ${run.branch}` });
+      });
+      if (recover) await resume(t);
+      return false;
+    }
     once(`${t.id}:pr`, () => ev?.record({ step: "pr", kind: "ok", ref: run.key, msg: `PR #${pr.number}` }));
     once(`${t.id}:self`, () => /^#{1,4}\s*Self-review\b/mi.test(String(pr.body ?? ""))
       ? ev?.record({ step: "self_review", kind: "ok", ref: run.key, msg: "Self-review section present" })
@@ -139,7 +160,7 @@ export function createReviewer(deps: ReviewDeps) {
 
   async function attempt(t: ThreadLike, recover = false) {
     const run = t.issueRun;
-    if (t.archived || !run || run.role !== "work" || run.effort === "deep" || run.reviewedAt || !run.branch || claimed.has(t.id)) return;
+    if (t.archived || !run || run.role !== "work" || run.effort === "deep" || run.reviewedAt || run.stalled || !run.branch || claimed.has(t.id)) return;
     if ((run.reviews ?? 0) >= MAX_REVIEWS) { once(`${t.id}:max`, () => ev?.record({ step: "review", kind: "info", ref: run.key, msg: `${MAX_REVIEWS} reviews without a merge: a person decides` })); return; }
     claimed.add(t.id); // a second turn ending while the first review is being set up must not start another
     try { if (!(await review(t as ThreadLike & { issueRun: IssueRun }, recover))) claimed.delete(t.id); }
@@ -224,8 +245,9 @@ export function createReviewer(deps: ReviewDeps) {
       deps.runner.mark(t.id, { finishedAt: now(), redoing: true, retryAt: now() + 15 * 60_000 });
       return; // Recover the worker before spending another review on an unchanged branch.
     }
-    deps.runner.mark(t.id, { finishedAt: now(), redoing: false });
-    void attempt({ ...t, issueRun: { ...run, finishedAt: now(), redoing: false } });
+    // A stalled worker only runs again when a person sends it a turn: that turn's PR is reviewed and recovery restarts.
+    deps.runner.mark(t.id, { finishedAt: now(), redoing: false, stalled: undefined, missingPr: undefined, recoveries: run.stalled ? 0 : run.recoveries });
+    void attempt({ ...t, issueRun: { ...run, finishedAt: now(), redoing: false, stalled: undefined, missingPr: undefined, recoveries: run.stalled ? 0 : run.recoveries } });
   }
 
   /** Catch up after a restart or a missed turn end: idle workers without a review (deferred, PR opened late, errored turn),
@@ -233,7 +255,7 @@ export function createReviewer(deps: ReviewDeps) {
   async function sweep(threads: ThreadLike[]) {
     for (const t of threads) {
       const run = t.issueRun;
-      if (t.archived || t.status === "running" || !run) continue;
+      if (t.archived || t.status === "running" || !run || run.stalled) continue;
       if (run.role === "work" && run.redoing) await resume(t);
       else if (run.role === "work" && !run.reviewedAt) await attempt(t, true);
       else if (run.role === "review" && run.pr && !run.outcome) {
