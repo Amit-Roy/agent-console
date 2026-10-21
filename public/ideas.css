@@ -1,0 +1,27 @@
+/* App ideas: an inset grouped list in the iOS Settings manner. Every control and row is at least 44px tall, spacing follows the --sp-* scale. */
+body.ideas{overflow:auto;height:auto;min-height:100%}
+.ideas .btn{min-height:44px;min-width:44px;padding:0 var(--sp-4)}
+.ideas .back{padding-inline-start:var(--sp-2)}
+#im{background:transparent;box-shadow:none;border:0;border-radius:0;display:grid;gap:var(--sp-4);width:min(var(--col),100%);margin:0 auto;padding:var(--sp-5) max(var(--sp-4),env(safe-area-inset-left)) var(--sp-8)}
+#im .muted{margin:0}
+.group{margin:0;padding:0;list-style:none;background:var(--s1);border-radius:var(--r-lg);box-shadow:var(--shadow-card);overflow:hidden}
+.group:empty{display:none}
+.group li+li{border-top:1px solid var(--edge);margin-inline-start:var(--sp-4)}
+.group a{display:flex;align-items:center;gap:var(--sp-3);min-height:44px;padding:var(--sp-3) var(--sp-4);color:var(--t1);text-decoration:none;transition:background var(--dur-1) var(--ease)}
+.group li+li a{padding-inline-start:0}
+.group a:hover{background:var(--hover)}
+.group a:active{background:var(--press)}
+.group a:focus-visible{outline:2px solid var(--focus);outline-offset:-2px}
+.group .txt{display:grid;gap:2px;flex:1;min-width:0}
+.group .n{font:var(--fw-semi) var(--f-md);letter-spacing:var(--ls-md)}
+.group .l{color:var(--t2);font:var(--fw-reg) var(--f-sm);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.group .chev{flex:none;color:var(--t3)}
+.foot{text-align:center}
+.sheet{display:grid;gap:var(--sp-3);padding:var(--sp-4);background:var(--s1);border-radius:var(--r-lg);box-shadow:var(--shadow-card)}
+.sheet label{display:grid;gap:var(--sp-1);color:var(--t2);font:var(--fw-med) var(--f-sm)}
+.sheet input{min-height:44px;padding:0 var(--sp-3);border:1px solid var(--edge-strong);border-radius:var(--r-sm);background:var(--s2);color:var(--t1);font:var(--fw-reg) var(--f-md)}
+.sheet input:focus-visible{outline:2px solid var(--focus);outline-offset:1px}
+.sheet .row{display:flex;justify-content:flex-end;gap:var(--sp-2)}
+.sheet .err{margin:0;color:var(--bad);font:var(--fw-reg) var(--f-sm)}
+article.group{padding:var(--sp-5)}
+#im .foot{margin-top:var(--sp-3)}
