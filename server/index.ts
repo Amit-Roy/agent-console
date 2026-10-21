@@ -11,6 +11,7 @@ import { createOpener } from "./window-opener.ts";
 import { claudeAccounts } from "./providers/claude-accounts.ts";
 import { cancelClaudeLogin, finishClaudeLogin, startClaudeLogin } from "./claude-login.ts";
 import { createReviewer } from "./issue-review.ts";
+import { createAutomationArchiver } from "./automation/archive.ts";
 import { createEventLog } from "./automation/events.ts";
 import { createTriageBridge } from "./automation/triage-bridge.ts";
 import { usageEvents } from "./automation/usage-events.ts";
@@ -139,7 +140,18 @@ if (process.env.AGENT_CONSOLE_MOCK !== "1") {
       automationLog.record({ step: "dispatcher", kind: "ok", msg: `${cfg.dryRun ? "dry run: would resume" : "resumed"} ${cfg.dryRun ? waiting : resumed} quota-paused ${provider} thread(s)` });
     }
   };
-  setInterval(() => { dispatcher.tick().catch(() => {}); reviewer.sweep(threads.list()).catch(() => {}); resumeQuotaPaused(); }, 5 * 60_000).unref();
+  const archiver = createAutomationArchiver({ threads });
+  let automationSweep: Promise<void> | undefined;
+  const sweepAutomation = () => automationSweep ??= (async () => {
+    await archiver.sweep();
+    await reviewer.sweep(threads.list());
+  })().catch(() => {}).finally(() => { automationSweep = undefined; });
+  void sweepAutomation();
+  setInterval(() => {
+    void sweepAutomation();
+    void dispatcher.tick().catch(() => {});
+    resumeQuotaPaused();
+  }, 5 * 60_000).unref();
   const opener = createOpener({
     usage: () => usage.all(), events: automationLog,
     refresh: readCodexUsage,

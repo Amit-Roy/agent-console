@@ -90,6 +90,12 @@
       <div id="pane-auto" role="tabpanel" aria-labelledby="lane-auto" hidden>
         <a id="auto-link" class="btn ghost new-task" href="/automation"><svg class="ico" aria-hidden="true"><use href="#i-chart"/></svg><span>Automation dashboard</span></a>
         <ul id="autos" class="thread-list auto-list" aria-label="Automated runs"></ul>
+        <div id="auto-archive" hidden>
+          <button id="auto-archive-toggle" class="side-label side-toggle" type="button" aria-expanded="false" aria-controls="auto-archived">
+            <svg class="ico" aria-hidden="true"><use href="#i-chev-right"/></svg><span>Archived</span><span id="auto-archive-count" class="count"></span>
+          </button>
+          <ul id="auto-archived" class="thread-list auto-list" aria-label="Archived automated runs" hidden></ul>
+        </div>
       </div>
       <div id="pane-tasks" role="tabpanel" aria-labelledby="lane-tasks" hidden>
         <ul id="tasks" class="thread-list task-list" aria-label="Scheduled tasks"></ul>

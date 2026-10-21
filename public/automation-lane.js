@@ -7,24 +7,38 @@ const ROLE = { work: "work", review: "review", debug: "debug" };
 export function createAutoLane({ state, openThread, setNav, provLabel, ago }) {
   const expanded = new Set();
   let lastCurrent;
+  let archiveOpen = !!localStorage.getItem("ac_auto_archive_open");
+  $("auto-archive-toggle").onclick = () => {
+    archiveOpen = !archiveOpen;
+    localStorage.setItem("ac_auto_archive_open", archiveOpen ? "1" : "");
+    render();
+  };
   const issueKey = (run) => run.repo && Number.isSafeInteger(run.number) && run.number > 0
     ? `${run.repo.toLowerCase()}#${run.number}` : run.key;
   function render() {
-    const ul = $("autos");
-    const focusedIssue = ul.contains(document.activeElement) && document.activeElement.classList.contains("auto-group-toggle")
-      ? document.activeElement.closest(".auto-group")?.dataset.issue : undefined;
-    const runs = [...state.threads.values()].filter((t) => t.issueRun && !t.archived).sort((a, b) => b.updatedAt - a.updatedAt);
+    const runs = [...state.threads.values()].filter((t) => t.issueRun).sort((a, b) => b.updatedAt - a.updatedAt);
     if (state.current !== lastCurrent) {
       const current = runs.find((t) => t.id === state.current);
-      if (current) expanded.add(issueKey(current.issueRun));
+      if (current) {
+        expanded.add(issueKey(current.issueRun));
+        if (current.archived) archiveOpen = true;
+      }
       lastCurrent = state.current;
     }
-    $("lane-auto-dot").hidden = !runs.some((t) => t.status === "running");
+    $("lane-auto-dot").hidden = !runs.some((t) => !t.archived && t.status === "running");
+    const archived = runs.filter((t) => t.archived);
+    $("auto-archive").hidden = !archived.length;
+    $("auto-archive-count").textContent = archived.length || "";
+    $("auto-archive-toggle").setAttribute("aria-expanded", String(archiveOpen));
+    $("auto-archived").hidden = !archiveOpen;
+    renderList($("autos"), runs.filter((t) => !t.archived), archived.length ? "Everything is archived." : "Nothing started automatically yet.");
+    renderList($("auto-archived"), archived);
+  }
+  function renderList(ul, runs, emptyMessage) {
+    const focusedIssue = ul.contains(document.activeElement) && document.activeElement.classList.contains("auto-group-toggle")
+      ? document.activeElement.closest(".auto-group")?.dataset.issue : undefined;
     ul.replaceChildren();
-    if (!runs.length) {
-      ul.append(el("li", "empty-list", "Nothing started automatically yet."));
-      return;
-    }
+    if (!runs.length && emptyMessage) ul.append(el("li", "empty-list", emptyMessage));
     const groups = new Map();
     for (const t of runs) {
       const key = issueKey(t.issueRun);
@@ -43,7 +57,7 @@ export function createAutoLane({ state, openThread, setNav, provLabel, ago }) {
       const running = list.filter((t) => t.status === "running").length;
       toggle.setAttribute("aria-label", `${key}, ${list.length} run${list.length === 1 ? "" : "s"}${running ? `, ${running} running` : ""}`);
       const children = el("ul", "auto-runs");
-      children.id = `auto-runs-${list[0].id}`;
+      children.id = `${ul.id}-runs-${list[0].id}`;
       children.setAttribute("aria-label", key);
       toggle.setAttribute("aria-controls", children.id);
       const sync = () => {
