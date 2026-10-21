@@ -12,5 +12,5 @@ ffmpeg -hide_banner -loglevel error -y -ss "$poster_time" -i "$input" \
 # Replace the first frame with the poster while preserving duration and audio timing.
 ffmpeg -hide_banner -loglevel error -y -i "$input" -i "$output_dir/brag.jpg" \
   -filter_complex "[0:v][1:v]overlay=0:0:enable='lt(t,0.001)'[video]" \
-  -map '[video]' -map '0:a?' -c:v libx264 -preset fast -crf 16 \
+  -map '[video]' -map '0:a?' -c:v libx264 -preset fast -crf 20 \
   -pix_fmt yuv420p -c:a copy -movflags +faststart "$output_dir/brag.mp4"
