@@ -8,10 +8,12 @@ import { chromium } from "playwright";
 const root = path.resolve(import.meta.dirname, "..");
 const out = process.env.OUT || "/tmp/auto-issue-groups-evidence";
 fs.mkdirSync(out, { recursive: true });
+const sprite = fs.readFileSync(path.join(root, "public/index.html"), "utf8").match(/<svg[^>]*aria-hidden="true"[\s\S]*?<\/svg>/)?.[0];
+assert.ok(sprite, "production icon sprite exists");
 const html = `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Auto issue grouping browser fixture</title><link rel="stylesheet" href="/style.css">
 <style>body{margin:0;padding:24px;background:var(--s0);color:var(--t1)}#fixture{max-width:var(--side-w);margin:auto}.fixture-note{color:var(--t3);font-size:12px}h1{font-size:20px}#lane-auto-dot{display:inline-block}.thread-list{padding:0;list-style:none}</style>
-<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs><symbol id="i-chev-right" viewBox="0 0 16 16"><path d="m6 4 4 4-4 4"/></symbol></defs></svg>
+${sprite}
 <section id="fixture"><h1>Auto <span id="lane-auto-dot" class="dot running"></span></h1><p class="fixture-note">Browser fixture · production Auto lane and styles · seeded issue work</p><ul id="autos" class="thread-list auto-list" aria-label="Automated runs"></ul><div id="auto-archive" hidden><button id="auto-archive-toggle" class="side-label side-toggle" type="button" aria-expanded="false" aria-controls="auto-archived"><svg class="ico" aria-hidden="true"><use href="#i-chev-right"/></svg><span>Archived</span><span id="auto-archive-count" class="count"></span></button><ul id="auto-archived" class="thread-list auto-list" aria-label="Archived automated runs" hidden></ul></div></section>
 <script type="module">
 import { createAutoLane } from '/automation-lane.js';
@@ -27,9 +29,10 @@ const state = { current: null, threads: new Map([
   ['archived', make('archived', 'Archived issue #43 work', run('work'), { archived: now })],
   ['plain', make('plain', 'Plain chat', undefined)],
 ]) };
-const opened = [], nav = [];
-const lane = createAutoLane({ state, openThread: id => opened.push(id), setNav: value => nav.push(value), provLabel: p => p === 'codex' ? 'Codex' : p, ago: () => 'just now' });
-Object.assign(window, { fixture: { state, lane, opened, nav } });
+const opened = [], nav = [], issueTabs = [], premiumAssignments = [];
+window.open = (...args) => { issueTabs.push(args); return null; };
+const lane = createAutoLane({ state, assignPremium: issue => premiumAssignments.push(issue), openThread: id => opened.push(id), setNav: value => nav.push(value), provLabel: p => p === 'codex' ? 'Codex' : p, ago: () => 'just now' });
+Object.assign(window, { fixture: { state, lane, opened, nav, issueTabs, premiumAssignments } });
 lane.render();
 </script></html>`;
 const server = http.createServer((req, res) => {
@@ -49,7 +52,7 @@ const browser = await chromium.launch();
 try {
   for (const [device, viewport] of [["desktop", { width: 1280, height: 900 }], ["phone", { width: 390, height: 844 }]] as const) for (const colorScheme of ["dark", "light"] as const) {
     const name = `${device}-${colorScheme}`;
-    const context = await browser.newContext({ viewport, colorScheme, recordVideo: { dir: out, size: viewport } });
+    const context = await browser.newContext({ viewport, colorScheme, hasTouch: device === "phone", isMobile: device === "phone", recordVideo: { dir: out, size: viewport } });
     const page = await context.newPage();
     const errors: string[] = [];
     page.on("pageerror", error => errors.push(error.message));
@@ -73,7 +76,41 @@ try {
     assert.equal(await toggle.locator(".dot.running").isVisible(), true, `${name}: collapsed issue still shows running work`);
     const controls = await toggle.getAttribute("aria-controls");
     assert.ok(controls && await group.locator(".auto-runs").getAttribute("id") === controls);
+    const more = group.locator(".auto-group-more");
+    assert.equal(await more.count(), 1, `${name}: issue header exposes an actions menu`);
+    assert.equal(await page.locator('.auto-group[data-issue="automation#debug"] .auto-group-more').count(), 0, `${name}: debug groups have no invalid issue action`);
+    assert.equal(await more.getAttribute("aria-haspopup"), "menu");
+    if (device === "phone") {
+      const target = await more.boundingBox();
+      assert.ok(target && target.width >= 44 && target.height >= 44, `${name}: issue menu has a 44px touch target`);
+    }
+    await more.click();
+    assert.equal(await toggle.getAttribute("aria-expanded"), "false", `${name}: opening actions does not expand the issue`);
+    assert.equal(await page.getByRole("menuitem", { name: "Show issue", exact: true }).count(), 1);
+    assert.equal(await page.getByRole("menuitem", { name: "Assign to premium", exact: true }).count(), 1);
+    await page.screenshot({ path: path.join(out, `${name}-menu-open.png`) });
+    await page.waitForTimeout(700);
+    await page.evaluate(() => (window as any).fixture.lane.render());
+    assert.equal(await page.getByRole("menuitem", { name: "Show issue", exact: true }).isVisible(), true, `${name}: live updates preserve an open menu`);
+    await page.keyboard.press("Escape");
+    assert.equal(await more.evaluate(element => document.activeElement === element), true, `${name}: Escape restores issue action focus`);
+    await more.click();
+    await page.waitForTimeout(700);
+    await page.getByRole("menuitem", { name: "Show issue", exact: true }).click();
+    assert.deepEqual(await page.evaluate(() => (window as any).fixture.issueTabs), [["https://github.com/Amit-Roy/agent-console/issues/43", "_blank", "noopener,noreferrer"]], `${name}: action synchronously opens the canonical GitHub issue in a safe new tab`);
+    assert.deepEqual(await page.evaluate(() => ({ opened: (window as any).fixture.opened, nav: (window as any).fixture.nav })), { opened: [], nav: [] }, `${name}: issue action does not select a run or close navigation`);
+    assert.equal(await toggle.getAttribute("aria-expanded"), "false");
+    await page.waitForTimeout(700);
+    const otherMore = page.locator('.auto-group[data-issue="amit-roy/other#43"] .auto-group-more');
+    await otherMore.focus();
+    await page.keyboard.press("Enter");
+    await page.keyboard.press("Enter");
+    assert.deepEqual(await page.evaluate(() => (window as any).fixture.issueTabs.at(-1)), ["https://github.com/Amit-Roy/other/issues/43", "_blank", "noopener,noreferrer"], `${name}: separate repository opens its own issue`);
     await page.screenshot({ path: path.join(out, `${name}-collapsed.png`) });
+    await more.click();
+    await page.getByRole("menuitem", { name: "Assign to premium", exact: true }).click();
+    assert.deepEqual(await page.evaluate(() => (window as any).fixture.premiumAssignments), [{ repo: "Amit-Roy/agent-console", number: 43 }], `${name}: premium assignment uses canonical issue identity`);
+    assert.equal(await toggle.getAttribute("aria-expanded"), "false", `${name}: premium action does not expand the issue`);
     // Hold each verified state briefly so the recorded interaction is readable at normal playback speed.
     await page.waitForTimeout(700);
     await toggle.focus();
@@ -106,6 +143,15 @@ try {
     assert.equal(await page.locator('#auto-archived .auto-group[data-issue="amit-roy/agent-console#43"]').count(), 1, `${name}: complete issue moves together`);
     assert.equal(await page.locator("#auto-archive-count").textContent(), "1", `${name}: archive counts issues, not runs`);
     await page.locator("#auto-archive-toggle").click();
+    const archivedMore = page.locator('#auto-archived .auto-group[data-issue="amit-roy/agent-console#43"] .auto-group-more');
+    await archivedMore.click();
+    await page.screenshot({ path: path.join(out, `${name}-archived-menu-open.png`) });
+    await page.waitForTimeout(700);
+    await page.getByRole("menuitem", { name: "Show issue", exact: true }).click();
+    assert.deepEqual(await page.evaluate(() => (window as any).fixture.issueTabs.at(-1)), ["https://github.com/Amit-Roy/agent-console/issues/43", "_blank", "noopener,noreferrer"], `${name}: archived issue also opens GitHub`);
+    await archivedMore.click();
+    await page.getByRole("menuitem", { name: "Assign to premium", exact: true }).click();
+    assert.equal(await page.evaluate(() => (window as any).fixture.premiumAssignments.length), 2, `${name}: archived issue supports premium assignment`);
     await page.screenshot({ path: path.join(out, `${name}-all-archived.png`) });
     await page.waitForTimeout(700);
     await page.evaluate(() => { const { state, lane } = (window as any).fixture; state.threads.get("review").status = "running"; lane.render(); });
@@ -132,4 +178,4 @@ try {
   await browser.close();
   await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
 }
-console.log("PASS Auto issue groups: exclusive Live/archive membership, complete issue transitions, running/background work, canonical identity, selection, keyboard controls, desktop/phone light/dark.");
+console.log("PASS Auto issue menus and groups: GitHub issue tabs, premium assignment callbacks, menu refresh and keyboard focus, exclusive Live/archive membership, running/background work, canonical identity, selection, desktop/phone light/dark.");

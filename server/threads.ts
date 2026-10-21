@@ -440,10 +440,10 @@ export class Threads {
   }
 
   /** Resume all non-archived threads quota-paused on the given provider (usage key), optionally only those paused by one window. */
-  resumeQuotaPaused(provider: string, windowLabel?: string) {
+  resumeQuotaPaused(provider: string, windowLabel?: string, eligible?: (thread: Thread) => boolean) {
     let resumed = 0;
     for (const t of this.threads.values()) {
-      if (t.archived) continue;
+      if (t.archived || (eligible && !eligible(t))) continue;
       if (t.quotaPaused?.provider === provider && (!windowLabel || t.quotaPaused.windowLabel === windowLabel)) {
         delete t.quotaPaused;
         if (t.status === "running") continue; // the user already continued it; send would throw and abort the other resumes
