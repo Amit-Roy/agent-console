@@ -123,7 +123,7 @@ interface Queued {
 }
 const attachList = (q: Queued): any[] => (Array.isArray(q.attachments) ? q.attachments : []);
 // The newest Claude rate-limit event in a log. Boot restores one per thread: read only the tail, never the transcript.
-function lastClaudeWindows(file: string) {
+function lastClaudeWindows(file: string, provider: string) {
   let fd: number;
   try { fd = fs.openSync(file, "r"); } catch { return undefined; }
   try {
@@ -137,7 +137,7 @@ function lastClaudeWindows(file: string) {
         const to = buf.indexOf(10, at);
         try {
           const ev = JSON.parse(buf.toString("utf8", from, to === -1 ? buf.length : to));
-          if (claudeWindows(ev).length) return ev;
+          if (Number.isFinite(ev.observedAt) && ev.usageProvider === provider && claudeWindows(ev).length) return ev;
         } catch {}
         if (from === 0) break;
         at = from;
@@ -272,8 +272,10 @@ export class Threads {
     for (const t of this.threads.values()) {
       try {
         if (t.provider === "claude") {
-          const last = lastClaudeWindows(path.join(LOG_DIR, `${t.id}.jsonl`));
-          if (last) usage.record(claudeUsageKey(t.claudeAccount), { windows: claudeWindows(last) }, t.updatedAt);
+          const last = lastClaudeWindows(path.join(LOG_DIR, `${t.id}.jsonl`), claudeUsageKey(t.claudeAccount));
+          if (last && Number.isFinite(last.observedAt) && last.usageProvider === claudeUsageKey(t.claudeAccount)) {
+            usage.record(last.usageProvider, { windows: claudeWindows(last) }, last.observedAt, { observedAt: last.observedAt, usageProvider: last.usageProvider });
+          }
         }
         if (t.provider === "codex") {
           const samples = t.sessionId ? new CodexTelemetry(t.sessionId).read() : [];
@@ -657,6 +659,9 @@ export class Threads {
     timed(() => timing?.recordProcess({ thread: t.id, provider: t.provider, kind: "spawn" }));
     const ctx: AgentCtx = {
       event: (ev) => {
+        if (ev?.type === "rate_limit_event" && t.provider === "claude") {
+          ev = { ...ev, observedAt: Date.now(), usageProvider: claudeUsageKey(t.claudeAccount) };
+        }
         if (fromProcess(ev)) ready();
         live.heardAt = Date.now();
         if (live.aborted) return;
@@ -756,7 +761,14 @@ export class Threads {
     }
     if (ev.type === "rate_limit_event") {
       const windows = claudeWindows(ev);
-      if (windows.length) usage.record(t.provider === "claude" ? claudeUsageKey(t.claudeAccount) : t.provider, { windows });
+      if (windows.length) {
+        const provider = t.provider === "claude" ? claudeUsageKey(t.claudeAccount) : t.provider;
+        if (provider.startsWith("claude")) {
+          const observedAt = ev.usageProvider === provider && Number.isFinite(ev.observedAt) ? ev.observedAt : Date.now();
+          ev = { ...ev, observedAt, usageProvider: provider };
+          usage.record(provider, { windows }, ev.observedAt, { observedAt: ev.observedAt, usageProvider: provider });
+        } else usage.record(provider, { windows });
+      }
     }
     if (ev.type === "token_usage") { const turn = this.turns.get(t.id); if (turn) turn.usage = ev; }
     if (ev.type === "run_settings" || ev.type === "token_usage") {
