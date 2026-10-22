@@ -41,7 +41,8 @@ import { createTelemetryService } from "./token-telemetry.ts";
 import { Schedules, describe } from "./schedules.ts";
 import { SessionSearch } from "./session-search.ts";
 import { Notifications } from "./notifications.ts";
-import { dashboard } from "./analytics.ts";
+import { dashboard, readTurns } from "./analytics.ts";
+import { benchmarkUsage, BenchmarkError, createBenchmarks } from "./benchmarks.ts";
 import { promptOverhead } from "./prompt-overhead.ts";
 import { pricing, rates } from "./api-pricing.ts";
 import { contextAllocation } from "./context-allocation.ts";
@@ -290,6 +291,28 @@ const sameOrigin: express.RequestHandler = (req, res, next) => {
   } catch {}
   res.status(403).json({ error: "Cross-site request refused." });
 };
+const benchmarks = createBenchmarks({ dataDir: DATA_DIR, keyFile: path.join(DATA_DIR, "artificial-analysis.key") });
+const benchmarkView = () => {
+  const to = Date.now(), from = to - 7 * 86_400_000;
+  let timings: any[] = [];
+  try { timings = turnTiming()?.turns(from - 86_400_000, to) ?? []; } catch {}
+  return { ...benchmarks.view(), usage: benchmarkUsage(readTurns(0, to, Number.MAX_SAFE_INTEGER), from, to, timings) };
+};
+app.get("/api/benchmarks", (_req, res) => {
+  res.set("Cache-Control", "no-store");
+  try { res.json(benchmarkView()); } catch { res.status(503).json({ error: "Benchmark usage is unavailable." }); }
+});
+app.post("/api/benchmarks/refresh", sameOrigin, async (_req, res) => {
+  res.set("Cache-Control", "no-store");
+  try { await benchmarks.refresh(); res.json(benchmarkView()); }
+  catch (e) { res.status(e instanceof BenchmarkError ? e.status : 503).json({ error: e instanceof BenchmarkError ? e.message : "Benchmark refresh is unavailable." }); }
+});
+app.post("/api/benchmarks/settings", sameOrigin, express.json({ limit: "1kb" }), (req, res) => {
+  res.set("Cache-Control", "no-store");
+  if (typeof req.body?.weekly !== "boolean") return void res.status(400).json({ error: "weekly must be a boolean." });
+  try { benchmarks.settings(req.body.weekly); res.json(benchmarkView()); }
+  catch { res.status(503).json({ error: "Benchmark settings could not be saved." }); }
+});
 const doctor = createDoctor(threads);
 app.get("/doctor", (_req, res) => res.sendFile(path.join(ROOT, "public", "doctor.html")));
 app.get("/api/doctor", async (_req, res) => {
@@ -743,6 +766,7 @@ for (const sig of ["SIGINT", "SIGTERM"] as const) {
     try { newest = execFileSync("ps", ["-eo", "pid,ppid,etime,args", "--sort=-start_time"], { encoding: "utf8" }).split("\n").slice(0, 16).map(l => l.slice(0, 240)).join("\n"); } catch {}
     console.log(`[${new Date().toISOString()}] stopping on ${sig}; newest processes:\n${newest}`);
     schedules.shutdown();
+    benchmarks.close();
     threads.shutdown();
     workspaceMonitor?.stop();
     await headroom.stop();
