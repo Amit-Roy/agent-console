@@ -497,6 +497,8 @@ details[open]>summary .chev{transform:rotate(90deg)}
 .card .name{font:var(--fw-med) var(--f-sm);color:var(--t1);flex:none}
 .card .sum{color:var(--t2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0;font:var(--fw-reg) var(--fm-xs);letter-spacing:0}
 .card .sum.human{font:var(--fw-reg) var(--f-sm);letter-spacing:var(--ls-sm)}
+.card a.file-view{display:inline-flex;align-items:center;flex:none;color:var(--t3);padding:2px;border-radius:var(--r-sm,4px)}
+.card a.file-view:hover,.card a.file-view:focus-visible{color:var(--accent,var(--t1))}
 .card .st{display:inline-flex;align-items:center;flex:none;color:var(--t3)}
 .card.err .st{color:var(--bad)}
 .spin{width:var(--ico);height:var(--ico);flex:none;border-radius:50%;border:1.5px solid var(--s3);border-top-color:var(--accent);animation:spin .8s linear infinite}
