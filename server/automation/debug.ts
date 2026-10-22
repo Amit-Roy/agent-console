@@ -2,7 +2,7 @@ import path from "node:path";
 import { STEP_IDS, VERSION, type DebugRequest, type DebugResponse } from "./contracts.ts";
 import { route as routeFor } from "./router.ts";
 import { skillDir } from "./review-prompts.ts";
-import { addWorktree, defaultGit, installPrOnlyHook, type IssueRun, type IssueRunner } from "../window-dispatch.ts";
+import { addWorktree, defaultGit, installPrOnlyHook, type Git, type IssueRun, type IssueRunner } from "../window-dispatch.ts";
 import type { EventLog } from "./events.ts";
 import type { ProviderUsage } from "../usage.ts";
 import type { automationApi } from "./snapshot.ts";
@@ -21,12 +21,12 @@ export interface DebugDeps {
   active: () => { provider: string; role: string }[];
   dirs: { repos: string; worktrees: string };
   now?: () => number;
-  git?: (cwd: string, ...args: string[]) => string;
+  git?: Git;
 }
 
 export const debugSkillPath = () => path.join(path.dirname(skillDir()), "automation-debug", "SKILL.md");
 
-export function startDebug(req: DebugRequest, deps: DebugDeps): DebugResponse {
+export async function startDebug(req: DebugRequest, deps: DebugDeps): Promise<DebugResponse> {
   if (req.v !== undefined && req.v !== VERSION) throw new Error(`Unsupported request version ${String(req.v)}`);
   if (req.focus !== undefined && !STEP_IDS.includes(req.focus)) throw new Error(`Unknown step "${req.focus}"`);
   const now = (deps.now ?? Date.now)();
@@ -57,13 +57,13 @@ export function startDebug(req: DebugRequest, deps: DebugDeps): DebugResponse {
   if (prompt.length > MAX_PROMPT) prompt = prompt.slice(0, MAX_PROMPT);
 
   const branch = `debug/automation-${now}`;
-  const wt = addWorktree({ repo: "agent-console", dirs: deps.dirs, dirName: `agent-console-debug-${now}`, branch, git: deps.git });
+  const wt = await addWorktree({ repo: "agent-console", dirs: deps.dirs, dirName: `agent-console-debug-${now}`, branch, git: deps.git });
   let thread: { id: string };
   try {
-    installPrOnlyHook(wt.cwd, wt.base, deps.git ?? defaultGit);
+    await installPrOnlyHook(wt.cwd, wt.base, deps.git ?? defaultGit);
     const run: IssueRun = { key: "automation#debug", repo: "Amit-Roy/agent-console", number: 0, effort: "bau", role: "debug", branch, base: wt.base };
     thread = deps.runner.create({ ...chosen.route, cwd: wt.cwd, mode: "bypassPermissions", title: `ac:debug ${req.focus ?? "flow"}`, issueRun: run });
     deps.runner.send(thread.id, prompt);
-  } catch (e) { if (wt.created) wt.remove(); throw e; } // a failed start must not leave a stray worktree behind
+  } catch (e) { if (wt.created) await wt.remove(); throw e; } // a failed start must not leave a stray worktree behind
   return { v: VERSION, thread: thread.id, cwd: wt.cwd, branch, route: chosen.route, why: chosen.why };
 }
