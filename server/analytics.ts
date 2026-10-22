@@ -7,7 +7,7 @@ import { linesWith } from "./history.ts";
 import { SessionAccounting, type ModelUsage } from "./accounting.ts";
 import { accountingSamples } from "./accounting-log.ts";
 import { normalizeAccountingRows } from "./accounting-repair.ts";
-import { apiPricedTurn, pricing } from "./api-pricing.ts";
+import { apiPricedTurn, pricing, calculateDeepSeekProjection, type DeepSeekProjection } from "./api-pricing.ts";
 export { claudeTotals, delta } from "./accounting.ts";
 
 // What the dashboard shows. Three sources, all local:
@@ -94,11 +94,42 @@ function rtkGain(): Promise<any | null> {
 export async function dashboard(from: number, to: number) {
   const [rtk, hr] = await Promise.all([rtkGain(), headroom.stats()]);
   const day = (ts: string) => Date.parse(ts);
+  const turns = readTurns(from, to).map(apiPricedTurn).map(({ cumulative, session, eventId, ...row }) => row);
+  const daysInRange = Math.max(1, Math.ceil((to - from) / 86_400_000));
+  let totalInput = 0, totalOutput = 0, totalCacheRead = 0;
+  for (const t of turns) {
+    totalInput += t.in || 0;
+    totalOutput += t.out || 0;
+    totalCacheRead += t.cache || 0;
+  }
+  const deepseekFlash = calculateDeepSeekProjection(totalInput, totalOutput, totalCacheRead, daysInRange, "deepseek-flash");
+  const deepseekPro = calculateDeepSeekProjection(totalInput, totalOutput, totalCacheRead, daysInRange, "deepseek-v4-pro");
+  const dayStr = (ts: number) => new Date(ts).toISOString().slice(0, 10);
+  const dailyInput = new Map<string, number>();
+  const dailyOutput = new Map<string, number>();
+  const dailyCacheRead = new Map<string, number>();
+  for (const t of turns) {
+    const d = dayStr(t.ts);
+    dailyInput.set(d, (dailyInput.get(d) || 0) + (t.in || 0));
+    dailyOutput.set(d, (dailyOutput.get(d) || 0) + (t.out || 0));
+    dailyCacheRead.set(d, (dailyCacheRead.get(d) || 0) + (t.cache || 0));
+  }
+  const dailyProjections: Array<{ date: string; flash: DeepSeekProjection; pro: DeepSeekProjection }> = [];
+  for (const [date, input] of dailyInput) {
+    const output = dailyOutput.get(date) || 0;
+    const cacheRead = dailyCacheRead.get(date) || 0;
+    dailyProjections.push({
+      date,
+      flash: calculateDeepSeekProjection(input, output, cacheRead, 1, "deepseek-flash"),
+      pro: calculateDeepSeekProjection(input, output, cacheRead, 1, "deepseek-v4-pro"),
+    });
+  }
+  dailyProjections.sort((a, b) => a.date.localeCompare(b.date));
   return {
     from, to, pricing,
-    // Public API estimates are a read-only projection; never overwrite provider counters or prices in the ledger.
-    turns: readTurns(from, to).map(apiPricedTurn).map(({ cumulative, session, eventId, ...row }) => row), // durable baselines stay server-side
+    turns,
     rtk: rtk ? { summary: rtk.summary, daily: (rtk.daily ?? []).filter((d: any) => Date.parse(d.date) + 86_400_000 > from && Date.parse(d.date) <= to) } : null,
     headroom: { ...headroom.state(), daily: (hr?.series?.daily ?? []).filter((d: any) => day(d.timestamp) + 86_400_000 > from && day(d.timestamp) <= to), lifetime: hr?.lifetime ?? null },
+    deepseek: { flash: deepseekFlash, pro: deepseekPro, daily: dailyProjections },
   };
 }

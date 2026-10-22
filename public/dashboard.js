@@ -482,6 +482,39 @@ function render(cur, prev) {
   hrP.append(dl2, el("p", "note", hr?.error ? hr.error : "Claude threads only: Codex (ChatGPT sign-in) and Pi (OpenRouter) use hosts the proxy cannot serve. Tool-schema deferral is an estimate and is not counted in Tokens saved."));
   srcs.append(rtkP, hrP);
 
+  // DeepSeek cost projection panel
+  const deepseekPanel = panel("DeepSeek cost projection", "Idle-hour extrapolation: projects current daily token rate across full month at peak pricing; off-peak is 50% lower.");
+  if (cur.deepseek) {
+    const { flash, pro } = cur.deepseek;
+    const projRows = [
+      { model: flash, label: "V4.1 Flash (deepseek-flash)" },
+      { model: pro, label: "V4 Pro (deepseek-v4-pro)" },
+    ];
+    const table = el("div", "mtab");
+    table.append(...["Model", "Daily input", "Daily cache reads", "Daily output", "Daily cost", "Monthly cost"].map((h) => el("div", "h", h)));
+    for (const { model, label } of projRows) {
+      const n = el("div", "n", label); n.title = label;
+      table.append(
+        n,
+        el("div", "", fmt(model.dailyInputTokens)),
+        el("div", "", fmt(model.dailyCacheReadTokens)),
+        el("div", "", fmt(model.dailyOutputTokens)),
+        el("div", "", usd(model.dailyCostUsd)),
+        el("div", "", usd(model.monthlyCostUsd))
+      );
+    }
+    deepseekPanel.append(table);
+    const assumptions = el("details", "deepseek-assumptions");
+    assumptions.append(el("summary", "", "Assumptions and methodology"));
+    for (const a of flash.assumptions) assumptions.append(el("p", "note", a));
+    const daysInRange = Math.max(1, Math.ceil((range.to - range.from) / 864e5));
+    assumptions.append(el("p", "note", `Daily tokens derived from ${daysInRange}-day range (${localDay(range.from)} to ${localDay(range.to)}).`));
+    assumptions.append(el("p", "note", "Cache-hit ratio assumed constant. Off-peak hours (01-04, 06-10 UTC, Mon-Fri, excl. Chinese holidays) are 50% of peak rates shown."));
+    deepseekPanel.append(assumptions);
+  } else {
+    deepseekPanel.append(el("div", "empty-c", "No token data available for projection."));
+  }
+
   // table
   const tbl = el("details", "table");
   tbl.append(el("summary", "", "Show data as a table"));
@@ -515,7 +548,7 @@ function render(cur, prev) {
   }
   if (sourceList.childNodes.length) pricingDetails.append(sourceList);
   for (const assumption of cur.pricing?.assumptions || []) pricingDetails.append(el("p", "note", assumption));
-  root.replaceChildren(kpis, priceNote, ...(cur.pricing ? [pricingDetails] : []), subscriptionPanel(cur), g1, latencyPanel(cur.latency), srcs, g2, g3, tbl);
+  root.replaceChildren(kpis, priceNote, ...(cur.pricing ? [pricingDetails] : []), subscriptionPanel(cur), g1, latencyPanel(cur.latency), srcs, deepseekPanel, g2, g3, tbl);
   if (cur.turns.some((x) => x.b)) root.append(el("p", "muted", "Historical rows were reconstructed from local logs. Missing usage and costs remain unknown; API-equivalent costs do not establish actual billing."));
 }
 
