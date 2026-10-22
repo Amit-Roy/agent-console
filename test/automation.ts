@@ -56,7 +56,7 @@ try {
   // every step sits in exactly one pipeline; the PR workflow runs issue -> labels -> PR -> premium review and merge
   const placed = FLOW.pipelines.flatMap(p => p.phases.flatMap(ph => ph.steps));
   assert.deepEqual([...placed].sort(), [...ids].sort(), "each step drawn once");
-  assert.deepEqual(FLOW.pipelines.map(p => p.id), ["pr", "windows"]);
+  assert.deepEqual(FLOW.pipelines.map(p => p.id), ["pr", "windows", "monitor"]);
   assert.deepEqual(FLOW.pipelines[0].phases.map(ph => ph.steps[0]), ["triage", "dispatcher", "review"]);
   assert.ok(FLOW.edges.some(e => e.from === "redo" && e.to === "review"), "redo loops back to review");
   // failures with step and (already redacted) message

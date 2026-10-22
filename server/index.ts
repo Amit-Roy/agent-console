@@ -4,7 +4,8 @@ import "./privacy.ts";
 import { usage, refreshRouterUsage, refreshUsage, readCodexUsage } from "./usage.ts";
 import { hostMetrics, hostProcesses, hostKill, hostPorts, hostProcessDetail } from "./host.ts";
 import { startToolPriority } from "./tool-priority.ts";
-import { startHostSampler, hostHistory, hostDu, hostDuRescan } from "./host-history.ts";
+import { startHostSampler, hostHistory, hostDu, hostDuRescan, latestHost } from "./host-history.ts";
+import { createWorkspaceMonitor } from "./monitor-wire.ts";
 import { Ideas, IdeaError } from "./ideas.ts";
 import { createDispatcher, startIssue, defaultDirs, resumeDue } from "./window-dispatch.ts";
 import { route as routeWork } from "./automation/router.ts";
@@ -71,7 +72,9 @@ const broadcast = (msg: unknown) => {
 let notifications: Notifications | undefined;
 try { notifications = new Notifications(DATA_DIR); }
 catch { console.warn("Browser notification storage is unavailable."); }
+let workspaceMonitor: ReturnType<typeof createWorkspaceMonitor> | undefined;
 const threads = new Threads(broadcast, notice => {
+  if (notice.kind === "failed") workspaceMonitor?.noteFailure();
   void notifications?.notify(notice).catch(() => console.warn("Browser notification delivery failed."));
 });
 const schedules = new Schedules(threads, broadcast);
@@ -91,6 +94,11 @@ startToolPriority(); // tool commands below agents and this server: busy tests n
 // Every automation stage writes here; the dashboard reads it. A previous process's unfinished runs are closed as abandoned.
 const automationLog = createEventLog({ file: path.join(DATA_DIR, "automation-events.jsonl") });
 automationLog.recoverOpenRuns();
+workspaceMonitor = createWorkspaceMonitor({
+  dataDir: DATA_DIR, port: PORT, cwd: ROOT, events: automationLog, host: latestHost, headroom: () => headroom.state(),
+  threads: { create: o => threads.create(o), send: (id, text) => threads.send(id, text) },
+  notify: n => notifications?.notify({ kind: "failed", thread: n.thread, title: n.title }),
+});
 const recordUsage = usageEvents(automationLog);
 usage.subscribe((provider, u) => { broadcast({ t: "usage", provider, usage: u }); recordUsage(provider, u); });
 const triageBridge = createTriageBridge({ dbPath: path.join(DATA_DIR, "github-triage.sqlite"), events: automationLog });
@@ -673,6 +681,7 @@ server.listen(PORT, HOST, () => {
   if (PID_FILE) fs.writeFileSync(PID_FILE, String(process.pid)); // only the process that holds the port may claim it
   startModelRateBroker(PORT); // same rule: a scratch server that lost the port must not repoint the live broker
   startHostSampler(); // 5 s host samples for the Host page's history charts
+  workspaceMonitor?.start(); // reads those samples; alerts and escalation (docs/monitoring.md)
   console.log(`agent-console listening on http://${HOST}:${PORT}`);
   console.log(CODER_HOSTS.length ? `auth: Coder SSO for ${CODER_HOSTS.join(", ")} (password cookie still works elsewhere)` : "auth: password only");
   if (process.env.AGENT_CONSOLE_SHOW_PASSWORD) console.log(`password: ${PASSWORD}`);
@@ -708,6 +717,7 @@ for (const sig of ["SIGINT", "SIGTERM"] as const) {
     console.log(`[${new Date().toISOString()}] stopping on ${sig}; newest processes:\n${newest}`);
     schedules.shutdown();
     threads.shutdown();
+    workspaceMonitor?.stop();
     await headroom.stop();
     latency?.close();
     process.exit(0);

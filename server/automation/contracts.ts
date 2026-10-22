@@ -3,7 +3,7 @@
 
 export const VERSION = 1 as const;
 
-export type StepId = "triage" | "opener" | "usage" | "dispatcher" | "router" | "worktree" | "worker" | "self_review" | "pr" | "review" | "redo" | "merge" | "apply";
+export type StepId = "triage" | "opener" | "usage" | "dispatcher" | "router" | "worktree" | "worker" | "self_review" | "pr" | "review" | "redo" | "merge" | "apply" | "monitor" | "escalate";
 export type StepState = "idle" | "active" | "ok" | "failed" | "abandoned" | "disabled";
 export type EventKind = "start" | "ok" | "fail" | "info" | "abandoned";
 
@@ -29,12 +29,15 @@ export const FLOW: { nodes: FlowNode[]; edges: FlowEdge[]; pipelines: Pipeline[]
     { id: "redo", label: "Worker redo", icon: "redo", kind: "agent", hint: "Changes requested: the worker fixes and pushes the same branch, then the PR is reviewed again (3 reviews at most). No new commit: the worker is asked to push, twice at most" },
     { id: "merge", label: "Merge", icon: "merge", kind: "action", hint: "Squash merge when approved" },
     { id: "apply", label: "Apply", icon: "rocket", kind: "action", hint: "agent-console, dotfiles, brain: pull and restart" },
+    { id: "monitor", label: "Workspace monitor", icon: "gauge", kind: "source", hint: "Every 15 s: host CPU and RAM, agent failures, console health. An alert needs a sustained breach" },
+    { id: "escalate", label: "Escalation", icon: "bot", kind: "agent", hint: "Unresolved alert: L3 Pi, then L2 Claude or Codex, then L1 Opus, then the owner. Dry run unless monitor.json says live" },
   ],
   edges: [
     { from: "triage", to: "dispatcher" }, { from: "opener", to: "usage" }, { from: "usage", to: "dispatcher" },
     { from: "dispatcher", to: "router" }, { from: "router", to: "worktree" }, { from: "worktree", to: "worker" },
     { from: "worker", to: "self_review" }, { from: "self_review", to: "pr" }, { from: "pr", to: "review" },
     { from: "review", to: "redo", label: "changes requested" }, { from: "redo", to: "review", label: "new commits pushed" }, { from: "review", to: "merge", label: "approved" }, { from: "merge", to: "apply" },
+    { from: "monitor", to: "escalate", label: "alert unresolved" },
   ],
   pipelines: [
     { id: "pr", label: "PR workflow", hint: "From a new issue to a merged pull request", phases: [
@@ -44,6 +47,10 @@ export const FLOW: { nodes: FlowNode[]; edges: FlowEdge[]; pipelines: Pipeline[]
     ] },
     { id: "windows", label: "Window opener", hint: "Starts Claude and Codex 5-hour windows overnight and reads their usage; the dispatcher plans from these readings", phases: [
       { label: "Quota windows", steps: ["opener", "usage"] },
+    ] },
+    { id: "monitor", label: "Workspace monitor", hint: "Watches CPU, RAM, agent failures and console health; escalates alerts that nobody resolves", phases: [
+      { label: "Signals to alerts", steps: ["monitor"] },
+      { label: "Escalation chain", steps: ["escalate"] },
     ] },
   ],
 };

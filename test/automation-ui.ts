@@ -137,11 +137,12 @@ try {
     // --- the page --------------------------------------------------------------------------------------------------
     await page.goto(`${base}/automation`);
     await page.waitForSelector('[data-step="dispatcher"]');
-    ok("all thirteen steps are drawn", (await page.locator("[data-step]").count()) === 13);
+    ok("all fifteen steps are drawn", (await page.locator("[data-step]").count()) === 15);
     const inPipe = async (p: string) => page.locator(`[data-pipeline="${p}"] [data-step]`).evaluateAll(ns => ns.map(n => (n as HTMLElement).dataset.step));
     ok("PR workflow: issue to labels, labels to PR, premium review and merge", JSON.stringify(await inPipe("pr")) === JSON.stringify(["triage", "dispatcher", "router", "worktree", "worker", "self_review", "pr", "review", "redo", "merge", "apply"]), JSON.stringify(await inPipe("pr")));
     ok("PR workflow phases are labelled", (await page.locator('[data-pipeline="pr"] .phase h3').allInnerTexts()).map(t => t.toLowerCase()).join("|") === "1. issue to labels|2. labels to pull request|3. premium review and merge");
     ok("window opener is its own workflow", JSON.stringify(await inPipe("windows")) === JSON.stringify(["opener", "usage"]));
+    ok("workspace monitor is its own workflow", JSON.stringify(await inPipe("monitor")) === JSON.stringify(["monitor", "escalate"]));
     ok("review and redo loop", (await page.locator('[data-pipeline="pr"] .link.loop[data-to="redo"]').count()) === 1);
     ok("review loop is boxed with its label", (await page.locator('[data-pipeline="pr"] .cycle [data-step]').evaluateAll((b) => b.map((x) => x.dataset.step).join())) === "review,redo"
       && /3 reviews at most/.test(await page.locator('[data-pipeline="pr"] .cycle .cap').innerText()));
