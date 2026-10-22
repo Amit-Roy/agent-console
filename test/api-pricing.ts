@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { apiPricedTurn, pricing } from "../server/api-pricing.ts";
+import { apiPricedTurn, pricing, calculateDeepSeekProjection } from "../server/api-pricing.ts";
 
 const model = { model: "claude-opus-5-5", role: "unattributed" as const, fresh: 1_000_000, cacheRead: 2_000_000, cacheWrite: 3_000_000, output: 4_000_000, reasoning: 3_000_000, cost: 999 };
 const original = { accounting: 2, provider: "claude", cost: 111, models: [model] };
@@ -32,4 +32,43 @@ assert.equal(pricing.currency, "USD");
 const noProviderPrice = apiPricedTurn({ ...original, cost: undefined, models: [{ ...model, cost: undefined }] });
 assert.deepEqual(apiPricedTurn(noProviderPrice), noProviderPrice);
 assert.equal(pricing.verifiedAt, "2026-10-17");
+
+// DeepSeek projection tests
+const flash = calculateDeepSeekProjection(3_000_000, 200_000, 1_800_000, 7, "deepseek-flash");
+assert.equal(flash.model, "deepseek-flash");
+assert.equal(flash.modelLabel, "DeepSeek V4.1 Flash");
+assert.equal(flash.rates.input, 0.30);
+assert.equal(flash.rates.cacheRead, 0.006);
+assert.equal(flash.rates.output, 1.20);
+assert.equal(flash.dailyInputTokens, 428571); // 3M / 7
+assert.equal(flash.dailyOutputTokens, 28571); // 200k / 7
+assert.equal(flash.dailyCacheReadTokens, 257143); // 1.8M / 7
+assert.equal(flash.dailyCostUsd, 0.0873);
+const daysInMonth = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).getDate();
+const flashDailyFresh = 3_000_000 / 7 - 1_800_000 / 7;
+const flashDailyCost = (flashDailyFresh * 0.30 + 1_800_000 / 7 * 0.006 + 200_000 / 7 * 1.20) / 1_000_000;
+const expectedFlashMonthly = Number((flashDailyCost * daysInMonth).toFixed(2));
+assert.equal(flash.monthlyCostUsd, expectedFlashMonthly);
+
+const pro = calculateDeepSeekProjection(3_000_000, 200_000, 1_800_000, 7, "deepseek-v4-pro");
+assert.equal(pro.model, "deepseek-v4-pro");
+assert.equal(pro.modelLabel, "DeepSeek V4 Pro");
+assert.equal(pro.rates.input, 1.32);
+assert.equal(pro.rates.cacheRead, 0.044);
+assert.equal(pro.rates.output, 3.96);
+assert.equal(pro.dailyCostUsd, 0.3507);
+const proDailyFresh = 3_000_000 / 7 - 1_800_000 / 7;
+const proDailyCost = (proDailyFresh * 1.32 + 1_800_000 / 7 * 0.044 + 200_000 / 7 * 3.96) / 1_000_000;
+const expectedProMonthly = Number((proDailyCost * daysInMonth).toFixed(2));
+assert.equal(pro.monthlyCostUsd, expectedProMonthly);
+
+// Test error for unknown model
+try {
+  calculateDeepSeekProjection(0, 0, 0, 1, "unknown-model" as any);
+  assert.fail("should throw");
+} catch (e) {
+  assert.match(String(e), /Unknown DeepSeek model/);
+}
+
 console.log("PASS public API list prices, disjoint caches, reasoning exclusion, unknown coverage and preserved provider costs");
+console.log("PASS DeepSeek cost projection: flash, pro, error handling");
