@@ -53,6 +53,8 @@ jobs:
       # No setup-python: CI runs only stdlib Python tests on the runner's python3. requirements-triage.txt
       # serves the offline calibration fit (npm run test:effort-fit), which CI does not run.
       - run: npm ci
+      - name: Start resource sampler
+        run: nohup node scripts/ci-resources.mjs sample "$RUNNER_TEMP/resources.csv" >/dev/null 2>&1 &
       - name: Cache Playwright browsers
         uses: actions/cache@v4
         with:
@@ -75,13 +77,16 @@ jobs:
             PORT=7070 nohup node .bundle/server/index.ts.mjs >"$RUNNER_TEMP/server.log" 2>&1 &
           for _ in $(seq 60); do curl -s -o /dev/null http://127.0.0.1:7070/login && exit 0; sleep 0.5; done
           cat "$RUNNER_TEMP/server.log"; exit 1
-      - run: npm test
-      - name: Composer scrolling regression
-        run: node test/composer-scroll-ui.ts
-      - name: Composer draft recovery regressions
-        run: npm run test:drafts-ui
-      - name: Pi end-to-end smoke
-        run: node test/pi-e2e-ui.ts
+      # One parallel pool: unit suites plus the UI and Pi smoke suites, each on its own port.
+      # TEST_CONCURRENCY above the CPU count pays off because most files wait on servers and browsers.
+      - name: Tests
+        shell: bash
+        env:
+          TEST_CONCURRENCY: "8"
+        run: npm test -- test/composer-scroll-ui.ts test/drafts-ui.ts test/attachment-drafts-ui.ts test/pi-e2e-ui.ts 2>&1 | tee "$RUNNER_TEMP/test.log"
+      - name: Runner usage
+        if: always()
+        run: node scripts/ci-resources.mjs summary "$RUNNER_TEMP/resources.csv" "$RUNNER_TEMP/test.log" | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Server log
         if: failure()
         run: tail -200 "$RUNNER_TEMP/server.log"
