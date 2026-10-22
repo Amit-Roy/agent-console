@@ -25,3 +25,10 @@ body.ideas{overflow:auto;height:auto;min-height:100%}
 .sheet .err{margin:0;color:var(--bad);font:var(--fw-reg) var(--f-sm)}
 article.group{padding:var(--sp-5)}
 #im .foot{margin-top:var(--sp-3)}
+.ideas .btn.icon{padding:0;margin-inline-start:auto}
+.seg{display:grid;grid-template-columns:repeat(3,1fr);gap:var(--sp-1);margin:0;padding:var(--sp-1);border:0;border-radius:var(--r-sm);background:var(--s2)}
+.sheet .seg label{display:block;position:relative;color:var(--t2)}
+.seg input{position:absolute;inset:0;opacity:0;margin:0;min-height:0;cursor:pointer}
+.seg span{display:grid;place-items:center;min-height:44px;padding:0 var(--sp-2);border-radius:var(--r-sm);font:var(--fw-med) var(--f-sm);text-align:center;transition:background var(--dur-1) var(--ease),color var(--dur-1) var(--ease)}
+.seg input:checked+span{background:var(--s1);color:var(--t1);box-shadow:var(--shadow-card)}
+.seg input:focus-visible+span{outline:2px solid var(--focus);outline-offset:1px}

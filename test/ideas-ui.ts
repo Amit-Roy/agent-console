@@ -61,9 +61,22 @@ for (const [name, viewport, scheme] of [["phone-light", { width: 390, height: 84
   // open the idea: its markdown renders, back returns to the list
   await page.click(`#list a[href="#/${slug}"]`);
   await page.waitForSelector("#detail h2");
-  check(`${name}: idea opens its markdown`, (await page.locator("#detail h1").innerText()) === idea && (await page.locator("#detail h2").innerText()) === "Features");
+  check(`${name}: idea opens its markdown`, (await page.locator("#detail h1").innerText()) === idea && (await page.locator("#detail h2").allInnerTexts()).join() === "Features,Implementation,Others");
   check(`${name}: header names the idea`, (await page.locator("#title").innerText()) === idea && (await page.locator("#backLabel").innerText()) === "Ideas");
   await page.screenshot({ path: `${OUT}/ideas-${name}-detail.png`, fullPage: true });
+
+  // plus button adds a bullet under the chosen section; the page re-renders and git holds one commit
+  check(`${name}: plus button shows on the idea, New idea hides`, await page.locator("#addBullet").isVisible() && await page.locator("#add").isHidden());
+  await page.click("#addBullet");
+  await page.locator(".seg label", { hasText: "Implementation" }).click();
+  await page.fill("#bullet", "SQLite + cron");
+  await page.screenshot({ path: `${OUT}/ideas-${name}-bullet-form.png`, fullPage: true });
+  await page.click("#bulletSave");
+  await page.waitForSelector("#detail li");
+  check(`${name}: bullet renders in the body`, (await page.locator("#detail li").first().innerText()) === "SQLite + cron");
+  check(`${name}: bullet form closes`, await page.locator("#bulletForm").isHidden());
+  check(`${name}: bullet commit`, git("log", "-1", "--format=%s") === `Add implementation bullet: ${idea}` && /## Implementation\n\n- SQLite \+ cron\n\n## Others/.test(fs.readFileSync(`${dir}/${slug}.md`, "utf8")));
+  await page.screenshot({ path: `${OUT}/ideas-${name}-detail-bullet.png`, fullPage: true });
   await page.click("#back");
   await page.waitForSelector("#listView:not([hidden])");
   check(`${name}: back returns to the list`, (await page.locator("#title").innerText()) === "App ideas" && await page.locator("#add").isVisible());

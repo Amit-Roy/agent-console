@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-const { Ideas, parseIndex, slugify } = await import('../server/ideas.ts');
+const { Ideas, parseIndex, slugify, addBullet } = await import('../server/ideas.ts');
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ac-ideas-'));
 const git = (cwd: string, ...a: string[]) => execFileSync('git', ['-C', cwd, ...a], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 try {
@@ -82,5 +82,20 @@ try {
   assert.equal(offline.pushed, false);
   assert.ok(offline.pushError && !offline.pushError.includes('s3cret'), offline.pushError);
   assert.equal(git(repo, 'log', '-1', '--format=%s'), 'Add idea: Moon Map');
+  // bullets: placeholder replaced, order kept, missing sections created in canonical order, repo commits it
+  const fresh = fs.readFileSync(path.join(repo, 'plant-pal.md'), 'utf8');
+  assert.match(fresh, /## Features\n\n_None yet[^\n]*\n\n## Implementation\n\n_None yet[^\n]*\n\n## Others\n\n_None yet/);
+  const one = addBullet(fresh, 'Features', 'Water alerts');
+  assert.match(one, /## Features\n\n- Water alerts\n\n## Implementation/);
+  assert.match(addBullet(one, 'Features', 'Photo log'), /- Water alerts\n- Photo log\n\n## Implementation/);
+  assert.match(addBullet(one, 'Others', 'Name TBD'), /## Others\n\n- Name TBD\n$/);
+  assert.equal(addBullet('# X\n\nline\n\n## Others\n\n- a\n', 'Implementation', 'b'), '# X\n\nline\n\n## Implementation\n\n- b\n\n## Others\n\n- a\n');
+  assert.equal(addBullet('# X\n\nline\n', 'Features', 'b'), '# X\n\nline\n\n## Features\n\n- b\n');
+  const bl = await new Ideas({ dir: repo }).addBullet('plant-pal', { section: 'Implementation', text: 'SQLite + cron' });
+  assert.equal(bl.pushed, false);
+  assert.match(fs.readFileSync(path.join(repo, 'plant-pal.md'), 'utf8'), /## Implementation\n\n- SQLite \+ cron\n\n## Others/);
+  assert.equal(git(repo, 'log', '-1', '--format=%s'), 'Add implementation bullet: Plant Pal');
+  await assert.rejects(new Ideas({ dir: repo }).addBullet('plant-pal', { section: 'Nope', text: 'x' }), /Pick a section/);
+  await assert.rejects(new Ideas({ dir: repo }).addBullet('ghost', { section: 'Others', text: 'x' }), /No such idea/);
   console.log('ideas ok');
 } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
