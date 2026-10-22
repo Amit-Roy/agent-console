@@ -2890,6 +2890,7 @@ async function submitPremiumAssignment(settings, account) {
   const cancel = $("dform").querySelector('button[value="cancel"]');
   cancel.disabled = true;
   $("d-ok").disabled = true;
+  $("d-ok").textContent = "Preparing checkout…"; // cloning a private checkout takes up to a minute
   $("d-assignment-error").hidden = true;
   try {
     const { cwd, ...choice } = settings;
@@ -2902,7 +2903,7 @@ async function submitPremiumAssignment(settings, account) {
   } catch (error) {
     $("d-assignment-error").textContent = error.message;
     $("d-assignment-error").hidden = false;
-  } finally { assignmentPending = false; cancel.disabled = false; syncDialogAccount(); }
+  } finally { assignmentPending = false; cancel.disabled = false; $("d-ok").textContent = "Start premium session"; syncDialogAccount(); }
 }
 function syncWhen() {
   const r = menus.dRepeat.value;
