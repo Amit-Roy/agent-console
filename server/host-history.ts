@@ -143,6 +143,12 @@ function downsample(rows: Sample[], max: number): Sample[] {
   return out;
 }
 
+/** The newest sample's CPU and memory percentages; the workspace monitor reads these instead of sampling the host again. */
+export function latestHost() {
+  const s = raw[raw.length - 1];
+  return s ? { cpu: s[1], mem: s[2] } : undefined;
+}
+
 export function latestRates() {
   const s = raw[raw.length - 1];
   return s ? { rx: s[5], tx: s[6], rd: s[7], wr: s[8] } : { rx: 0, tx: 0, rd: 0, wr: 0 };
