@@ -859,12 +859,12 @@ function openThread(id) {
   const old = cur();
   if (old && (!state.rendering && !state.loading || state.snapshot)) {
     if (state.live?.raf) { cancelAnimationFrame(state.live.raf); state.live.raf = 0; }
-    const snapshot = (!state.deferredRefresh && state.snapshot) || { nodes: [...$("chat").childNodes], cards: state.cards, subs: state.subs, subTools: state.subTools, live: state.live, compact: state.compact, start: state.start, latestStart: state.latestStart, end: state.end, scroll: $("chat").scrollTop, stats: $("diagnostics").textContent };
+    const snapshot = (!state.deferredRefresh && state.snapshot) || { nodes: [...$("chat").childNodes], cards: state.cards, doneTasks: state.doneTasks, subs: state.subs, subTools: state.subTools, live: state.live, compact: state.compact, start: state.start, latestStart: state.latestStart, end: state.end, scroll: $("chat").scrollTop, stats: $("diagnostics").textContent };
     snapshot.stale ||= !!state.revalidating || !!state.loadingEarlier || old.id === id;
     views.delete(old.id);
     views.set(old.id, snapshot);
     if (views.size > 5) views.delete(views.keys().next().value);
-    state.cards = new Map(); state.subs = new Map(); state.subTools = new Map(); state.live = null;
+    state.cards = new Map(); state.subs = new Map(); state.subTools = new Map(); state.doneTasks = null; state.live = null;
   }
   state.revalidating = false;
   state.loadingEarlier = false;
@@ -893,7 +893,7 @@ function openThread(id) {
   if (cached) {
     if (state.features.selectiveEvents) send({ t: "subscribe", thread: id });
     clearTimeout(state.loadTimer); state.loading = null;
-    state.cards = cached.cards; state.subs = cached.subs; state.subTools = cached.subTools; state.start = cached.start; state.latestStart = cached.latestStart; state.end = cached.end; state.live = cached.live; state.compact = cached.compact;
+    state.cards = cached.cards; state.doneTasks = cached.doneTasks; state.subs = cached.subs; state.subTools = cached.subTools; state.start = cached.start; state.latestStart = cached.latestStart; state.end = cached.end; state.live = cached.live; state.compact = cached.compact;
     $("chat").replaceChildren(...cached.nodes);
     questions.ensure(id);
     earlierIdle();
@@ -981,7 +981,7 @@ async function showHistory(m) {
   if (refreshing) {
     if (state.live?.raf) cancelAnimationFrame(state.live.raf);
     state.live = null; state.compact = null;
-    state.cards = new Map(); state.subs = new Map(); state.subTools = new Map();
+    state.cards = new Map(); state.subs = new Map(); state.subTools = new Map(); state.doneTasks = null;
   } else clearChat();
   state.rendering = true;
   $("chat").setAttribute("aria-busy", "true");
@@ -1543,6 +1543,7 @@ function clearChat() {
   if (state.live?.raf) cancelAnimationFrame(state.live.raf);
   state.live = null;
   state.cards.clear();
+  state.doneTasks = null;
   state.compact = null;
   state.subs.clear();
   state.subTools.clear();
@@ -1949,9 +1950,21 @@ function subEvent(e, live) {
   if (live && following()) scrollDown(false);
 }
 // task_started / task_progress / task_notification: live stats on the card, and a status chip for work that outlives the call
+function finishChip(card, chip, e) {
+  const word = { completed: "finished", failed: "failed", stopped: "stopped" }[e.status] || e.status || "finished";
+  chip.className = `task-chip ${e.status === "failed" ? "err" : "done"}`;
+  chip.replaceChildren(icon(e.status === "failed" ? "x" : "check"), el("span", "", word));
+  if (e.summary) chip.title = e.summary;
+  const now = card.querySelector(".now");
+  if (now) now.textContent = "";
+}
 function taskEvent(e) {
   const card = state.cards.get(e.tool_use_id);
-  if (!card) return;
+  if (!card) {
+    // history is paged newest-first: the notification can arrive before the older page that holds its card and task_started
+    if (e.subtype === "task_notification") (state.doneTasks ||= new Map()).set(e.tool_use_id, e);
+    return;
+  }
   if (e.subtype === "task_progress" && card.classList.contains("agent")) {
     const u = e.usage || {};
     card.querySelector(".stats").textContent = [u.tool_uses != null && `${u.tool_uses} tool${u.tool_uses === 1 ? "" : "s"}`, u.total_tokens != null && `${fmtTok(u.total_tokens)} tokens`, u.duration_ms != null && fmtDur(u.duration_ms)].filter(Boolean).join(" · ");
@@ -1968,14 +1981,9 @@ function taskEvent(e) {
     chip.hidden = false;
     chip.className = "task-chip running";
     chip.replaceChildren(el("i", "spin"), el("span", "", "in background"));
-  } else if (e.subtype === "task_notification" && chip && !chip.hidden) {
-    const word = { completed: "finished", failed: "failed", stopped: "stopped" }[e.status] || e.status || "finished";
-    chip.className = `task-chip ${e.status === "failed" ? "err" : "done"}`;
-    chip.replaceChildren(icon(e.status === "failed" ? "x" : "check"), el("span", "", word));
-    if (e.summary) chip.title = e.summary;
-    const now = card.querySelector(".now");
-    if (now) now.textContent = "";
-  }
+    const done = state.doneTasks?.get(e.tool_use_id);
+    if (done) { state.doneTasks.delete(e.tool_use_id); finishChip(card, chip, done); }
+  } else if (e.subtype === "task_notification" && chip && !chip.hidden) finishChip(card, chip, e);
   updateWorking();
 }
 
