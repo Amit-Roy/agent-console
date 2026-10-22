@@ -34,6 +34,8 @@ type Options = {
   log?: (metadata: Record<string, unknown>) => void;
   // Called for each accepted webhook, each finished non-webhook job (queued, repair, reconcile) and each reconciled item
   // that looks like it has no telemetry comment. Must be idempotent; failures are logged, never thrown (token telemetry comment).
+  // Called for an issue closed or a pull request merged, so the Console can archive the matching automation threads.
+  onClosed?: (item: { repo: string; number: number; kind: Kind }) => void;
   onItem?: (item: { repo: string; number: number; kind: Kind }) => Promise<unknown> | void;
 };
 
@@ -429,6 +431,20 @@ export function createTriageService(options: Options) {
       log("deploy_requested", { repo, sha: run.head_sha });
       respond(res, 202, { deploying: true });
       try { options.deploy.run(repo, run.head_sha); } catch { log("deploy_failed", { repo }); }
+      return;
+    }
+    if ((event === "issues" || event === "pull_request") && payload.action === "closed") {
+      const repo = payload.repository?.full_name;
+      if (typeof repo !== "string" || !repos.has(repo)) { respond(res, 403, { error: "Repository not allowed" }); return; }
+      const item = event === "issues" ? payload.issue : payload.pull_request;
+      const number = item?.number;
+      if (!Number.isSafeInteger(number) || number <= 0) { respond(res, 400, { error: "Invalid item number" }); return; }
+      const done = event === "issues" ? !item.pull_request : item.merged === true;
+      if (done) {
+        try { options.onClosed?.({ repo, number, kind: event === "issues" ? "issue" : "pull_request" }); }
+        catch { log("on_closed_failed"); }
+      }
+      respond(res, 200, { closed: done });
       return;
     }
     if (!Object.hasOwn(ACTIONS, event)) { respond(res, 200, { ignored: true }); return; }

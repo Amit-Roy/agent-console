@@ -14,6 +14,7 @@ import { claudeAccounts } from "./providers/claude-accounts.ts";
 import { cancelClaudeLogin, finishClaudeLogin, startClaudeLogin } from "./claude-login.ts";
 import { createReviewer } from "./issue-review.ts";
 import { createAutomationArchiver } from "./automation/archive.ts";
+import { watchClosed } from "./automation/closed-signal.ts";
 import { createEventLog } from "./automation/events.ts";
 import { createTriageBridge } from "./automation/triage-bridge.ts";
 import { usageEvents } from "./automation/usage-events.ts";
@@ -161,11 +162,13 @@ if (process.env.AGENT_CONSOLE_MOCK !== "1") {
   };
   const archiver = createAutomationArchiver({ threads });
   let automationSweep: Promise<void> | undefined;
-  const sweepAutomation = () => automationSweep ??= (async () => {
-    await archiver.sweep();
+  const sweepAutomation = (archive = false) => automationSweep ??= (async () => {
+    if (archive) await archiver.sweep();
     await reviewer.sweep(threads.list().filter(t => !assignedOwner(t)));
   })().catch(() => {}).finally(() => { automationSweep = undefined; });
-  void sweepAutomation();
+  void sweepAutomation(true); // catches up on closures missed while the Console was down
+  // Closed issues and merged PRs arrive as GitHub webhooks (the triage worker drops a marker here), so archiving is event-driven.
+  watchClosed(path.join(DATA_DIR, "github-events"), () => archiver.sweep(), () => automationLog.record({ step: "triage", kind: "fail", msg: "archive sweep after GitHub closure failed" }));
   setInterval(() => {
     void sweepAutomation();
     void dispatcher.tick().catch(() => {});
