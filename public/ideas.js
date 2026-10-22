@@ -2,6 +2,7 @@
 import { $, el, renderMarkdown } from "/render.js";
 
 let ideas = [];
+let current = ""; // slug of the open idea, "" on the list
 const api = async (url, opts) => {
   const r = await fetch(url, { cache: "no-store", ...opts });
   const body = await r.json().catch(() => ({}));
@@ -46,10 +47,12 @@ async function route() {
   const detail = $("detail");
   $("listView").hidden = !!slug; detail.hidden = !slug;
   $("add").hidden = !!slug;
+  $("addBullet").hidden = !slug;
+  current = slug ?? "";
   $("back").href = slug ? "#" : "/";
   $("back").setAttribute("aria-label", slug ? "Back to all ideas" : "Back to the console");
   $("backLabel").textContent = slug ? "Ideas" : "Console";
-  if (slug) setForm(false);
+  setForm(false); setBulletForm(false);
   $("im").setAttribute("aria-busy", "true");
   if (!slug) {
     $("title").textContent = "App ideas"; document.title = "App ideas · Agent Console";
@@ -85,6 +88,26 @@ $("form").addEventListener("submit", async (e) => {
     ideas.push(r.idea); renderList();
     toast(r.pushed === false ? `Committed ${r.commit}, but the push failed: ${r.pushError}` : `Committed ${r.commit}${r.pushed ? " and pushed" : ""}.`);
   } catch (err) { $("formErr").textContent = err.message; $("formErr").hidden = false; }
+  finally { save.disabled = false; }
+});
+function setBulletForm(open) {
+  $("bulletForm").hidden = !open;
+  $("addBullet").setAttribute("aria-expanded", String(open));
+  $("bulletErr").hidden = true;
+  if (open) $("bullet").focus();
+}
+$("addBullet").onclick = () => setBulletForm($("bulletForm").hidden);
+$("bulletCancel").onclick = () => { $("bulletForm").reset(); setBulletForm(false); };
+$("bulletForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const save = $("bulletSave"), slug = current;
+  save.disabled = true; $("bulletErr").hidden = true;
+  try {
+    const r = await api(`/api/ideas/${slug}/bullets`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ section: new FormData($("bulletForm")).get("section"), text: $("bullet").value }) });
+    $("bulletForm").reset(); setBulletForm(false);
+    if (current === slug) renderMarkdown((await api(`/api/ideas/${slug}`)).markdown, $("detail"));
+    toast(r.pushed === false ? `Committed ${r.commit}, but the push failed: ${r.pushError}` : `Committed ${r.commit}${r.pushed ? " and pushed" : ""}.`);
+  } catch (err) { $("bulletErr").textContent = err.message; $("bulletErr").hidden = false; }
   finally { save.disabled = false; }
 });
 addEventListener("hashchange", route);
