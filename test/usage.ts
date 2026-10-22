@@ -6,9 +6,12 @@ import { CodexTelemetry, codexTokenEvent } from "../server/providers/codex-telem
 import { createLabelCompletion, askRouter, askNvidia, NVIDIA_LABEL_MODELS } from "../server/providers/small-model.ts";
 import { setLocalModelRateLimit } from "../server/providers/model-rate-client.ts";
 import { ModelRateLimit } from "../server/providers/model-rate-limit.ts";
-import { claudeWindows, codexWindows, routerUsage } from "../server/usage.ts";
 import { parseLabels } from "../server/providers/label.ts";
 import { codexTranslator } from "../server/providers/codex.ts";
+const usageData = fs.mkdtempSync(path.join(os.tmpdir(), "usage-data-"));
+process.on("exit", () => fs.rmSync(usageData, { recursive: true, force: true }));
+process.env.AGENT_CONSOLE_DATA = usageData;
+const { claudeWindows, codexWindows, routerUsage, historyRows } = await import("../server/usage.ts");
 setLocalModelRateLimit(new ModelRateLimit({ path: path.join(fs.mkdtempSync(path.join(os.tmpdir(), "usage-rate-")), "gate.sqlite"), intervalMs: 1 }));
 const token = { type: "event_msg", timestamp: "2026-10-16T10:00:00Z", payload: { type: "token_count", info: { total_token_usage: { total_tokens: 5_700_000 }, last_token_usage: { total_tokens: 136279 }, model_context_window: 475000 }, rate_limits: { primary: { used_percent: 15, window_minutes: 300, resets_at: 1792151311 }, secondary: { used_percent: 4, window_minutes: 10080, resets_at: 1792655061 } } } };
 assert.deepEqual(codexTokenEvent(token)?.context, { used: 136279, max: 475000, source: "codex/last_request" });
@@ -17,6 +20,13 @@ assert.equal(codexWindows(token.payload.rate_limits)[1].used, 4);
 assert.equal(claudeWindows({ rate_limit_info: { unifiedWindows: { five_hour: { utilization: 1 } } } })[0].used, 100);
 assert.equal(routerUsage({ free_model_daily_requests: { used: 49, limit: 50 }, usage_daily: 0 }).windows[0].limit, 50);
 assert.equal(routerUsage({ usage_daily: 0 }).windows.length, 0); // no invented allowance
+assert.equal(historyRows("claude", undefined, { windows: [{ label: "5-hour", used: 1, limit: 100 }], updatedAt: 11, observedAt: 11, usageProvider: "claude" })[0].timestampSource, "received");
+const quotaWindow = { label: "5-hour", used: 1, limit: 100, unit: "%" };
+const nativeReceipt = historyRows("claude", undefined, { windows: [quotaWindow], updatedAt: 12, observedAt: 12, usageProvider: "claude", sourceSessionId: "session-native", sourceEventUuid: "event-a" })[0];
+assert.equal(nativeReceipt.sourceSessionId, "session-native");
+assert.equal(nativeReceipt.sourceEventUuid, "event-a");
+assert.equal(historyRows("claude", { windows: [quotaWindow], updatedAt: 12, sourceSessionId: "session-native", sourceEventUuid: "event-a" }, { windows: [quotaWindow], updatedAt: 13, observedAt: 13, usageProvider: "claude", sourceSessionId: "session-native", sourceEventUuid: "event-b" }).length, 1, "distinct UUID observations append even when quota value is unchanged");
+assert.equal(historyRows("claude", { windows: [quotaWindow], updatedAt: 12, sourceSessionId: "session-native-a", sourceEventUuid: "event-shared" }, { windows: [quotaWindow], updatedAt: 13, observedAt: 13, usageProvider: "claude", sourceSessionId: "session-native-b", sourceEventUuid: "event-shared" }).length, 1, "same UUID in another native session remains a distinct observation");
 const emitted: any[] = [];
 codexTranslator(e => emitted.push(e))({ type: "turn.completed", usage: { input_tokens: 5_700_000, output_tokens: 3000 } });
 assert.ok(!emitted.some(e => e.type === "context_usage"));
