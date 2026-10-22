@@ -29,7 +29,7 @@ try {
   const deps = (over: any = {}) => ({ api, log, runner, usage: () => ({ claude: win(20), codex: win(20) }), active: () => [] as any[], dirs, now: () => now, ...over });
 
   // the Debug button: a worktree of agent-console, a locked-title thread on a premium (or Pi) model, a prompt that carries the evidence
-  const res = startDebug({ v: 1, focus: "worktree", note: "Why did #6 fail?" }, deps());
+  const res = await startDebug({ v: 1, focus: "worktree", note: "Why did #6 fail?" }, deps());
   assert.equal(res.v, 1); assert.equal(res.thread, "D1"); assert.equal(res.route.provider, "claude");
   const c = created[0];
   assert.equal(c.title, "ac:debug worktree"); assert.ok(c.title.length <= 30);
@@ -46,23 +46,23 @@ try {
   assert.ok(prompt.length < 16_000, `prompt is ${prompt.length}`);
 
   // no focus: the whole flow; the note is capped and still data
-  const wide = startDebug({ v: 1, note: "x".repeat(2000) }, deps());
+  const wide = await startDebug({ v: 1, note: "x".repeat(2000) }, deps());
   assert.equal(created[1].title, "ac:debug flow"); assert.ok(sent[1].text.length < 16_000); assert.ok(!sent[1].text.includes("x".repeat(501)));
 
   // guards
-  assert.throws(() => startDebug({ v: 1, focus: "nope" as any }, deps()), /unknown step/i);
-  assert.throws(() => startDebug({ v: 2 } as any, deps()), /unsupported/i);
-  assert.throws(() => startDebug({ v: 1 }, deps({ active: () => [{ provider: "claude", role: "debug" }] })), /already running/i);
+  await assert.rejects(() => startDebug({ v: 1, focus: "nope" as any }, deps()), /unknown step/i);
+  await assert.rejects(() => startDebug({ v: 2 } as any, deps()), /unsupported/i);
+  await assert.rejects(() => startDebug({ v: 1 }, deps({ active: () => [{ provider: "claude", role: "debug" }] })), /already running/i);
   // premium exhausted: Pi takes it (the router's rule for debug), still a thread
-  const piRes = startDebug({ v: 1 }, deps({ usage: () => ({ claude: win(100), codex: win(100) }) }));
+  const piRes = await startDebug({ v: 1 }, deps({ usage: () => ({ claude: win(100), codex: win(100) }) }));
   assert.equal(piRes.route.provider, "pi");
   // a failed thread start leaves no half-made state behind that would block the next click
-  assert.throws(() => startDebug({ v: 1 }, deps({ runner: { create: () => { throw new Error("provider not ready"); }, send: () => {} } })), /provider not ready/);
-  assert.equal(startDebug({ v: 1 }, deps()).thread, "D4");
+  await assert.rejects(() => startDebug({ v: 1 }, deps({ runner: { create: () => { throw new Error("provider not ready"); }, send: () => {} } })), /provider not ready/);
+  assert.equal((await startDebug({ v: 1 }, deps())).thread, "D4");
   // ...and a failure at a fresh moment removes the worktree it just made
   now += 1000;
   const wtBefore = fs.readdirSync(dirs.worktrees).sort();
-  assert.throws(() => startDebug({ v: 1 }, deps({ runner: { create: () => { throw new Error("provider not ready"); }, send: () => {} } })), /provider not ready/);
+  await assert.rejects(() => startDebug({ v: 1 }, deps({ runner: { create: () => { throw new Error("provider not ready"); }, send: () => {} } })), /provider not ready/);
   assert.deepEqual(fs.readdirSync(dirs.worktrees).sort(), wtBefore, "no stray worktree");
   assert.ok(!g(main, "branch", "--list", `debug/automation-${now}`), "no stray branch");
   // the skill is in the repo and says what to read and what not to do

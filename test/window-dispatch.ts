@@ -99,7 +99,7 @@ assert.match(issuePrompt(dec("o/agent-console", "trivial"), "b", "main"), /pull 
     // Dirty and untracked host files never enter the private clone.
     fs.writeFileSync(path.join(main, "a"), "host dirty");
     fs.writeFileSync(path.join(main, "host-only"), "private host data");
-    const res = startIssue({ ...dec("o/webapp", "bau"), issue: { repo: "o/webapp", number: 42, title: "Fix the export totals", labels: [] } }, runner, { repos, worktrees: path.join(root, "wt") });
+    const res = await startIssue({ ...dec("o/webapp", "bau"), issue: { repo: "o/webapp", number: 42, title: "Fix the export totals", labels: [] } }, runner, { repos, worktrees: path.join(root, "wt") });
     assert.match(res.cwd, /webapp-issue-42-[a-f0-9]{8}$/); assert.match(res.branch, /^issue-42-fix-the-export-totals-[a-f0-9]{8}$/);
     assert.equal(g(res.cwd, "rev-parse", "--path-format=absolute", "--git-common-dir"), path.join(res.cwd, ".git"), "private Git metadata");
     assert.ok(fs.statSync(path.join(res.cwd, ".git")).isDirectory());
@@ -110,21 +110,26 @@ assert.match(issuePrompt(dec("o/agent-console", "trivial"), "b", "main"), /pull 
     assert.equal(g(main, "branch", "--list", res.branch), "", "worker branch not shared with main");
     const firstHead = g(res.cwd, "rev-parse", "HEAD");
     fs.writeFileSync(path.join(main, "a"), "2"); g(main, "add", "a"); g(main, "commit", "-qm", "upstream update"); g(main, "push", "-q", "origin", "HEAD:main");
-    const retry = startIssue({ ...dec("o/webapp", "bau"), issue: { repo: "o/webapp", number: 42, title: "Fix the export totals", labels: [] } }, runner, { repos, worktrees: path.join(root, "wt") });
+    const retry = await startIssue({ ...dec("o/webapp", "bau"), issue: { repo: "o/webapp", number: 42, title: "Fix the export totals", labels: [] } }, runner, { repos, worktrees: path.join(root, "wt") });
     assert.notEqual(retry.cwd, res.cwd); assert.notEqual(retry.branch, res.branch);
     assert.equal(g(retry.cwd, "rev-parse", "HEAD"), g(main, "rev-parse", "HEAD"), "retry starts latest upstream");
     assert.equal(g(res.cwd, "rev-parse", "HEAD"), firstHead, "old attempt untouched");
     // Existing symlinks, shared worktrees and mismatched branches cannot masquerade as private clones.
     const opts = { repo: "webapp", dirs: { repos, worktrees: path.join(root, "wt") }, dirName: "private-check", branch: "private-check" };
     fs.symlinkSync(main, path.join(root, "wt", "symlink"));
-    assert.throws(() => addWorktree({ ...opts, dirName: "symlink" }), /Refusing/);
+    await assert.rejects(() => addWorktree({ ...opts, dirName: "symlink" }), /Refusing/);
     g(main, "worktree", "add", "-q", "-b", "shared", path.join(root, "wt", "shared"));
-    assert.throws(() => addWorktree({ ...opts, dirName: "shared", branch: "shared" }), /Refusing/);
-    const privateWt = addWorktree(opts);
-    assert.throws(() => addWorktree({ ...opts, branch: "wrong" }), /Refusing stale/);
-    const reused = addWorktree(opts); assert.equal(reused.created, false);
-    reused.remove(); assert.ok(fs.existsSync(privateWt.cwd), "reused checkout never removed");
-    privateWt.remove(); assert.ok(!fs.existsSync(privateWt.cwd)); assert.ok(fs.existsSync(path.join(main, ".git")));
+    await assert.rejects(() => addWorktree({ ...opts, dirName: "shared", branch: "shared" }), /Refusing/);
+    // Cloning takes tens of seconds on a real repository: the server's event loop must keep serving while it runs.
+    const order: string[] = [];
+    const cloning = addWorktree(opts).then(wt => { order.push("cloned"); return wt; });
+    setImmediate(() => order.push("event loop"));
+    const privateWt = await cloning;
+    assert.equal(order[0], "event loop", "private checkout setup never blocks the event loop");
+    await assert.rejects(() => addWorktree({ ...opts, branch: "wrong" }), /Refusing stale/);
+    const reused = await addWorktree(opts); assert.equal(reused.created, false);
+    await reused.remove(); assert.ok(fs.existsSync(privateWt.cwd), "reused checkout never removed");
+    await privateWt.remove(); assert.ok(!fs.existsSync(privateWt.cwd)); assert.ok(fs.existsSync(path.join(main, ".git")));
     assert.equal(g(res.cwd, "rev-parse", "--abbrev-ref", "HEAD"), res.branch);
     assert.equal(made[0].title, "webapp:42 Fix the export"); assert.equal(made[0].cwd, res.cwd); assert.equal(made[0].provider, "claude");
     const hook = g(res.cwd, "config", "--get", "core.hooksPath");
@@ -133,9 +138,9 @@ assert.match(issuePrompt(dec("o/agent-console", "trivial"), "b", "main"), /pull 
     const directRepo = path.join(repos, "agent-console");
     execFileSync("git", ["clone", "-q", origin, directRepo]);
     g(directRepo, "remote", "set-head", "origin", "main");
-    const bauDirect = startIssue(dec("o/agent-console", "bau"), runner, { repos, worktrees: path.join(root, "wt") });
+    const bauDirect = await startIssue(dec("o/agent-console", "bau"), runner, { repos, worktrees: path.join(root, "wt") });
     assert.ok(fs.existsSync(path.join(g(bauDirect.cwd, "config", "--get", "core.hooksPath"), "pre-push")), "BAU in local-apply repos also gets a push guard");
-    assert.throws(() => startIssue(dec("o/missing", "bau"), runner, { repos, worktrees: path.join(root, "wt") }), /No local checkout/);
+    await assert.rejects(() => startIssue(dec("o/missing", "bau"), runner, { repos, worktrees: path.join(root, "wt") }), /No local checkout/);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 }
 
