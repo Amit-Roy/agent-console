@@ -103,8 +103,8 @@ try {
     await page.waitForFunction(() => document.querySelector("#head .title")?.textContent?.includes("r:5 Fix the export"));
 
     if (name.startsWith("phone")) await page.click("#menu");
-    ok("archive starts collapsed and counts saved runs", await page.locator("#auto-archive").isVisible()
-      && await page.locator("#auto-archive-count").innerText() === "2"
+    ok("archive starts collapsed and counts archived issues", await page.locator("#auto-archive").isVisible()
+      && await page.locator("#auto-archive-count").innerText() === "1"
       && await page.getAttribute("#auto-archive-toggle", "aria-expanded") === "false"
       && await page.locator("#auto-archived").isHidden());
     ok("automated history never enters the Threads archive", await page.locator("#archived li[data-thread]").count() === 0 && await page.locator("#archive").isHidden());
@@ -124,7 +124,7 @@ try {
     // The same thread update broadcast used by automatic lifecycle archival moves rows without a reload.
     await archive("22222222-2222-4222-8222-222222222222", true);
     await archive("33333333-3333-4333-8333-333333333333", true);
-    await page.waitForFunction(() => document.querySelector("#auto-archive-count")?.textContent === "4");
+    await page.waitForFunction(() => document.querySelector("#auto-archive-count")?.textContent === "2");
     ok("live archive removes completed issue from active runs", await page.locator('#autos .auto-group[data-issue="o/r#5"]').count() === 0
       && await page.locator('#auto-archived .auto-group[data-issue="o/r#5"] li[data-thread]').count() === 2);
     ok("rerender preserves archive and issue expansion", await page.getAttribute("#auto-archive-toggle", "aria-expanded") === "true"
