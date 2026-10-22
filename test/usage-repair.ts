@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { once } from "node:events";
 import { reconstructClaudeHistory } from "../server/usage-repair.ts";
 
 const logs = {
@@ -49,7 +50,10 @@ fs.writeFileSync(path.join(data, "logs/b.jsonl"), JSON.stringify({ type: "user_i
 try {
   const { repairUsageHistory } = await import("../server/usage.ts");
   assert.equal(fs.existsSync(path.join(data, "usage-history.schema-v2")), false, "import alone never migrates");
-  repairUsageHistory();
+  const unrelatedPid = path.join(data, "unrelated.pid");
+  fs.writeFileSync(unrelatedPid, String(process.ppid));
+  repairUsageHistory({ pidFile: unrelatedPid });
+  assert.equal(fs.existsSync(path.join(data, "usage-history.schema-v2")), true, "unrelated live PID does not block repair");
   const repaired = fs.readFileSync(historyPath, "utf8").trim().split("\n").map(line => JSON.parse(line));
   assert.ok(repaired.some(r => r.provider === "claude:unknown" && r.accountUnresolved));
   assert.ok(repaired.some(r => r.provider === "pi"));
@@ -61,6 +65,8 @@ try {
   const migratedOnce = fs.readFileSync(historyPath, "utf8");
   repairUsageHistory();
   assert.equal(fs.readFileSync(historyPath, "utf8"), migratedOnce, "completed migration rerun is a no-op");
+  assert.doesNotThrow(() => repairUsageHistory({ pidFile: unrelatedPid }), "completed marker makes owner checks unnecessary");
+  fs.unlinkSync(unrelatedPid);
   const snapshots = JSON.parse(fs.readFileSync(snapshotsPath, "utf8"));
   assert.equal(snapshots.claude, undefined, "legacy latest quota snapshots are discarded");
   assert.ok(snapshots.pi, "non-Claude latest snapshots survive");
@@ -74,10 +80,6 @@ try {
   assert.ok(afterRetry.includes('"provider":"codex","label":"7-day"'), "retry keeps current non-Claude history");
   assert.ok(JSON.parse(fs.readFileSync(snapshotsPath, "utf8")).claude.observedAt === 3100, "retry keeps newer receipt snapshot");
   assert.notEqual(beforeRerun, afterRetry);
-  const ownedPid = path.join(data, "owner.pid");
-  fs.writeFileSync(ownedPid, String(process.ppid));
-  assert.throws(() => repairUsageHistory({ pidFile: ownedPid }), /Another Agent Console server owns/);
-  fs.unlinkSync(ownedPid);
   const { Threads } = await import("../server/threads.ts");
   const { PROVIDERS } = await import("../server/providers/index.ts");
   const claude = PROVIDERS.get("claude")!;
@@ -113,4 +115,30 @@ try {
   assert.equal(fs.existsSync(`${file}.repair-v2.original`), false, "parse failure precedes backup/replacement");
   assert.equal(fs.existsSync(path.join(broken, "usage-history.schema-v2")), false);
 } finally { fs.rmSync(broken, { recursive: true, force: true }); }
+
+const ownerTest = fs.mkdtempSync(path.join(os.tmpdir(), "usage-repair-owner-"));
+const ownerData = path.join(ownerTest, "data"), stubServer = path.join(ownerTest, "server", "index.ts");
+fs.mkdirSync(path.dirname(stubServer), { recursive: true }); fs.mkdirSync(ownerData);
+fs.writeFileSync(stubServer, "setInterval(() => {}, 1000);\n");
+const serverStub = spawn(process.execPath, [stubServer], { stdio: "ignore" });
+try {
+  await Promise.race([once(serverStub, "spawn"), once(serverStub, "error").then(([error]) => Promise.reject(error))]);
+  const command = fs.readFileSync(`/proc/${serverStub.pid}/cmdline`);
+  assert.ok(command.includes(Buffer.from("server/index.ts")), "stub PID matches the launcher’s Agent Console process check");
+  const history = path.join(ownerData, "usage-history.jsonl"), pid = path.join(ownerTest, "owner.pid");
+  const original = JSON.stringify({ ts: 1, provider: "claude", label: "5-hour", used: 1, limit: 100 }) + "\n";
+  fs.writeFileSync(history, original); fs.writeFileSync(path.join(ownerData, "usage.json"), "{}"); fs.writeFileSync(pid, String(serverStub.pid));
+  const usageUrl = new URL("../server/usage.ts", import.meta.url).href;
+  const child = spawnSync(process.execPath, ["--input-type=module", "-e", `const { repairUsageHistory } = await import(${JSON.stringify(usageUrl)}); repairUsageHistory({ pidFile: ${JSON.stringify(pid)} });`], {
+    env: { ...process.env, AGENT_CONSOLE_DATA: ownerData, AGENT_CONSOLE_MOCK: "1" }, encoding: "utf8",
+  });
+  assert.notEqual(child.status, 0);
+  assert.match(child.stderr, /Another Agent Console server owns the data directory/);
+  assert.equal(fs.readFileSync(history, "utf8"), original, "live owner rejection precedes mutation");
+  assert.equal(fs.existsSync(`${history}.repair-v2.original`), false);
+  assert.equal(fs.existsSync(path.join(ownerData, "usage-history.schema-v2")), false);
+} finally {
+  if (serverStub.exitCode == null) { serverStub.kill(); await once(serverStub, "exit"); }
+  fs.rmSync(ownerTest, { recursive: true, force: true });
+}
 console.log("usage repair: ok");

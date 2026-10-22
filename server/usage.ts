@@ -87,12 +87,15 @@ try { values = JSON.parse(fs.readFileSync(file, "utf8")); } catch {}
 /** Called only after this process has acquired the server ownership lock. */
 export function repairUsageHistory(request: { pidFile?: string } = {}) {
   const pidFile = request.pidFile ?? process.env.AGENT_CONSOLE_PID_FILE;
-  if (pidFile && fs.existsSync(pidFile)) {
+  if (!fs.existsSync(repairMarker) && pidFile && fs.existsSync(pidFile)) {
     const ownerPid = Number(fs.readFileSync(pidFile, "utf8").trim());
-    if (!Number.isSafeInteger(ownerPid) || ownerPid <= 0) throw Error("Cannot verify Agent Console ownership before usage repair");
     if (ownerPid !== process.pid) {
-      try { process.kill(ownerPid, 0); throw Error("Another Agent Console server owns the data directory"); }
-      catch (error: any) { if (error?.code !== "ESRCH") throw error; }
+      let isAgentConsole = false;
+      if (Number.isSafeInteger(ownerPid) && ownerPid > 0) {
+        try { isAgentConsole = fs.readFileSync(`/proc/${ownerPid}/cmdline`).includes(Buffer.from("server/index.ts")); }
+        catch {}
+      }
+      if (isAgentConsole) throw Error("Another Agent Console server owns the data directory");
     }
   }
   migrateUsageHistory();
