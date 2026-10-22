@@ -41,6 +41,7 @@ import { Schedules, describe } from "./schedules.ts";
 import { SessionSearch } from "./session-search.ts";
 import { Notifications } from "./notifications.ts";
 import { dashboard } from "./analytics.ts";
+import { promptOverhead } from "./prompt-overhead.ts";
 import { pricing, rates } from "./api-pricing.ts";
 import { contextAllocation } from "./context-allocation.ts";
 import { headroom } from "./headroom.ts";
@@ -459,12 +460,20 @@ app.get("/api/dashboard", async (req, res) => {
   try {
     const d = await dashboard(from, to);
     const titles: Record<string, string> = {};
-    for (const t of d.turns) titles[t.thread] ??= threads.get(t.thread)?.title ?? "Deleted thread";
+    const cwds: Record<string, string | null> = {};
+    for (const t of d.turns) {
+      titles[t.thread] ??= threads.get(t.thread)?.title ?? "Deleted thread";
+      cwds[t.thread] ??= threads.get(t.thread)?.cwd ?? null;
+    }
     let turnLatencyStats: any = { available: false };
     try { turnLatencyStats = turnLatency(from, to); } catch {}
-    res.json({ ...d, titles, latency: turnLatencyStats });
+    res.json({ ...d, titles, cwds, latency: turnLatencyStats });
   }
   catch { res.status(503).json({ error: "Dashboard data is unavailable." }); }
+});
+app.get("/api/dashboard/overhead", async (_req, res) => {
+  res.set("Cache-Control", "no-store");
+  try { res.json(await promptOverhead()); } catch { res.status(503).json({ error: "Prompt overhead is unavailable." }); }
 });
 app.get("/api/host/metrics", hostMetrics);
 app.get("/api/host/processes", hostProcesses);
