@@ -215,6 +215,13 @@
   <p id="d-warn" class="callout" role="alert" hidden><svg class="ico" aria-hidden="true"><use href="#i-alert"/></svg><span>Bypass mode runs every tool without asking. Use only in folders you trust.</span></p>
   <div class="row"><button value="cancel" class="btn" formnovalidate>Cancel</button><button value="ok" class="btn primary" id="d-ok">Create thread</button></div>
 </form></dialog>
+<dialog id="ap" aria-labelledby="ap-title">
+  <h2 id="ap-title">Assigning to premium</h2>
+  <p class="sub" id="ap-sub"></p>
+  <ol id="ap-steps" class="ap-steps" aria-live="polite"></ol>
+  <p id="ap-error" role="alert" hidden></p>
+  <div class="row"><button id="ap-close" class="btn" type="button">Close</button><button id="ap-open" class="btn primary" type="button" disabled>See thread</button></div>
+</dialog>
 <dialog id="notifications-dialog" aria-labelledby="notifications-title">
   <h2 id="notifications-title">Notifications</h2>
   <p id="notifications-status" class="sub" role="status" aria-live="polite"></p>

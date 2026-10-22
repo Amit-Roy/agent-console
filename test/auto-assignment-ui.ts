@@ -5,6 +5,7 @@ import http from "node:http";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { chromium, type Page } from "playwright";
+import { ASSIGNMENT_STEPS } from "../server/automation/assign.ts";
 
 const root = path.resolve(import.meta.dirname, "..");
 const out = process.env.OUT || "/tmp/auto-assignment-ui";
@@ -22,8 +23,28 @@ const providers = [
   provider("codex", "Codex", "gpt-6.1-sol"), provider("pi", "Pi", "free-model"),
 ];
 const baseline = process.env.AUTO_ASSIGNMENT_BASELINE === "1" ? execFileSync("git", ["show", "HEAD:public/app.js"], { cwd: root }) : null;
+// The fixture streams the real step plan and holds at the clone step, so the test can inspect the live timeline.
+let holdClone = Promise.resolve(), streamFail = false;
+async function streamAssignment(res: http.ServerResponse) {
+  res.writeHead(200, { "content-type": "application/x-ndjson" });
+  const line = (m: object) => res.write(JSON.stringify({ ...m, at: Date.now() }) + "\n");
+  line({ t: "plan", steps: ASSIGNMENT_STEPS });
+  for (const { id } of ASSIGNMENT_STEPS) {
+    line({ t: "step", id });
+    if (id === "clone") {
+      line({ t: "log", id, text: "$ git clone -q --no-local --no-hardlinks --no-checkout --single-branch --branch main" });
+      await holdClone;
+      if (streamFail) { line({ t: "fail", id, error: "fatal: could not create work tree" }); line({ t: "error", error: "fatal: could not create work tree" }); return void res.end(); }
+    }
+    await new Promise(r => setTimeout(r, 150));
+    line({ t: "ok", id });
+  }
+  line({ t: "done", thread: "premium-handoff" });
+  res.end();
+}
 const server = http.createServer((req, res) => {
   const url = new URL(req.url || "/", "http://localhost");
+  if (url.pathname === "/api/automation/assign") return void streamAssignment(res);
   if (url.pathname.startsWith("/api/")) { res.setHeader("content-type", "application/json"); res.end("{}"); return; }
   if (url.pathname === "/app.js" && baseline) { res.setHeader("content-type", "application/javascript"); res.end(baseline); return; }
   const vendors: Record<string, string> = { "/vendor/marked.js": "node_modules/marked/lib/marked.esm.js", "/vendor/purify.js": "node_modules/dompurify/dist/purify.es.mjs" };
@@ -72,9 +93,8 @@ try {
         await errorGate;
         return route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ error: "A premium session is already running for this issue." }) });
       }
-      const created = thread("premium-handoff", "Premium issue #7 recovery");
-      socket.send(JSON.stringify({ t: "thread", thread: created }));
-      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ thread: created.id }) });
+      socket.send(JSON.stringify({ t: "thread", thread: thread("premium-handoff", "Premium issue #7 recovery") }));
+      await route.continue();
     });
     await page.goto(base);
     await page.waitForFunction(() => document.getElementById("ttl")?.textContent === "Issue #7 worker stopped");
@@ -125,9 +145,29 @@ try {
     await page.locator("#d-effort").click();
     await page.getByRole("option", { name: "Effort · High", exact: true }).click();
     responseMode = "success";
+    let releaseClone!: () => void;
+    holdClone = new Promise(resolve => { releaseClone = resolve; });
     await page.locator("#d-ok").click();
+    const step = (n: number) => page.locator(`#ap .ap-step:nth-child(${n})`);
+    await page.waitForFunction(() => (document.querySelector("#ap .ap-step:nth-child(5)") as HTMLElement | null)?.dataset.state === "active");
+    assert.equal(await page.locator("#dlg").isVisible(), false, `${name}: the settings dialog gives way to the timeline`);
+    assert.equal(await page.locator("#ap .ap-step").count(), ASSIGNMENT_STEPS.length, `${name}: every planned step is drawn`);
+    assert.equal(await page.locator('#ap .ap-step[data-state="done"]').count(), 4, `${name}: earlier steps are complete`);
+    assert.match(await step(1).locator(".ap-time").innerText(), /^\d+\.\d s$/, `${name}: completed steps show their duration`);
+    assert.equal(await page.locator("#ap-open").isDisabled(), true, `${name}: See thread waits for the session`);
+    await step(5).locator(".ap-row").click();
+    assert.equal(await step(5).locator(".ap-row").getAttribute("aria-expanded"), "true");
+    assert.match(await step(5).locator(".ap-log").innerText(), /\$ git clone/, `${name}: expanding a step shows its command output`);
+    await page.waitForTimeout(400);
+    await page.screenshot({ path: path.join(out, `${name}-assignment-progress.png`) });
+    releaseClone();
+    await page.waitForFunction(() => !(document.getElementById("ap-open") as HTMLButtonElement).disabled);
+    assert.equal(await page.locator('#ap .ap-step[data-state="done"]').count(), ASSIGNMENT_STEPS.length, `${name}: every step completes`);
+    await page.waitForTimeout(700);
+    await page.screenshot({ path: path.join(out, `${name}-assignment-complete.png`) });
+    await page.getByRole("button", { name: "See thread", exact: true }).click();
     await page.waitForFunction(() => document.getElementById("ttl")?.textContent === "Premium issue #7 recovery");
-    assert.equal(await page.locator("#dlg").isVisible(), false, `${name}: successful assignment opens the returned thread`);
+    assert.equal(await page.locator("#ap").isVisible(), false, `${name}: See thread opens the returned thread`);
     assert.equal(assignments.length, 2);
     assert.equal(assignments[1].provider, "codex");
     assert.equal(assignments[1].model, "gpt-6.1-sol");
@@ -144,6 +184,20 @@ try {
     assert.equal(await page.getByRole("option", { name: "Pi", exact: true }).count(), 1, `${name}: normal creation restores other providers`);
     await page.keyboard.press("Escape");
     await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    streamFail = true; holdClone = Promise.resolve();
+    await openAssignment(page, mobile);
+    await page.locator("#d-ok").click();
+    await page.getByRole("button", { name: "Back to settings", exact: true }).waitFor();
+    assert.equal(await step(5).getAttribute("data-state"), "failed", `${name}: the failing step is marked`);
+    assert.match(await step(5).locator(".ap-log").innerText(), /could not create work tree/, `${name}: the failing step opens with its error`);
+    assert.equal(await page.locator("#ap-error").innerText(), "fatal: could not create work tree");
+    await page.waitForTimeout(500);
+    await page.screenshot({ path: path.join(out, `${name}-assignment-failed.png`) });
+    await page.getByRole("button", { name: "Back to settings", exact: true }).click();
+    assert.equal(await page.locator("#dlg").isVisible(), true, `${name}: Back to settings reopens the dialog`);
+    assert.equal(await page.locator("#d-assignment-error").innerText(), "fatal: could not create work tree");
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    streamFail = false;
     assert.deepEqual(errors, [], `${name}: no browser runtime errors`);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, `${name}: no page overflow`);
     const video = page.video();
@@ -151,7 +205,7 @@ try {
     assert.ok(video);
     await video.saveAs(path.join(out, `${name}-assignment-interaction.webm`));
   }
-  console.log("PASS Auto premium assignment: shared dialog, premium choices/account/effort/mode, cancel, visible retryable server error, selected settings transport, returned thread, normal-dialog reset; desktop/phone dark/light.");
+  console.log("PASS Auto premium assignment: shared dialog, premium choices/account/effort/mode, cancel, visible retryable server error, selected settings transport, live step timeline with output and durations, failed step and back to settings, returned thread, normal-dialog reset; desktop/phone dark/light.");
 } finally {
   await browser.close();
   await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
