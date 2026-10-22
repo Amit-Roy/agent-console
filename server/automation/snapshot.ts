@@ -61,6 +61,7 @@ export function automationApi(deps: ApiDeps) {
       { id: "webhook", kind: "webhook", label: "GitHub webhook", detail: "Issue events reach the triage worker on :7077, which labels effort and priority", enabled: true, lastAt: lastOf("triage"), pipeline: "pr" },
       { id: "dispatch-tick", kind: "timer", label: "Dispatcher tick", detail: `Every 5 min; last ${d.leadMinutes} min of a window; ${d.dryRun ? "dry run" : "live"}`, enabled: d.enabled, lastAt: lastOf("dispatcher"), pipeline: "pr" },
       { id: "opener-tick", kind: "timer", label: "Window opener tick", detail: `Every 5 min; ${o.from}–${o.to} ${o.tz}; ${o.dryRun ? "dry run" : "live"}`, enabled: o.enabled, lastAt: lastOf("opener"), pipeline: "windows" },
+      { id: "monitor-tick", kind: "timer", label: "Workspace monitor tick", detail: "Every 15 s: host CPU and RAM, agent failures, console health; unresolved alerts escalate L3 Pi, L2 Claude or Codex, L1 Opus, owner", enabled: true, lastAt: lastOf("monitor"), pipeline: "monitor" },
       { id: "turn-end", kind: "hook", label: "Issue turn-end hook", detail: "When a Trivial or BAU worker ends its turn with a PR, a reviewer thread starts; changes requested go back to the worker", enabled: true, lastAt: lastOf("review"), pipeline: "pr" },
       ...deps.schedules().map((s): Trigger => ({ id: `cron-${s.id}`, kind: "cron", label: s.title, detail: s.schedule, enabled: s.enabled })),
       { id: "debug", kind: "manual", label: "Debug button", detail: "Starts a debugging thread with the automation skill", enabled: true },
