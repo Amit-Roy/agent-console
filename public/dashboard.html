@@ -7,11 +7,14 @@
 <meta name="theme-color" content="#eeeef2" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0b0b0d" media="(prefers-color-scheme: dark)">
 <link rel="preload" href="/fonts/inter-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/dashboard.css"></head>
+<link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/dashboard.css"><link rel="stylesheet" href="/dashboard-tokens.css"></head>
 <body class="dash">
 <header class="dh">
   <a class="btn ghost back" href="/" aria-label="Back to the console"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M10 3.5 5.5 8l4.5 4.5"/></svg><span>Console</span></a>
   <h1>Usage &amp; savings</h1>
+  <div class="range tabs" role="tablist" aria-label="Dashboard view">
+    <button type="button" role="tab" id="tab-usage" data-tab="usage" aria-controls="dm" aria-selected="true" tabindex="0">Usage</button><button type="button" role="tab" id="tab-tokens" data-tab="tokens" aria-controls="dt" aria-selected="false" tabindex="-1">Tokens</button>
+  </div>
   <div class="range" role="group" aria-label="Time range">
     <button type="button" data-r="1">Today</button><button type="button" data-r="7">7 days</button><button type="button" data-r="30">30 days</button><button type="button" data-r="90">90 days</button><button type="button" data-r="custom">Custom</button>
   </div>
@@ -20,9 +23,10 @@
     <button class="btn sm primary" type="submit">Apply</button>
   </form>
 </header>
-<main id="dm" aria-live="polite" aria-busy="true">
+<main id="dm" role="tabpanel" aria-labelledby="tab-usage" aria-live="polite" aria-busy="true">
   <p class="muted" id="status">Loading usage…</p>
 </main>
+<section id="dt" role="tabpanel" aria-labelledby="tab-tokens" aria-live="polite" aria-busy="false" hidden></section>
 <div id="tip" role="tooltip" hidden></div>
 <script type="module" src="/dashboard.js"></script>
 </body></html>

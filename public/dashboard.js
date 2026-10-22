@@ -55,18 +55,77 @@ async function fetchRange(from, to) {
   if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `HTTP ${r.status}`);
   return r.json();
 }
+// ---------- tabs ----------
+let tab = new URLSearchParams(location.search).get("tab") === "tokens" ? "tokens" : "usage";
+let overhead = { loading: true }, ohSeq = 0, lastCur = null, tokensMod = null;
+function applyTab(focus) {
+  for (const b of document.querySelectorAll(".tabs [role=tab]")) {
+    const on = b.dataset.tab === tab;
+    b.setAttribute("aria-selected", String(on)); b.tabIndex = on ? 0 : -1;
+    if (on && focus) b.focus();
+  }
+  $("dm").hidden = tab !== "usage"; $("dt").hidden = tab !== "tokens";
+  hideTip();
+}
+function setTab(next, focus) {
+  if (next === tab) { if (focus) applyTab(true); return; }
+  tab = next;
+  const u = new URL(location.href);
+  if (tab === "tokens") u.searchParams.set("tab", "tokens"); else u.searchParams.delete("tab");
+  history.replaceState(null, "", u);
+  applyTab(focus);
+  void load();
+}
+for (const b of document.querySelectorAll(".tabs [role=tab]")) {
+  b.onclick = () => setTab(b.dataset.tab);
+  b.onkeydown = (e) => {
+    const order = ["usage", "tokens"], i = order.indexOf(b.dataset.tab);
+    const next = e.key === "ArrowRight" ? order[(i + 1) % 2] : e.key === "ArrowLeft" ? order[(i + 1) % 2] : e.key === "Home" ? order[0] : e.key === "End" ? order[1] : null;
+    if (next) { e.preventDefault(); setTab(next, true); }
+  };
+}
+
+// ---------- tokens tab ----------
+async function fetchOverhead() {
+  const mine = ++ohSeq;
+  try {
+    const r = await fetch("/api/dashboard/overhead", { credentials: "same-origin" });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `HTTP ${r.status}`);
+    const data = await r.json();
+    if (mine === ohSeq) overhead = data;
+  } catch (e) {
+    if (mine === ohSeq) overhead = { error: e.message };
+  }
+  if (mine === ohSeq && tab === "tokens") renderTokensTab();
+}
+function retryOverhead() { overhead = { loading: true }; renderTokensTab(); void fetchOverhead(); }
+function renderTokensTab() {
+  if (!lastCur || !tokensMod) return;
+  tokensMod.renderTokens($("dt"), lastCur, overhead, { el, panel, kpi, hbars, legend, fmt, usd, pct, provMeta, showTip, hideTip, retryOverhead });
+}
+
 let seq = 0;
 async function load() {
   const mine = ++seq;
-  $("dm").setAttribute("aria-busy", "true");
+  const root = $(tab === "tokens" ? "dt" : "dm");
+  root.setAttribute("aria-busy", "true");
   try {
-    const span = range.to - range.from;
-    const [cur, prev] = await Promise.all([fetchRange(range.from, range.to), fetchRange(range.from - span, range.from - 1).catch(() => null)]);
-    if (mine === seq) { render(cur, prev); }
+    if (tab === "tokens") {
+      const [cur, mod] = await Promise.all([fetchRange(range.from, range.to), tokensMod || import("/dashboard-tokens.js")]);
+      if (mine !== seq) return;
+      tokensMod = mod; lastCur = cur;
+      if (!overhead || overhead.error) overhead = { loading: true };
+      renderTokensTab();
+      void fetchOverhead();
+    } else {
+      const span = range.to - range.from;
+      const [cur, prev] = await Promise.all([fetchRange(range.from, range.to), fetchRange(range.from - span, range.from - 1).catch(() => null)]);
+      if (mine === seq) { render(cur, prev); }
+    }
   } catch (e) {
-    if (mine === seq) $("dm").replaceChildren(el("p", "muted", `Could not load usage: ${e.message}`));
+    if (mine === seq) root.replaceChildren(el("p", "muted", `Could not load ${tab === "tokens" ? "tokens" : "usage"}: ${e.message}`));
   }
-  if (mine === seq) $("dm").setAttribute("aria-busy", "false");
+  if (mine === seq) root.setAttribute("aria-busy", "false");
 }
 
 const hasTokens = (t) => Number.isFinite(t.in) && t.in >= 0 && Number.isFinite(t.out) && t.out >= 0;
@@ -461,6 +520,7 @@ function render(cur, prev) {
 }
 
 // ---------- boot ----------
+applyTab(false);
 const m = /^#(\d{4}-\d{2}-\d{2})\.\.(\d{4}-\d{2}-\d{2})$/.exec(location.hash);
 if (m) setRange("custom", new Date(`${m[1]}T00:00:00Z`).getTime(), Math.min(Date.now(), new Date(`${m[2]}T23:59:59Z`).getTime()));
 else setRange(["1", "7", "30", "90"].includes(location.hash.slice(1)) ? location.hash.slice(1) : "7");
