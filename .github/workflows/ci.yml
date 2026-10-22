@@ -50,19 +50,17 @@ jobs:
         with:
           node-version: 24
           cache: npm
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: pip
-          cache-dependency-path: requirements-triage.txt
+      # No setup-python: CI runs only stdlib Python tests on the runner's python3. requirements-triage.txt
+      # serves the offline calibration fit (npm run test:effort-fit), which CI does not run.
       - run: npm ci
-      - run: pip install -r requirements-triage.txt
       - name: Cache Playwright browsers
         uses: actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ hashFiles('package-lock.json') }}
-      - run: npx playwright install --with-deps chromium
+      # The runner image ships Google Chrome, so Chromium's system libraries are already present;
+      # --with-deps ran apt-get and took up to 9 minutes.
+      - run: npx playwright install chromium
       - name: Install Pi
         run: npm install -g @earendil-works/pi-coding-agent@1.2.0
       - name: Start mock scratch server
