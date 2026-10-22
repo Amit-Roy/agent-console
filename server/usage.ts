@@ -8,7 +8,7 @@ import { reconstructClaudeHistory, type UsageRepairRow } from "./usage-repair.ts
 
 
 export interface UsageWindow { label: string; used: number; limit: number; unit?: string; resetsAt?: number }
-export interface ProviderUsage { windows: UsageWindow[]; note?: string; updatedAt: number; spendToday?: number; observedAt?: number; usageProvider?: string }
+export interface ProviderUsage { windows: UsageWindow[]; note?: string; updatedAt: number; spendToday?: number; observedAt?: number; usageProvider?: string; sourceSessionId?: string; sourceEventUuid?: string }
 export function claudeWindows(ev: any): UsageWindow[] {
   const w = ev.rate_limit_info?.unifiedWindows;
   if (!w) return [];
@@ -28,8 +28,9 @@ export function routerUsage(d: any): Omit<ProviderUsage, "updatedAt"> {
 export function historyRows(provider: string, prev: ProviderUsage | undefined, next: ProviderUsage) {
   return next.windows.filter(w => {
     const p = prev?.windows.find(x => x.label === w.label);
-    return !p || p.used !== w.used || p.limit !== w.limit || p.resetsAt !== w.resetsAt;
-  }).map(w => ({ ts: next.updatedAt, provider, ...w, ...(next.usageProvider ? { schemaVersion: 2, provenance: "received", timestampSource: "received", observedAt: next.observedAt, usageProvider: next.usageProvider } : {}) }));
+    const distinctEvent = !!next.sourceSessionId && !!next.sourceEventUuid && (next.sourceSessionId !== prev?.sourceSessionId || next.sourceEventUuid !== prev?.sourceEventUuid);
+    return distinctEvent || !p || p.used !== w.used || p.limit !== w.limit || p.resetsAt !== w.resetsAt;
+  }).map(w => ({ ts: next.updatedAt, provider, ...w, ...(next.usageProvider ? { schemaVersion: 2, provenance: "received", timestampSource: "received", observedAt: next.observedAt, usageProvider: next.usageProvider, ...(next.sourceSessionId && next.sourceEventUuid ? { sourceSessionId: next.sourceSessionId, sourceEventUuid: next.sourceEventUuid } : {}) } : {}) }));
 }
 const file = path.join(DATA_DIR, "usage.json");
 const historyFile = path.join(DATA_DIR, "usage-history.jsonl");
@@ -107,7 +108,7 @@ export const usage = {
   all: () => values,
   get: (provider: string) => values[provider],
   subscribe(fn: typeof notify) { notify = fn; },
-  record(provider: string, sample: Omit<ProviderUsage, "updatedAt">, updatedAt = Date.now(), attribution?: { usageProvider: string; observedAt: number }) {
+  record(provider: string, sample: Omit<ProviderUsage, "updatedAt">, updatedAt = Date.now(), attribution?: { usageProvider: string; observedAt: number; sourceSessionId?: string; sourceEventUuid?: string }) {
     if (values[provider]?.updatedAt > updatedAt) return;
     const prev = values[provider];
     const rows = historyRows(provider, prev, { ...sample, ...(attribution || {}), updatedAt });

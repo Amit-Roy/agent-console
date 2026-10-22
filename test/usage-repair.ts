@@ -18,6 +18,78 @@ const result = reconstructClaudeHistory({
 assert.equal(result.rows.length, 1, "copied legacy events must not credit two accounts");
 assert.equal(result.rows[0].provider, "claude:unknown");
 assert.equal(result.rows[0].timestampSource, "turn-start");
+const forkEvent = (session_id: string, uuid: string, ts: number, utilization: number) => ({
+  type: "rate_limit_event", session_id, uuid, ts,
+  rate_limit_info: { unifiedWindows: { five_hour: { utilization } } },
+});
+const forked = reconstructClaudeHistory({ rows: [], logs: {
+  sunnyOriginal: [forkEvent("native-sunny", "sunny-old", 1000, 0.3)],
+  nefroFork: [forkEvent("native-sunny", "sunny-old", 1000, 0.3), forkEvent("native-nefro", "nefro-new", 2000, 0.6)],
+}, threads: [
+  { id: "sunnyOriginal", claudeAccount: "sunny", createdAt: 900 },
+  { id: "nefroFork", claudeAccount: "nefro", createdAt: 1500 },
+] });
+assert.deepEqual(forked.rows.map(r => [r.provider, r.ts, r.used]).sort(), [
+  ["claude", 1000, 30], ["claude:nefro", 2000, 60],
+], "fork copies retain original account; new fork events use fork account");
+assert.equal(forked.rows.find(r => r.ts === 1000)?.sourceSessionId, "native-sunny");
+assert.equal(forked.rows.find(r => r.ts === 1000)?.sourceEventUuid, "sunny-old");
+assert.equal(forked.rows.find(r => r.ts === 1000)?.accountSource, "native-session");
+const reverseFork = reconstructClaudeHistory({ rows: [], logs: {
+  nefroOriginal: [forkEvent("native-nefro", "nefro-old", 1100, 0.2)],
+  sunnyFork: [forkEvent("native-nefro", "nefro-old", 1100, 0.2), forkEvent("nested-sunny", "nested-new", 2100, 0.8)],
+  nestedSunnyFork: [forkEvent("native-nefro", "nefro-old", 1100, 0.2), forkEvent("nested-sunny", "nested-new", 2100, 0.8)],
+}, threads: [
+  { id: "nefroOriginal", claudeAccount: "nefro", createdAt: 1000 },
+  { id: "sunnyFork", claudeAccount: "sunny", createdAt: 1500 },
+  { id: "nestedSunnyFork", claudeAccount: "sunny", createdAt: 1800 },
+] });
+assert.deepEqual(reverseFork.rows.map(r => [r.provider, r.ts, r.used]).sort(), [
+  ["claude:nefro", 1100, 20], ["claude", 2100, 80],
+].sort(), "nested forks preserve origin account and account new native sessions locally");
+const sameAccountFork = reconstructClaudeHistory({ rows: [], logs: {
+  original: [forkEvent("native-same", "same-a", 3000, 0.4), forkEvent("native-same", "same-b", 3000, 0.4)],
+  fork: [forkEvent("native-same", "same-a", 3000, 0.4), forkEvent("native-same", "same-b", 3000, 0.4)],
+}, threads: [{ id: "original", claudeAccount: "sunny", createdAt: 2500 }, { id: "fork", claudeAccount: "sunny", createdAt: 2800 }] });
+assert.equal(sameAccountFork.rows.length, 2, "same-time, same-value distinct UUID events remain distinct");
+const ownerEvidence = reconstructClaudeHistory({ rows: [], logs: {
+  onlyRemainingSource: [forkEvent("native-recovered", "other-event", 3900, 0.1)],
+  copiedTarget: [forkEvent("native-recovered", "target-event", 4000, 0.5)],
+}, threads: [
+  { id: "onlyRemainingSource", claudeAccount: "nefro", createdAt: 3800 },
+  { id: "copiedTarget", claudeAccount: "sunny", createdAt: 4050 },
+] });
+assert.equal(ownerEvidence.rows.find(r => r.ts === 4000)?.provider, "claude:nefro", "another eligible occurrence resolves source session when original target log is absent");
+const conflict = reconstructClaudeHistory({ rows: [], logs: {
+  sunnyOwner: [forkEvent("native-conflict", "sunny-event", 5000, 0.2)],
+  nefroOwner: [forkEvent("native-conflict", "nefro-event", 5100, 0.3)],
+}, threads: [
+  { id: "sunnyOwner", claudeAccount: "sunny", createdAt: 4900 },
+  { id: "nefroOwner", claudeAccount: "nefro", createdAt: 4950 },
+] });
+assert.ok(conflict.rows.every(r => r.provider === "claude:unknown" && r.accountUnresolved), "conflicting eligible session ownership stays unresolved");
+const unidentifiedEvent = { type: "rate_limit_event", ts: 6000, rate_limit_info: { unifiedWindows: { five_hour: { utilization: 0.25 } } } };
+const fallbackCopies = reconstructClaudeHistory({ rows: [], logs: {
+  source: [{ type: "session_meta", marker: "copied-prefix" }, unidentifiedEvent],
+  fork: [{ type: "session_meta", marker: "copied-prefix" }, unidentifiedEvent],
+  independentA: [{ type: "session_meta", marker: "independent-a" }, unidentifiedEvent],
+  independentB: [{ type: "session_meta", marker: "independent-b" }, unidentifiedEvent],
+}, threads: [
+  { id: "source", claudeAccount: "sunny", createdAt: 5900 },
+  { id: "fork", claudeAccount: "nefro", createdAt: 6100 },
+  { id: "independentA", claudeAccount: "sunny", createdAt: 5900 },
+  { id: "independentB", claudeAccount: "sunny", createdAt: 5900 },
+] });
+assert.equal(fallbackCopies.rows.length, 3, "full-prefix hashes collapse copied legacy rows but preserve independent equal-valued rows");
+assert.equal(fallbackCopies.rows.filter(r => r.ts === 6000 && r.provider === "claude").length, 3);
+const unstampedProviderCopy = reconstructClaudeHistory({ rows: [], logs: {
+  receiptOrigin: [forkEvent("native-receipt", "receipt-event", 7000, 0.5)],
+  receiptFork: [{ ...forkEvent("native-receipt", "receipt-event", 7000, 0.5), usageProvider: "claude:nefro" }],
+}, threads: [
+  { id: "receiptOrigin", claudeAccount: "sunny", createdAt: 6900 },
+  { id: "receiptFork", claudeAccount: "nefro", createdAt: 7100 },
+] });
+assert.equal(unstampedProviderCopy.rows[0].provider, "claude", "provider without finite receipt timestamp is not authoritative");
 const receipts = reconstructClaudeHistory({ rows: [{ ts: 500, provider: "pi", label: "Budget", used: 3, limit: 10 }], logs: {
   a: [{ type: "rate_limit_event", observedAt: 900, usageProvider: "claude", rate_limit_info: { unifiedWindows: { five_hour: { utilization: 0.7 } } } }],
   b: [{ type: "rate_limit_event", observedAt: 900, usageProvider: "claude:nefro", rate_limit_info: { unifiedWindows: { five_hour: { utilization: 0.2 } } } }],
@@ -28,6 +100,19 @@ assert.deepEqual(receipts.rows.filter(r => r.provider.startsWith("claude")).map(
   ["claude", 900, 70], ["claude", 850, 10], ["claude:nefro", 900, 20], ["claude:unknown", 850, 40],
 ].sort());
 assert.deepEqual(receipts.rows.find(r => r.provider === "pi"), { ts: 500, provider: "pi", label: "Budget", used: 3, limit: 10 });
+const receiptAliases = reconstructClaudeHistory({ rows: [
+  { ts: 8000, provider: "claude", label: "5-hour", used: 40, limit: 100, unit: "%", schemaVersion: 2, provenance: "received", timestampSource: "received" },
+], logs: {
+  native: [forkEvent("native-alias", "alias-a", 8000, 0.4), forkEvent("native-alias", "alias-b", 8000, 0.4)],
+}, threads: [{ id: "native", claudeAccount: "sunny", createdAt: 7900 }] });
+assert.equal(receiptAliases.rows.length, 2, "unidentified received aggregate aliases native rows; distinct native UUID rows remain canonical");
+assert.deepEqual(receiptAliases.rows.map(r => r.sourceEventUuid).sort(), ["alias-a", "alias-b"]);
+const fallbackReceiptAlias = reconstructClaudeHistory({ rows: [
+  { ts: 8100, provider: "claude", label: "5-hour", used: 35, limit: 100, unit: "%", schemaVersion: 2, provenance: "received", timestampSource: "received" },
+], logs: { fallback: [{ type: "rate_limit_event", ts: 8100, rate_limit_info: { unifiedWindows: { five_hour: { utilization: 0.35 } } } }] },
+threads: [{ id: "fallback", claudeAccount: "sunny", createdAt: 8000 }] });
+assert.equal(fallbackReceiptAlias.rows.length, 1, "no-ID received aggregate aliases matching full-prefix reconstruction");
+assert.ok(fallbackReceiptAlias.rows[0].sourcePrefixHash);
 
 // Exercise explicit migration only against a scratch data directory.
 const data = fs.mkdtempSync(path.join(os.tmpdir(), "usage-repair-"));

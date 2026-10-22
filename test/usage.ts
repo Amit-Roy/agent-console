@@ -21,6 +21,12 @@ assert.equal(claudeWindows({ rate_limit_info: { unifiedWindows: { five_hour: { u
 assert.equal(routerUsage({ free_model_daily_requests: { used: 49, limit: 50 }, usage_daily: 0 }).windows[0].limit, 50);
 assert.equal(routerUsage({ usage_daily: 0 }).windows.length, 0); // no invented allowance
 assert.equal(historyRows("claude", undefined, { windows: [{ label: "5-hour", used: 1, limit: 100 }], updatedAt: 11, observedAt: 11, usageProvider: "claude" })[0].timestampSource, "received");
+const quotaWindow = { label: "5-hour", used: 1, limit: 100, unit: "%" };
+const nativeReceipt = historyRows("claude", undefined, { windows: [quotaWindow], updatedAt: 12, observedAt: 12, usageProvider: "claude", sourceSessionId: "session-native", sourceEventUuid: "event-a" })[0];
+assert.equal(nativeReceipt.sourceSessionId, "session-native");
+assert.equal(nativeReceipt.sourceEventUuid, "event-a");
+assert.equal(historyRows("claude", { windows: [quotaWindow], updatedAt: 12, sourceSessionId: "session-native", sourceEventUuid: "event-a" }, { windows: [quotaWindow], updatedAt: 13, observedAt: 13, usageProvider: "claude", sourceSessionId: "session-native", sourceEventUuid: "event-b" }).length, 1, "distinct UUID observations append even when quota value is unchanged");
+assert.equal(historyRows("claude", { windows: [quotaWindow], updatedAt: 12, sourceSessionId: "session-native-a", sourceEventUuid: "event-shared" }, { windows: [quotaWindow], updatedAt: 13, observedAt: 13, usageProvider: "claude", sourceSessionId: "session-native-b", sourceEventUuid: "event-shared" }).length, 1, "same UUID in another native session remains a distinct observation");
 const emitted: any[] = [];
 codexTranslator(e => emitted.push(e))({ type: "turn.completed", usage: { input_tokens: 5_700_000, output_tokens: 3000 } });
 assert.ok(!emitted.some(e => e.type === "context_usage"));

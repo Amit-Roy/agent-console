@@ -274,7 +274,7 @@ export class Threads {
         if (t.provider === "claude") {
           const last = lastClaudeWindows(path.join(LOG_DIR, `${t.id}.jsonl`), claudeUsageKey(t.claudeAccount));
           if (last && Number.isFinite(last.observedAt) && last.usageProvider === claudeUsageKey(t.claudeAccount)) {
-            usage.record(last.usageProvider, { windows: claudeWindows(last) }, last.observedAt, { observedAt: last.observedAt, usageProvider: last.usageProvider });
+            usage.record(last.usageProvider, { windows: claudeWindows(last) }, last.observedAt, { observedAt: last.observedAt, usageProvider: last.usageProvider, ...(typeof last.session_id === "string" && typeof last.uuid === "string" ? { sourceSessionId: last.session_id, sourceEventUuid: last.uuid } : {}) });
           }
         }
         if (t.provider === "codex") {
@@ -766,7 +766,7 @@ export class Threads {
         if (provider.startsWith("claude")) {
           const observedAt = ev.usageProvider === provider && Number.isFinite(ev.observedAt) ? ev.observedAt : Date.now();
           ev = { ...ev, observedAt, usageProvider: provider };
-          usage.record(provider, { windows }, ev.observedAt, { observedAt: ev.observedAt, usageProvider: provider });
+          usage.record(provider, { windows }, ev.observedAt, { observedAt: ev.observedAt, usageProvider: provider, ...(typeof ev.session_id === "string" && typeof ev.uuid === "string" ? { sourceSessionId: ev.session_id, sourceEventUuid: ev.uuid } : {}) });
         } else usage.record(provider, { windows });
       }
     }
