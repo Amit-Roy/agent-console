@@ -3,7 +3,7 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import type express from "express";
 
-// Security scans run on the VPS host (clamav, rkhunter, trivy, nmap). This workspace only reads their
+// Security scans run on the VPS host (clamav, falco, trivy, nmap). This workspace only reads their
 // results over SSH with a forced-command key: the remote side accepts latest | history | get <id> | status | run.
 const LATEST_TTL = 30_000;
 const SSH_TIMEOUT = 20_000;
@@ -21,8 +21,12 @@ function remote(cmd: string): Promise<any> {
   const args = ["-i", keyFile(), "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "-o", "ConnectTimeout=5", target(), cmd];
   return new Promise((resolve, reject) => {
     execFile(sshBin(), args, { timeout: SSH_TIMEOUT, maxBuffer: 8 * 1024 * 1024 }, (err, stdout) => {
-      if (err) return reject(new SshError((err as any).killed ? "The scan host did not answer in time." : "Could not reach the scan host over SSH."));
-      try { resolve(JSON.parse(stdout)); } catch { reject(new SshError("The scan host sent an unreadable answer.")); }
+      let parsed: any;
+      try { parsed = JSON.parse(stdout); } catch {}
+      // The remote exits non-zero with a JSON {"error"} body for unknown ids; pass that through so callers can 404.
+      if (err && !parsed?.error) return reject(new SshError((err as any).killed ? "The scan host did not answer in time." : "Could not reach the scan host over SSH."));
+      if (parsed === undefined) return reject(new SshError("The scan host sent an unreadable answer."));
+      resolve(parsed);
     });
   });
 }

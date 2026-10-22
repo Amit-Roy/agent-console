@@ -1,4 +1,4 @@
-// Security page: results of the VPS host scans (clamav, rkhunter, trivy, nmap), read through the console server.
+// Security page: results of the VPS host scans (clamav, falco, trivy, nmap), read through the console server.
 // Static skeleton in security.html; this file renders it from /api/security/*. Listeners via addEventListener
 // only: module-scoped functions are not reachable from inline onclick.
 const $ = id => document.getElementById(id);
