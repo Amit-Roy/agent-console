@@ -35,6 +35,7 @@ assert.deepEqual(views[1].message.content, [
 ]);
 assert.deepEqual(views[2].message.content, original[2].message!.content);
 assert.deepEqual(views[3], { type: 'result', subtype: 'success', duration_ms: 1234, total_cost_usd: .1, is_error: false });
+assert.deepEqual(historyWireEvent({ type: 'result', subtype: 'success', is_error: true, result: 'Failed to authenticate: OAuth session expired and could not be refreshed', usage: {} }), { type: 'result', subtype: 'success', is_error: true, result: 'Failed to authenticate: OAuth session expired and could not be refreshed' }, 'error results keep their short text');
 for (let i = 4; i < 12; i++) assert.deepEqual(views[i], original[i], `rendered event ${i} stays intact`);
 assert.deepEqual(views[12], { type: 'rate_limit_event' });
 assert.deepEqual(views[13], original[13]);
