@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="light dark"><title>Model benchmarks · Agent Console</title>
+<link rel="icon" href="/icon.svg"><link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/dashboard.css"><link rel="stylesheet" href="/benchmarks.css">
+<script defer src="/vendor/chart.umd.min.js"></script><script defer src="/benchmarks.js"></script></head>
+<body class="dash benchmarks">
+<header class="dh"><a class="btn ghost back" href="/">Console</a><h1>Model benchmarks</h1><a class="btn ghost" href="/dashboard">Usage</a><button id="refresh" class="btn primary" type="button" disabled>Refresh benchmarks</button></header>
+<main id="benchmark-main" aria-busy="true">
+  <p id="load-status" role="status">Loading cached benchmarks and measured usage…</p>
+  <p id="error" class="notice error" role="alert" hidden></p>
+  <section class="benchmark-intro"><h2>Intelligence within your budget</h2><p>Compare model quality against your measured token burn, projected to a full working week.</p></section>
+  <form id="controls" class="benchmark-controls" aria-label="Comparison assumptions">
+    <label>Benchmark<select id="score"><option value="intelligence">Intelligence</option><option value="coding">Coding</option><option value="agentic">Agentic</option></select></label>
+    <label>Minimum % of best score<input id="quality" type="number" min="0" max="100" step="1" value="90" required></label>
+    <label>Monthly budget (USD)<input id="budget" type="number" min="0" step="any" placeholder="No limit"></label>
+    <label>Hours per day<input id="hours" type="number" min="0.1" max="24" step="any" value="16" required></label>
+    <label>Days per week<input id="days" type="number" min="1" max="7" step="1" value="7" required></label>
+    <label>Observed active hours override<input id="active-hours" type="number" min="0.01" step="any" placeholder="Use measured hours" aria-describedby="usage-note"></label>
+    <label>Cache pricing<select id="cache"><option value="conservative">All input at standard price</option><option value="known" selected>Use known cache prices</option></select></label>
+  </form>
+  <section class="recommendation" aria-labelledby="recommendation-title" aria-live="polite"><div><h2 id="recommendation-title">Finding your lowest-cost option…</h2><p id="recommendation-detail">A recommendation needs benchmark scores, prices and measured usage.</p></div><div id="recommendation-cost"></div></section>
+  <div class="benchmark-facts"><p id="leader"></p><p id="usage-note"></p></div>
+  <section class="panel" aria-labelledby="chart-title"><div class="head"><div><h2 id="chart-title">Quality versus monthly API cost</h2><p class="sub" id="chart-note">Chart and table share the Show filter. The frontier marks models with no cheaper, equally capable alternative.</p></div></div><div class="benchmark-chart"><canvas id="comparison-chart" role="img" aria-label="Scatter plot of projected monthly API cost and benchmark score. Exact values are in the model comparison table below."></canvas><p id="chart-empty" hidden></p></div><p class="note">Select a point or a model name to inspect it. Filled points meet your quality floor; diamonds mark the cost frontier.</p></section>
+  <section class="panel" aria-labelledby="table-title"><div class="head"><div><h2 id="table-title">Model comparison</h2><p class="sub" id="table-count"></p></div><label class="table-filter">Show<select id="scope"><option value="qualified">Meeting quality floor</option><option value="leaders">Top 20 by score</option><option value="all">All scored models</option></select></label></div><div class="table-scroll" role="region" aria-label="Model comparison table" tabindex="0"><table><thead><tr><th scope="col">Model</th><th scope="col">Score</th><th scope="col">Monthly USD</th><th scope="col">Weekly USD</th><th scope="col">Input / 1M</th><th scope="col">Output / 1M</th><th scope="col">Output tokens/s</th></tr></thead><tbody id="models"></tbody></table></div><p id="table-empty" class="note" hidden></p><p id="selection" class="note" aria-live="polite"></p></section>
+  <section class="benchmark-method" aria-labelledby="method-title"><h2 id="method-title">What this estimate means</h2><p id="formula"></p><p id="assumptions"></p><p>API equivalent costs are not subscription charges. Provider access, rate limits, context limits, tool support and task success need separate verification. Benchmarks do not guarantee 16 hours of productivity.</p><p id="cache-note"></p></section>
+  <footer class="benchmark-source"><div><p><a href="https://artificialanalysis.ai/" target="_blank" rel="noopener">Artificial Analysis</a> · <span id="freshness">No snapshot loaded</span></p><p id="quota"></p><p id="schedule"></p></div><label class="weekly-toggle"><input id="weekly" type="checkbox" disabled> Refresh weekly</label></footer>
+</main></body></html>
