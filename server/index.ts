@@ -47,6 +47,7 @@ import { pricing, rates } from "./api-pricing.ts";
 import { contextAllocation } from "./context-allocation.ts";
 import { headroom } from "./headroom.ts";
 import { createDoctor } from "./doctor.ts";
+import { mountSecurity } from "./security.ts";
 import { LatencyStore } from "./latency.ts";
 import { fileMedia, fileTree, fileViewer } from "./files.ts";
 import { createAcodeBridge } from "./acode.ts";
@@ -495,6 +496,8 @@ app.get("/api/host/history", hostHistory);
 app.get("/api/host/du", hostDu);
 app.post("/api/host/du/rescan", sameOrigin, hostDuRescan);
 app.post("/api/host/processes/:pid/kill", express.json({ limit: "1kb" }), sameOrigin, hostKill);
+// Security scan results from the VPS host (read over SSH; "Run scan" is same-origin only).
+mountSecurity(app, sameOrigin);
 // App ideas: index.md + one markdown file per idea in a private git repo (server/ideas.ts). Adding commits, so same-origin only.
 const ideaError = (res: express.Response, e: any) => res.status(e instanceof IdeaError ? e.status : 500).json({ error: e instanceof IdeaError ? e.message : "App ideas are unavailable." });
 app.get("/api/ideas", (_req, res) => {
