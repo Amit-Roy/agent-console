@@ -5,6 +5,7 @@ import { childEnv } from "./env.ts";
 import { codexRouting } from "./codex-routing.ts";
 import { harnessInstructions } from "./brain.ts";
 import { consoleCodexMcpArgs } from "./console-mcp.mjs";
+import { codexTranslator } from "./codex.ts";
 import { retryEvent } from "../turn-timing.ts";
 import { cleanQuestions, IMAGE_ONLY_PROMPT, type Agent, type AgentCtx, type Attachment, type Question, type QuestionReply, type ThreadSpec } from "./types.ts";
 
@@ -71,6 +72,17 @@ export function codexQuestion(method: string, params: any): { questions: Questio
   return undefined;
 }
 
+const ITEM_TYPES: Record<string, string> = { agentMessage: "agent_message", commandExecution: "command_execution", fileChange: "file_change", mcpToolCall: "mcp_tool_call", webSearch: "web_search" };
+// App-server thread item -> the exec-style row codexTranslator understands; undefined when the item has no visible row.
+function adaptItem(it: any, done: boolean): any {
+  if (it.type === "reasoning") return done ? { type: "item.completed", item: { ...it, text: [...(it.summary || []), ...(it.content || [])].join("\n") } } : undefined;
+  if (!ITEM_TYPES[it.type]) return undefined;
+  return { type: done ? "item.completed" : "item.started", item: {
+    ...it, type: ITEM_TYPES[it.type], aggregated_output: it.aggregatedOutput, exit_code: it.exitCode,
+    ...(it.changes ? { changes: it.changes.map((c: any) => ({ ...c, kind: c.kind?.type || c.kind })) } : {}),
+  } };
+}
+
 // Keep the owning app-server alive: turn/steer must reach the process running the turn.
 export function startCodexApp(t: ThreadSpec, ctx: AgentCtx, translate: (row: any) => void): Agent {
   let session = t.sessionId, active: string | undefined, alive = true, serial = 0;
@@ -78,7 +90,7 @@ export function startCodexApp(t: ThreadSpec, ctx: AgentCtx, translate: (row: any
   let compactTimer: NodeJS.Timeout | undefined;
   let total: any, baseline: any;
   // Subagents by thread id. Codex does not start a parent turn when one finishes after the parent's turn ended, so we do.
-  const children = new Map<string, { path: string; call: string; text: string; done?: boolean; failed?: string }>();
+  const children = new Map<string, { path: string; call: string; text: string; translate: (row: any) => void; done?: boolean; failed?: string }>();
   let heartbeat = 0; // child progress never reaches ctx.event otherwise; the stale-background sweep needs proof of life
   let unseen: string[] = []; // finished while the parent turn ran, before the parent model looked again
   const backgroundChanged = () => ctx.event({ type: "system", subtype: "background_tasks_changed", tasks: [...children].filter(([, c]) => !c.done).map(([id, c]) => ({ task_id: id, description: c.path })) });
@@ -149,34 +161,10 @@ export function startCodexApp(t: ThreadSpec, ctx: AgentCtx, translate: (row: any
       const child = children.get(v.threadId);
       if (child && !child.done && Date.now() - heartbeat > 60_000) { heartbeat = Date.now(); ctx.event({ type: "system", subtype: "task_updated", task_id: v.threadId }); }
       if (child && r.method === "item/completed" && v.item?.type === "agentMessage" && typeof v.item.text === "string") child.text = v.item.text;
-      // Forward events from the subagent thread to the main thread, setting parent_tool_use_id to the child's call.
-      if (child) {
-        // Determine if we should forward this event.
-        const shouldForward = () => {
-          switch (r.method) {
-            case "assistant":
-            case "user":
-            case "stream_event":
-              return true;
-            case "system":
-              // Forward task-related system events.
-              const subtype = v.subtype;
-              return subtype === "task_started" || subtype === "task_notification" || subtype === "task_progress";
-            default:
-              return false;
-          }
-        };
-        if (shouldForward()) {
-          // Clone the event to avoid mutating the original.
-          const forwarded = { ...r, parent_tool_use_id: child.call };
-          // If the event already has a parent_tool_use_id, we should not override it? 
-          // But we assume events from the subagent turn do not have it set.
-          // To be safe, we only set it if it's not already set.
-          if (!(r.parent_tool_use_id != null)) {
-            forwarded.parent_tool_use_id = child.call;
-          }
-          ctx.event(forwarded);
-        }
+      // Child output reaches the parent card through the child's own translator, tagged with the spawning call. Turn lifecycle is never fed to it.
+      if (child && !child.done && (r.method === "item/started" || r.method === "item/completed")) {
+        const ev = adaptItem(v.item || {}, r.method === "item/completed");
+        if (ev) child.translate(ev.item?.questions ? { ...ev, item: { ...ev.item, questions: undefined } } : ev); // a child cannot raise a console question card
       }
       // A subagent that dies (usage exhausted, crash) never sends subAgentActivity "completed"; without this it counts as background work forever.
       const failure = r.method === "turn/completed" && ["failed", "interrupted"].includes(v.turn?.status) ? v.turn?.error?.message || `turn ${v.turn.status}`
@@ -206,12 +194,11 @@ export function startCodexApp(t: ThreadSpec, ctx: AgentCtx, translate: (row: any
       for (const id of unseen.splice(0)) ctx.event({ type: "subagent_wake", text: subagentDone(id) });
     } else if (r.method === "item/started" || r.method === "item/completed") {
       const it = v.item || {}, done = r.method === "item/completed";
-      const types: Record<string, string> = { agentMessage: "agent_message", commandExecution: "command_execution", fileChange: "file_change", mcpToolCall: "mcp_tool_call", webSearch: "web_search" };
       if (it.type !== "subAgentActivity" && unseen.length && ["agentMessage", "reasoning", "commandExecution", "mcpToolCall"].includes(it.type)) unseen = []; // the parent model ran after the result arrived
       if (it.type === "subAgentActivity") {
         if (!done || !it.agentThreadId) return;
         if (it.kind === "started" && !children.has(it.agentThreadId)) {
-          children.set(it.agentThreadId, { path: it.agentPath || "subagent", call: it.id, text: "" });
+          children.set(it.agentThreadId, { path: it.agentPath || "subagent", call: it.id, text: "", translate: codexTranslator(ev => ctx.event({ ...ev, parent_tool_use_id: it.id })) });
           ctx.event({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: it.id, name: "Agent", input: { description: it.agentPath || "Subagent" } }] } });
           ctx.event({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: it.id, content: "Started in the background." }] } });
           ctx.event({ type: "system", subtype: "task_started", task_id: it.agentThreadId, tool_use_id: it.id, task_type: "local_agent", is_backgrounded: true, description: it.agentPath });
@@ -226,13 +213,8 @@ export function startCodexApp(t: ThreadSpec, ctx: AgentCtx, translate: (row: any
         }
       } else if (it.type === "contextCompaction" && done) {
         compactConfirmed = true; ctx.event({ type: "system", subtype: "compact_boundary" });
-      } else if (it.type === "reasoning") {
-        if (done) translate({ type: "item.completed", item: { ...it, text: [...(it.summary || []), ...(it.content || [])].join("\n") } });
-      } else if (types[it.type]) {
-        translate({ type: done ? "item.completed" : "item.started", item: {
-          ...it, type: types[it.type], aggregated_output: it.aggregatedOutput, exit_code: it.exitCode,
-          ...(it.changes ? { changes: it.changes.map((c: any) => ({ ...c, kind: c.kind?.type || c.kind })) } : {}),
-        } });
+      } else if (adaptItem(it, done)) {
+        translate(adaptItem(it, done));
       } else if (done && it.type === "plan") {
         ctx.event({ type: "assistant", message: { content: [{ type: "text", text: it.text }] } });
       }
