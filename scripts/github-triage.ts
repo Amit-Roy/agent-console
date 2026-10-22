@@ -9,6 +9,7 @@ import { execFile, spawn } from "node:child_process";
 import { sign } from "@octokit/webhooks-methods";
 import { childEnv } from "../server/providers/env.ts";
 import { createTriageService } from "../server/github-triage.ts";
+import { announceClosed } from "../server/automation/closed-signal.ts";
 import { createTelemetryService } from "../server/token-telemetry.ts";
 import { effortModelPath, loadEffortModel, quoteEffort, requestShape } from "../server/providers/triage-effort.ts";
 
@@ -345,6 +346,7 @@ async function main() {
       service = createTriageService({ secret: c.secret, repos: c.repos, dbPath: path.join(path.dirname(CONFIG), "github-triage.sqlite"),
         deploy: c.deploy ? { workflow: "CI", run: repo => { if (repo === c.deploy) deploy(); } } : undefined,
         // Items without agent threads get "No agent usage recorded." so the required CI check can pass honestly.
+        onClosed: item => announceClosed(path.join(path.dirname(CONFIG), "github-events"), item),
         onItem: item => telemetry.ensureComment(item.repo, item.number),
         log: metadata => console.info(JSON.stringify(metadata)) });
       fs.writeFileSync(PID, String(process.pid), { mode: 0o600 });
