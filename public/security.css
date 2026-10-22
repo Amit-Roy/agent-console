@@ -1,0 +1,82 @@
+/* Security page. Reuses the host dashboard shell (host.css); adds verdict, tool cards, vulnerability list, history strip. */
+
+.verdict{--tone:var(--t3);position:relative;display:grid;gap:var(--sp-2);padding:var(--sp-4) var(--sp-4) var(--sp-4);border:1px solid var(--edge);border-radius:var(--r-md);background:var(--card);min-width:0}
+.verdict.ok{--tone:var(--ok)} .verdict.bad{--tone:var(--bad)} .verdict.warn{--tone:var(--warn)}
+.vhead{display:flex;align-items:center;gap:var(--sp-3)}
+.vhead h2{margin:0;font:var(--fw-semi) var(--f-xl);letter-spacing:var(--ls-lg);color:var(--t1);text-wrap:balance}
+.vdot{flex:0 0 auto;width:12px;height:12px;border-radius:50%;background:var(--tone);box-shadow:0 0 0 4px color-mix(in srgb,var(--tone) 20%,transparent)}
+.vsub{margin:0;color:var(--t2);font:var(--fw-reg) var(--f-sm);max-width:60ch}
+.vwarn{margin:0;color:var(--warn);font:var(--fw-reg) var(--f-sm)}
+.verdict .btn{justify-self:start}
+.readout{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:0;margin:var(--sp-3) 0 0;border-top:1px solid var(--edge)}
+.readout>div{padding:var(--sp-3) var(--sp-3) 0 0;min-width:0}
+.readout dt{font:var(--label);letter-spacing:.08em;text-transform:uppercase;color:var(--t3)}
+.readout dd{margin:var(--sp-1) 0 0;font:var(--fw-semi) 1.5rem/1.1 var(--font-mono);font-variant-numeric:tabular-nums;color:var(--t1)}
+.readout .hot dd{color:var(--bad)}
+@media (max-width:640px){.readout{grid-template-columns:repeat(2,minmax(0,1fr))}.readout>div:last-child{grid-column:1/-1}}
+
+.running{border-color:color-mix(in srgb,var(--accent) 45%,var(--edge))}
+.running p{margin:var(--sp-2) 0 0;color:var(--t2);font:var(--fw-reg) var(--f-sm)}
+.running .note{color:var(--t3)}
+.rhead{display:flex;align-items:center;gap:var(--sp-3);flex-wrap:wrap}
+.rhead b{color:var(--t1)}
+.rhead span{color:var(--t3);font:var(--fw-reg) var(--fm-xs)}
+.spin{width:14px;height:14px;border-radius:50%;border:2px solid var(--s3);border-top-color:var(--accent);animation:secspin 1s linear infinite}
+@keyframes secspin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.spin{animation:none;border-top-color:var(--accent);border-right-color:var(--accent)}}
+
+.pill{display:inline-block;padding:2px var(--sp-3);border-radius:var(--r-full);border:1px solid var(--edge-strong);color:var(--t2);font:var(--fw-med) var(--f-xs);white-space:nowrap}
+.pill.ok{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 45%,transparent)}
+.pill.bad{color:var(--bad);border-color:color-mix(in srgb,var(--bad) 45%,transparent)}
+.pill.warn{color:var(--warn);border-color:color-mix(in srgb,var(--warn) 45%,transparent)}
+
+.tools{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:var(--sp-3)}
+@media (max-width:900px){.tools{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:520px){.tools{grid-template-columns:1fr}}
+.tool{padding:var(--sp-3) var(--sp-4);background:var(--card);border:1px solid var(--edge);border-radius:var(--r-md);min-width:0}
+.ttop{display:flex;justify-content:space-between;align-items:flex-start;gap:var(--sp-2)}
+.tool h3{margin:0;font:var(--fw-semi) var(--f-md);color:var(--t1)}
+.trole{color:var(--t3);font:var(--fw-reg) var(--f-xs)}
+.tfacts{margin:var(--sp-3) 0 0;display:grid;gap:var(--sp-1)}
+.tfacts>div{display:flex;justify-content:space-between;gap:var(--sp-3);min-width:0}
+.tfacts dt{color:var(--t3);font:var(--fw-reg) var(--fm-xs);flex:0 0 auto}
+.tfacts dd{margin:0;color:var(--t1);font:var(--fw-reg) var(--fm-xs);text-align:right;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
+.terr{margin:var(--sp-3) 0 0;color:var(--warn);font:var(--fw-reg) var(--f-sm);overflow-wrap:anywhere}
+.tool .note,.sec .note{margin:var(--sp-3) 0 0;color:var(--t3);font:var(--fw-reg) var(--f-xs)}
+
+.hrow.find{grid-template-columns:5.5rem minmax(0,1fr);cursor:default}
+.hrow.find:hover,.hrow.sport:hover{background:none}
+.hrow.find .wrap{white-space:normal;overflow-wrap:anywhere}
+.hrow.sport{grid-template-columns:4rem minmax(0,1fr) auto;cursor:default}
+
+.sw{display:inline-flex;align-items:center;gap:var(--sp-2);min-height:var(--ctl-h-sm);color:var(--t2);font:var(--fw-reg) var(--f-sm);cursor:pointer}
+.sw input{width:1.1rem;height:1.1rem;accent-color:var(--accent)}
+.target{border-top:1px solid var(--edge)}
+.target:first-child{border-top:0}
+.hrow.tgt{grid-template-columns:minmax(0,1fr) auto 1rem;border-top:0}
+.chips{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:var(--sp-1) var(--sp-2)}
+.chip{font:var(--fw-med) var(--fm-xs);font-variant-numeric:tabular-nums;color:var(--t2);white-space:nowrap}
+.chip.critical{color:var(--bad)} .chip.high{color:var(--warn)} .chip.none{color:var(--ok)}
+.tbody{padding:0 0 var(--sp-3)}
+.vulns{margin:0;padding:0;list-style:none}
+.vuln{padding:var(--sp-3) 0;border-top:1px dashed var(--edge)}
+.vuln:first-child{border-top:0}
+.vuln p{margin:2px 0 0}
+.vtop{display:flex;flex-wrap:wrap;align-items:center;gap:var(--sp-1) var(--sp-3)}
+.vtop b{font:var(--fw-med) var(--fm-sm);color:var(--t1)}
+.sev{font:var(--label);letter-spacing:.06em;text-transform:uppercase}
+.sev.crit{color:var(--bad)} .sev.high{color:var(--warn)}
+.vfix,.vnofix{margin-left:auto;font:var(--fw-reg) var(--fm-xs)}
+.vfix{color:var(--ok)} .vnofix{color:var(--t3)}
+.vtitle{color:var(--t2);font:var(--fw-reg) var(--f-sm);overflow-wrap:anywhere}
+
+.strip{display:flex;align-items:flex-end;gap:3px;height:3.25rem}
+.tick{--c:var(--t3);flex:1 1 0;min-width:0;max-width:1.75rem;height:var(--h);min-height:12px;padding:0;border:0;border-radius:3px 3px 1px 1px;background:var(--c);opacity:.7;cursor:pointer;position:relative}
+.tick.ok{--c:var(--ok)} .tick.bad{--c:var(--bad)} .tick.warn{--c:var(--warn)}
+.tick:hover{opacity:1}
+.tick[aria-current]{opacity:1;outline:2px solid var(--t1);outline-offset:2px}
+.tick::after{content:"";position:absolute;inset:-6px -2px}
+@media (prefers-color-scheme:dark){.tick{opacity:.85}}
+.sec .btn:disabled{opacity:.6}
+.vuln .hctx{color:var(--t3);font:var(--fw-reg) var(--fm-xs)}
+.hrow.tgt:focus-visible,.tick:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
