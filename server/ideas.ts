@@ -14,6 +14,9 @@ export class IdeaError extends Error {
 
 const SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const ENTRY = /^\s*[-*]\s+\[([^\]]+)\]\(([^)\s]+)\.md\)\s*(?:[—–:-]\s*(.*?))?\s*$/;
+export const SECTIONS = ["Features", "Implementation", "Others"] as const;
+export type Section = (typeof SECTIONS)[number];
+const PLACEHOLDER = /^_None yet\..*_\s*$/;
 const HEADER = "# App ideas\n\nOne line per idea. Each links to its feature list.\n\n";
 
 export const slugify = (name: string) => name.normalize("NFKD").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60).replace(/-+$/, "");
@@ -33,6 +36,26 @@ function field(v: unknown, what: string, max: number): string {
   if (/[\r\n]/.test(s)) throw new IdeaError(`Keep the ${what} to one line.`);
   if (s.length > max) throw new IdeaError(`Keep the ${what} under ${max} characters.`);
   return s;
+}
+
+/** Put `- text` under `## section`, creating the heading in canonical order and dropping the "None yet" placeholder. */
+export function addBullet(markdown: string, section: Section, text: string): string {
+  const lines = markdown.replace(/\n+$/, "").split("\n");
+  const heading = (l: string) => /^##\s/.test(l);
+  const at = lines.findIndex(l => l.trim() === `## ${section}`);
+  if (at < 0) {
+    const later = lines.findIndex(l => SECTIONS.slice(SECTIONS.indexOf(section) + 1).some(n => l.trim() === `## ${n}`));
+    const block = [`## ${section}`, "", `- ${text}`, ""];
+    if (later < 0) return `${[...lines, "", ...block.slice(0, -1)].join("\n")}\n`;
+    return `${[...lines.slice(0, later), ...block, ...lines.slice(later)].join("\n")}\n`;
+  }
+  let end = lines.findIndex((l, i) => i > at && heading(l));
+  if (end < 0) end = lines.length;
+  const body = lines.slice(at + 1, end).filter(l => !PLACEHOLDER.test(l.trim()));
+  while (body.length && !body[body.length - 1].trim()) body.pop();
+  while (body.length && !body[0].trim()) body.shift();
+  const next = [...lines.slice(0, at + 1), "", ...body, `- ${text}`, ...(end < lines.length ? [""] : []), ...lines.slice(end)];
+  return `${next.join("\n")}\n`;
 }
 
 export class Ideas {
@@ -82,7 +105,7 @@ export class Ideas {
     const base = before === null ? HEADER : before && !before.endsWith("\n") ? `${before}\n` : before;
     const idea = { slug, name, line };
     try {
-      fs.writeFileSync(file, `# ${name}\n\n${line}\n\n## Features\n\n_None yet. Edit ${slug}.md to add them._\n`, { flag: "wx" });
+      fs.writeFileSync(file, `# ${name}\n\n${line}\n\n${SECTIONS.map(n => `## ${n}\n\n_None yet. Edit ${slug}.md to add them._\n`).join("\n")}`, { flag: "wx" });
       fs.writeFileSync(this.index, `${base}- [${name}](${slug}.md) — ${line}\n`);
       this.git("add", "--", "index.md", `${slug}.md`);
       this.git("commit", "-q", "-m", `Add idea: ${name}`, "--", "index.md", `${slug}.md`);
@@ -93,13 +116,42 @@ export class Ideas {
       if (before === null) fs.rmSync(this.index, { force: true }); else fs.writeFileSync(this.index, before);
       throw new IdeaError(`Could not commit the idea: ${String(e?.stderr || e?.message || e).trim().split("\n")[0]}`, 500);
     }
+    return { idea, ...(await this.publish()) };
+  }
+
+  addBullet(slug: string, input: { section?: unknown; text?: unknown }): Promise<{ commit: string; pushed: boolean | null; pushError?: string }> {
+    const run = this.chain.then(() => this.addBulletNow(slug, input));
+    this.chain = run.catch(() => {});
+    return run;
+  }
+
+  private async addBulletNow(slug: string, input: { section?: unknown; text?: unknown }) {
+    const idea = this.read(slug);
+    const section = SECTIONS.find(n => n === input.section);
+    if (!section) throw new IdeaError(`Pick a section: ${SECTIONS.join(", ")}.`);
+    const text = field(input.text, "bullet", 300);
+    const file = path.join(this.dir, `${slug}.md`);
+    try {
+      fs.writeFileSync(file, addBullet(idea.markdown, section, text));
+      this.git("add", "--", `${slug}.md`);
+      this.git("commit", "-q", "-m", `Add ${section.toLowerCase()} bullet: ${idea.name}`, "--", `${slug}.md`);
+    } catch (e: any) {
+      try { this.git("reset", "-q", "--", `${slug}.md`); } catch {} // nothing staged yet; restoring the file is what matters
+      fs.writeFileSync(file, idea.markdown);
+      throw new IdeaError(`Could not commit the bullet: ${String(e?.stderr || e?.message || e).trim().split("\n")[0]}`, 500);
+    }
+    return this.publish();
+  }
+
+  /** After a commit: report its hash, then push if the branch tracks a remote. */
+  private async publish(): Promise<{ commit: string; pushed: boolean | null; pushError?: string }> {
     const commit = this.git("rev-parse", "--short", "HEAD");
     let upstream = "";
     try { upstream = this.git("rev-parse", "--abbrev-ref", "@{u}"); } catch {} // no upstream: commit only
-    if (!upstream) return { idea, commit, pushed: null };
+    if (!upstream) return { commit, pushed: null };
     const pushError = await new Promise<string | undefined>(resolve =>
       execFile("git", ["-C", this.dir, "push", "-q"], { timeout: 30_000, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } },
         (err, _out, stderr) => resolve(err ? (String(stderr).trim().split("\n")[0] || "push failed").replace(/\/\/[^@/\s]+@/g, "//") /* never echo URL credentials */ : undefined)));
-    return pushError ? { idea, commit, pushed: false, pushError } : { idea, commit, pushed: true };
+    return pushError ? { commit, pushed: false, pushError } : { commit, pushed: true };
   }
 }

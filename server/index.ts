@@ -493,6 +493,9 @@ app.get("/api/ideas/:slug", (req, res) => {
   res.setHeader("Cache-Control", "no-store");
   try { res.json(ideas.read(req.params.slug)); } catch (e) { ideaError(res, e); }
 });
+app.post("/api/ideas/:slug/bullets", sameOrigin, express.json({ limit: "4kb" }), async (req, res) => {
+  try { res.status(201).json(await ideas.addBullet(req.params.slug, { section: req.body?.section, text: req.body?.text })); } catch (e) { ideaError(res, e); }
+});
 app.post("/api/ideas", sameOrigin, express.json({ limit: "4kb" }), async (req, res) => {
   try { res.status(201).json(await ideas.add({ name: req.body?.name, line: req.body?.line })); } catch (e) { ideaError(res, e); }
 });
