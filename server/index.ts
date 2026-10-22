@@ -431,10 +431,19 @@ app.get("/api/automation/job", (req, res) => {
   catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
 });
 app.post("/api/automation/assign", sameOrigin, express.json({ limit: "4kb" }), async (req, res) => {
-  try {
-    const { v, repo, number, provider, model, effort, mode, claudeAccount } = req.body ?? {};
-    res.json(await assignPremium({ v, repo, number, provider, model, effort, mode, claudeAccount }));
-  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+  const { v, repo, number, provider, model, effort, mode, claudeAccount } = req.body ?? {};
+  const choice = { v, repo, number, provider, model, effort, mode, claudeAccount };
+  // The dialog asks for NDJSON to draw each step live; the last line is the thread or the error.
+  if (!String(req.headers.accept).includes("application/x-ndjson")) {
+    try { return void res.json(await assignPremium(choice)); } catch (e: any) { return void res.status(400).json({ error: String(e?.message ?? e) }); }
+  }
+  res.setHeader("Content-Type", "application/x-ndjson");
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("X-Accel-Buffering", "no");
+  res.flushHeaders();
+  const line = (msg: unknown) => { if (!res.writableEnded) res.write(JSON.stringify({ ...msg as object, at: Date.now() }) + "\n"); };
+  try { line({ t: "done", thread: (await assignPremium(choice, line)).thread }); } catch (e: any) { line({ t: "error", error: String(e?.message ?? e) }); }
+  res.end();
 });
 app.post("/api/automation/debug", sameOrigin, express.json({ limit: "4kb" }), async (req, res) => {
   try {

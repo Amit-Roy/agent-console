@@ -776,6 +776,36 @@ dialog .sub{font:var(--fw-reg) var(--f-md);color:var(--t2)}
 .btn.chip>span{max-width:14rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .callout .ico{margin-top:.1875rem}
 .row{display:flex;gap:var(--sp-2);justify-content:flex-end;margin-top:var(--sp-6)}
+/* Premium assignment timeline: a rail through one node per step; the rail fills as each step completes. */
+#ap{width:min(30rem,calc(100vw - var(--sp-8)))}
+.ap-steps{list-style:none;margin:var(--sp-4) 0 0;padding:0;--ap-row:2.75rem;--ap-node:1.25rem}
+.ap-step{position:relative}
+.ap-step::before,.ap-step::after{content:"";position:absolute;left:calc(var(--sp-2) + var(--ap-node) / 2 - 1px);width:2px;top:calc(var(--ap-row) / 2);bottom:calc(var(--ap-row) / -2);background:var(--s3)}
+.ap-step::after{background:var(--accent);transform:scaleY(0);transform-origin:top;transition:transform .45s var(--ease)}
+.ap-step[data-state=done]::after{transform:none}
+.ap-step:last-child::before,.ap-step:last-child::after{display:none}
+.ap-row{position:relative;z-index:1;display:flex;align-items:center;gap:var(--sp-3);width:100%;min-height:var(--ap-row);padding:0 var(--sp-2);border:0;border-radius:var(--r-sm);background:none;text-align:left;cursor:pointer}
+.ap-row:hover{background:var(--s2)}
+.ap-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+.ap-node{position:relative;flex:none;width:var(--ap-node);height:var(--ap-node);border-radius:50%;background:var(--pop)}
+.ap-node svg{position:absolute;inset:0;width:100%;height:100%;fill:none}
+.ap-node .track{stroke:var(--s3);stroke-width:2}
+.ap-node .arc{stroke:var(--accent);stroke-width:2;stroke-linecap:round;stroke-dashoffset:50.27;transform:rotate(-90deg);transform-origin:center;transition:stroke-dashoffset .35s var(--ease),stroke .2s}
+.ap-node .mark path{stroke-width:2;stroke-linecap:round;stroke-linejoin:round;opacity:0;transition:opacity .2s .3s}
+.ap-node .mark .ok{stroke:var(--accent)}.ap-node .mark .no{stroke:var(--bad)}
+.ap-step[data-state=active] .ap-node>svg:first-child{animation:spin .9s linear infinite}
+.ap-step[data-state=active] .arc{stroke-dashoffset:36}
+.ap-step[data-state=done] .ap-node>svg:first-child,.ap-step[data-state=failed] .ap-node>svg:first-child{animation:spin .9s linear infinite paused}
+.ap-step[data-state=done] .arc{stroke-dashoffset:0}
+.ap-step[data-state=failed] .arc{stroke-dashoffset:0;stroke:var(--bad)}
+.ap-step[data-state=done] .mark .ok,.ap-step[data-state=failed] .mark .no{opacity:1}
+.ap-label{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:var(--fw-reg) var(--f-md);color:var(--t2)}
+.ap-step[data-state=active] .ap-label,.ap-step[data-state=done] .ap-label{color:var(--t1)}
+.ap-step[data-state=failed] .ap-label{color:var(--bad)}
+.ap-time{flex:none;font:var(--fw-reg) var(--f-sm);font-variant-numeric:tabular-nums;color:var(--t3)}
+.ap-log{position:relative;z-index:1;margin:var(--sp-1) 0 var(--sp-2) calc(var(--sp-2) + var(--ap-node) + var(--sp-3));padding:var(--sp-2) var(--sp-3);max-height:12rem;overflow:auto;border-radius:var(--r-sm);background:var(--s2);font:var(--fm-xs);color:var(--t2);white-space:pre-wrap;overflow-wrap:anywhere}
+.ap-log:empty::before{content:"No output yet.";color:var(--t3)}
+#ap-error{margin-top:var(--sp-3);color:var(--bad);font:var(--fw-reg) var(--f-md)}
 #dlg{max-height:calc(var(--viewport-height,100dvh) - var(--sp-8));overflow:auto;overscroll-behavior:contain}
 .fld .input{width:100%}
 textarea.input{padding:var(--sp-2) var(--sp-3);min-height:6rem;resize:vertical;line-height:1.45}

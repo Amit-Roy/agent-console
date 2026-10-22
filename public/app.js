@@ -13,6 +13,7 @@ import { createSchedules, REPEAT_ITEMS, DAY_ITEMS } from "/schedules.js";
 import { createAutoLane } from "/automation-lane.js";
 import { openJobDebug } from "/automation-job-debug.js";
 import { autoCandidates, autoPick } from "/auto-pick.js";
+import { showAssignmentProgress } from "/assign-progress.js";
 
 composerField($("input"));
 
@@ -2930,20 +2931,44 @@ async function submitPremiumAssignment(settings, account) {
   const cancel = $("dform").querySelector('button[value="cancel"]');
   cancel.disabled = true;
   $("d-ok").disabled = true;
-  $("d-ok").textContent = "Preparing checkout…"; // cloning a private checkout takes up to a minute
+  $("d-ok").textContent = "Starting…";
   $("d-assignment-error").hidden = true;
+  const reset = () => { assignmentPending = false; cancel.disabled = false; $("d-ok").textContent = "Start premium session"; syncDialogAccount(); };
+  let response;
   try {
     const { cwd, ...choice } = settings;
-    const response = await apiFetch("/api/automation/assign", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ v: 1, ...issue, ...choice, ...account }) });
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.error || "Could not start a premium session.");
-    $("dlg").close();
-    dialogAssignment = null;
-    openThread(result.thread);
+    response = await apiFetch("/api/automation/assign", { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/x-ndjson" }, body: JSON.stringify({ v: 1, ...issue, ...choice, ...account }) });
+    if (!response.ok || !response.headers.get("content-type")?.includes("ndjson")) {
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "Could not start a premium session.");
+      $("dlg").close();
+      dialogAssignment = null;
+      return void openThread(result.thread);
+    }
   } catch (error) {
     $("d-assignment-error").textContent = error.message;
     $("d-assignment-error").hidden = false;
-  } finally { assignmentPending = false; cancel.disabled = false; $("d-ok").textContent = "Start premium session"; syncDialogAccount(); }
+    return void reset();
+  }
+  // Checkout preparation takes up to a minute: the settings dialog gives way to a live timeline of its steps.
+  $("dlg").close();
+  reset();
+  const back = (message) => {
+    if (dialogAssignment !== issue) openPremiumDialog(issue);
+    else { setNav(false); $("dlg").showModal(); }
+    $("d-assignment-error").textContent = message;
+    $("d-assignment-error").hidden = false;
+  };
+  try {
+    await showAssignmentProgress(response, {
+      title: `${issue.repo}#${issue.number}`,
+      onBack: () => back($("ap-error").textContent),
+      onOpen: (id) => { if (dialogAssignment === issue) dialogAssignment = null; openThread(id); },
+    });
+    if (!$("ap").open) toast("Premium session started.");
+  } catch (error) {
+    if (!$("ap").open) toast(error.message);
+  }
 }
 function syncWhen() {
   const r = menus.dRepeat.value;

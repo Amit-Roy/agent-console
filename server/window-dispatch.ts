@@ -218,14 +218,16 @@ export const defaultGit = async (cwd: string, ...args: string[]) => (await run("
 export const defaultDirs = () => ({ repos: process.env.AGENT_CONSOLE_REPOS || path.join(os.homedir(), "repos"), worktrees: process.env.AGENT_CONSOLE_WORKTREES || path.join(os.homedir(), "worktrees") });
 
 /** Create a private clone with its own Git metadata. Shared worktrees are never reused. */
-export async function addWorktree(o: { repo: string; dirs: { repos: string; worktrees: string }; dirName: string; branch: string; git?: Git }) {
+export async function addWorktree(o: { repo: string; dirs: { repos: string; worktrees: string }; dirName: string; branch: string; git?: Git; step?: (id: "fetch" | "clone") => void }) {
   const git = o.git ?? defaultGit;
   const main = path.join(o.dirs.repos, o.repo);
   if (!fs.existsSync(path.join(main, ".git"))) throw new Error(`No local checkout of ${o.repo} at ${main}`);
   if (path.basename(o.dirName) !== o.dirName || o.dirName === "." || o.dirName === "..") throw new Error("Invalid private checkout name");
+  o.step?.("fetch");
   await git(main, "fetch", "-q", "origin");
   const base = (await git(main, "symbolic-ref", "--short", "refs/remotes/origin/HEAD")).replace(/^origin\//, "");
   const remote = await git(main, "remote", "get-url", "origin");
+  o.step?.("clone");
   fs.mkdirSync(o.dirs.worktrees, { recursive: true });
   const cwd = path.join(fs.realpathSync(o.dirs.worktrees), o.dirName);
   const exists = (() => { try { fs.lstatSync(cwd); return true; } catch { return false; } })();
