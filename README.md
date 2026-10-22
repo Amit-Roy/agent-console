@@ -1,8 +1,8 @@
 # agent-console
 
-[![Watch the Agent Console feature tour: laptop and Android workflows](docs/brag/brag.jpg)](docs/brag/brag.mp4)
+[![Watch the Agent Console feature tour: laptop and Android workflows](docs/brag/brag.jpg)](https://youtu.be/JNqju6qvxvc)
 
-[Watch the 2-minute tour](docs/brag/brag.mp4) · Claude Code, Codex, and Pi, from your laptop or phone: auto-picked models, files, inline media, Acode, schedules, Auto mode from GitHub issues, triage, cross-agent forks, usage and host dashboards, search.
+[Watch the 2-minute tour](https://youtu.be/JNqju6qvxvc) · Claude Code, Codex, and Pi, from your laptop or phone: auto-picked models, files, inline media, Acode, schedules, Auto mode from GitHub issues, triage, cross-agent forks, usage and host dashboards, search.
 
 Browser front end for Claude, Pi, and Codex agents running on this machine. No remote desktop. Installable as a PWA.
 
