@@ -859,7 +859,7 @@ function openThread(id) {
   const old = cur();
   if (old && (!state.rendering && !state.loading || state.snapshot)) {
     if (state.live?.raf) { cancelAnimationFrame(state.live.raf); state.live.raf = 0; }
-    const snapshot = (!state.deferredRefresh && state.snapshot) || { nodes: [...$("chat").childNodes], cards: state.cards, doneTasks: state.doneTasks, subs: state.subs, subTools: state.subTools, live: state.live, compact: state.compact, start: state.start, latestStart: state.latestStart, end: state.end, scroll: $("chat").scrollTop, stats: $("diagnostics").textContent };
+    const snapshot = (!state.deferredRefresh && state.snapshot) || { nodes: [...$("chat").childNodes], cards: state.cards, doneTasks: state.doneTasks, subs: state.subs, subTools: state.subTools, live: state.live, compact: state.compact, start: state.start, latestStart: state.latestStart, end: state.end, scroll: $("chat").scrollTop, anchor: viewAnchor(), stats: $("diagnostics").textContent };
     snapshot.stale ||= !!state.revalidating || !!state.loadingEarlier || old.id === id;
     views.delete(old.id);
     views.set(old.id, snapshot);
@@ -897,9 +897,7 @@ function openThread(id) {
     $("chat").replaceChildren(...cached.nodes);
     questions.ensure(id);
     earlierIdle();
-    $("chat").scrollTop = cached.scroll;
-    state.lastScrollTop = $("chat").scrollTop;
-    state.stick = nearBottom();
+    restoreView(cached);
     const total_ms = Math.round(performance.now() - state.openAt);
     window.agentConsoleMetrics = { thread: id, cached: true, total_ms };
     latency.record({ kind: "cached", thread: id, total_ms, render_ms: total_ms, wait_ms: 0 });
@@ -922,6 +920,28 @@ function openThread(id) {
   send({ t: "open", thread: id, request: state.request, foregroundOnly: !!state.features.selectiveEvents, small: SMALL_PAGES });
 }
 
+// Saved scroll offsets go stale when virtual rows resolve their real height; remember the first visible message (or "at bottom") instead.
+function viewAnchor() {
+  const chat = $("chat");
+  if (nearBottom()) return { bottom: true };
+  const top = chat.getBoundingClientRect().top;
+  for (const node of chat.children) {
+    const rect = node.getBoundingClientRect();
+    if (rect.bottom > top + 1) return { node, offset: rect.top - top };
+  }
+  return null;
+}
+function restoreView(view) {
+  const chat = $("chat"), anchor = view.anchor;
+  if (anchor?.bottom) { scrollDown(true); state.stick = true; }
+  else if (anchor?.node?.isConnected) {
+    const top = chat.getBoundingClientRect().top;
+    chat.scrollTop += anchor.node.getBoundingClientRect().top - top - anchor.offset;
+    holdHistoryAnchor(anchor.node, top + anchor.offset);
+    state.stick = nearBottom();
+  } else { chat.scrollTop = view.scroll; state.stick = nearBottom(); }
+  state.lastScrollTop = chat.scrollTop;
+}
 function refreshConversation() {
   if (state.rendering || state.loadingEarlier) return;
   state.deferredRefresh = false;
@@ -1680,6 +1700,16 @@ function errBlock(text) {
 function summarize(name, input) {
   return toolSummary(name, input || {});
 }
+const FILE_TOOLS = new Set(["Read", "Write", "Edit", "MultiEdit", "NotebookEdit"]);
+// File tools get an eye link next to the label that opens the file viewer. It is a sibling of .sum, so relabelling the text never removes it.
+function fileView(name, input) {
+  const path = FILE_TOOLS.has(name) && (input?.file_path || input?.notebook_path);
+  if (!path || typeof path !== "string" || !parseFileRef(path)) return [];
+  const a = el("a", "file-view");
+  a.href = "#"; a.dataset.fileRef = path; a.title = "Open file"; a.setAttribute("aria-label", `Open ${path}`);
+  a.append(icon("eye"));
+  return [a];
+}
 // A shell command is cryptic; when the agent said what it is for, show that and keep the command in the card body and on hover.
 const describedAs = (name, input) => (name === "Bash" && typeof input?.description === "string" && input.description.trim()) || "";
 const TOOL_ICON = { Bash: "terminal", Edit: "pencil", MultiEdit: "pencil", NotebookEdit: "pencil", Write: "file", Read: "file", Grep: "search", Glob: "search", WebFetch: "globe", WebSearch: "globe", WebFind: "globe", WebBrowse: "globe", Task: "sparkle", Agent: "sparkle" };
@@ -1927,7 +1957,7 @@ function subEvent(e, live) {
         const st = el("span", "st");
         st.append(el("i", "spin"));
         const why = describedAs(b.name, b.input);
-        li.append(icon(TOOL_ICON[b.name] || "code", "tool"), el("span", "name", isAgent(b.name) ? "Agent" : toolName(b.name, b.input)), el("span", why || isAgent(b.name) ? "sum human" : "sum", why || (isAgent(b.name) ? b.input?.description || "Subagent" : summarize(b.name, b.input))), st);
+        li.append(icon(TOOL_ICON[b.name] || "code", "tool"), el("span", "name", isAgent(b.name) ? "Agent" : toolName(b.name, b.input)), el("span", why || isAgent(b.name) ? "sum human" : "sum", why || (isAgent(b.name) ? b.input?.description || "Subagent" : summarize(b.name, b.input))), ...fileView(b.name, b.input), st);
         li.title = summarize(b.name, b.input);
         state.subTools.set(b.id, li);
         if (isAgent(b.name)) {
@@ -2091,7 +2121,7 @@ function onEvent(e, live) {
           const st = el("span", "st");
           st.append(el("i", "spin"), el("span", "sr-only", "running"));
           const why = describedAs(b.name, b.input);
-          sum.append(tool, el("span", "name", toolName(b.name, b.input)), el("span", why ? "sum human" : "sum", why || summarize(b.name, b.input)), st, icon("chev-right", "chev"));
+          sum.append(tool, el("span", "name", toolName(b.name, b.input)), el("span", why ? "sum human" : "sum", why || summarize(b.name, b.input)), ...fileView(b.name, b.input), st, icon("chev-right", "chev"));
           sum.title = summarize(b.name, b.input);
           card.toolInput = { name: b.name, input: b.input };
           card.append(sum, el("div", "body")); // the open row wraps to show the whole label, so it is not repeated below
@@ -2153,7 +2183,9 @@ function onEvent(e, live) {
       const card = state.cards.get(e.tool_use_id) ?? state.subTools.get(e.tool_use_id);
       if (!card) break;
       card.querySelector(".name").textContent = toolName(e.name, e.input);
-      card.querySelector(".sum").textContent = summarize(e.name, e.input);
+      const sumEl = card.querySelector(".sum");
+      sumEl.textContent = summarize(e.name, e.input);
+      if (!card.querySelector(".file-view")) sumEl.after(...fileView(e.name, e.input));
       const summary = card.querySelector("summary") || card;
       summary.title = summarize(e.name, e.input);
       const body = card.querySelector(".body");
