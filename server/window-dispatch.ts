@@ -239,9 +239,11 @@ export async function addWorktree(o: { repo: string; dirs: { repos: string; work
     try { await privateCheckout(); } catch (e: any) { throw new Error(`Refusing existing checkout: ${e.message}`); }
   } else {
     // Transport cloning copies committed objects only, with no hardlinks or alternates to the live repository.
-    await git(main, "clone", "-q", "--no-local", "--no-hardlinks", "--no-checkout", main, cwd);
+    // Only the default branch is copied: local agent branches would drag their whole history into every clone.
+    await git(main, "clone", "-q", "--no-local", "--no-hardlinks", "--no-checkout", "--single-branch", "--branch", base, main, cwd);
     try {
       await git(cwd, "remote", "set-url", "origin", remote);
+      await git(cwd, "remote", "set-branches", "origin", "*");
       await git(cwd, "fetch", "-q", "origin");
       await git(cwd, "checkout", "-q", "-b", o.branch, `origin/${base}`);
       await privateCheckout();
