@@ -3048,6 +3048,7 @@ createMenu({
     { value: "task", label: "New scheduled task", icon: "clock" },
     { value: "notifications", label: "Notifications", desc: /: on$/.test($("notifications").getAttribute("aria-label") || "") ? "On for this device" : "Off", icon: "bell" },
     { value: "dashboard", label: "Usage dashboard", icon: "chart" },
+    { value: "benchmarks", label: "Model benchmarks", icon: "chart" },
     { value: "automation", label: "Automation dashboard", icon: "play" },
     { value: "host", label: "Host dashboard", icon: "terminal" },
     { value: "security", label: "Security scans", desc: "Malware, CVEs, open ports", icon: "shield" },
@@ -3058,6 +3059,7 @@ createMenu({
   ],
   onSelect: (v) => {
     if (v === "dashboard") location.href = $("dash-link").href;
+    else if (v === "benchmarks") location.href = $("benchmarks-link").href;
     else if (v === "automation") location.href = $("auto-link").href;
     else if (v === "host") location.href = $("host-link").href;
     else if (v === "security") location.href = $("security-link").href;
