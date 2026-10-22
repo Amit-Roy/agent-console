@@ -455,6 +455,22 @@ async function finishSignIn() {
   $("d-signin-finish").disabled = false;
 }
 $("d-signin-finish").onclick = finishSignIn;
+// An existing thread whose Claude login expired: open the new-thread dialog on that account so its Sign in button shows.
+const CLAUDE_AUTH_FAILED = /Failed to authenticate|OAuth session expired|Not logged in|Please run \/login/i;
+function signInButton(account) {
+  const btn = el("button", "btn sm", `Sign in to ${claudeAccount(account).label}`);
+  btn.type = "button";
+  btn.onclick = () => {
+    const a = claudeAccounts().find(x => x.id === account);
+    if (a) a.ready = false; // hello-time readiness is stale once the CLI has rejected the login
+    openNewDialog();
+    menus.dProv.setValue("claude");
+    fillDialog("claude");
+    menus.dAccount.setItems(accountItems(), account);
+    syncDialogAccount();
+  };
+  return btn;
+}
 $("d-code").onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); finishSignIn(); } };
 // Auto: Sonnet or Sol at medium effort, on whichever five-hour window would otherwise leave the most allowance unused.
 const autoUsable = (r) => !!prov(r.provider)?.ok && prov(r.provider).models?.includes(r.model) && (!r.account || !!claudeAccount(r.account).ready);
@@ -2170,11 +2186,15 @@ function onEvent(e, live) {
       bits.push(at.toDateString() === new Date().toDateString() ? clock : `${at.toLocaleDateString([], { month: "short", day: "numeric" })} ${clock}`);
       if (e.duration_ms) bits.push(`${(e.duration_ms / 1000).toFixed(1)}s`);
       if (typeof e.total_cost_usd === "number") bits.push(`$${e.total_cost_usd.toFixed(4)}`);
-      if (e.is_error || (e.subtype && e.subtype !== "success")) bits.push(e.subtype || "error");
+      // Claude CLI reports failed turns (expired login, API errors) as subtype "success" with is_error set.
+      if (e.is_error || (e.subtype && e.subtype !== "success")) bits.push(e.subtype && e.subtype !== "success" ? e.subtype : "error");
       const last = (state.into || $("chat")).lastElementChild;
       const row = last?.matches(".msg.asst") ? last.querySelector(".actions") : null;
-      if (row) row.append(el("span", "foot", bits.join(" · "))); // stats sit on the reply's action row
+      const foot = el("span", "foot", bits.join(" · "));
+      if (row) row.append(foot); // stats sit on the reply's action row
       else push(el("div", "msg foot", bits.join(" · ")), live);
+      const t = cur();
+      if (e.is_error && t?.provider === "claude" && CLAUDE_AUTH_FAILED.test(e.result || "")) (row ? foot : (state.into || $("chat")).lastElementChild).append(" ", signInButton(t.claudeAccount || "sunny"));
       break;
     }
     case "system":
