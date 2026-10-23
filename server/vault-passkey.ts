@@ -19,6 +19,8 @@ type Challenge = { challenge: string; kind: "reg" | "auth"; expires: number; fir
 type Deps = {
   confDir: () => string;
   rpId: () => string | undefined;
+  // Extra browser origins, for a proxy alias that rewrites the Origin header (e.g. Caddy console.<domain>).
+  origins: () => string[];
   atomicWrite: (file: string, data: string) => void;
   audit: (action: string, source: string, key: string) => void;
   alert: (subject: string, lines: string[]) => Promise<void>;
@@ -43,7 +45,7 @@ export function createPasskeys(d: Deps) {
 
   const cookies = (req: express.Request) => Object.fromEntries(String(req.headers.cookie || "").split(";").map((p) => p.trim().split(/=(.*)/s).slice(0, 2)).filter((p) => p[0]));
   const session = (req: express.Request) => crypto.createHash("sha256").update(cookies(req).ac_session || "").digest("hex");
-  const origin = (req: express.Request) => String(req.headers.origin || "");
+  const origin = (req: express.Request) => [...new Set([String(req.headers.origin || ""), ...d.origins()].filter(Boolean))];
   const rpID = (req: express.Request) => d.rpId() || String(req.headers.host || "").replace(/:\d+$/, "").replace(/^\[|\]$/g, "");
 
   function sweep() {
