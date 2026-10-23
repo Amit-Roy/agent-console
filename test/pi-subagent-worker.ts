@@ -5,7 +5,9 @@ import path from "node:path";
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagent-mock-"));
 process.env.AGENT_CONSOLE_DATA = path.join(tmp, "data");
-process.env.PATH = `${tmp}/bin:${process.env.PATH}`;
+process.env.AGENT_CONSOLE_RATE_URL = "http://127.0.0.1:9/model-request"; // the server sets these; the mock pi never calls a model
+process.env.AGENT_CONSOLE_RATE_TOKEN = "test-token-0123456789";
+process.env.PATH =`${tmp}/bin:${process.env.PATH}`;
 fs.mkdirSync(`${tmp}/bin`, { recursive: true });
 
 // Mock pi (RPC): records argv, answers one prompt with assistant text + usage. It writes no files: the worker must.
