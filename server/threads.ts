@@ -272,7 +272,11 @@ interface TurnState {
   usage?: any;
   models?: ModelUsage[];
   clock?: TurnClock;
+  failure?: string; // newest console_error text; Codex and Pi report a failed turn there, not on the result
 }
+
+const QUOTA_ERROR =
+  /\b429\b|rate.?limit|too many requests|usage.?limit|quota|hit your (?:\w+ )?limit|limit reached|reached (?:your|the) (?:\w+[- ])?limit/i;
 
 interface Live {
   agent: Agent;
@@ -1120,6 +1124,10 @@ export class Threads {
       }
       return;
     }
+    if (ev.type === "console_error" && typeof ev.text === "string") {
+      const turn = this.turns.get(t.id);
+      if (turn) turn.failure = ev.text;
+    }
     if (ev.type === "subagent_wake") return this.wake(t, String(ev.text || ""));
     // Claude starts a turn by itself when a background subagent finishes after the turn ended: show it as running
     if (
@@ -1266,14 +1274,14 @@ export class Threads {
         clearTimeout(live.compactWait);
         live.compactWait = undefined;
       }
+      const failure = this.turns.get(t.id)?.failure;
       this.finishTurn(t, ev);
       // Mark thread as quota-paused if turn ended due to rate limit and quota is exhausted
       if (ev.is_error && !t.archived && !t.quotaPaused) {
-        const errMsg = String(ev.error?.message ?? ev.error ?? "");
-        const isRateLimit = /\b429\b|rate.?limit|too many requests|usage.?limit|quota/i.test(
-          errMsg,
-        );
-        if (isRateLimit) {
+        const errMsg = [ev.error?.message ?? ev.error, ev.result, failure]
+          .filter((x) => typeof x === "string")
+          .join("\n");
+        if (QUOTA_ERROR.test(errMsg)) {
           const providerKey =
             t.provider === "claude" ? claudeUsageKey(t.claudeAccount) : t.provider;
           if (usage.exhausted(providerKey)) {

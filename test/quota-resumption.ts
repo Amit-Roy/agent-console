@@ -292,6 +292,44 @@ assert.deepEqual(resumedThreads, [unrelatedSibling, pausedOwner, heldSibling]);
 assert.ok(!threads.get(heldSibling)!.quotaPaused);
 pass("Premium ownership defers sibling quota resume without losing it");
 
+// Real provider shapes: Claude puts the limit text in `result`; Codex and Pi emit a separate console_error before a bare result.
+function finishWith(threadId: string, events: any[]) {
+  const thread = threads.get(threadId)!;
+  (threads as any).turns.set(threadId, { start: Date.now() - 1000, tools: {} });
+  for (const ev of events) (threads as any).onEvent(thread, ev);
+}
+const claudeResult = createThread(threads, "claude");
+recordExhaustedUsage("claude");
+finishWith(claudeResult, [
+  {
+    type: "result",
+    is_error: true,
+    subtype: "success",
+    result: "You've hit your limit · resets 3pm",
+    duration_ms: 1000,
+  },
+]);
+assert.ok(threads.get(claudeResult)?.quotaPaused, "Claude result text pauses the thread");
+pass("Claude limit text in result pauses the thread");
+
+const codexConsole = createThread(threads, "codex");
+recordExhaustedUsage("codex");
+finishWith(codexConsole, [
+  { type: "console_error", text: "You've hit your usage limit. Try again at 9:00 AM." },
+  { type: "result", is_error: true, subtype: "error", duration_ms: 1000 },
+]);
+assert.ok(threads.get(codexConsole)?.quotaPaused, "console_error text pauses the thread");
+pass("Codex limit text in console_error pauses the thread");
+
+const staleConsole = createThread(threads, "codex");
+recordExhaustedUsage("codex");
+finishWith(staleConsole, [
+  { type: "console_error", text: "Network error" },
+  { type: "result", is_error: true, subtype: "error", duration_ms: 1000 },
+]);
+assert.ok(!threads.get(staleConsole)?.quotaPaused, "unrelated console_error does not pause");
+pass("Unrelated console_error does not pause the thread");
+
 threads.shutdown();
 fs.rmSync(data, { recursive: true, force: true });
 console.log("All quota resumption tests passed");
