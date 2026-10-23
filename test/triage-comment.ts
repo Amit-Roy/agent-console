@@ -268,6 +268,25 @@ assert.ok(
 assert.ok(sparseVisible.includes("Recommended budget"));
 assert.ok(!/Add a .* → estimated budget/.test(structuredText));
 assert.ok(!/\bunknown\b/i.test(sparseVisible));
+// The model suggestion replaces the generic label, and a repository inference is marked in the comment.
+const advised = structuredClone(sparse);
+advised.scorecard.structure = {
+  ...sparseStructure,
+  flags: { ...sparseStructure.flags, hasExpectedOutput: true },
+  counterfactual: { ...sparseStructure.counterfactual!, suggestion: "Name the file to change." },
+  inferredFromRepo: true,
+};
+const advisedVisible = renderTriageComment(advised).split("<details>")[0];
+assert.ok(
+  /Name the file to change → estimated budget drops to \*\*[\d.]+[KM]?\*\* tokens/.test(
+    advisedVisible,
+  ),
+);
+assert.ok(!advisedVisible.includes("Add a file path"));
+assert.ok(
+  advisedVisible.includes("inferred from the repository description, not stated in the request."),
+);
+assert.ok(!sparseVisible.includes("inferred from the repository description"));
 
 // Regression: structure detection false positives (prose samples produce no match)
 const proseCases = [

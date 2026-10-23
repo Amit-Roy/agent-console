@@ -7,7 +7,7 @@ import { piRateEnv } from "./pi-rate-env.ts";
 import { createLabelCompletion, type LabelEngine, NVIDIA_LABEL_MODELS } from "./small-model.ts";
 import { type LoadedEffortModel, loadEffortModel } from "./triage-effort.ts";
 import { deriveAssessment, parseAssessment, type TriageScorecard } from "./triage-scorecard.ts";
-import { requestStructure } from "./triage-structure.ts";
+import { extractStructure, quoteStructure, requestStructure } from "./triage-structure.ts";
 
 export { TRIAGE_SCORECARD_VERSION } from "./triage-scorecard.ts";
 
@@ -481,6 +481,7 @@ export function defaultTriageEngines(): LabelEngine[] {
 export function createTriageClassifier(
   engines: LabelEngine[] = defaultTriageEngines(),
   modelFor: () => LoadedEffortModel = loadEffortModel,
+  extract: typeof extractStructure = extractStructure,
 ) {
   const complete = createLabelCompletion(
     engines.map((engine) => ({
@@ -540,6 +541,15 @@ export function createTriageClassifier(
       if (reviewed) decision = reviewed;
     }
     if (!decision) throw Error("All triage models unavailable or returned invalid decisions");
+    // One cheap extra call may read expected behavior from the repository description; it never blocks the quote.
+    const score = decision.scorecard;
+    if (score?.structure && score.pricing) {
+      const text = input.body.trim() ? `${input.title}\n${input.body}` : input.title;
+      const extraction = await extract({ text, repoContext: input.repoContext }).catch(
+        () => undefined,
+      );
+      score.structure = quoteStructure(text, score.pricing, extraction);
+    }
     return decision;
   };
 }
