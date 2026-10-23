@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import type express from "express";
+import { createSecAutomations, type SecAutomations, statusKeyFile } from "./sec-automations.ts";
 import { createToolWatch, RemoteError, type ToolWatch } from "./tool-watch.ts";
 
 // Security scans run on the VPS host (clamav, falco, trivy, nmap). This workspace only reads their
@@ -20,10 +21,10 @@ class SshError extends Error {}
 class NotFound extends Error {}
 
 /* One forced-command call. Resolves with parsed JSON; rejects with a short human message. */
-function remote(cmd: string): Promise<any> {
+export function remote(cmd: string, key: string = keyFile()): Promise<any> {
   const args = [
     "-i",
-    keyFile(),
+    key,
     "-o",
     "IdentitiesOnly=yes",
     "-o",
@@ -87,6 +88,10 @@ export function mountSecurity(
   app: express.Express,
   sameOrigin: express.RequestHandler,
   tools: ToolWatch = createToolWatch(),
+  automations: SecAutomations = createSecAutomations({
+    fetchStatus: () => remote("status", statusKeyFile()),
+    bridge: () => tools.bridgeView(),
+  }),
 ) {
   const guard =
     (fn: (req: express.Request) => Promise<any>): express.RequestHandler =>
@@ -162,8 +167,14 @@ export function mountSecurity(
     guard(async (req) => {
       const out = await remote(`run ${req.res?.locals.mode}`);
       resetSecurityCache();
+      automations.invalidate();
       return out;
     }),
+  );
+  // Every security automation (VPS timers, OpenCVE, the patch bridge) with schedule, last and next run, colour. Cached 60 s.
+  app.get(
+    "/api/security/automations",
+    guard(() => automations.view()),
   );
   // Tool-watch: fixed tool versions and unsanctioned changes from the VPS. Untrusted advisory text never leaves the server.
   app.get(
@@ -176,6 +187,7 @@ export function mountSecurity(
     guard(async () => {
       const out = await tools.run();
       void tools.tick().catch(() => {});
+      automations.invalidate();
       return out;
     }),
   );
