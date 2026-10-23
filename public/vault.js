@@ -8,7 +8,8 @@ const el = (tag, cls, text) => {
   if (text != null) n.textContent = text;
   return n;
 };
-const state = { groups: [], pk: { enrolled: 0, passkeys: [] }, restart: false };
+const state = { groups: [], pk: { known: false, enrolled: 0, passkeys: [] }, restart: false };
+const SECRETISH = /(KEY|TOKEN|SECRET|PASS|AUTH|CRED|PRIVATE|DSN|URL)/i;
 let toastTimer;
 function toast(text, tone) {
   const t = $("toast");
@@ -83,9 +84,11 @@ function row(g, e) {
     ctx.append(bits.length ? " · " : "", l);
   }
   n.append(el("b", "", e.key), ctx);
+  // owner-only hint: the server sends `mine` only to a client holding a passkey grant
+  if (e.mine === false) { const m = el("span", "hmark", "not live"); m.title = "Only you see this marker"; n.querySelector("b").after(m); }
   const act = el("div", "vact");
   if (e.viewable) act.append(btn("Reveal", "", () => reveal(g, e, r, n), `Reveal ${e.key}`));
-  else if (e.editable) {
+  if (e.editable) {
     act.append(btn("Replace", "", () => openEdit(g, e), `Replace ${e.key}`), btn("Delete", "danger", () => openDelete(g, e), `Delete ${e.key}`));
   }
   r.append(n, act);
@@ -96,7 +99,6 @@ function renderGroups() {
   for (const g of state.groups) {
     const p = el("section", "panel vgroup"); p.setAttribute("aria-label", g.label);
     const head = el("div", "head"); head.append(el("h2", "", g.label));
-    if (g.canAdd) head.append(btn("Add key", "", () => openEdit(g, null), `Add key to ${g.label}`));
     p.append(head);
     if (g.error) p.append(el("p", "gerr", g.error));
     if (!g.entries.length && !g.error) p.append(el("p", "gempty", "No keys yet."));
@@ -108,8 +110,8 @@ function renderGroups() {
 }
 function renderPasskeys() {
   const { enrolled, passkeys } = state.pk;
-  $("pk-add").textContent = enrolled ? "Add passkey" : "Set up passkey";
-  $("pk-note").textContent = enrolled ? "" : "No passkey yet. Changing a key needs one. Setup needs the one-time code from the server log.";
+  $("pk-banner").hidden = !state.pk.known || enrolled > 0;
+  $("passkeys").hidden = !enrolled;
   const rows = $("pk-rows"); rows.replaceChildren();
   for (const k of passkeys) {
     const r = el("div", "hrow prow");
@@ -126,7 +128,7 @@ async function load() {
     const [v, p] = await Promise.all([call("GET", "/api/vault"), call("GET", "/api/vault/passkeys")]);
     if (!v.ok) throw fail(v);
     state.groups = v.j.sources || [];
-    if (p.ok) state.pk = { enrolled: p.j.enrolled, passkeys: p.j.passkeys || [] };
+    if (p.ok) state.pk = { known: true, enrolled: p.j.enrolled, passkeys: p.j.passkeys || [] };
     $("vmsg").hidden = true;
   } catch (e) {
     $("vmsg").textContent = `Could not load the vault: ${e.message}`; $("vmsg").className = "vmsg bad"; $("vmsg").hidden = false;
@@ -151,15 +153,39 @@ const edit = $("edit"), value = $("value");
 function closeEdit() { value.value = ""; value.type = "password"; $("reveal").textContent = "Show"; $("reveal").setAttribute("aria-pressed", "false"); edit.close(); }
 function openEdit(g, e) {
   cur = { g, e };
+  const adding = !e, stores = state.groups.filter(x => x.canAdd);
   $("edit-title").textContent = e ? `Replace ${e.key}` : "Add key";
-  $("edit-sub").textContent = g.label;
-  $("name-wrap").hidden = !!e;
+  $("edit-sub").textContent = e ? g.label : "";
+  $("edit-sub").hidden = !e;
+  $("where-wrap").hidden = !adding;
+  $("where").replaceChildren(...stores.map(x => Object.assign(el("option", "", x.label), { value: x.id })), Object.assign(el("option", "", "New…"), { value: "__new" }));
+  $("where").value = stores.length ? stores[0].id : "__new";
+  $("new-type").value = "env"; $("new-val").value = ""; syncNew();
+  $("name-wrap").hidden = !adding;
   $("name").value = "";
   value.value = ""; $("edit-err").hidden = true; $("edit-wait").hidden = true; $("edit-save").disabled = false;
+  syncHint();
   edit.showModal();
-  (e ? value : $("name")).focus();
+  (adding ? $("name") : value).focus();
 }
-$("name").addEventListener("input", ev => { ev.target.value = ev.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, "_"); });
+function syncNew() {
+  const isNew = !$("where-wrap").hidden && $("where").value === "__new", gh = $("new-type").value === "github";
+  $("new-wrap").hidden = !isNew;
+  $("new-label").textContent = gh ? "Repo (owner/name)" : "File path";
+  $("new-val").placeholder = gh ? "owner/name" : "~/project/.env";
+  syncHint();
+}
+// names the list would hide (env files only) are still saved: say so before the user wonders where the row went
+function syncHint() {
+  const sel = $("where").value, g = state.groups.find(x => x.id === sel);
+  const env = sel === "__new" ? $("new-type").value === "env" : !!g && !/^GitHub/.test(g.label);
+  $("name-hint").hidden = !(!$("name-wrap").hidden && env && $("name").value && !SECRETISH.test($("name").value));
+}
+$("where").addEventListener("change", syncNew);
+$("new-type").addEventListener("change", syncNew);
+$("new-val").addEventListener("input", () => { $("edit-err").hidden = true; });
+$("add-key").addEventListener("click", () => openEdit(null, null));
+$("name").addEventListener("input", ev => { ev.target.value = ev.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, "_"); syncHint(); });
 $("reveal").addEventListener("click", () => {
   const show = value.type === "password";
   value.type = show ? "text" : "password";
@@ -173,9 +199,14 @@ $("edit-form").addEventListener("submit", async ev => {
   const key = cur.e ? cur.e.key : $("name").value.trim();
   const err = $("edit-err"); err.hidden = true;
   if (!/^[A-Z_][A-Z0-9_]*$/.test(key)) { err.textContent = "Key names use capital letters, digits and underscores."; err.hidden = false; return; }
+  const isNew = !cur.e && $("where").value === "__new";
+  if (isNew && !$("new-val").value.trim()) { err.textContent = "Enter where to store it."; err.hidden = false; return; }
   $("edit-save").disabled = true;
   try {
-    const j = await write("PUT", `/api/vault/${encodeURIComponent(cur.g.id)}/${encodeURIComponent(key)}`, { value: value.value }, w => { $("edit-wait").hidden = !w; });
+    const wait = w => { $("edit-wait").hidden = !w; };
+    let id = cur.e ? cur.g.id : $("where").value;
+    if (isNew) id = (await write("POST", "/api/vault/stores", { type: $("new-type").value, value: $("new-val").value.trim() }, wait)).id;
+    const j = await write("PUT", `/api/vault/${encodeURIComponent(id)}/${encodeURIComponent(key)}`, { value: value.value }, wait);
     closeEdit();
     if (j.restartNeeded) state.restart = true;
     toast(`${key} saved.${j.restartNeeded ? " Restart agent-console to apply." : ""}`, "ok");
@@ -218,22 +249,21 @@ const enroll = $("enroll");
 function openEnroll() {
   const first = !state.pk.enrolled;
   $("enroll-sub").textContent = first
-    ? "Type the one-time code the server printed to its log (or wrote to vault-enroll-code), then confirm with your fingerprint or face."
-    : "Confirm with an existing passkey, then register another one.";
-  $("code-wrap").hidden = !first;
-  $("code").value = ""; $("pk-name").value = ""; $("enroll-err").hidden = true; $("enroll-wait").hidden = true; $("enroll-go").disabled = false;
+    ? "Confirm with this device's fingerprint or face. Another phone or a security key will not work."
+    : "Confirm with an existing passkey, then register another one on this device.";
+  $("pk-name").value = ""; $("enroll-err").hidden = true; $("enroll-wait").hidden = true; $("enroll-go").disabled = false;
   enroll.showModal();
-  (first ? $("code") : $("pk-name")).focus();
+  $("pk-name").focus();
 }
 $("pk-add").addEventListener("click", openEnroll);
+$("pk-setup").addEventListener("click", openEnroll);
 $("enroll-cancel").addEventListener("click", () => enroll.close());
 $("enroll-form").addEventListener("submit", async ev => {
   ev.preventDefault();
   const err = $("enroll-err"); err.hidden = true; $("enroll-go").disabled = true;
   const wait = w => { $("enroll-wait").hidden = !w; };
   try {
-    const first = !state.pk.enrolled;
-    const body = first ? { code: $("code").value.trim() } : {};
+    const body = {};
     let r = await call("POST", "/api/vault/passkeys/register/options", body);
     if (r.status === 401 && r.j.stepUp) { await stepUp(wait); r = await call("POST", "/api/vault/passkeys/register/options", body); }
     if (!r.ok) throw fail(r);
