@@ -181,11 +181,14 @@ export type IssueRun = {
   rerouted?: boolean; // work: its recoveries were reset once because its Pi model was retired upstream
   stalled?: number;   // work: recoveries ran out without a PR; the sweep leaves it until a person runs a turn
   missingPr?: number; // work: when "no open PR" was logged, so a restart does not log it again
-  reviews?: number;   // work: reviews started so far, capped by MAX_REVIEWS; review: which of them this is
+  reviews?: number;   // Reserved review slots; attempts without a verdict return their slot after a cooldown.
+  reviewThread?: string; // Work: the reviewer holding its current slot; rejects late refunds from older reviewers.
+  takeover?: boolean; // Review: the final slot owns fixes, final review, and merge instead of another worker redo.
   redoing?: boolean;  // work: the worker is fixing review findings
   nudges?: number;    // work: times the worker was asked to push because the PR had no commit after the last verdict
   worker?: string;    // review: the worker thread whose PR this reviews
   startedAt?: number; // review: when the reviewer started; its verdict comment is newer
+  verdictAfter?: number; // Review: only comments created after this existing GitHub comment ID belong to this attempt.
   outcome?: string;   // review: set once the end of the reviewer's turn has been judged
 };
 export interface IssueRunner {
