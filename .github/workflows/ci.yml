@@ -44,6 +44,10 @@ jobs:
     timeout-minutes: 20
     env:
       AGENT_CONSOLE_PAGE: "12"
+      PI_VERSION: "1.2.0"
+      # Every test file, scratch server and CLI spawn reloads the same TypeScript graph; caching the
+      # compiled code cut one script start from about 0.75 s to 0.25 s.
+      NODE_COMPILE_CACHE: /tmp/node-compile-cache
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -63,8 +67,17 @@ jobs:
       # The runner image ships Google Chrome, so Chromium's system libraries are already present;
       # --with-deps ran apt-get and took up to 9 minutes.
       - run: npx playwright install chromium
+      # Pi goes into its own prefix so the whole install can be cached; npm install -g took 6-8 s per run.
+      - name: Cache Pi
+        id: pi-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.pi-cli
+          key: pi-${{ env.PI_VERSION }}-node24-${{ runner.os }}
       - name: Install Pi
-        run: npm install -g @earendil-works/pi-coding-agent@1.2.0
+        if: steps.pi-cache.outputs.cache-hit != 'true'
+        run: npm install -g --prefix ~/.pi-cli "@earendil-works/pi-coding-agent@$PI_VERSION"
+      - run: echo "$HOME/.pi-cli/bin" >>"$GITHUB_PATH"
       - name: Start mock scratch server
         run: |
           mkdir -p test/tmp
@@ -84,6 +97,12 @@ jobs:
         env:
           TEST_CONCURRENCY: "8"
         run: npm test -- test/composer-scroll-ui.ts test/drafts-ui.ts test/attachment-drafts-ui.ts test/pi-e2e-ui.ts 2>&1 | tee "$RUNNER_TEMP/test.log"
+      # Fails the run when one file or the whole pool gets slower than the budget, so test time cannot creep up.
+      - name: Test time budget
+        env:
+          TEST_FILE_BUDGET_S: "10"
+          TEST_WALL_BUDGET_S: "25"
+        run: node scripts/ci-resources.mjs budget "$RUNNER_TEMP/test.log"
       - name: Runner usage
         if: always()
         run: node scripts/ci-resources.mjs summary "$RUNNER_TEMP/resources.csv" "$RUNNER_TEMP/test.log" | tee -a "$GITHUB_STEP_SUMMARY"
