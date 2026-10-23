@@ -471,6 +471,7 @@ function handle(m) {
         renderHead();
         warmFileViewer();
       }
+      maybeOpenWorkflowDialog();
       break;
     }
     case "thread":
@@ -501,9 +502,18 @@ function handle(m) {
       }
       renderThreads();
       break;
-    case "created":
+    case "created": {
       openThread(m.thread.id);
+      if (workflowBrief) {
+        writeDraft(m.thread.id, workflowBrief);
+        $("input").value = workflowBrief;
+        sizeInput();
+        workflowBrief = null;
+        $("input").focus();
+        toast("Workflow brief ready. Edit it, then send.");
+      }
       break;
+    }
     case "tasks":
       state.tasks = new Map(m.tasks.map((t) => [t.id, t]));
       renderThreads();
@@ -4265,6 +4275,7 @@ let dialogAssignment = null;
 let assignmentPending = false;
 $("dlg").addEventListener("cancel", (event) => {
   if (assignmentPending) event.preventDefault();
+  workflowBrief = null;
 });
 function setDialogKind(task) {
   dialogAssignment = null;
@@ -4489,10 +4500,37 @@ function syncWhen() {
 }
 function openNewDialog() {
   setNav(false);
+  workflowBrief = null;
   setDialogKind(null);
   menus.dAccount.setValue("sunny");
   syncDialogAccount();
   $("dlg").showModal();
+}
+// + New workflow on /automation lands here: the same new-thread dialog, titled for a workflow, and the thread starts with
+// the drawing, step and alert rules already written into the composer. The brief is editable and never sent by itself.
+const WORKFLOW_BRIEF = `Add a new workflow to the Automation page (/automation) end to end.
+
+Read first: server/automation/contracts.ts, server/automation/snapshot.ts, server/automation/events.ts, public/automation.js, public/automation.css, docs/automation.md and docs/monitoring.md.
+
+1. Data before pixels. Add the workflow as a Pipeline in FLOW (contracts.ts) with group, icon, phases and ordered StepId steps; add each FlowNode and every FlowEdge with the condition that takes it. One step = one atomic action with a real trigger, state and event; never a decorative box.
+2. Real steps only. Every step writes start/ok/fail/info events to the automation log (or reads a real unit/status source), has a disabled state, and can be enabled or disabled independently. The sidebar entry and detail view must come from FLOW, not bespoke HTML.
+3. Draw it with the existing system: hand-drawn ICONS in public/automation.js (one stroke, no emoji, no icon library), console tokens and CSS classes. Phases run left to right, arrows carry their condition, loops are boxed with their label, and the phone layout is one vertical column. No new dependency.
+4. Alerts. Phone web push is the default and only channel for non-security alerts. AgentMail only for security alerts, used minimally: batch into a daily digest, never one mail per event, and stay within the 3,000 messages per month allowance. Never put secrets, tokens or raw advisory text in a mail.
+5. Guard rails. Keep the existing steps, tests, API shapes and version checks working. Add a failing test first, then fix it. Update test/automation-ui.ts (and test/sec-automations-ui.ts when security) for the new sidebar entry, its steps and its states, plus docs/automation.md.
+6. Follow the pr-standards skill; end the PR body with ## Self-review and evidence screenshots at phone and desktop width.`;
+let workflowBrief = null;
+function maybeOpenWorkflowDialog() {
+  const params = new URLSearchParams(location.search);
+  if (params.get("new") !== "workflow" || !state.ready) return;
+  params.delete("new");
+  const query = params.toString();
+  history.replaceState(null, "", `${location.pathname}${query ? `?${query}` : ""}${location.hash}`);
+  openNewDialog();
+  workflowBrief = WORKFLOW_BRIEF;
+  $("dlg-title").textContent = "New workflow";
+  $("dlg-sub").textContent =
+    "The brief already covers the drawing, atomic steps and alert limits. Choose an agent and folder.";
+  $("d-ok").textContent = "Create thread";
 }
 function openTaskDialog(task) {
   setNav(false);
@@ -4599,7 +4637,10 @@ $("restart").onclick = async () => {
   );
 };
 $("dform").addEventListener("submit", (e) => {
-  if (e.submitter?.value !== "ok") return;
+  if (e.submitter?.value !== "ok") {
+    workflowBrief = null;
+    return;
+  }
   const settings = {
     provider: menus.dProv.value,
     cwd: menus.dCwd.value,
