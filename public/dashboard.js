@@ -167,13 +167,14 @@ function allocatedFee(monthly, from, to) {
 }
 const feeKnown = (p) => Number.isFinite(monthlyFees[p]) && monthlyFees[p] >= 0;
 function subscriptionPanel(cur) {
-  const p = panel("API estimate vs your subscriptions", "Baseline: two Claude Pro plans at $20 each plus Codex at $20 = $60/month. Fees are editable.");
+  const p = panel("API estimate vs your subscriptions", "Your configured monthly subscription fees.");
   const result = el("div", "comparison-result");
   const draw = () => {
     const providers = ["claude", "codex"];
     const active = providers.filter(provider => cur.turns.some(t => t.provider === provider));
     const missing = active.filter(provider => !feeKnown(provider));
     const configured = providers.filter(feeKnown);
+    p.querySelector(".head .sub").textContent = configured.length ? `${configured.map(provider => `${provMeta(provider)[0]}: ${usd(monthlyFees[provider])}/month`).join(" · ")}. Fees are editable.` : "Set your monthly subscription fees to compare.";
     const comparable = cur.turns.filter(t => configured.includes(t.provider));
     const measured = comparable.filter(t => t.accounting === 2 && t.cost != null);
     const api = measured.reduce((sum, t) => sum + t.cost, 0);
