@@ -48,6 +48,8 @@ export class SessionSearch {
   private db: DatabaseSync;
   private pending: Promise<void> | undefined;
   private closed = false;
+  /** Archive state lives in threads.json, not the logs, so it is refreshed on every sync rather than indexed. */
+  private archived = new Set<string>();
   private dataDir: string;
   constructor(dataDir: string) {
     this.dataDir = dataDir;
@@ -137,6 +139,7 @@ export class SessionSearch {
     if (!Array.isArray(threads)) throw new Error("Session catalog must contain an array.");
     const valid = threads.filter(t => safeId(t?.id));
     const ids = new Set(valid.map(t => t.id));
+    this.archived = new Set(valid.filter(t => t.archived).map(t => t.id));
     for (const row of this.db.prepare("SELECT thread FROM sessions").all()) if (!ids.has(row.thread)) this.remove(String(row.thread));
     for (const t of valid) {
       const file = path.join(this.dataDir, "logs", `${t.id}.jsonl`);
@@ -223,7 +226,7 @@ export class SessionSearch {
       FROM session_fts f JOIN sessions s ON s.thread=f.thread
       WHERE session_fts MATCH ? ${input.provider ? "AND s.provider=?" : ""}
       ORDER BY score, f.thread, f.line LIMIT ?`).all(match, ...(input.provider ? [input.provider] : []), limit);
-    return { query, results: rows.map(row => ({ ...row, citation: `${row.thread}:L${row.line}`, url: `/#thread=${encodeURIComponent(String(row.thread))}` })), indexedSessions: Number(this.db.prepare("SELECT count(*) AS n FROM sessions").get()!.n) };
+    return { query, results: rows.map(row => ({ ...row, archived: this.archived.has(String(row.thread)), citation: `${row.thread}:L${row.line}`, url: `/#thread=${encodeURIComponent(String(row.thread))}` })), indexedSessions: Number(this.db.prepare("SELECT count(*) AS n FROM sessions").get()!.n) };
   }
 
   async read(input: SessionReadInput) {
@@ -237,7 +240,7 @@ export class SessionSearch {
     const events: typeof rows = []; let size = 0;
     for (const row of rows) { size += String(row.text).length; if (events.length && size > 48_000) break; events.push({ ...row, citation: `${input.thread}:L${row.line}` }); }
     const next = events.length ? Number(events.at(-1)!.line) + 1 : null;
-    return { thread: input.thread, title: session.title, provider: session.provider, start, next: next !== null && next <= Number(session.lines) ? next : null, events };
+    return { thread: input.thread, title: session.title, provider: session.provider, archived: this.archived.has(input.thread), start, next: next !== null && next <= Number(session.lines) ? next : null, events };
   }
 
   /** PRs a session raised (by thread), or sessions that raised a PR (by `ref`: URL, `owner/repo#n` or number). */
@@ -253,7 +256,7 @@ export class SessionSearch {
       if (!ref) throw new Error("Give a GitHub PR URL, owner/repo#number, or a PR number.");
       rows = this.db.prepare(`${select} WHERE p.number=? ${ref.repo ? "AND p.repo=?" : ""} ORDER BY s.mtime DESC, p.line LIMIT 50`).all(ref.number, ...(ref.repo ? [ref.repo] : []));
     }
-    return { prs: rows.map(r => ({ ...r, citation: `${r.thread}:L${r.line}`, sessionUrl: `/#thread=${encodeURIComponent(String(r.thread))}` })) };
+    return { prs: rows.map(r => ({ ...r, archived: this.archived.has(String(r.thread)), citation: `${r.thread}:L${r.line}`, sessionUrl: `/#thread=${encodeURIComponent(String(r.thread))}` })) };
   }
 
   close() { this.closed = true; this.db.close(); }
