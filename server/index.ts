@@ -29,13 +29,13 @@ import fs from "node:fs";
 import crypto from "node:crypto";
 import http from "node:http";
 import { execFileSync, spawn } from "node:child_process";
+import { createIssueDraft } from "./issue-draft.ts";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer, type WebSocket } from "ws";
 import { authed, CODER_HOSTS, cookieFrom, limited, makeToken, passwordOk, PASSWORD, recordFail, setCookie, tokenValid } from "./auth.ts";
 import { providerInfo, refreshPiModels } from "./providers/index.ts";
-import { piEditIssueDraft } from "./providers/triage-model.ts";
 import { threadToMarkdown } from "./export.ts";
 import { Threads, turnTiming } from "./threads.ts";
 import { createTelemetryService } from "./token-telemetry.ts";
@@ -654,6 +654,13 @@ wss.on("connection", (ws) => {
             return reply({ t: "answer_error", thread: m.thread, id: m.id, request: m.request, message: e?.message || "Could not send your answer." });
           }
         }
+        case "create_issue": {
+          const cid = typeof m.cid === "string" ? m.cid : undefined;
+          createIssueDraft(threads.get(m.thread)?.cwd, m.draft).then(
+            draft => reply({ t: "create_issue_done", cid, ...draft }),
+            (e: any) => reply({ t: "create_issue_error", cid, message: e?.message || "Could not create the issue draft." }));
+          return;
+        }
         case "queue_edit":
         case "queue_save":
         case "queue_cancel_edit": {
@@ -674,43 +681,12 @@ wss.on("connection", (ws) => {
           const t = threads.create({ provider: m.provider, claudeAccount: typeof m.claudeAccount === "string" ? m.claudeAccount : undefined, cwd: safeCwd(m.cwd), mode: m.mode, model: m.model, effort: m.effort, title: m.title });
           return reply({ t: "created", thread: t });
         }
-        case "create_issue": {
-          try {
-            const draft = typeof m.draft === "string" ? m.draft.slice(0, 500) : "";
-            if (!draft.trim()) return reply({ t: "create_issue_error", message: "Empty draft" });
-            const result = await piEditIssueDraft(draft);
-            if (!result) return reply({ t: "create_issue_error", message: "Pi returned no edit" });
-            if (result._piFailed) {
-              return reply({ t: "create_issue_error", message: "Pi editing failed; using original draft as-is." });
-            }
-            const { title, body } = result;
-            return reply({ t: "create_issue_done", title, body });
-          } catch (e: any) {
-            return reply({ t: "create_issue_error", message: e?.message ?? String(e) });
-          }
-        }
         case "send":
           if (typeof m.cid === "string" && !firstDelivery(m.cid)) return reply({ t: "ack", cid: m.cid });
           if (typeof m.text === "string" && (m.text.trim() || (Array.isArray(m.attachments) && m.attachments.length))) {
             threads.send(m.thread, m.text.slice(0, 100_000), { attachments: m.attachments, mode: m.mode === "steer" ? "steer" : "queue" });
           }
           return typeof m.cid === "string" && reply({ t: "ack", cid: m.cid });
-        case "get_repo": {
-          const t = threads.get(m.thread);
-          if (!t || !t.cwd) return reply({ t: "get_repo_error", message: "No thread or cwd" });
-          try {
-            const { execSync } = await import("node:child_process");
-            const remote = execSync(`git -C "${t.cwd}" remote -v`, { encoding: "utf8", timeout: 10_000 }).trim();
-            // Parse remote URL: origin  https://github.com/owner/repo.git (push)
-            const match = remote.match(/^origin\s+(https?:\/\/)?(?:www\.)?github\.com\/([^/]+)\/([^.]+)/);
-            if (match) {
-              return reply({ t: "get_repo_done", owner: match[2], repo: match[3] });
-            }
-            return reply({ t: "get_repo_done", owner: "", repo: t.cwd.split("/").pop() || "" });
-          } catch (e: any) {
-            return reply({ t: "get_repo_error", message: e?.message ?? String(e) });
-          }
-        }
         case "steer_queued":
           return threads.steerQueued(m.thread, m.id);
         case "compact":

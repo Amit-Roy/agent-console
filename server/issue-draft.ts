@@ -1,3 +1,5 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { askPi } from "./providers/triage-model.ts";
 
 export const MAX_ISSUE_DRAFT = 2000;
@@ -34,4 +36,13 @@ export async function piEditIssueDraft(draft: string, ask: IssueAsk = askPi): Pr
     try { return parseIssueDraft(await ask(provider, model, prompt, SYSTEM)); } catch { /* next engine */ }
   }
   throw Error("Pi could not edit the draft. Try again.");
+}
+
+/** Pi edits the draft; the repo comes from the thread folder's origin remote (never from user text). */
+export async function createIssueDraft(cwd: string | undefined, draft: unknown, ask: IssueAsk = askPi): Promise<IssueDraft & { owner: string; repo: string }> {
+  if (!cwd) throw Error("Open a thread in a git folder first.");
+  const remote = await promisify(execFile)("git", ["-C", cwd, "remote", "get-url", "origin"], { encoding: "utf8", timeout: 10_000 }).then(r => r.stdout, () => "");
+  const repo = githubRepoFromRemote(remote);
+  if (!repo) throw Error("This folder has no GitHub origin remote.");
+  return { ...repo, ...await piEditIssueDraft(typeof draft === "string" ? draft : "", ask) };
 }
