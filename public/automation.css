@@ -65,6 +65,19 @@ body.auto {
   font-size: 10px;
   letter-spacing: 0.04em;
 }
+.ptrig .tog {
+  padding: 0 var(--sp-2);
+  border: 1px solid var(--edge);
+  border-radius: var(--r-full);
+  background: var(--s3);
+  color: var(--t2);
+  font: inherit;
+  cursor: pointer;
+}
+.ptrig .tog[aria-checked="true"] {
+  background: var(--ok, var(--t1));
+  color: var(--s1, #fff);
+}
 .ptrig .w {
   color: var(--t3);
   font-variant-numeric: tabular-nums;

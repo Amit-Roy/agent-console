@@ -137,6 +137,23 @@ try {
   assert.equal(log.entries[0].msg, "approved");
   assert.equal((await get("/api/automation/log?step=nope")).status, 400);
   assert.equal((await get("/api/automation?v=2")).status, 400);
+  // toggles: same-origin only, validated, persisted to window-dispatch.json
+  const postToggle = (body: object, origin_ = origin) =>
+    fetch(origin + "/api/automation/toggle", {
+      method: "POST",
+      headers: { ...headers, "content-type": "application/json", Origin: origin_ },
+      body: JSON.stringify(body),
+    });
+  assert.equal(
+    (await postToggle({ target: "opener", enabled: true }, "https://example.invalid")).status,
+    403,
+  );
+  assert.equal((await postToggle({ target: "nope", enabled: true })).status, 400);
+  const on = await postToggle({ target: "opener", enabled: true });
+  assert.equal(on.status, 200);
+  assert.equal((await on.json()).config.opener.enabled, true);
+  const off = await postToggle({ target: "dispatcher", enabled: false });
+  assert.equal((await off.json()).config.dispatch.enabled, false);
   // the Debug button: same-origin only, validated, one worktree and thread
   const postDebug = (body: object, origin_ = origin) =>
     fetch(origin + "/api/automation/debug", {
