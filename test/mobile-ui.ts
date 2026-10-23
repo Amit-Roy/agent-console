@@ -7,7 +7,7 @@ import path from "node:path";
 import { type Browser, chromium } from "playwright";
 
 const data = fs.mkdtempSync(path.join(os.tmpdir(), "ac-mobile-ui-"));
-const base = "http://127.0.0.1:17774",
+const base = "http://127.0.0.1:7074",
   id = "mobile-review";
 const initial = {
   id,
@@ -33,6 +33,7 @@ const initial = {
 };
 fs.writeFileSync(path.join(data, "threads.json"), JSON.stringify([initial]));
 fs.mkdirSync(path.join(data, "logs"));
+fs.mkdirSync(path.join(data, "uploads"));
 const history: any[] = [
   { type: "user_input", text: "Make the mobile composer easier to use." },
   {
@@ -85,8 +86,15 @@ fs.writeFileSync(
 );
 process.env.AGENT_CONSOLE_DATA = data;
 const { makeToken } = await import("../server/auth.ts");
+const { cleanTitle } = await import("../server/providers/title.ts");
+const { threadTitle } = await import("../server/window-dispatch.ts");
 const server = spawn(process.execPath, ["server/index.ts"], {
-  env: { ...process.env, PORT: "17774", AGENT_CONSOLE_MOCK: "1" },
+  env: {
+    ...process.env,
+    PORT: "7074",
+    AGENT_CONSOLE_MOCK: "1",
+    AGENT_CONSOLE_RUN: path.join(data, "run"),
+  },
   stdio: "ignore",
 });
 let browser: Browser;
@@ -98,6 +106,93 @@ try {
     await new Promise((r) => setTimeout(r, 100));
   }
   browser = await chromium.launch();
+  // Generated names must fit the actual sidebar, including its running indicator and selected font weight.
+  for (const width of [412, 1280]) {
+    const context = await browser.newContext({
+      viewport: { width, height: 915 },
+      isMobile: width === 412,
+      hasTouch: width === 412,
+    });
+    await context.addCookies([{ name: "ac_session", value: makeToken(), url: base }]);
+    const titles = [
+      "Auth:fix redirect",
+      "WWW:WWWWWWWWWWWWWWWW",
+      "线程:修复标题显示布局过长溢出问题",
+      "Mobile:keyboard",
+      "Windows:resize panel",
+      "Security:passkeys",
+      "Threads:short names",
+      "Models:rate limit",
+      "History:load older",
+      "Repo:clean worktree",
+      "Tests:run checks",
+      "UI:compact sidebar",
+    ].map((raw) => cleanTitle(raw)!);
+    titles.splice(
+      1,
+      0,
+      threadTitle({ repo: "o/WWWWWWWWWW", number: 12345, title: "WWWW wide issue" }),
+      threadTitle({ repo: "o/資料検索表示修正開発管理", number: 1234567, title: "fix" }),
+    );
+    assert.ok(titles.every(Boolean), "all layout fixtures produce valid generated names");
+    await context.routeWebSocket("**/ws", (socket) => {
+      const upstream = socket.connectToServer();
+      upstream.onMessage((raw) => {
+        const m = JSON.parse(String(raw));
+        if (m.t === "hello")
+          m.threads = titles.map((title, i) => ({ ...initial, id: "title-" + i, title }));
+        socket.send(JSON.stringify(m));
+      });
+      socket.onMessage((raw) => upstream.send(raw));
+    });
+    const page = await context.newPage();
+    await page.goto(base);
+    await page.waitForSelector("#threads li .t", { state: "attached" });
+    await page.evaluate(() => document.fonts.ready);
+    if (width === 412) {
+      await page.locator("#menu").click();
+      await page.waitForFunction(
+        () => document.querySelector("#side")!.getBoundingClientRect().x >= -1,
+      );
+    }
+    for (const running of [false, true]) {
+      const clipped = await page.evaluate(
+        (running) =>
+          [...document.querySelectorAll<HTMLElement>("#threads li")].flatMap((row) => {
+            row.classList.add("sel");
+            row.querySelector(".dot")?.classList.toggle("running", running);
+            const title = row.querySelector<HTMLElement>(".t")!;
+            return title.scrollWidth > title.clientWidth
+              ? [
+                  {
+                    title: title.textContent,
+                    available: title.clientWidth,
+                    required: title.scrollWidth,
+                  },
+                ]
+              : [];
+          }),
+        running,
+      );
+      assert.deepEqual(
+        clipped,
+        [],
+        `${width}px generated titles fit ${running ? "running" : "idle"} selected rows`,
+      );
+    }
+    if (process.env.OUT) {
+      await page.evaluate(() =>
+        document.querySelectorAll("#threads li").forEach((row, i) => {
+          row.classList.toggle("sel", i === 0);
+        }),
+      );
+      fs.mkdirSync(process.env.OUT, { recursive: true });
+      await page.screenshot({ path: path.join(process.env.OUT, `thread-titles-${width}.png`) });
+    }
+    console.log(`PASS ${width}px: 14 generated titles fit idle/running selected rows`);
+    await context.close();
+  }
+
   for (const colorScheme of ["dark", "light"] as const) {
     for (const width of [320, 390, 430, 600]) {
       const context = await browser.newContext({
@@ -259,7 +354,9 @@ try {
       await page.waitForSelector("#cbox.running");
       await page.evaluate(() => (document.documentElement.style.fontSize = ""));
       if (width === 390) {
-        await page.screenshot({ path: `/tmp/ac-mobile-${colorScheme}-running.png` });
+        await page.screenshot({
+          path: `${process.env.OUT || os.tmpdir()}/ac-mobile-${colorScheme}-running.png`,
+        });
         await page.setViewportSize({ width, height: 360 });
         await page.fill(
           "#input",
@@ -308,7 +405,9 @@ try {
         await page.waitForFunction(
           () => !document.querySelector("#cbox")!.classList.contains("running"),
         );
-        await page.screenshot({ path: `/tmp/ac-mobile-${colorScheme}-idle.png` });
+        await page.screenshot({
+          path: `${process.env.OUT || os.tmpdir()}/ac-mobile-${colorScheme}-idle.png`,
+        });
       }
       assert.deepEqual(errors, []);
       console.log(

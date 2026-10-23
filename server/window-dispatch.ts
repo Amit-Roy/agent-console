@@ -15,6 +15,7 @@ import {
   githubRequest,
   PRIORITY_LABELS,
 } from "./github-triage.ts";
+import { fitTitle, MAX_TITLE } from "./providers/title.ts";
 import type { ProviderUsage, UsageWindow } from "./usage.ts";
 
 export { DIRECT_REPOS };
@@ -239,7 +240,6 @@ export function plan(input: {
   return out;
 }
 
-const MAX_THREAD_TITLE = 30; // same width the sidebar shows for auto titles (issue #11: Android)
 /** Short repo label for thread names: the name itself when short, else initials of a hyphenated name, else its first 10 characters. */
 export function topicOf(repo: string): string {
   const name = repo.split("/")[1] ?? repo;
@@ -252,22 +252,27 @@ export function topicOf(repo: string): string {
   return initials.length >= 2 && initials.length <= 6 ? initials : name.slice(0, 10);
 }
 
-/** Thread name: `<repo>:<issue#> <short desc>`, at most 30 characters. Created as a user-chosen title, so the auto-namer and later renames never touch it. */
+/** Thread name: `<repo>:<issue#> <short desc>`, at most 20 characters. Created as a user-chosen title, so the auto-namer and later renames never touch it. */
 export function threadTitle(issue: Pick<Issue, "repo" | "number" | "title">): string {
-  const prefix = `${topicOf(issue.repo)}:${issue.number} `;
-  const room = Math.max(8, MAX_THREAD_TITLE - prefix.length);
-  const words = issue.title
-    .replace(/^\s*(?:\[[^\]]*\]|\w+:)\s*/, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .split(" ")
-    .filter(Boolean);
-  let desc = "";
-  for (const w of words) {
-    if ((desc + " " + w).trim().length > room) break;
-    desc = (desc + " " + w).trim();
+  const text =
+    issue.title
+      .replace(/^\s*(?:\[[^\]]*\]|\w+:)\s*/, "")
+      .replace(/\s+/g, " ")
+      .trim() || "issue";
+  let topic = Array.from(topicOf(issue.repo))
+    .slice(0, Math.max(1, MAX_TITLE - String(issue.number).length - 7))
+    .join("");
+  // Reserve a short description in both budgets, even for wide repository names.
+  const sample = Array.from(text).slice(0, 5).join("").trimEnd();
+  let prefix = `${topic}:${issue.number} `;
+  while (
+    Array.from(topic).length > 1 &&
+    fitTitle({ prefix, text: sample }).title !== prefix + sample
+  ) {
+    topic = Array.from(topic).slice(0, -1).join("");
+    prefix = `${topic}:${issue.number} `;
   }
-  return `${prefix}${desc || words[0]?.slice(0, room) || "issue"}`;
+  return fitTitle({ prefix, text }).title;
 }
 
 export function issuePrompt(d: Decision, branch: string, base: string): string {

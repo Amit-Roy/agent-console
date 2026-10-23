@@ -224,7 +224,7 @@ assert.deepEqual(
   "unlabelled issues wait for triage",
 );
 
-// thread names: <repo>:<issue#> <short desc>, at most 30 characters (issue #11: Android width)
+// thread names: <repo>:<issue#> <short desc>, at most 20 characters (issue #11: Android width)
 assert.equal(topicOf("Amit-Roy/agent-console"), "ac");
 assert.equal(topicOf("o/brain"), "brain");
 assert.equal(topicOf("o/portfolio-lab"), "pl");
@@ -235,18 +235,38 @@ assert.equal(
     number: 10,
     title: "Identify unused reset windows",
   }),
-  "ac:10 Identify unused reset",
+  "ac:10 Identify",
 );
 assert.equal(
   threadTitle({ repo: "o/brain", number: 3, title: "[Bug] feat: " + "word ".repeat(20) }).length <=
-    30,
+    20,
   true,
 );
 assert.equal(
   threadTitle({ repo: "o/r", number: 7, title: "x".repeat(80) }),
-  "r:7 " + "x".repeat(26),
+  "r:7 " + "x".repeat(16),
 );
 assert.equal(threadTitle({ repo: "o/r", number: 7, title: "" }), "r:7 issue");
+
+// A long repository and issue prefix must still leave a bounded description.
+assert.equal(
+  threadTitle({ repo: "o/abcdefghij", number: 1234567, title: "Investigate mobile overflow" })
+    .length <= 20,
+  true,
+  "long prefix exceeds Android budget",
+);
+
+assert.equal(
+  threadTitle({ repo: "o/abcdefghij", number: Number.MAX_SAFE_INTEGER, title: "" }).length <= 20,
+  true,
+  "empty issue descriptions respect the remaining budget",
+);
+
+assert.match(
+  threadTitle({ repo: "o/資料検索表示修正開発管理", number: 1234567, title: "fix" }),
+  / fix$/,
+  "wide repository prefixes leave room for a feature",
+);
 
 // prompts: PRs everywhere except the local-apply repos; trivial always needs a reviewer
 const dec = (repo: string, effort: any): any => ({
@@ -381,7 +401,7 @@ assert.match(
     assert.ok(!fs.existsSync(privateWt.cwd));
     assert.ok(fs.existsSync(path.join(main, ".git")));
     assert.equal(g(res.cwd, "rev-parse", "--abbrev-ref", "HEAD"), res.branch);
-    assert.equal(made[0].title, "webapp:42 Fix the export");
+    assert.equal(made[0].title, "webapp:42 Fix the");
     assert.equal(made[0].cwd, res.cwd);
     assert.equal(made[0].provider, "claude");
     const hook = g(res.cwd, "config", "--get", "core.hooksPath");
