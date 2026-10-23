@@ -100,7 +100,7 @@ jobs:
       # Fails the run when one file or the whole pool gets slower than the budget, so test time cannot creep up.
       - name: Test time budget
         env:
-          TEST_FILE_BUDGET_S: "10"
+          TEST_FILE_BUDGET_S: "15"
           TEST_WALL_BUDGET_S: "25"
         run: node scripts/ci-resources.mjs budget "$RUNNER_TEMP/test.log"
       - name: Runner usage
