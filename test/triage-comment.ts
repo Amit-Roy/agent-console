@@ -4,6 +4,7 @@ import {
   METRIC_MAX,
   type MetricName,
 } from "../server/providers/triage-scorecard.ts";
+import { requestStructure } from "../server/providers/triage-structure.ts";
 import {
   renderTriageComment,
   safeTriageText,
@@ -249,13 +250,11 @@ assert.deepEqual(sparseStructure.flags, {
   hasFilePath: false,
   hasExpectedOutput: false,
   hasAcceptanceCheck: false,
-  inferredFromRepo: false,
 });
 assert.deepEqual(structuredStructure.flags, {
   hasFilePath: true,
   hasExpectedOutput: true,
   hasAcceptanceCheck: true,
-  inferredFromRepo: false,
 });
 assert.ok(sparseStructure.budget! > structuredStructure.budget!);
 assert.ok(sparseStructure.counterfactual!.budget < sparseStructure.budget!);
@@ -269,4 +268,105 @@ assert.ok(
 assert.ok(sparseVisible.includes("Recommended budget"));
 assert.ok(!/Add a .* → estimated budget/.test(structuredText));
 assert.ok(!/\bunknown\b/i.test(sparseVisible));
+// The model suggestion replaces the generic label, and a repository inference is marked in the comment.
+const advised = structuredClone(sparse);
+advised.scorecard.structure = {
+  ...sparseStructure,
+  flags: { ...sparseStructure.flags, hasExpectedOutput: true },
+  counterfactual: { ...sparseStructure.counterfactual!, suggestion: "Name the file to change." },
+  inferredFromRepo: true,
+};
+const advisedVisible = renderTriageComment(advised).split("<details>")[0];
+assert.ok(
+  /Name the file to change → estimated budget drops to \*\*[\d.]+[KM]?\*\* tokens/.test(
+    advisedVisible,
+  ),
+);
+assert.ok(!advisedVisible.includes("Add a file path"));
+assert.ok(
+  advisedVisible.includes("inferred from the repository description, not stated in the request."),
+);
+assert.ok(!sparseVisible.includes("inferred from the repository description"));
+
+// Regression: structure detection false positives (prose samples produce no match)
+const proseCases = [
+  "and/or",
+  "fix this and/or that",
+  "shows the output",
+  "the output is wrong",
+  "expectedly",
+  "outputting",
+];
+for (const c of proseCases) {
+  const flags = requestStructure(c);
+  assert.ok(!flags.hasFilePath, `Expected no file path for: "${c}"`);
+  assert.ok(!flags.hasExpectedOutput, `Expected no expected output for: "${c}"`);
+}
+
+// Regression: structure detection true positives (real paths and explicit expected behavior match)
+const pathCases = [
+  "./src/utils.ts",
+  "../src/file.ts",
+  "~/file.ts",
+  "server/queue.ts",
+  "config.yaml",
+];
+for (const c of pathCases) {
+  assert.ok(requestStructure(c).hasFilePath, `Expected file path for: "${c}"`);
+}
+
+const outputCases = [
+  "Expected: the job shows as done",
+  "Expected output: done",
+  "output: done",
+  "should show result",
+  "must return value",
+  "results in success",
+];
+for (const c of outputCases) {
+  assert.ok(requestStructure(c).hasExpectedOutput, `Expected expected output for: "${c}"`);
+}
+
+// Regression: summary ordering in visible section
+const orderingDecision = { ...derived, model: "pi/test" };
+orderingDecision.scorecard.pricing.estimator = "historical-baseline";
+orderingDecision.scorecard.pricing.validation = {
+  sampleCount: 34,
+  groupCount: 32,
+  hasLearnedComplexitySignal: false,
+  work: { mae: 1000 },
+  baselineWork: { mae: 2000 },
+  activeWork: { mae: 1000 },
+  activeCoverage: { work: { p80: 0.8, p95: 0.9 }, output: { p80: 0.7, p95: 0.85 } },
+};
+const orderingText = renderTriageComment(orderingDecision, "<!-- source:fixture -->");
+const orderingVisible = orderingText.split("<details>")[0];
+const lines = orderingVisible.split("\n").filter((l) => l.trim());
+let effortIdx = -1,
+  budgetIdx = -1,
+  costDriverIdx = -1,
+  bookIdx = -1;
+lines.forEach((l, i) => {
+  if (l.includes("**Eff:") && l.includes("· Pri:")) effortIdx = i;
+  if (l.includes("Recommended budget")) budgetIdx = i;
+  if (l.includes("Biggest cost driver")) costDriverIdx = i;
+  if (l === "### Book of work") bookIdx = i;
+});
+assert.ok(effortIdx >= 0, "Effort/priority section present");
+assert.ok(budgetIdx >= 0, "Budget section present");
+assert.ok(costDriverIdx >= 0, "Cost driver section present");
+assert.ok(bookIdx >= 0, "Book of work section present");
+assert.ok(effortIdx < budgetIdx, "Effort before budget");
+assert.ok(budgetIdx < costDriverIdx, "Budget before cost driver");
+assert.ok(costDriverIdx < bookIdx, "Cost driver before work steps");
+
+// Regression: no missing-item claim when all structure flags are true (structured case)
+assert.equal(structuredStructure.counterfactual, null, "Structured input has no counterfactual");
+assert.ok(
+  !structuredText.includes("Add a file path") &&
+    !structuredText.includes("Add the expected output") &&
+    !structuredText.includes("Add an acceptance check"),
+  "Structured input shows no missing-item claim",
+);
+
 console.log("triage-comment: pass");

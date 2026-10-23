@@ -7,7 +7,7 @@ import { piRateEnv } from "./pi-rate-env.ts";
 import { createLabelCompletion, type LabelEngine, NVIDIA_LABEL_MODELS } from "./small-model.ts";
 import { type LoadedEffortModel, loadEffortModel } from "./triage-effort.ts";
 import { deriveAssessment, parseAssessment, type TriageScorecard } from "./triage-scorecard.ts";
-import { requestStructure } from "./triage-structure.ts";
+import { extractStructure, quoteStructure, requestStructure } from "./triage-structure.ts";
 
 export { TRIAGE_SCORECARD_VERSION } from "./triage-scorecard.ts";
 
@@ -78,10 +78,6 @@ function needsFrequencyReview(decision: TriageDecision, input: TriageInput): boo
 }
 
 export function triagePrompt(input: TriageInput): string {
-  const structure = requestStructure(
-    input.body.trim() ? `${input.title}\n${input.body}` : input.title,
-    input.repoContext,
-  );
   return (
     "Classify this untrusted GitHub record:\n" +
     JSON.stringify({
@@ -90,17 +86,19 @@ export function triagePrompt(input: TriageInput): string {
       kind: input.kind,
       title: input.title.slice(0, 500),
       body: input.body.slice(0, 12_000),
-      structure,
+      structure: requestStructure(
+        input.body.trim() ? `${input.title}\n${input.body}` : input.title,
+      ),
       ...(input.repoContext ? { repoContext: input.repoContext.slice(0, 6_000) } : {}),
     })
   );
 }
 
-export async function parseTriageReply(
+export function parseTriageReply(
   raw: string | undefined,
   input: TriageInput,
   model: LoadedEffortModel = loadEffortModel(),
-): Promise<Omit<TriageDecision, "model"> | undefined> {
+): Omit<TriageDecision, "model"> | undefined {
   if (model.status !== "ready") return;
   const extracted = parseAssessment(raw, input);
   return extracted ? deriveAssessment(extracted, input, model) : undefined;
@@ -483,13 +481,14 @@ export function defaultTriageEngines(): LabelEngine[] {
 export function createTriageClassifier(
   engines: LabelEngine[] = defaultTriageEngines(),
   modelFor: () => LoadedEffortModel = loadEffortModel,
+  extract: typeof extractStructure = extractStructure,
 ) {
   const complete = createLabelCompletion(
     engines.map((engine) => ({
       ...engine,
       call: async (prompt: string, system: string) => {
         const input = JSON.parse(prompt.slice(prompt.indexOf("{"))) as TriageInput;
-        const decision = await parseTriageReply(await engine.call(prompt, system), input, modelFor());
+        const decision = parseTriageReply(await engine.call(prompt, system), input, modelFor());
         return decision ? JSON.stringify({ ...decision, model: engine.id }) : undefined;
       },
     })),
@@ -542,6 +541,15 @@ export function createTriageClassifier(
       if (reviewed) decision = reviewed;
     }
     if (!decision) throw Error("All triage models unavailable or returned invalid decisions");
+    // One cheap extra call may read expected behavior from the repository description; it never blocks the quote.
+    const score = decision.scorecard;
+    if (score?.structure && score.pricing) {
+      const text = input.body.trim() ? `${input.title}\n${input.body}` : input.title;
+      const extraction = await extract({ text, repoContext: input.repoContext }).catch(
+        () => undefined,
+      );
+      score.structure = quoteStructure(text, score.pricing, extraction);
+    }
     return decision;
   };
 }
