@@ -314,11 +314,34 @@ try {
     // --- the page --------------------------------------------------------------------------------------------------
     await page.goto(`${base}/automation`);
     await page.waitForSelector('[data-step="dispatcher"]');
-    ok("all fifteen steps are drawn", (await page.locator("[data-step]").count()) === 15);
     const inPipe = async (p: string) =>
       page
         .locator(`[data-pipeline="${p}"] [data-step]`)
         .evaluateAll((ns) => ns.map((n) => (n as HTMLElement).dataset.step));
+    const navIds = await page
+      .locator("[data-wf]")
+      .evaluateAll((ns) => ns.map((n) => (n as HTMLElement).dataset.wf));
+    ok(
+      "the left panel lists every workflow and the extra console view",
+      JSON.stringify(navIds) ===
+        JSON.stringify(["pr", "windows", "monitor", "cve", "runtime", "scans", "deadman", "other"]),
+      JSON.stringify(navIds),
+    );
+    ok(
+      "one workflow is open at a time",
+      (await page.locator("[data-pipeline]").count()) === 1 &&
+        (await page.locator('[data-pipeline="pr"] [data-step]').count()) === 11,
+    );
+    ok("the New workflow button is in the panel", await page.locator("#new-workflow").isVisible());
+    const openWf = async (id: string) => {
+      await page.click(`[data-wf="${id}"]`);
+      await page.waitForSelector(`[data-pipeline="${id}"] [data-step]`);
+      ok(
+        `${id}: only this workflow is drawn`,
+        (await page.locator("[data-pipeline]").count()) === 1 &&
+          (await page.getAttribute(`[data-wf="${id}"]`, "aria-current")) === "page",
+      );
+    };
     ok(
       "PR workflow: issue to labels, labels to PR, premium review and merge",
       JSON.stringify(await inPipe("pr")) ===
@@ -343,14 +366,32 @@ try {
         .map((t) => t.toLowerCase())
         .join("|") === "1. issue to labels|2. labels to pull request|3. premium review and merge",
     );
+    await openWf("windows");
     ok(
       "window opener is its own workflow",
       JSON.stringify(await inPipe("windows")) === JSON.stringify(["opener", "usage"]),
     );
+    await openWf("monitor");
     ok(
       "workspace monitor is its own workflow",
       JSON.stringify(await inPipe("monitor")) === JSON.stringify(["monitor", "escalate"]),
     );
+    // security workflows draw their real architecture, not one summary row
+    for (const [id, steps] of [
+      ["cve", ["opencve", "receiver", "tool_watch", "tool_patch", "digest", "push"]],
+      ["runtime", ["falco", "falco_queue", "transport", "push"]],
+      ["scans", ["scan", "osv_check", "report", "transport", "push"]],
+      ["deadman", ["heartbeat", "status_check", "transport", "push"]],
+    ] as const) {
+      await openWf(id);
+      ok(
+        `${id}: architecture steps`,
+        JSON.stringify(await inPipe(id)) === JSON.stringify(steps),
+        JSON.stringify(await inPipe(id)),
+      );
+    }
+    await page.click('[data-wf="pr"]');
+    await page.waitForSelector('[data-pipeline="pr"] [data-step]');
     ok(
       "review and redo loop",
       (await page.locator('[data-pipeline="pr"] .link.loop[data-to="redo"]').count()) === 1,
@@ -374,11 +415,17 @@ try {
     );
     ok(
       "each workflow lists its own triggers",
-      (await page.locator('[data-pipeline="pr"] .ptrig').innerText()).includes("GitHub webhook") &&
-        (await page.locator('[data-pipeline="windows"] .ptrig').innerText()).includes(
-          "Window opener tick",
-        ),
+      (await page.locator('[data-pipeline="pr"]').locator("..").innerText()).includes(
+        "GitHub webhook",
+      ),
     );
+    await openWf("windows");
+    ok(
+      "the window opener lists its own trigger",
+      (await page.locator("#am").innerText()).includes("Window opener tick"),
+    );
+    await page.click('[data-wf="pr"]');
+    await page.waitForSelector('[data-pipeline="pr"] [data-step]');
     const state = (s: string) => page.getAttribute(`[data-step="${s}"]`, "data-state");
     ok("worker is the active step", (await state("worker")) === "active");
     ok("review is active too", (await state("review")) === "active");
@@ -415,11 +462,15 @@ try {
     );
     await page.locator("#failures").scrollIntoViewIfNeeded();
     await page.screenshot({ path: `${OUT}/resolved-failures-${name}.png` });
+    await page.click('[data-wf="other"]');
+    await page.waitForSelector("#triggers");
     ok(
       "other triggers list what belongs to no workflow",
       (await page.locator("#triggers").innerText()).includes("Debug button") &&
         !(await page.locator("#triggers").innerText()).includes("GitHub webhook"),
     );
+    await page.click('[data-wf="pr"]');
+    await page.waitForSelector("#hooks");
     ok(
       "git hooks list the worktree and the branch it protects",
       /r-issue-5/.test(await page.locator("#hooks").innerText()) &&
@@ -478,6 +529,46 @@ try {
       "Debug opens a thread",
       /#thread=[0-9a-f-]{36}/.test(page.url()),
       page.url() + " " + errors.join("|"),
+    );
+    // New workflow: the console's new-thread dialog, titled for a workflow, with the brief ready to edit
+    await page.goto(`${base}/automation#pr`);
+    await page.waitForSelector("#new-workflow");
+    await page.click("#new-workflow");
+    await page.waitForURL(/new=workflow/, { timeout: 15_000 });
+    await page.waitForSelector("#dlg[open]");
+    ok(
+      "New workflow opens the new-thread dialog",
+      (await page.locator("#dlg-title").innerText()) === "New workflow",
+    );
+    await page.click("#d-ok");
+    await page.waitForFunction(
+      () => (document.querySelector("#input")?.textContent || "").includes("new workflow"),
+      null,
+      { timeout: 20_000 },
+    );
+    ok(
+      "the workflow brief is in the composer, unsent",
+      (await page.locator("#input").innerText()).includes("3,000 messages per month"),
+    );
+    // leave no thread behind for the next viewport: the shared server keeps it otherwise
+    await page.evaluate(
+      () =>
+        new Promise<void>((resolve) => {
+          const id = new URLSearchParams(location.hash.slice(1)).get("thread");
+          const socket = new WebSocket(
+            `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`,
+          );
+          const done = () => {
+            socket.close();
+            resolve();
+          };
+          socket.onopen = () => socket.send(JSON.stringify({ t: "delete", thread: id }));
+          socket.onmessage = (event) => {
+            const message = JSON.parse(event.data);
+            if (message.t === "removed" && message.thread === id) done();
+          };
+          setTimeout(done, 5000);
+        }),
     );
     await page.waitForSelector("#lane-auto", { state: "attached" });
     ok(
