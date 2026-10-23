@@ -21,6 +21,8 @@ Open the URL, sign in, create a thread. You're running.
 
 **Agents.** Claude Code, Pi (any model Pi supports: OpenRouter, OpenAI, Google, local), Codex. Pick one per thread; switch by creating a new thread.
 
+**Pi subagents.** Pi can delegate independent tasks in parallel with `subagent({ description, prompt, model? })`. Each child starts with a fresh context, the shared Console instructions, and the parent's working directory and thinking level. Omit `model` to inherit the parent model, or select an authenticated `provider/model` ID. Plan children have only `read`, `grep`, `find`, and `ls`; other children can edit files, so assign separate files when delegating parallel edits. Start, progress, results, and token usage appear in the parent conversation. Stopping the parent cancels its active subagent calls.
+
 **Threads.** Each thread is its own resumable agent session. Streaming output, markdown, tool cards with diffs. Per-thread model and permission mode: plan / accept edits / bypass. Bypass is opt-in and confirmed.
 
 **Composer.**
