@@ -84,6 +84,7 @@ export function createReviewer(deps: ReviewDeps) {
   const ev = deps.events;
   const claimed = new Set<string>(); // a review is starting or has started for this worker
   const reported = new Set<string>(); // events already written once per worker (no PR, PR found, deferred...)
+  const reconciling = new Set<string>();
   const judging = new Set<string>(); // a reviewer's end is being judged: the sweep must not judge it twice
   const once = (key: string, f: () => void) => {
     if (!reported.has(key)) {
@@ -563,6 +564,7 @@ export function createReviewer(deps: ReviewDeps) {
             kind: "fail",
             ref: run.key,
             msg: `${name} checkout is not at the merge commit yet`,
+            data: { pr: run.pr, ...(sha ? { sha } : {}) },
           });
         return;
       }
@@ -672,9 +674,57 @@ export function createReviewer(deps: ReviewDeps) {
     });
   }
 
+  /** Recheck pending local applies, including historical failures recorded before merge metadata was kept. */
+  async function reconcileApplies(threads: ThreadLike[]) {
+    if (!ev) return;
+    const latest = new Map<string, ReturnType<EventLog["all"]>[number]>();
+    for (const e of ev.all())
+      if (e.step === "apply" && e.ref && (e.kind === "ok" || e.kind === "fail"))
+        latest.set(e.ref, e);
+    for (const [ref, failure] of latest) {
+      if (failure.kind !== "fail" || reconciling.has(ref)) continue;
+      const candidates = threads.filter((t) => {
+        const r = t.issueRun;
+        return (
+          r?.key === ref &&
+          r.role === "review" &&
+          r.outcome === "merged" &&
+          r.pr &&
+          (failure.data?.pr === undefined || failure.data.pr === r.pr)
+        );
+      });
+      if (!candidates.length || new Set(candidates.map((t) => t.issueRun!.pr)).size !== 1) continue;
+      const run = candidates[0].issueRun!;
+      const name = run.repo.split("/")[1];
+      if (!DIRECT_REPOS.includes(name)) continue;
+      reconciling.add(ref);
+      try {
+        let sha = typeof failure.data?.sha === "string" ? failure.data.sha : "";
+        if (!sha) {
+          const pr = await github("GET", `repos/${run.repo}/pulls/${run.pr}`);
+          if (!pr?.merged) continue;
+          sha = String(pr.merge_commit_sha ?? "");
+        }
+        if (!sha || !(await applied(name, sha))) continue;
+        ev.record({
+          step: "apply",
+          kind: "ok",
+          ref,
+          msg: `${name} checkout contains the merge commit`,
+          data: { pr: run.pr, sha },
+        });
+      } catch {
+        // A failed read leaves the original failure unresolved for the next sweep.
+      } finally {
+        reconciling.delete(ref);
+      }
+    }
+  }
+
   /** Catch up after a restart or a missed turn end: idle workers without a review (deferred, PR opened late, errored turn),
    *  and reviewers whose end was never judged. */
   async function sweep(threads: ThreadLike[]) {
+    await reconcileApplies(threads);
     for (const t of threads) {
       const run = t.issueRun;
       if (

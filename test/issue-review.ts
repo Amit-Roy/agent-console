@@ -97,6 +97,7 @@ try {
     realRoute({ role: "review", effort, usage: {}, active: [], now });
   const logs: string[] = [];
   const applied: any[] = [];
+  const appliedLater = new Set<string>();
   const rv = createReviewer({
     git: run,
     github: gh as any,
@@ -107,7 +108,7 @@ try {
     route: (e: any) => routing(e),
     applied: (name: string, sha: string) => {
       applied.push([name, sha]);
-      return sha === "good";
+      return sha === "good" || appliedLater.has(sha);
     },
     now: () => now,
   });
@@ -351,6 +352,26 @@ try {
     steps("apply").some((m) => m.startsWith("fail:") && /brain/.test(m)),
     "local checkout is not at the merge commit",
   );
+  const mergedBrain = {
+    ...reviewer("o/brain"),
+    archived: 1,
+    issueRun: { ...reviewer("o/brain").issueRun, outcome: "merged" },
+  };
+  const applyCount = () => ev.all().filter((e) => e.step === "apply").length;
+  const pendingCount = applyCount();
+  await rv.sweep([mergedBrain] as any);
+  assert.equal(applyCount(), pendingCount, "pending applies do not repeat failures");
+  appliedLater.add("bad");
+  await Promise.all([rv.sweep([mergedBrain] as any), rv.sweep([mergedBrain] as any)]);
+  assert.equal(applyCount(), pendingCount + 1, "concurrent sweeps record recovery only once");
+  assert.equal(ev.all().at(-1)?.kind, "ok");
+  await rv.sweep([mergedBrain] as any);
+  assert.equal(applyCount(), pendingCount + 1, "recovered applies are not checked again");
+
+  // Older failures have no stored SHA: the merged PR supplies it after a restart.
+  ev.record({ step: "apply", kind: "fail", ref: "o/brain#42", msg: "historical apply failure" });
+  await rv.sweep([mergedBrain] as any);
+  assert.equal(ev.all().at(-1)?.kind, "ok", "historical merged reviewers recover too");
   pull = { merged: false };
   rv.turnEnded(reviewer("o/webapp"), {});
   await tick();

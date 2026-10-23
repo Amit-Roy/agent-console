@@ -178,12 +178,37 @@ export function automationApi(deps: ApiDeps) {
     checkVersion(req.v);
     const limit = Math.min(100, Math.max(1, Math.floor(req.limit ?? 20)));
     const cfg = deps.config();
-    const failures: FailureView[] = deps.log
-      .all()
+    const events = deps.log.all();
+    const failures: FailureView[] = events
       .filter((e) => e.kind === "fail")
       .slice(-limit)
       .reverse()
-      .map((e) => ({ ts: e.ts, step: e.step, ...(e.ref ? { ref: e.ref } : {}), msg: e.msg ?? "" }));
+      .map((e) => {
+        const recovery = events.find((later) => {
+          if (later.seq <= e.seq) return false;
+          if (e.step === "escalate" || e.step === "monitor") {
+            return (
+              !!e.ref &&
+              later.ref === e.ref &&
+              later.step === "monitor" &&
+              later.data?.state === "resolved" &&
+              (!e.data?.incident || later.data?.incident === e.data.incident)
+            );
+          }
+          return (
+            later.kind === "ok" &&
+            later.step === e.step &&
+            (e.ref ? later.ref === e.ref : !!e.run && later.run === e.run)
+          );
+        });
+        return {
+          ts: e.ts,
+          step: e.step,
+          ...(e.ref ? { ref: e.ref } : {}),
+          msg: e.msg ?? "",
+          ...(recovery ? { resolvedAt: recovery.ts } : {}),
+        };
+      });
     return {
       v: VERSION,
       now: now(),
