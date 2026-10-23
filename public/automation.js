@@ -86,6 +86,23 @@ function stepNode(n) {
   return b;
 }
 
+const TOGGLES = { "dispatch-tick": "dispatcher", "opener-tick": "opener" };
+async function toggle(target, enabled, btn) {
+  btn.disabled = true;
+  try {
+    render(
+      await getJson("/api/automation/toggle", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ target, enabled }),
+      }),
+    );
+  } catch (e) {
+    alert(`Could not change automation: ${e.message}`);
+    btn.disabled = false;
+  }
+}
+
 // One panel per workflow; inside it the phases in order, each a chain of steps. A phase's loop (review and redo) is a box
 // with a caption; its steps get a two-way link. Each arrow shows its edge's condition.
 function buildPipeline(s, p) {
@@ -100,6 +117,16 @@ function buildPipeline(s, p) {
       li.dataset.trigger = t.id;
       li.title = t.detail;
       li.append(el("span", "k", t.kind), el("span", "", t.label), el("span", "w"));
+      const target = TOGGLES[t.id];
+      if (target) {
+        const sw = el("button", "tog", t.enabled ? "On" : "Off");
+        sw.type = "button";
+        sw.setAttribute("role", "switch");
+        sw.setAttribute("aria-checked", String(t.enabled));
+        sw.setAttribute("aria-label", `${t.label}: ${t.enabled ? "on" : "off"}`);
+        sw.onclick = () => toggle(target, !t.enabled, sw);
+        li.append(sw);
+      }
       ul.append(li);
     }
     sec.append(ul);
@@ -176,6 +203,15 @@ function updateFlow(s) {
   for (const t of s.triggers) {
     const w = document.querySelector(`[data-trigger="${t.id}"] .w`);
     if (w) w.textContent = t.enabled ? (t.lastAt ? when(t.lastAt, s.now) : "waiting") : "off";
+    const sw = document.querySelector(`[data-trigger="${t.id}"] .tog`);
+    if (sw) {
+      sw.textContent = t.enabled ? "On" : "Off";
+      sw.setAttribute("aria-checked", String(t.enabled));
+      sw.setAttribute("aria-label", `${t.label}: ${t.enabled ? "on" : "off"}`);
+      sw.disabled = false;
+      sw.onclick = () => toggle(TOGGLES[t.id], !t.enabled, sw);
+    }
+    document.querySelector(`[data-trigger="${t.id}"]`)?.classList.toggle("off", !t.enabled);
   }
 }
 
