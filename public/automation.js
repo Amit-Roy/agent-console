@@ -368,6 +368,27 @@ function buildNav() {
     nav.append(box);
   }
 }
+function buildPicker() {
+  const sel = $("wf-select");
+  if (!sel || sel.childElementCount) return;
+  for (const [group, title] of [
+    ["workflow", "Workflows"],
+    ["security", "Security"],
+    ["console", "Console"],
+  ]) {
+    const items = navItems().filter((i) => i.group === group);
+    if (!items.length) continue;
+    const box = el("optgroup");
+    box.label = title;
+    for (const item of items) {
+      const o = el("option", "", item.label);
+      o.value = item.id;
+      box.append(o);
+    }
+    sel.append(box);
+  }
+  sel.onchange = () => select(sel.value);
+}
 function updateNav() {
   for (const b of document.querySelectorAll("[data-wf]")) {
     const id = b.dataset.wf;
@@ -378,6 +399,20 @@ function updateNav() {
   }
   const hidden = document.querySelectorAll("[data-wf]").length <= 1;
   $("wf-nav").hidden = hidden;
+  const sel = $("wf-select");
+  if (sel) {
+    for (const o of sel.options) {
+      const item = navItems().find((i) => i.id === o.value);
+      const status = pipelineStatus(o.value);
+      o.textContent = item && status ? `${item.label} · ${status}` : (item?.label ?? o.textContent);
+    }
+    sel.value = selected;
+    const p = $("wf-picker");
+    p.hidden = hidden;
+    p.dataset.tone = statusTone(selected);
+    const item = navItems().find((i) => i.id === selected);
+    if (item) $("wf-picker-ic").replaceChildren(icon(item.icon));
+  }
 }
 
 function select(id) {
@@ -389,10 +424,6 @@ function select(id) {
   const hash = `#${id}`;
   if (location.hash !== hash) history.replaceState(null, "", hash);
   render(snap);
-  if (matchMedia("(max-width: 760px)").matches)
-    document
-      .querySelector(`[data-wf="${id}"]`)
-      ?.scrollIntoView({ block: "nearest", inline: "center" });
   $("am").focus({ preventScroll: true });
 }
 
@@ -736,6 +767,7 @@ function render(s) {
     modeChip("Opener", s.config.opener),
   );
   buildNav();
+  buildPicker();
   if (detailFor !== selected) buildDetail(s);
   else {
     const p = pipelineOf(selected);

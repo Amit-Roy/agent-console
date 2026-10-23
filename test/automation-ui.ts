@@ -333,13 +333,24 @@ try {
         (await page.locator('[data-pipeline="pr"] [data-step]').count()) === 11,
     );
     ok("the New workflow button is in the panel", await page.locator("#new-workflow").isVisible());
+    const usingPicker = name.startsWith("phone");
+    ok(
+      "workflow switcher matches the viewport",
+      usingPicker
+        ? (await page.locator("#wf-select").isVisible()) &&
+            !(await page.locator("#wf-nav").isVisible())
+        : (await page.locator("#wf-nav").isVisible()) &&
+            !(await page.locator("#wf-select").isVisible()),
+    );
     const openWf = async (id: string) => {
-      await page.click(`[data-wf="${id}"]`);
-      await page.waitForSelector(`[data-pipeline="${id}"] [data-step]`);
+      if (usingPicker) await page.selectOption("#wf-select", id);
+      else await page.click(`[data-wf="${id}"]`);
+      if (id !== "other") await page.waitForSelector(`[data-pipeline="${id}"] [data-step]`);
       ok(
         `${id}: only this workflow is drawn`,
-        (await page.locator("[data-pipeline]").count()) === 1 &&
-          (await page.getAttribute(`[data-wf="${id}"]`, "aria-current")) === "page",
+        (await page.getAttribute(`[data-wf="${id}"]`, "aria-current")) === "page" &&
+          (!usingPicker || (await page.inputValue("#wf-select")) === id) &&
+          (id === "other" || (await page.locator("[data-pipeline]").count()) === 1),
       );
     };
     ok(
@@ -390,8 +401,7 @@ try {
         JSON.stringify(await inPipe(id)),
       );
     }
-    await page.click('[data-wf="pr"]');
-    await page.waitForSelector('[data-pipeline="pr"] [data-step]');
+    await openWf("pr");
     ok(
       "review and redo loop",
       (await page.locator('[data-pipeline="pr"] .link.loop[data-to="redo"]').count()) === 1,
@@ -424,8 +434,7 @@ try {
       "the window opener lists its own trigger",
       (await page.locator("#am").innerText()).includes("Window opener tick"),
     );
-    await page.click('[data-wf="pr"]');
-    await page.waitForSelector('[data-pipeline="pr"] [data-step]');
+    await openWf("pr");
     const state = (s: string) => page.getAttribute(`[data-step="${s}"]`, "data-state");
     ok("worker is the active step", (await state("worker")) === "active");
     ok("review is active too", (await state("review")) === "active");
@@ -462,14 +471,14 @@ try {
     );
     await page.locator("#failures").scrollIntoViewIfNeeded();
     await page.screenshot({ path: `${OUT}/resolved-failures-${name}.png` });
-    await page.click('[data-wf="other"]');
+    await openWf("other");
     await page.waitForSelector("#triggers");
     ok(
       "other triggers list what belongs to no workflow",
       (await page.locator("#triggers").innerText()).includes("Debug button") &&
         !(await page.locator("#triggers").innerText()).includes("GitHub webhook"),
     );
-    await page.click('[data-wf="pr"]');
+    await openWf("pr");
     await page.waitForSelector("#hooks");
     ok(
       "git hooks list the worktree and the branch it protects",
