@@ -138,6 +138,7 @@ if (process.env.AGENT_CONSOLE_MOCK !== "1") {
     start: d => startIssue(d, { create: o => threads.create(o), send: (id, text) => threads.send(id, text) }),
   });
   const reviewer = createReviewer({
+    threads: () => threads.list(), dataDir: DATA_DIR,
     canReview: t => !assignedOwner(t),
     canResume: t => {
       const live = threads.get(t.id);

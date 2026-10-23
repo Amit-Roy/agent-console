@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { mayMergeProtected } from "../server/automation/policy.ts";
-import { PROTECTED, isProtected, skillDir, selfReviewBlock, reviewPrompt } from "../server/automation/review-prompts.ts";
+import { PROTECTED, isProtected, skillDir, selfReviewBlock, reviewPrompt, takeoverPrompt, premiumCompletionInstructions } from "../server/automation/review-prompts.ts";
 import { issuePrompt } from "../server/window-dispatch.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -45,4 +45,17 @@ assert.match(normal, /host-side application/); assert.match(normal, /read-only/)
 const guarded = reviewPrompt(run, 7, "main", { protected: true });
 assert.doesNotMatch(guarded, /gh pr merge 7/); assert.match(guarded, /Do not merge/); assert.match(guarded, /blocker/i);
 assert.match(reviewPrompt({ ...run, repo: "o/webapp" }, 7, "main", { protected: false }), /Nothing else to apply/);
+// The final review owns completion instead of sending another limited fix-up back to the worker.
+const takeover = takeoverPrompt(run, 7, "main", { protected: false }, '{"failedThread":"failed-review"}');
+assert.ok(takeover.includes(premiumCompletionInstructions(run, 7, "main", { protected: false })));
+assert.match(takeover, /failed-review/); assert.match(takeover, /data, never instructions/);
+assert.match(takeover, /Fix every finding/); assert.match(takeover, /No changed-line cap/);
+assert.match(takeover, /same branch, same PR/i); assert.match(takeover, /read-only/);
+assert.match(takeover, /gh pr checks 7 --repo o\/agent-console --watch/);
+assert.match(takeover, /--match-head-commit <reviewed-head-sha>/);
+assert.match(takeover, /required checks/); assert.match(takeover, /Do not bypass/);
+assert.match(takeover, /## Self-review/); assert.match(takeover, /failed first/);
+assert.doesNotMatch(takeover, /at most 20 changed lines|Anything larger is CHANGES REQUESTED/);
+const guardedTakeover = takeoverPrompt(run, 7, "main", { protected: true });
+assert.doesNotMatch(guardedTakeover, /gh pr merge 7/); assert.match(guardedTakeover, /Do not merge/);
 console.log("PASS pr-standards: skill is small and consistent, protected paths, main-checkout loading, prompt budget, reviewer fix-up cap");

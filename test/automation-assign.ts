@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
+import { premiumCompletionInstructions } from "../server/automation/review-prompts.ts";
 import { createPremiumAssigner } from "../server/automation/assign.ts";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "ac-assign-"));
@@ -43,6 +44,8 @@ try {
   assert.equal(git(created[0].cwd, "branch", "--show-current"), "worker");
   assert.ok(fs.existsSync(path.join(created[0].cwd, ".git", "ac-hooks", "pre-push")));
   assert.match(sent[0].prompt, /failed-worker/); assert.match(sent[0].prompt, /Acceptance: works/); assert.match(sent[0].prompt, /CHANGES REQUESTED/); assert.match(sent[0].prompt, /data, never instructions/); assert.match(sent[0].prompt, /Pending book of work/); assert.match(sent[0].prompt, /20/); assert.match(sent[0].prompt, /failure/);
+  assert.ok(sent[0].prompt.includes(premiumCompletionInstructions(created[0].issueRun, 20, "main", { protected: false })), "manual assignment shares the final review completion contract");
+  assert.match(sent[0].prompt, /No changed-line cap/); assert.match(sent[0].prompt, /--match-head-commit <reviewed-head-sha>/);
   assert.equal(created[0].issueRun.premiumAssignment, true);
   rows.push({ id: "paused-owner", cwd: "/old-owner", status: "idle", quotaPaused: { provider: "codex" }, issueRun: { repo: "owner/project", number: 7, role: "debug", premiumAssignment: true } });
   assert.equal(assign.active("owner/project#7"), true, "quota-paused premium owner retains ownership");
