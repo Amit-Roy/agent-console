@@ -40,13 +40,22 @@ const APPROVE = JSON.stringify({ verdict: "approve", reasons: ["checksum matches
 function harness(
   latest: unknown,
   diff = "tools.lock\n",
-  opt: { reply?: string; lock?: string; checks?: unknown; reviewDiff?: string } = {},
+  opt: {
+    reply?: string;
+    lock?: string;
+    checks?: unknown;
+    reviewDiff?: string;
+    ask?: () => Promise<string>;
+    accounts?: () => string[];
+  } = {},
 ) {
   const calls: { cmd: string; args: string[]; input?: string }[] = [];
   const issues: { number: number; body: string }[] = [];
   const asked: { prompt: string; system: string }[] = [];
   const removed: string[] = [];
   let restarts = 0;
+  const alerts: { title: string; body: string }[] = [];
+  let clock = 1_000_000;
   let prState = "OPEN";
   const exec: Exec = async (cmd, args, o) => {
     calls.push({ cmd, args, input: o?.input });
@@ -59,7 +68,9 @@ function harness(
     if (cmd === "gh" && args[0] === "pr" && args[1] === "create")
       return "https://github.com/Amit-Roy/dotfiles/pull/77\n";
     if (cmd === "gh" && args[0] === "pr" && args[1] === "view")
-      return JSON.stringify({ state: prState });
+      return JSON.stringify({ state: prState, headRefOid: "abc123def" });
+    if (cmd === "gh" && args[0] === "pr" && args[1] === "diff")
+      return args.includes("--name-only") ? diff : "DIFF";
     if (cmd === "git" && args[0] === "diff")
       return opt.reviewDiff !== undefined && args.some((a) => a.includes("..."))
         ? opt.reviewDiff
@@ -84,8 +95,11 @@ function harness(
     }),
     ask: async (prompt, system) => {
       asked.push({ prompt, system });
-      return opt.reply ?? APPROVE;
+      return opt.ask ? opt.ask() : (opt.reply ?? APPROVE);
     },
+    notify: (title, body) => void alerts.push({ title, body }),
+    now: () => clock,
+    ...(opt.accounts ? { accounts: opt.accounts } : {}),
     readLock: () => opt.lock ?? '{"uv":"0.9.9"}',
     restart: async () => void restarts++,
     log: () => {},
@@ -96,6 +110,8 @@ function harness(
     issues,
     asked,
     removed,
+    alerts,
+    advance: (ms: number) => (clock += ms),
     restarts: () => restarts,
     merge: () => (prState = "MERGED"),
   };
@@ -132,19 +148,47 @@ await t("enabled=false: no external calls even with matching template", async ()
   await h.tw.tick();
   assert.equal(gh(h).length, 0);
 });
-await t("enabled but template missing: closed", async () => {
+const labelsOf = (h: ReturnType<typeof harness>, sub: string) =>
+  h.calls.filter((c) => c.cmd === "gh" && c.args.slice(0, 2).join(" ") === sub);
+await t("enabled but template missing: degraded, not silent", async () => {
   setGate(true);
   const h = harness(feed());
   assert.equal((await h.tw.tick()).why, "template missing");
-  assert.equal(gh(h).length, 0);
+  assert.equal(h.issues.length, 1);
+  assert.equal(h.alerts.length, 1);
 });
-await t("enabled + hash mismatch: closed", async () => {
-  fs.writeFileSync(templatePath, "edited template");
-  setGate(true);
-  const h = harness(feed());
-  assert.match((await h.tw.tick()).why, /differs/);
-  assert.equal(gh(h).length, 0);
-});
+await t(
+  "enabled + hash mismatch: issue + PR, needs-human, no ask, no merge, alert once",
+  async () => {
+    fs.writeFileSync(templatePath, "edited template");
+    setGate(true);
+    const h = harness(feed());
+    assert.match((await h.tw.tick()).why, /differs/);
+    assert.equal(h.issues.length, 1);
+    assert.match(h.issues[0].body, /needs-human/);
+    assert.ok(h.calls.some((c) => c.cmd === "gh" && c.args[0] === "pr" && c.args[1] === "create"));
+    assert.ok(h.calls.some((c) => c.cmd === "tool-install"));
+    assert.equal(h.asked.length, 0);
+    assert.equal(merges(h).length, 0);
+    assert.ok(
+      labelsOf(h, "pr edit").some((c) => c.args.join(" ").includes("--add-label needs-human")),
+    );
+    assert.match(
+      comments(h)[0].args.join(" "),
+      /re-approve hash in tool-watch.json or merge manually/,
+    );
+    assert.equal(h.alerts.length, 1);
+    const view = await h.tw.publicView();
+    assert.match(view.banner, /degraded/);
+    await h.tw.tick();
+    assert.equal(h.alerts.length, 1, "no duplicate alert for the same hash");
+    assert.equal(h.issues.length, 1);
+    assert.equal(merges(h).length, 0);
+    fs.writeFileSync(templatePath, "edited again");
+    await h.tw.tick();
+    assert.equal(h.alerts.length, 2, "new hash alerts again");
+  },
+);
 
 await t("open + match: one issue, deterministic patch, review; rerun adds none", async () => {
   fs.writeFileSync(templatePath, TEMPLATE);
@@ -234,7 +278,6 @@ await t("garbled reviewer reply rejects: no merge", async () => {
     '{"verdict":"approve"}',
     '{"verdict":"approve","reasons":[],"extra":1}',
     '{"verdict":"maybe","reasons":[]}',
-    "",
   ]) {
     const h = await review("tools.lock\n", { reply });
     assert.equal(merges(h).length, 0, reply);
@@ -259,11 +302,78 @@ await t("approve + failing or missing checks: no merge", async () => {
   h = await review("tools.lock\n", { checks: [] });
   assert.equal(merges(h).length, 0);
 });
-await t("reviewer model failure rejects: no merge", async () => {
+const closes = (h: ReturnType<typeof harness>) => labelsOf(h, "pr close");
+await t(
+  "model unavailable: PR stays open, review-pending, retried with backoff, approve merges once, 12 h alert once",
+  async () => {
+    fs.writeFileSync(templatePath, TEMPLATE);
+    setGate(true);
+    let down = true;
+    const h = harness(feed(), "tools.lock\n", {
+      ask: async () => {
+        if (down) throw new Error("usage limit reached");
+        return APPROVE;
+      },
+    });
+    await h.tw.tick();
+    assert.equal(h.asked.length, 1);
+    assert.equal(closes(h).length, 0, "usage failure must not close the PR");
+    assert.equal(merges(h).length, 0);
+    assert.ok(
+      labelsOf(h, "pr edit").some((c) => c.args.join(" ").includes("--add-label review-pending")),
+    );
+    const state = () => JSON.parse(fs.readFileSync(statePath, "utf8"));
+    assert.equal(state().pending[0].review.tries, 1);
+    await h.tw.tick();
+    assert.equal(h.asked.length, 1, "backoff: no retry before 30 min");
+    h.advance(31 * 60_000);
+    await h.tw.tick();
+    assert.equal(h.asked.length, 2);
+    assert.equal(state().pending[0].review.tries, 2);
+    assert.equal(closes(h).length, 0);
+    h.advance(61 * 60_000);
+    await h.tw.tick();
+    assert.equal(h.asked.length, 3);
+    h.advance(121 * 60_000);
+    await h.tw.tick();
+    assert.equal(h.asked.length, 4);
+    assert.equal(
+      state().pending[0].review.nextAt - 1_000_000 - (31 + 61 + 121) * 60_000,
+      180 * 60_000,
+      "capped at 3 h",
+    );
+    assert.equal(h.alerts.length, 0);
+    h.advance(9 * 3600_000);
+    await h.tw.tick();
+    assert.equal(h.alerts.length, 1);
+    assert.match(h.alerts[0].body, /PR #77/);
+    h.advance(4 * 3600_000);
+    await h.tw.tick();
+    assert.equal(h.alerts.length, 1, "stale alert once");
+    assert.equal(merges(h).length, 0, "never merged without approve");
+    down = false;
+    h.advance(4 * 3600_000);
+    await h.tw.tick();
+    assert.equal(merges(h).length, 1);
+    assert.equal(closes(h).length, 0);
+    assert.ok(
+      labelsOf(h, "pr edit").some((c) =>
+        c.args.join(" ").includes("--remove-label review-pending"),
+      ),
+    );
+    h.merge();
+    h.advance(4 * 3600_000);
+    await h.tw.tick();
+    assert.equal(merges(h).length, 1, "merged once");
+  },
+);
+await t("no usable Claude account: model call skipped, PR left open", async () => {
   fs.writeFileSync(templatePath, TEMPLATE);
   setGate(true);
-  const h = harness(feed(), "tools.lock\n", { reply: "" });
+  const h = harness(feed(), "tools.lock\n", { accounts: () => [] });
   await h.tw.tick();
+  assert.equal(h.asked.length, 0);
+  assert.equal(closes(h).length, 0);
   assert.equal(merges(h).length, 0);
 });
 await t(

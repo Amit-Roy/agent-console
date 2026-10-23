@@ -806,7 +806,10 @@ function twRows(d) {
 function renderToolWatch(d) {
   const box = $("toolwatch");
   const rows = d ? twRows(d) : [];
-  box.hidden = !rows.length;
+  const banner = $("tw-banner");
+  banner.textContent = d?.banner || "";
+  banner.hidden = !d?.banner;
+  box.hidden = !rows.length && !d?.banner;
   if (box.hidden) return;
   $("tw-count").textContent = String(rows.length);
   const body = $("tw-rows");

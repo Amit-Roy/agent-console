@@ -64,7 +64,7 @@ import { createWorkspaceMonitor } from "./monitor-wire.ts";
 import { Notifications } from "./notifications.ts";
 import { researchToolText, runPiResearch } from "./pi-subagent-worker.ts";
 import { promptOverhead } from "./prompt-overhead.ts";
-import { claudeAccounts } from "./providers/claude-accounts.ts";
+import { claudeAccounts, claudeUsageKey } from "./providers/claude-accounts.ts";
 import { providerInfo, refreshPiModels } from "./providers/index.ts";
 import { describe, Schedules } from "./schedules.ts";
 import { mountSecurity } from "./security.ts";
@@ -1047,7 +1047,16 @@ app.get("/api/host/du", hostDu);
 app.post("/api/host/du/rescan", sameOrigin, hostDuRescan);
 app.post("/api/host/processes/:pid/kill", express.json({ limit: "1kb" }), sameOrigin, hostKill);
 // Tool-watch bridge: VPS tool versions -> dotfiles issues, deterministic tools.lock PR, no-tools Claude verdict, server-side merge. Gated by tool-watch.json.
-const toolWatch = createToolWatch();
+const toolWatch = createToolWatch({
+  // Same web push the thread notices use; no thread behind it, so the tap just opens the console.
+  notify: (title, body) =>
+    notifications?.notify({ kind: "failed", thread: "tool-watch", title: `${title}: ${body}` }),
+  // Signed-in Claude accounts that still have window left; none = retry later instead of failing the review.
+  accounts: () =>
+    claudeAccounts()
+      .filter((a) => a.ready && !usage.exhausted(claudeUsageKey(a.id)))
+      .map((a) => a.id),
+});
 if (process.env.AGENT_CONSOLE_MOCK !== "1") toolWatch.start();
 // Security scan results from the VPS host (read over SSH; "Run scan" is same-origin only).
 mountSecurity(app, sameOrigin, toolWatch);
