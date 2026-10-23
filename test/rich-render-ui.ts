@@ -49,6 +49,10 @@ fs.writeFileSync(path.join(data, 'threads.json'), JSON.stringify([rich, plain]))
 fs.writeFileSync(path.join(data, 'commands.json'), '{}');
 const log = (id: string, text: string) => fs.writeFileSync(path.join(data, 'logs', `${id}.jsonl`), JSON.stringify({type: 'assistant', message: {role: 'assistant', content: [{type: 'text', text}]}}) + '\n');
 log(rich.id, message);
+fs.appendFileSync(path.join(data, 'logs', `${rich.id}.jsonl`), [
+  {type: 'assistant', message: {role: 'assistant', content: [{type: 'tool_use', id: 'read-png', name: 'Read', input: {file_path: path.join(cwd, 'shot.png')}}, {type: 'tool_use', id: 'read-ts', name: 'Read', input: {file_path: path.join(cwd, 'sample.ts')}}]}},
+  {type: 'user', message: {role: 'user', content: [{type: 'tool_result', tool_use_id: 'read-png', content: [{type: 'image', source: {type: 'base64', media_type: 'image/png', data: png.toString('base64')}}]}, {type: 'tool_result', tool_use_id: 'read-ts', content: 'export const sample = 1;'}]}},
+].map(e => JSON.stringify(e) + '\n').join(''));
 log(plain.id, 'Just text, no chart here.');
 process.env.AGENT_CONSOLE_DATA = data;
 const {makeToken} = await import('../server/auth.ts');
@@ -119,6 +123,20 @@ try {
   await page.keyboard.press('Escape');
   await page.locator('#file-viewer[open]').waitFor({state: 'hidden'});
   pass('click-to-zoom opens the shared viewer');
+
+  // ---- Read tool card previews the image it read (issue #14)
+  const readPng = chat.locator('details.card', {hasText: 'shot.png'}).first();
+  await readPng.locator('summary').click();
+  const preview = readPng.locator('.body a.md-img img');
+  await preview.waitFor({timeout: 5000});
+  await page.waitForFunction(() => { const i = document.querySelector<HTMLImageElement>('#chat details.card[open] .body a.md-img img'); return !!i && i.complete && i.naturalWidth === 640; });
+  assert.match((await preview.getAttribute('src'))!, /^\/api\/file-image\?/);
+  const readTs = chat.locator('details.card', {hasText: 'sample.ts'}).first();
+  await readTs.locator('summary').click();
+  assert.equal(await readTs.locator('.body img').count(), 0, 'a text file read gets no preview');
+  await readPng.scrollIntoViewIfNeeded();
+  await shot(page, 'read-card-preview.png');
+  pass('Read card of a PNG shows an inline preview; text file does not');
 
   // ---- video
   const video = chat.locator('video.md-video').first();
