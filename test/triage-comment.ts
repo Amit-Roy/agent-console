@@ -224,4 +224,47 @@ assert.ok(
   plainLanguageRendered.includes("http://docs.agent-console.dev/pricing-model"),
   "Expected a link to the pricing model documentation",
 );
+// Structure-first pricing: sparse requests reserve more budget and show what a missing item costs.
+const priced = (title: string, body: string) => {
+  const result = deriveAssessment(
+    {
+      metrics: Object.fromEntries(
+        Object.keys(METRIC_MAX).map((name) => [name, { value: 1, evidence: "Request" }]),
+      ) as typeof metrics,
+      work: [{ step: "Inspect the request.", check: "Result is recorded." }],
+    },
+    { title, body },
+    fixtureEffortModel,
+  )!;
+  return { ...result, model: "pi/test" };
+};
+const sparse = priced("fix this", "");
+const structured = priced(
+  "Fix retry in `server/queue.ts`",
+  "Update `server/queue.ts` so failed jobs retry once.\nExpected: the job shows as done in the list.\nAcceptance: `npm test` passes with a retry case.",
+);
+const sparseStructure = sparse.scorecard.structure!;
+const structuredStructure = structured.scorecard.structure!;
+assert.deepEqual(sparseStructure.flags, {
+  hasFilePath: false,
+  hasExpectedOutput: false,
+  hasAcceptanceCheck: false,
+});
+assert.deepEqual(structuredStructure.flags, {
+  hasFilePath: true,
+  hasExpectedOutput: true,
+  hasAcceptanceCheck: true,
+});
+assert.ok(sparseStructure.budget! > structuredStructure.budget!);
+assert.ok(sparseStructure.counterfactual!.budget < sparseStructure.budget!);
+assert.equal(structuredStructure.counterfactual, null);
+const sparseText = renderTriageComment(sparse);
+const structuredText = renderTriageComment(structured);
+const sparseVisible = sparseText.split("<details>")[0];
+assert.ok(
+  /Add a file path → estimated budget drops to \*\*[\d.]+[KM]?\*\* tokens/.test(sparseVisible),
+);
+assert.ok(sparseVisible.includes("Recommended budget"));
+assert.ok(!/Add a .* → estimated budget/.test(structuredText));
+assert.ok(!/\bunknown\b/i.test(sparseVisible));
 console.log("triage-comment: pass");

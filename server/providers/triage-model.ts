@@ -7,6 +7,7 @@ import { piRateEnv } from "./pi-rate-env.ts";
 import { createLabelCompletion, type LabelEngine, NVIDIA_LABEL_MODELS } from "./small-model.ts";
 import { type LoadedEffortModel, loadEffortModel } from "./triage-effort.ts";
 import { deriveAssessment, parseAssessment, type TriageScorecard } from "./triage-scorecard.ts";
+import { requestStructure } from "./triage-structure.ts";
 
 export { TRIAGE_SCORECARD_VERSION } from "./triage-scorecard.ts";
 
@@ -44,6 +45,7 @@ risk: 0 cosmetic only; 1 reversible functional change; 2 authentication, persist
 impact: 0 visual polish/speculative tuning; 1 minor convenience or ordinary feature; 2 removes repeated manual work; 3 directly blocks or enables shipping or restores broken essential workflow.
 urgency (stated timing only; code derives the final urgency and priority from impact, frequency, and this): 0 explicitly no deadline/no active incident; 1 explicit near-term deadline; 2 CONFIRMED CURRENT outage, data loss, or active security incident. A feature that PREVENTS incidents, a hypothetical failure, or future safeguard NEVER counts as an active incident. For value 2, the quote must include both the incident (outage/down/data loss/breach) and current occurrence (active/ongoing/currently/now/is down). Unsupported urgency is null.
 frequency: 0 explicitly one-off; 1 explicit occasional use; 2 explicitly repeated/daily/per-build/per-session problem. In frozen metrics leave frequency null unless the request states it; the planning pass may infer it from repo context.
+Metric evidence must be a verbatim quote; prefer concrete structure (file path, expected output, acceptance check) over guessed scope. The record carries computed "structure" flags. Name a missing file path, expected output, or acceptance check in the work steps only when its flag is false; never claim an item is missing when its flag is true.
 Propose 1–5 specific work steps, each with an observable acceptance check. These are proposed actions, not claims about unseen code. If scope is unclear, first step resolves named unknowns. Each step/check maximum 240 characters. No labels, token counts, or design opinions; code computes them from the metrics.`;
 
 /** A fixed local skill is injected explicitly; Pi's ambient skill discovery stays disabled. */
@@ -84,6 +86,9 @@ export function triagePrompt(input: TriageInput): string {
       kind: input.kind,
       title: input.title.slice(0, 500),
       body: input.body.slice(0, 12_000),
+      structure: requestStructure(
+        input.body.trim() ? `${input.title}\n${input.body}` : input.title,
+      ),
       ...(input.repoContext ? { repoContext: input.repoContext.slice(0, 6_000) } : {}),
     })
   );

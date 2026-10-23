@@ -4,9 +4,10 @@ import {
   quoteEffort,
   requestShape,
 } from "./triage-effort.ts";
+import { quoteStructure, type StructureQuote } from "./triage-structure.ts";
 
 /** Initial-request complexity predicts observed session usage; later outcomes are not features. */
-export const TRIAGE_SCORECARD_VERSION = 10;
+export const TRIAGE_SCORECARD_VERSION = 11;
 export const METRIC_MAX = {
   breadth: 3,
   complexity: 3,
@@ -59,6 +60,7 @@ export interface TriageScorecard {
     confidence: "experimental" | "validated";
   };
   pricing: EffortQuote;
+  structure?: StructureQuote;
 }
 export interface AssessmentInput extends ScorecardFacts {
   title: string;
@@ -284,13 +286,8 @@ export function deriveAssessment(
   model: LoadedEffortModel,
 ) {
   // Request shape is computed from the initial request itself; it is never model-written.
-  const pricing = quoteEffort(
-    {
-      ...extracted.metrics,
-      ...requestShape(input.body.trim() ? `${input.title}\n${input.body}` : input.title),
-    },
-    model,
-  );
+  const requestText = input.body.trim() ? `${input.title}\n${input.body}` : input.title;
+  const pricing = quoteEffort({ ...extracted.metrics, ...requestShape(requestText) }, model);
   if (pricing.status !== "ready") return;
   const names = Object.keys(METRIC_MAX) as MetricName[];
   const planning = extracted.planningMetrics ?? extracted.metrics;
@@ -347,6 +344,7 @@ export function deriveAssessment(
       confidence: pricing.confidence,
     },
     pricing,
+    structure: quoteStructure(requestText, pricing),
   };
   const actions = (value: number) => value.toLocaleString("en-US", { maximumFractionDigits: 1 });
   const workUnit =
