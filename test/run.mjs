@@ -28,6 +28,8 @@ if (process.env.TEST_SHARD) {
     total = Number(match?.[2]);
   if (!Number.isSafeInteger(index) || !Number.isSafeInteger(total) || index < 1 || index > total)
     throw new Error("TEST_SHARD must be an index/total pair with 1 <= index <= total.");
+  console.log(`Test suite files: ${JSON.stringify(files)}`);
+  console.log(`Test run started: ${Date.now() - performance.now()}`);
   const count = files.length;
   files = files.filter((_, position) => position % total === index - 1);
   console.log(`Test shard ${index}/${total}: ${files.length} of ${count} files.`);

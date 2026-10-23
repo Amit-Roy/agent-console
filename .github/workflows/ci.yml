@@ -44,10 +44,23 @@ jobs:
     needs: test-shard
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: test-log-*
+          path: ${{ runner.temp }}/test-logs
       - name: Require every test shard
         env:
           RESULT: ${{ needs.test-shard.result }}
         run: test "$RESULT" = success
+      - name: Whole-suite coverage and time budget
+        env:
+          TEST_FILE_BUDGET_S: "15"
+          TEST_WALL_BUDGET_S: "25"
+        run: node test/shard-budget.mjs "$RUNNER_TEMP/test-logs"
   test-shard:
     strategy:
       fail-fast: false
@@ -123,6 +136,11 @@ jobs:
           TEST_FILE_BUDGET_S: "15"
           TEST_WALL_BUDGET_S: "25"
         run: node scripts/ci-resources.mjs budget "$RUNNER_TEMP/test.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-log-${{ strategy.job-index }}
+          path: ${{ runner.temp }}/test.log
       - name: Runner usage
         if: always()
         run: node scripts/ci-resources.mjs summary "$RUNNER_TEMP/resources.csv" "$RUNNER_TEMP/test.log" | tee -a "$GITHUB_STEP_SUMMARY"
