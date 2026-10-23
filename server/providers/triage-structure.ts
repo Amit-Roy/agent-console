@@ -36,10 +36,10 @@ const DRIVER_LABELS: Record<string, string> = {
 export function requestStructure(text: string): StructureFlags {
   return {
     hasFilePath:
-      /(?:^|[\s`(])(?:~|\.{0,2})\/?[\w.-]+\/[\w.-]+/.test(text) ||
+      /(?:^|[\s`(])(?:~|\.{1,2})\/?[\w.-]+\/[\w.-]+/.test(text) ||
       /\b[\w-]+\.(?:ts|tsx|js|mjs|jsx|py|json|md|css|html|sh|ya?ml)\b/i.test(text),
     hasExpectedOutput:
-      /\b(expected|should (?:show|display|return|print|see|be)|must (?:show|display|return)|result(?:s)? in|output)\b/i.test(
+      /\b(expected(?:\s+output)?|output\s*:|should (?:show|display|return|print|see|be)|must (?:show|display|return)|result(?:s)? in)(?!\w)/i.test(
         text,
       ),
     hasAcceptanceCheck:
