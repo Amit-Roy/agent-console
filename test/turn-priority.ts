@@ -63,17 +63,17 @@ const settle = () => new Promise((r) => setImmediate(r));
 const plenty = 0.8,
   tight = 0.1;
 
-// idle keepalive: 45 idle minutes no longer cost a cold start
+// idle keepalive: 25 idle minutes no longer cost a cold start
 const a = threads.create({ provider: "idle-fixture", cwd: data, title: "a" });
 names.set(a.id, "a");
 threads.send(a.id, "go");
 await settle();
-mock.timers.tick(45 * 60_000);
+mock.timers.tick(25 * 60_000);
 threads.sweep(plenty);
-assert.deepEqual(killed, [], "an agent idle for 45 minutes stays warm");
-mock.timers.tick(76 * 60_000);
+assert.deepEqual(killed, [], "an agent idle for 25 minutes stays warm");
+mock.timers.tick(6 * 60_000);
 threads.sweep(plenty);
-assert.deepEqual(killed, ["a"], "past two idle hours it is freed");
+assert.deepEqual(killed, ["a"], "past 30 idle minutes it is freed");
 
 // count cap: oldest idle processes go first
 killed.length = 0;
