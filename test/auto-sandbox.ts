@@ -1,14 +1,25 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { closeSync, mkdtempSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  mkdirSync,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const launcher = resolve(dirname(fileURLToPath(import.meta.url)), "../scripts/auto-sandbox.py");
 const root = mkdtempSync(join(tmpdir(), "ac-auto-sandbox-"));
-const main = join(root, "main"), sibling = join(root, "sibling"), own = join(root, "own");
-const scratch = join(root, "private-tmp"), session = join(root, "private-session");
+const main = join(root, "main"),
+  sibling = join(root, "sibling"),
+  own = join(root, "own");
+const scratch = join(root, "private-tmp"),
+  session = join(root, "private-session");
 const python = process.env.PYTHON || "python3";
 function run(command: string, args: string[], cwd = root) {
   return spawnSync(command, args, { cwd, encoding: "utf8", timeout: 30_000 });
@@ -25,11 +36,23 @@ try {
   writeFileSync(join(sibling, "important.txt"), "sibling unchanged\n");
   ok("git", ["init", "-q", main]);
   ok("git", ["-C", main, "add", "."]);
-  ok("git", ["-C", main, "-c", "user.name=Sandbox Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "Seed"]);
+  ok("git", [
+    "-C",
+    main,
+    "-c",
+    "user.name=Sandbox Test",
+    "-c",
+    "user.email=test@example.invalid",
+    "commit",
+    "-qm",
+    "Seed",
+  ]);
 
   // Unsupported kernels must fail closed: even the supplied command never runs.
   const marker = join(root, "must-not-run");
-  const unavailable = run(python, ["-c", `
+  const unavailable = run(python, [
+    "-c",
+    `
 import importlib.util, errno, sys
 sys.dont_write_bytecode = True
 spec = importlib.util.spec_from_file_location('sandbox', ${JSON.stringify(launcher)})
@@ -39,7 +62,8 @@ def unavailable():
     raise OSError(errno.ENOSYS, 'simulated unsupported Landlock')
 module._landlock_abi = unavailable
 sys.exit(module.main(['--write', ${JSON.stringify(own)}, '--', sys.executable, '-c', ${JSON.stringify(`open(${JSON.stringify(marker)}, 'w').write('unsafe')`)}]))
-`]);
+`,
+  ]);
   assert.equal(unavailable.status, 78, unavailable.stderr);
   assert.match(unavailable.stderr, /refusing to start command/);
   assert.throws(() => readFileSync(marker), /ENOENT/);
@@ -51,7 +75,13 @@ sys.exit(module.main(['--write', ${JSON.stringify(own)}, '--', sys.executable, '
   } else {
     assert.ok(JSON.parse(probe.stdout).landlockAbi >= 3);
     const roots = ["--write", own, "--write", scratch, "--write", session];
-    const result = run(python, [launcher, ...roots, "--", python, "-c", `
+    const result = run(python, [
+      launcher,
+      ...roots,
+      "--",
+      python,
+      "-c",
+      `
 import ctypes, errno, os, pathlib, socket, subprocess, sys
 own, main, sibling, scratch, session = map(pathlib.Path, sys.argv[1:])
 os.chdir(own)
@@ -109,11 +139,25 @@ for number in (101, 311, 425, 438):
     assert libc.syscall(number, 0, 0, 0, 0, 0, 0) == -1
     assert ctypes.get_errno() == errno.EPERM
 print('sandbox content isolation verified')
-`, own, main, sibling, scratch, session]);
+`,
+      own,
+      main,
+      sibling,
+      scratch,
+      session,
+    ]);
     assert.equal(result.status, 0, `${result.error || result.stderr}\n${result.stdout}`);
     const inherited = openSync(join(main, "important.txt"), "r+");
     try {
-      const handles = spawnSync(python, [launcher, ...roots, "--", python, "-c", `
+      const handles = spawnSync(
+        python,
+        [
+          launcher,
+          ...roots,
+          "--",
+          python,
+          "-c",
+          `
 import os, errno
 try:
     os.write(3, b'inherited descriptor corruption')
@@ -121,7 +165,15 @@ except OSError as error:
     assert error.errno == errno.EBADF
 else:
     raise AssertionError('inherited writable descriptor survived sandbox')
-`], { cwd: root, encoding: "utf8", timeout: 30_000, stdio: ["ignore", "pipe", "pipe", inherited] });
+`,
+        ],
+        {
+          cwd: root,
+          encoding: "utf8",
+          timeout: 30_000,
+          stdio: ["ignore", "pipe", "pipe", inherited],
+        },
+      );
       assert.equal(handles.status, 0, handles.stderr);
     } finally {
       closeSync(inherited);
@@ -131,7 +183,9 @@ else:
     assert.doesNotMatch(readFileSync(join(main, ".git/config"), "utf8"), /escape/);
     const broad = run(python, [launcher, "--write", "/", "--", "true"]);
     assert.equal(broad.status, 78);
-    console.log("PASS auto sandbox: shell/Python/Git/symlink/truncate/link denied outside roots; own commit and private temp/session writes work; unavailable support fails closed");
+    console.log(
+      "PASS auto sandbox: shell/Python/Git/symlink/truncate/link denied outside roots; own commit and private temp/session writes work; unavailable support fails closed",
+    );
   }
 } finally {
   rmSync(root, { recursive: true, force: true });

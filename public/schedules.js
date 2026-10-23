@@ -1,9 +1,18 @@
 // Scheduled tasks in the sidebar: one row per task (schedule, agent, next run, on/off), its latest runs as child rows, and the report
 // card a finished run leaves in its thread. Every run is an ordinary thread, so opening, replying and forking work as usual.
-import { $, el, icon, iconButton } from "/render.js";
-import { createMenu } from "/menu.js";
 
-const DAY_NAMES = ["Sundays", "Mondays", "Tuesdays", "Wednesdays", "Thursdays", "Fridays", "Saturdays"];
+import { createMenu } from "/menu.js";
+import { $, el, icon, iconButton } from "/render.js";
+
+const DAY_NAMES = [
+  "Sundays",
+  "Mondays",
+  "Tuesdays",
+  "Wednesdays",
+  "Thursdays",
+  "Fridays",
+  "Saturdays",
+];
 export const REPEAT_ITEMS = [
   { value: "manual", label: "Manual", desc: "Only when you press Run now" },
   { value: "hourly", label: "Hourly" },
@@ -11,7 +20,10 @@ export const REPEAT_ITEMS = [
   { value: "weekdays", label: "Weekdays", desc: "Monday to Friday" },
   { value: "weekly", label: "Weekly" },
 ];
-export const DAY_ITEMS = [1, 2, 3, 4, 5, 6, 0].map(d => ({ value: String(d), label: DAY_NAMES[d] }));
+export const DAY_ITEMS = [1, 2, 3, 4, 5, 6, 0].map((d) => ({
+  value: String(d),
+  label: DAY_NAMES[d],
+}));
 const RECENT = 3;
 
 // "Daily 09:00", "Mondays 09:00", "Hourly at :15", "Manual" (matches server describe())
@@ -33,7 +45,8 @@ export function until(ts) {
 
 // "Today 09:00", "Yesterday 18:30", "Oct 17 09:00"
 export function when(ts) {
-  const d = new Date(ts), now = new Date();
+  const d = new Date(ts),
+    now = new Date();
   const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
   const days = Math.round((new Date(now.toDateString()) - new Date(d.toDateString())) / 86400000);
   if (days === 0) return `Today ${time}`;
@@ -44,19 +57,40 @@ export function when(ts) {
 export function duration(ms) {
   if (!(ms >= 0)) return "";
   const s = Math.round(ms / 1000);
-  return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${Math.floor(s / 3600)}h ${Math.round((s % 3600) / 60)}m`;
+  return s < 60
+    ? `${s}s`
+    : s < 3600
+      ? `${Math.floor(s / 60)}m ${s % 60}s`
+      : `${Math.floor(s / 3600)}h ${Math.round((s % 3600) / 60)}m`;
 }
 
 const STATUS = { running: "Running", done: "Done", failed: "Failed", skipped: "Skipped" };
 function runSummary(r) {
   if (r.status === "running") return "Running";
-  if (r.status === "skipped" || r.status === "failed") return `${STATUS[r.status]} · ${r.reason || ""}`.replace(/ · $/, "");
-  return [STATUS[r.status], duration(r.ms), r.cost != null ? `$${r.cost.toFixed(2)}` : "", r.output ? "Report saved" : ""].filter(Boolean).join(" · ");
+  if (r.status === "skipped" || r.status === "failed")
+    return `${STATUS[r.status]} · ${r.reason || ""}`.replace(/ · $/, "");
+  return [
+    STATUS[r.status],
+    duration(r.ms),
+    r.cost != null ? `$${r.cost.toFixed(2)}` : "",
+    r.output ? "Report saved" : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
 }
 
-export function createSchedules({ state, send, openThread, setNav, provLabel, editTask, confirmDelete }) {
+export function createSchedules({
+  state,
+  send,
+  openThread,
+  setNav,
+  provLabel,
+  editTask,
+  confirmDelete,
+}) {
   const openRuns = new Set(); // tasks showing every run instead of the latest few
-  let menuOpen = false, pending = false;
+  let menuOpen = false,
+    pending = false;
 
   function switchFor(t) {
     const sw = el("button", "switch");
@@ -64,9 +98,17 @@ export function createSchedules({ state, send, openThread, setNav, provLabel, ed
     sw.setAttribute("role", "switch");
     sw.setAttribute("aria-checked", String(t.enabled));
     sw.setAttribute("aria-label", `${t.enabled ? "Pause" : "Resume"} ${t.title}`);
-    sw.title = t.repeat === "manual" ? "Manual tasks run only when you press Run now" : t.enabled ? "On: runs on schedule" : "Paused";
-    sw.onclick = e => { e.stopPropagation(); send({ t: "task_save", id: t.id, enabled: !t.enabled }); };
-    sw.onkeydown = e => (e.key === "Enter" || e.key === " ") && e.stopPropagation();
+    sw.title =
+      t.repeat === "manual"
+        ? "Manual tasks run only when you press Run now"
+        : t.enabled
+          ? "On: runs on schedule"
+          : "Paused";
+    sw.onclick = (e) => {
+      e.stopPropagation();
+      send({ t: "task_save", id: t.id, enabled: !t.enabled });
+    };
+    sw.onkeydown = (e) => (e.key === "Enter" || e.key === " ") && e.stopPropagation();
     return sw;
   }
 
@@ -82,9 +124,17 @@ export function createSchedules({ state, send, openThread, setNav, provLabel, ed
       li.tabIndex = 0;
       li.title = thread.title;
       if (r.thread === state.current) li.setAttribute("aria-current", "true");
-      const pick = () => { setNav(false); openThread(r.thread); };
+      const pick = () => {
+        setNav(false);
+        openThread(r.thread);
+      };
       li.onclick = pick;
-      li.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } };
+      li.onkeydown = (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          pick();
+        }
+      };
     } else li.classList.add("inert");
     return li;
   }
@@ -92,49 +142,104 @@ export function createSchedules({ state, send, openThread, setNav, provLabel, ed
   function taskRow(t) {
     const li = el("li", "task");
     li.tabIndex = 0;
-    const running = t.runs.some(r => r.status === "running");
+    const running = t.runs.some((r) => r.status === "running");
     const title = el("div", "t");
-    if (running) { const d = el("span", "dot running"); d.setAttribute("aria-hidden", "true"); title.append(d); }
+    if (running) {
+      const d = el("span", "dot running");
+      d.setAttribute("aria-hidden", "true");
+      title.append(d);
+    }
     title.append(el("span", "", t.title));
     const meta = el("div", "meta");
-    meta.append(icon("clock"), el("span", "sched", describe(t)), el("span", "tag", provLabel(t.provider)));
+    meta.append(
+      icon("clock"),
+      el("span", "sched", describe(t)),
+      el("span", "tag", provLabel(t.provider)),
+    );
     if (!t.enabled && t.repeat !== "manual") meta.append(el("span", "paused", "Paused"));
-    else if (t.nextRunAt) { const next = el("time", "", until(t.nextRunAt)); next.dateTime = new Date(t.nextRunAt).toISOString(); next.title = `Next run ${new Date(t.nextRunAt).toLocaleString()}`; meta.append(next); }
+    else if (t.nextRunAt) {
+      const next = el("time", "", until(t.nextRunAt));
+      next.dateTime = new Date(t.nextRunAt).toISOString();
+      next.title = `Next run ${new Date(t.nextRunAt).toLocaleString()}`;
+      meta.append(next);
+    }
     const more = iconButton("more", `Actions for ${t.title}`, "btn sm icon ghost row-more");
-    more.onclick = e => e.stopPropagation();
-    more.addEventListener("keydown", e => (e.key === "Enter" || e.key === " ") && e.stopPropagation());
+    more.onclick = (e) => e.stopPropagation();
+    more.addEventListener(
+      "keydown",
+      (e) => (e.key === "Enter" || e.key === " ") && e.stopPropagation(),
+    );
     createMenu({
-      trigger: more, kind: "menu", label: `Actions for ${t.title}`, header: () => t.title, align: "end",
+      trigger: more,
+      kind: "menu",
+      label: `Actions for ${t.title}`,
+      header: () => t.title,
+      align: "end",
       getItems: () => [
-        { value: "run", label: "Run now", desc: running ? "A run is in progress" : "Start a run in a new thread", icon: "play", disabled: running },
+        {
+          value: "run",
+          label: "Run now",
+          desc: running ? "A run is in progress" : "Start a run in a new thread",
+          icon: "play",
+          disabled: running,
+        },
         { value: "edit", label: "Edit", icon: "pencil" },
-        { value: "delete", label: "Delete task…", desc: "Also deletes its run threads; reports stay in git", icon: "trash", tone: "danger" },
+        {
+          value: "delete",
+          label: "Delete task…",
+          desc: "Also deletes its run threads; reports stay in git",
+          icon: "trash",
+          tone: "danger",
+        },
       ],
-      onOpen: () => { menuOpen = true; li.classList.add("menu-open"); },
-      onClose: () => { menuOpen = false; li.classList.remove("menu-open"); if (pending) render(); },
-      onSelect: v => {
-        if (v === "run") { setNav(false); send({ t: "task_run", id: t.id }); }
-        else if (v === "edit") editTask(t);
+      onOpen: () => {
+        menuOpen = true;
+        li.classList.add("menu-open");
+      },
+      onClose: () => {
+        menuOpen = false;
+        li.classList.remove("menu-open");
+        if (pending) render();
+      },
+      onSelect: (v) => {
+        if (v === "run") {
+          setNav(false);
+          send({ t: "task_run", id: t.id });
+        } else if (v === "edit") editTask(t);
         else if (v === "delete" && confirmDelete(t)) send({ t: "task_delete", id: t.id });
       },
     });
     li.append(title, meta, switchFor(t), more);
     li.title = `${t.title}\n${describe(t)} (${t.tz}) · ${provLabel(t.provider)} · ${t.cwd}`;
     li.onclick = () => editTask(t);
-    li.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); editTask(t); } };
+    li.onkeydown = (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        editTask(t);
+      }
+    };
     return li;
   }
 
   function render() {
-    if (menuOpen) { pending = true; return; }
+    if (menuOpen) {
+      pending = true;
+      return;
+    }
     pending = false;
     const ul = $("tasks");
     ul.replaceChildren();
     const tasks = [...state.tasks.values()];
-    $("lane-tasks-dot").hidden = !tasks.some(t => t.runs.some(r => r.status === "running"));
+    $("lane-tasks-dot").hidden = !tasks.some((t) => t.runs.some((r) => r.status === "running"));
     if (!tasks.length) {
       const empty = el("li", "empty-list empty-tasks");
-      empty.append(el("span", "", "Run a prompt on a timer: a morning research digest, weekly triage, a nightly check. Each run is a thread you can reply to, and its report is committed to git."));
+      empty.append(
+        el(
+          "span",
+          "",
+          "Run a prompt on a timer: a morning research digest, weekly triage, a nightly check. Each run is a thread you can reply to, and its report is committed to git.",
+        ),
+      );
       ul.append(empty);
       return;
     }
@@ -142,15 +247,35 @@ export function createSchedules({ state, send, openThread, setNav, provLabel, ed
       ul.append(taskRow(t));
       const runs = t.runs.slice().reverse();
       const shown = openRuns.has(t.id) ? runs : runs.slice(0, RECENT);
-      if (!runs.length) { ul.append(el("li", "run empty-run", t.repeat === "manual" ? "No runs yet. Use ⋯ → Run now." : t.enabled && t.nextRunAt ? `First run ${when(t.nextRunAt)}` : "No runs yet.")); continue; }
+      if (!runs.length) {
+        ul.append(
+          el(
+            "li",
+            "run empty-run",
+            t.repeat === "manual"
+              ? "No runs yet. Use ⋯ → Run now."
+              : t.enabled && t.nextRunAt
+                ? `First run ${when(t.nextRunAt)}`
+                : "No runs yet.",
+          ),
+        );
+        continue;
+      }
       for (const r of shown) ul.append(runRow(t, r));
       if (runs.length > RECENT) {
         const li = el("li", "run all-runs");
-        const b = el("button", "side-toggle", openRuns.has(t.id) ? "Show fewer" : `All ${runs.length} runs`);
+        const b = el(
+          "button",
+          "side-toggle",
+          openRuns.has(t.id) ? "Show fewer" : `All ${runs.length} runs`,
+        );
         b.type = "button";
         b.setAttribute("aria-expanded", String(openRuns.has(t.id)));
         b.prepend(icon("chev-right"));
-        b.onclick = () => { openRuns.has(t.id) ? openRuns.delete(t.id) : openRuns.add(t.id); render(); };
+        b.onclick = () => {
+          openRuns.has(t.id) ? openRuns.delete(t.id) : openRuns.add(t.id);
+          render();
+        };
         li.append(b);
         ul.append(li);
       }
@@ -162,10 +287,24 @@ export function createSchedules({ state, send, openThread, setNav, provLabel, ed
     const r = e.run || {};
     const card = el("div", `msg run-report ${r.status}`);
     const head = el("div", "rr-head");
-    head.append(icon(r.status === "done" ? "check" : r.status === "failed" ? "alert" : "clock"), el("span", "rr-status", STATUS[r.status] || r.status), el("span", "rr-task", e.title || "Scheduled task"));
+    head.append(
+      icon(r.status === "done" ? "check" : r.status === "failed" ? "alert" : "clock"),
+      el("span", "rr-status", STATUS[r.status] || r.status),
+      el("span", "rr-task", e.title || "Scheduled task"),
+    );
     card.append(head);
     const facts = el("div", "rr-facts");
-    for (const f of [when(r.at), duration(r.ms), r.cost != null ? `$${r.cost.toFixed(3)}` : "", r.trigger === "catch-up" ? "Catch-up run" : r.trigger === "manual" ? "Run now" : "On schedule"]) if (f) facts.append(el("span", "", f));
+    for (const f of [
+      when(r.at),
+      duration(r.ms),
+      r.cost != null ? `$${r.cost.toFixed(3)}` : "",
+      r.trigger === "catch-up"
+        ? "Catch-up run"
+        : r.trigger === "manual"
+          ? "Run now"
+          : "On schedule",
+    ])
+      if (f) facts.append(el("span", "", f));
     card.append(facts);
     if (r.reason) card.append(el("p", "rr-reason", r.reason));
     const actions = el("div", "rr-actions");
@@ -174,7 +313,11 @@ export function createSchedules({ state, send, openThread, setNav, provLabel, ed
       file.href = "#";
       file.dataset.fileRef = r.output.path;
       file.title = r.output.path;
-      file.append(icon("file"), el("span", "rr-path", r.output.path.replace(/^.*\/agent-outputs\//, "agent-outputs/")), ...(r.output.commit ? [el("code", "", r.output.commit)] : []));
+      file.append(
+        icon("file"),
+        el("span", "rr-path", r.output.path.replace(/^.*\/agent-outputs\//, "agent-outputs/")),
+        ...(r.output.commit ? [el("code", "", r.output.commit)] : []),
+      );
       card.append(file);
       const open = el("a", "btn sm primary", "Open report");
       open.href = "#";

@@ -5,33 +5,55 @@ import os from "node:os";
 import path from "node:path";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "ac-brain-"));
-fs.mkdirSync(path.join(root, "bin")); fs.mkdirSync(path.join(root, "wiki"));
-const index = path.join(root, "wiki", "index.md"), count = path.join(root, "runs");
+fs.mkdirSync(path.join(root, "bin"));
+fs.mkdirSync(path.join(root, "wiki"));
+const index = path.join(root, "wiki", "index.md"),
+  count = path.join(root, "runs");
 fs.writeFileSync(index, "# Brain index\nv1\n");
 // a slow stand-in for `brain context`: records each run, then prints the index
-fs.writeFileSync(path.join(root, "bin", "brain"), `#!/bin/sh\necho x >> "${count}"\nsleep 0.3\ncat "${index}"\n`, { mode: 0o755 });
+fs.writeFileSync(
+  path.join(root, "bin", "brain"),
+  `#!/bin/sh\necho x >> "${count}"\nsleep 0.3\ncat "${index}"\n`,
+  { mode: 0o755 },
+);
 process.env.AGENT_CONSOLE_BRAIN = path.join(root, "bin", "brain");
-const { brainContext, brainInstructions, harnessInstructions } = await import("../server/providers/brain.ts");
-const runs = () => (fs.existsSync(count) ? fs.readFileSync(count, "utf8").split("\n").filter(Boolean).length : 0);
+const { brainContext, brainInstructions, harnessInstructions } = await import(
+  "../server/providers/brain.ts"
+);
+const runs = () =>
+  fs.existsSync(count) ? fs.readFileSync(count, "utf8").split("\n").filter(Boolean).length : 0;
 
 try {
   let ticks = 0;
   const timer = setInterval(() => ticks++, 10);
   const [a, b] = await Promise.all([brainContext(), brainContext()]);
   clearInterval(timer);
-  assert.equal(a, "# Brain index\nv1"); assert.equal(b, a);
+  assert.equal(a, "# Brain index\nv1");
+  assert.equal(b, a);
   assert.equal(runs(), 1, "concurrent calls share one run");
   assert.ok(ticks >= 10, `event loop kept running during the 300 ms run (${ticks} ticks)`);
-  console.log(`PASS  brain: async run, event loop free (${ticks} ticks), one run for concurrent callers`);
+  console.log(
+    `PASS  brain: async run, event loop free (${ticks} ticks), one run for concurrent callers`,
+  );
 
   const t0 = performance.now();
   assert.equal(await brainContext(), a);
-  assert.equal(runs(), 1); assert.ok(performance.now() - t0 < 50);
+  assert.equal(runs(), 1);
+  assert.ok(performance.now() - t0 < 50);
   const instructions = await harnessInstructions();
   assert.ok(instructions.includes("v1"));
-  assert.ok(instructions.includes(brainInstructions()), "the harness receives the save contract alongside the index");
-  assert.ok(instructions.includes(path.join(root, "CLAUDE.md")), "the schema path follows the configured brain repository");
-  assert.ok(instructions.includes(`${process.env.AGENT_CONSOLE_BRAIN} lint`), "the full CLI path works without a brain PATH entry");
+  assert.ok(
+    instructions.includes(brainInstructions()),
+    "the harness receives the save contract alongside the index",
+  );
+  assert.ok(
+    instructions.includes(path.join(root, "CLAUDE.md")),
+    "the schema path follows the configured brain repository",
+  );
+  assert.ok(
+    instructions.includes(`${process.env.AGENT_CONSOLE_BRAIN} lint`),
+    "the full CLI path works without a brain PATH entry",
+  );
   assert.ok(instructions.includes("wiki/index.md"));
   assert.ok(instructions.includes("required frontmatter"));
   assert.ok(instructions.includes("Never edit wiki/log.md by hand or run git"));
@@ -41,4 +63,6 @@ try {
   assert.equal(await brainContext(), "# Brain index\nv2 longer");
   assert.equal(runs(), 2);
   console.log("PASS  brain: index change invalidates the cache");
-} finally { fs.rmSync(root, { recursive: true, force: true }); }
+} finally {
+  fs.rmSync(root, { recursive: true, force: true });
+}

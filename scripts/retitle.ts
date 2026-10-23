@@ -9,7 +9,9 @@ import { suggestTitle } from "../server/providers/title.ts";
 
 const BASE = process.env.BASE || "http://127.0.0.1:7070";
 const dry = process.argv.includes("--dry");
-const ws = new WebSocket(BASE.replace("http", "ws") + "/ws", { headers: { cookie: `ac_session=${makeToken()}`, origin: BASE } });
+const ws = new WebSocket(BASE.replace("http", "ws") + "/ws", {
+  headers: { cookie: `ac_session=${makeToken()}`, origin: BASE },
+});
 const inbox: any[] = [];
 ws.on("message", (d) => inbox.push(JSON.parse(String(d))));
 await new Promise<void>((res, rej) => {
@@ -39,17 +41,23 @@ for (const t of hello.threads as any[]) {
   inbox.length = 0;
   ws.send(JSON.stringify({ t: "open", thread: t.id }));
   const hist = await waitFor((m) => m.t === "history" && m.thread === t.id);
-  const first = (hist?.events ?? []).find((e: any) => e.type === "user_input" && !e.auto && words(e.text ?? "") >= 3);
+  const first = (hist?.events ?? []).find(
+    (e: any) => e.type === "user_input" && !e.auto && words(e.text ?? "") >= 3,
+  );
   if (!first) {
     console.log(`skip   ${label} no substantial first message`);
     continue;
   }
   const title = await suggestTitle(first.text);
   if (!title) {
-    console.log(`skip   ${label} no title produced for: ${first.text.slice(0, 60).replace(/\s+/g, " ")}`);
+    console.log(
+      `skip   ${label} no title produced for: ${first.text.slice(0, 60).replace(/\s+/g, " ")}`,
+    );
     continue;
   }
-  console.log(`${dry ? "would " : "rename"} ${label} "${t.title}" -> "${title}"   (${first.text.slice(0, 60).replace(/\s+/g, " ")})`);
+  console.log(
+    `${dry ? "would " : "rename"} ${label} "${t.title}" -> "${title}"   (${first.text.slice(0, 60).replace(/\s+/g, " ")})`,
+  );
   if (!dry) ws.send(JSON.stringify({ t: "update", thread: t.id, title }));
 }
 await new Promise((r) => setTimeout(r, 300)); // let the last update flush before closing

@@ -1,4 +1,5 @@
 declare const tokens: any;
 declare const cssString: string;
-export { tokens, cssString };
+
+export { cssString, tokens };
 export default { tokens, cssString };

@@ -1,0 +1,1 @@
+extend = "tooling/repos/ruff.shared.toml"

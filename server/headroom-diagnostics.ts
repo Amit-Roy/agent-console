@@ -19,8 +19,14 @@ export function diagnostic(event: Event, fields: Record<string, number> = {}) {
       if (old.isSymbolicLink() || old.size > LIMIT) fs.rmSync(previous, { force: true });
       else fs.chmodSync(previous, 0o600);
     }
-    const values = Object.fromEntries(Object.entries(fields).filter(([key, value]) =>
-      /^(pid|code|signal|attempt|rssBytes|cpuPercent|stdoutBytes|stderrBytes|reason)$/.test(key) && Number.isFinite(value)));
+    const values = Object.fromEntries(
+      Object.entries(fields).filter(
+        ([key, value]) =>
+          /^(pid|code|signal|attempt|rssBytes|cpuPercent|stdoutBytes|stderrBytes|reason)$/.test(
+            key,
+          ) && Number.isFinite(value),
+      ),
+    );
     const line = JSON.stringify({ time: Date.now(), event, ...values }) + "\n";
     if (Buffer.byteLength(line) > LIMIT) return;
     if (fs.existsSync(file) && fs.lstatSync(file).size + Buffer.byteLength(line) > LIMIT) {
@@ -28,11 +34,28 @@ export function diagnostic(event: Event, fields: Record<string, number> = {}) {
       fs.rmSync(previous, { force: true });
       const old = fs.lstatSync(file);
       if (old.isSymbolicLink() || old.size > LIMIT) fs.rmSync(file, { force: true });
-      else { fs.renameSync(file, previous); fs.chmodSync(previous, 0o600); }
+      else {
+        fs.renameSync(file, previous);
+        fs.chmodSync(previous, 0o600);
+      }
     }
-    const fd = fs.openSync(file, fs.constants.O_WRONLY | fs.constants.O_APPEND | fs.constants.O_CREAT | fs.constants.O_NOFOLLOW, 0o600);
-    try { fs.fchmodSync(fd, 0o600); fs.writeSync(fd, line); } finally { fs.closeSync(fd); }
-  } catch { /* Diagnostics cannot break routing or shutdown. */ }
+    const fd = fs.openSync(
+      file,
+      fs.constants.O_WRONLY |
+        fs.constants.O_APPEND |
+        fs.constants.O_CREAT |
+        fs.constants.O_NOFOLLOW,
+      0o600,
+    );
+    try {
+      fs.fchmodSync(fd, 0o600);
+      fs.writeSync(fd, line);
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    /* Diagnostics cannot break routing or shutdown. */
+  }
 }
 
 export type Resource = { rssBytes: number; ticks: number; time: number };
@@ -43,11 +66,17 @@ export async function resource(pid: number): Promise<Resource | undefined> {
       fs.promises.readFile(`/proc/${pid}/stat`, "utf8"),
       fs.promises.readFile(`/proc/${pid}/status`, "utf8"),
     ]);
-    const fields = stat.slice(stat.lastIndexOf(")") + 2).trim().split(/\s+/);
+    const fields = stat
+      .slice(stat.lastIndexOf(")") + 2)
+      .trim()
+      .split(/\s+/);
     const rssKB = Number(status.match(/^VmRSS:\s+(\d+)/m)?.[1]);
     const ticks = Number(fields[11]) + Number(fields[12]);
-    if (Number.isFinite(rssKB) && Number.isFinite(ticks)) return { rssBytes: rssKB * 1024, ticks, time: Date.now() };
-  } catch { /* A process may exit between the two reads. */ }
+    if (Number.isFinite(rssKB) && Number.isFinite(ticks))
+      return { rssBytes: rssKB * 1024, ticks, time: Date.now() };
+  } catch {
+    /* A process may exit between the two reads. */
+  }
 }
 
 export class ResourceGuard {
@@ -56,11 +85,19 @@ export class ResourceGuard {
   sample(current: Resource) {
     // Linux /proc process accounting uses USER_HZ (100 ticks per second).
     const elapsed = this.previous ? current.time - this.previous.time : 0;
-    const cpuPercent = elapsed > 0 ? Math.max(0, (current.ticks - this.previous!.ticks) * 1000 / elapsed) : 0;
+    const cpuPercent =
+      elapsed > 0 ? Math.max(0, ((current.ticks - this.previous!.ticks) * 1000) / elapsed) : 0;
     if (cpuPercent > 80) this.busySince ??= this.previous!.time;
     else this.busySince = undefined;
     this.previous = current;
-    return { cpuPercent, reason: current.rssBytes > 1024 * 1024 * 1024 ? 1 :
-      this.busySince !== undefined && current.time - this.busySince >= 30_000 ? 2 : 0 };
+    return {
+      cpuPercent,
+      reason:
+        current.rssBytes > 1024 * 1024 * 1024
+          ? 1
+          : this.busySince !== undefined && current.time - this.busySince >= 30_000
+            ? 2
+            : 0,
+    };
   }
 }

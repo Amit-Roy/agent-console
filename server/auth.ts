@@ -4,7 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { fileEnv } from "./providers/env.ts";
 
-export const DATA_DIR = process.env.AGENT_CONSOLE_DATA || path.join(os.homedir(), ".config", "agent-console");
+export const DATA_DIR =
+  process.env.AGENT_CONSOLE_DATA || path.join(os.homedir(), ".config", "agent-console");
 fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
 
 function loadOrCreate(file: string, make: () => string): string {
@@ -19,13 +20,15 @@ function loadOrCreate(file: string, make: () => string): string {
 }
 
 const rand = (n: number) => crypto.randomBytes(n).toString("base64url");
-export const PASSWORD = process.env.AGENT_CONSOLE_PASSWORD || loadOrCreate("password", () => rand(15));
+export const PASSWORD =
+  process.env.AGENT_CONSOLE_PASSWORD || loadOrCreate("password", () => rand(15));
 const SECRET = loadOrCreate("secret", () => rand(32));
 
 const COOKIE = "ac_session";
 const TTL_MS = 30 * 24 * 3600 * 1000;
 
-const sign = (payload: string) => crypto.createHmac("sha256", SECRET).update(payload).digest("base64url");
+const sign = (payload: string) =>
+  crypto.createHmac("sha256", SECRET).update(payload).digest("base64url");
 
 function safeEqual(a: string, b: string): boolean {
   const ha = crypto.createHash("sha256").update(a).digest();
@@ -81,7 +84,9 @@ export function passwordOk(candidate: unknown): boolean {
 // wildcard app host next to the tunnel one. Only list hosts that Coder itself authenticates.
 function coderHostsFromEnv(): string[] {
   if (process.env.AGENT_CONSOLE_AUTH === "password") return [];
-  const hosts = String(process.env.AGENT_CONSOLE_PUBLIC_HOST || fileEnv().AGENT_CONSOLE_PUBLIC_HOST || "")
+  const hosts = String(
+    process.env.AGENT_CONSOLE_PUBLIC_HOST || fileEnv().AGENT_CONSOLE_PUBLIC_HOST || "",
+  )
     .split(",")
     .map((h) => h.trim().toLowerCase())
     .filter(Boolean);

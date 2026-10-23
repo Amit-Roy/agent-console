@@ -15,17 +15,34 @@ export function announceClosed(dir: string, item: ClosedItem, now = Date.now): v
 }
 
 /** Runs `onClosed` after each announcement. Bursts coalesce; an announcement during a run triggers exactly one more run. */
-export function watchClosed(dir: string, onClosed: () => Promise<unknown> | void, onError?: (e: unknown) => void) {
+export function watchClosed(
+  dir: string,
+  onClosed: () => Promise<unknown> | void,
+  onError?: (e: unknown) => void,
+) {
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  let running = false, again = false;
+  let running = false,
+    again = false;
   const run = async () => {
-    if (running) { again = true; return; }
+    if (running) {
+      again = true;
+      return;
+    }
     running = true;
-    try { do { again = false; await onClosed(); } while (again); }
-    catch (e) { onError?.(e); }
-    finally { running = false; }
+    try {
+      do {
+        again = false;
+        await onClosed();
+      } while (again);
+    } catch (e) {
+      onError?.(e);
+    } finally {
+      running = false;
+    }
   };
-  const watcher = fs.watch(dir, (_event, name) => { if (name === FILE) void run(); });
+  const watcher = fs.watch(dir, (_event, name) => {
+    if (name === FILE) void run();
+  });
   watcher.unref();
   return { close: () => watcher.close() };
 }

@@ -28,7 +28,10 @@ export function needsLabel(name: string, input: any): boolean {
   return false;
 }
 
-export const excerpt = (c: string) => { const one = c.replace(/\s+/g, " ").trim(); return one.length > MAX_CMD ? one.slice(0, MAX_CMD) + "..." : one; };
+export const excerpt = (c: string) => {
+  const one = c.replace(/\s+/g, " ").trim();
+  return one.length > MAX_CMD ? one.slice(0, MAX_CMD) + "..." : one;
+};
 
 /** Prettify an MCP tool name `mcp__server__tool` -> `server/tool`; pass other names through. */
 export function mcpName(name: string): string {
@@ -42,7 +45,7 @@ export function mcpSketch(name: string, input: any): string {
   const label = mcpName(name);
   if (!input || typeof input !== "object") return label;
   const keys = Object.keys(input);
-  const hint = keys.find(k => /query|pattern|path|file|url|issue|symbol|topic/.test(k));
+  const hint = keys.find((k) => /query|pattern|path|file|url|issue|symbol|topic/.test(k));
   if (hint && typeof input[hint] === "string") return `${label}: ${excerpt(String(input[hint]))}`;
   return `${label}: ${excerpt(JSON.stringify(input))}`;
 }
@@ -66,7 +69,9 @@ export function editSketch(input: any): string {
   const segs = p.split(/[/\\]/).filter(Boolean);
   const i = segs.lastIndexOf("repos");
   const short = i !== -1 && segs[i + 1] ? segs.slice(i + 1).join("/") : segs.slice(-2).join("/");
-  const oldLines = Array.isArray(input.old_string) ? input.old_string.length : String(input.old_string ?? "").split("\n").length;
+  const oldLines = Array.isArray(input.old_string)
+    ? input.old_string.length
+    : String(input.old_string ?? "").split("\n").length;
   return `Edit: ${excerpt(short)} (${oldLines} line${oldLines === 1 ? "" : "s"})`;
 }
 
@@ -83,20 +88,34 @@ export function parseLabels(raw: string | undefined, n: number): string[] | unde
   } catch {
     return undefined;
   }
-  if (!Array.isArray(arr) || arr.length !== n || !arr.every(x => typeof x === "string")) return undefined;
-  const out = arr.map((x) => String(x ?? "").replace(/\s+/g, " ").replace(/^["'`\s]+|["'`\s.]+$/g, "").slice(0, MAX_LABEL).trim());
+  if (!Array.isArray(arr) || arr.length !== n || !arr.every((x) => typeof x === "string"))
+    return undefined;
+  const out = arr.map((x) =>
+    String(x ?? "")
+      .replace(/\s+/g, " ")
+      .replace(/^["'`\s]+|["'`\s.]+$/g, "")
+      .slice(0, MAX_LABEL)
+      .trim(),
+  );
   return out.every(Boolean) ? out : undefined;
 }
 
 /** Deterministic stand-in for tests (AGENT_CONSOLE_MOCK=1). */
-const fake = (job: LabelJob) => job.name === "Bash" ? `Running ${job.command.trim().split(/\s+/)[0]}` : job.name === "Read" ? job.command : job.name === "Edit" ? job.command : `Using ${mcpName(job.name)}`;
+const fake = (job: LabelJob) =>
+  job.name === "Bash"
+    ? `Running ${job.command.trim().split(/\s+/)[0]}`
+    : job.name === "Read"
+      ? job.command
+      : job.name === "Edit"
+        ? job.command
+        : `Using ${mcpName(job.name)}`;
 
 export interface Labeler {
   request(job: LabelJob): void;
 }
 
 export function createLabeler(onLabel: (job: LabelJob, label: string) => void): Labeler {
-  let queue: LabelJob[] = [];
+  const queue: LabelJob[] = [];
   let timer: NodeJS.Timeout | undefined;
   let busy = false;
 
@@ -110,9 +129,16 @@ export function createLabeler(onLabel: (job: LabelJob, label: string) => void): 
         if (process.env.AGENT_CONSOLE_MOCK === "1") labels = batch.map((j) => fake(j));
         else {
           // jobs from different folders are rare; the first job's folder is context enough
-          labels = await completeLabel(PROMPT(path.basename(batch[0].cwd) || batch[0].cwd, batch), "You write short, plain-English labels.", raw => parseLabels(raw, batch.length));
+          labels = await completeLabel(
+            PROMPT(path.basename(batch[0].cwd) || batch[0].cwd, batch),
+            "You write short, plain-English labels.",
+            (raw) => parseLabels(raw, batch.length),
+          );
         }
-        if (labels) batch.forEach((j, i) => onLabel(j, labels![i]));
+        if (labels)
+          batch.forEach((j, i) => {
+            onLabel(j, labels![i]);
+          });
       }
     } finally {
       busy = false;

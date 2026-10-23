@@ -1,49 +1,107 @@
-import { $, el, icon, iconButton, wireCopy, renderMarkdown, highlightInto, langFromPath, parseFileRef, setFileScope, localImage, isImageFile } from "/render.js";
-import { createMenu } from "/menu.js";
-import { composerField } from "/composer-field.js";
-import { attachmentDraftStore } from "/attachment-drafts.js";
-import { toolName, toolSummary } from "/tool-display.js";
-import { createLatencyReporter } from "/telemetry.js";
-import { createQuestions } from "/questions.js";
-import { openContextEconomics } from "/context-economics.js";
-import { openBreakdown, closeBreakdown } from "/turn-breakdown.js";
-import { setupNotifications } from "/notifications.js";
-import { createChatSearch } from "/chat-search.js";
-import { createSchedules, REPEAT_ITEMS, DAY_ITEMS } from "/schedules.js";
-import { createAutoLane } from "/automation-lane.js";
-import { openJobDebug } from "/automation-job-debug.js";
-import { autoCandidates, autoPick } from "/auto-pick.js";
 import { showAssignmentProgress } from "/assign-progress.js";
+import { attachmentDraftStore } from "/attachment-drafts.js";
+import { autoCandidates, autoPick } from "/auto-pick.js";
+import { openJobDebug } from "/automation-job-debug.js";
+import { createAutoLane } from "/automation-lane.js";
+import { createChatSearch } from "/chat-search.js";
+import { composerField } from "/composer-field.js";
+import { openContextEconomics } from "/context-economics.js";
+import { createMenu } from "/menu.js";
+import { setupNotifications } from "/notifications.js";
+import { createQuestions } from "/questions.js";
+import {
+  $,
+  el,
+  highlightInto,
+  icon,
+  iconButton,
+  isImageFile,
+  langFromPath,
+  localImage,
+  parseFileRef,
+  renderMarkdown,
+  setFileScope,
+  wireCopy,
+} from "/render.js";
+import { createSchedules, DAY_ITEMS, REPEAT_ITEMS } from "/schedules.js";
+import { createLatencyReporter } from "/telemetry.js";
+import { toolName, toolSummary } from "/tool-display.js";
+import { closeBreakdown, openBreakdown } from "/turn-breakdown.js";
 
 composerField($("input"));
 
 const MODE_META = {
   plan: { label: "Plan", desc: "Read-only. Plans without editing.", icon: "eye" },
   acceptEdits: { label: "Accept edits", desc: "Edits files without asking.", icon: "pencil" },
-  bypassPermissions: { label: "Bypass", desc: "Runs every tool without asking.", icon: "shield-off", tone: "warn" },
+  bypassPermissions: {
+    label: "Bypass",
+    desc: "Runs every tool without asking.",
+    icon: "shield-off",
+    tone: "warn",
+  },
 };
 const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 const EFFORT_LABEL = { xhigh: "Extra high", ultracode: "Ultra" };
-const EFFORT_DESC = { ultracode: "Claude Code's Ultracode: starts a multi-agent workflow on every task. Slow and costly; keep it for big jobs.", max: "Deepest reasoning the model offers.", xhigh: "More reasoning than High, less than Max." };
+const EFFORT_DESC = {
+  ultracode:
+    "Claude Code's Ultracode: starts a multi-agent workflow on every task. Slow and costly; keep it for big jobs.",
+  max: "Deepest reasoning the model offers.",
+  xhigh: "More reasoning than High, less than Max.",
+};
 const effortLabel = (v) => EFFORT_LABEL[v] || cap(v);
 const state = {
-  commands: {}, providers: new Map(), threads: new Map(), tasks: new Map(), lane: localStorage.getItem("ac_lane") === "tasks" ? "tasks" : "threads", current: null, ready: false, dirs: [], live: null, cards: new Map(), usage: {}, usageTab: "claude", archiveOpen: !!localStorage.getItem("ac_archive_open"),
+  commands: {},
+  providers: new Map(),
+  threads: new Map(),
+  tasks: new Map(),
+  lane: localStorage.getItem("ac_lane") === "tasks" ? "tasks" : "threads",
+  current: null,
+  ready: false,
+  dirs: [],
+  live: null,
+  cards: new Map(),
+  usage: {},
+  usageTab: "claude",
+  archiveOpen: !!localStorage.getItem("ac_archive_open"),
   stick: true, // the reader is at the bottom of the chat (kept from scroll events, since layout growth fires none)
   subs: new Map(), // tool_use id of a subagent (or nested subagent) -> the <ol> its activity is listed in
   subTools: new Map(), // tool_use id of a call made inside a subagent -> its row
-  queues: {}, features: {}, // thread id -> messages waiting for the running turn to end
-  loading: null, loadTimer: 0, renderToken: 0, rendering: false, pendingLive: [], into: null, start: 0,
+  queues: {},
+  features: {}, // thread id -> messages waiting for the running turn to end
+  loading: null,
+  loadTimer: 0,
+  renderToken: 0,
+  rendering: false,
+  pendingLive: [],
+  into: null,
+  start: 0,
 };
 setFileScope(() => state.current); // local image/video refs in markdown resolve against this thread's folder
 const views = new Map(); // five most recently visited threads; stale snapshots remain visible during revalidation
 const chatSearch = createChatSearch({
   current: () => state.current,
-  history: () => ({ older: state.start > 0, busy: !!(state.loading || state.rendering || state.loadingEarlier || state.revalidating && !state.deferredRefresh) }),
+  history: () => ({
+    older: state.start > 0,
+    busy: !!(
+      state.loading ||
+      state.rendering ||
+      state.loadingEarlier ||
+      (state.revalidating && !state.deferredRefresh)
+    ),
+  }),
   loadEarlier: () => requestEarlier(state.current),
-  prepare: () => { for (const card of $("chat").querySelectorAll(".card")) materializeTool(card); },
-  navigate: () => { releaseHistoryAnchor(); state.stick = false; },
+  prepare: () => {
+    for (const card of $("chat").querySelectorAll(".card")) materializeTool(card);
+  },
+  navigate: () => {
+    releaseHistoryAnchor();
+    state.stick = false;
+  },
 });
-let ws, retry = 0, reconnectTimer = 0, probeTimer = 0;
+let ws,
+  retry = 0,
+  reconnectTimer = 0,
+  probeTimer = 0;
 let draftsLoaded = false;
 
 // ---------- connection ----------
@@ -51,7 +109,9 @@ function connect() {
   if (!draftsLoaded) return;
   clearTimeout(reconnectTimer);
   if (ws && ws.readyState <= 1) return; // connecting or open already
-  const sock = ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
+  const sock = (ws = new WebSocket(
+    `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`,
+  ));
   sock.onopen = () => {
     if (sock !== ws) return;
     retry = 0;
@@ -59,10 +119,13 @@ function connect() {
     questions.setConnected(true);
     banner("");
   };
-  sock.onclose = () => { if (sock === ws) closed(); };
+  sock.onclose = () => {
+    if (sock === ws) closed();
+  };
   sock.onmessage = (m) => {
     if (sock !== ws) return;
-    clearTimeout(probeTimer); probeTimer = 0; // anything from the server proves the socket alive
+    clearTimeout(probeTimer);
+    probeTimer = 0; // anything from the server proves the socket alive
     const receivedAt = performance.now();
     const message = JSON.parse(m.data);
     if (message.t === "history") {
@@ -75,11 +138,13 @@ function connect() {
   };
 }
 function closed() {
-  clearTimeout(probeTimer); probeTimer = 0;
+  clearTimeout(probeTimer);
+  probeTimer = 0;
   questions.setConnected(false);
   if (queueEditor) {
     queueEditor.pending = false;
-    $("queue-edit-error").textContent = "Disconnected. Reconnect to save, or reopen this editor after reconnecting.";
+    $("queue-edit-error").textContent =
+      "Disconnected. Reconnect to save, or reopen this editor after reconnecting.";
     $("queue-cancel").disabled = false;
     $("queue-save").disabled = queueEditor.revision == null;
     $("queue-draft").disabled = queueEditor.revision == null;
@@ -97,7 +162,9 @@ function probe() {
     probeTimer = 0;
     const dead = ws;
     ws = null; // its late close event is ignored
-    try { dead.close(); } catch {}
+    try {
+      dead.close();
+    } catch {}
     closed();
     retry = 0;
     connect();
@@ -109,7 +176,12 @@ function reconnectNow() {
   retry = 0;
   connect();
 }
-document.addEventListener("visibilitychange", () => { if (!document.hidden) { reconnectNow(); warmSoon(); } });
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) {
+    reconnectNow();
+    warmSoon();
+  }
+});
 addEventListener("online", reconnectNow);
 addEventListener("pageshow", (e) => e.persisted && reconnectNow());
 // Messages the user typed or Stop presses: kept until the server acknowledges them, resent after a reconnect (the server drops
@@ -118,16 +190,26 @@ const outbox = [];
 const sendingDrafts = new Map();
 let cidSeq = 0;
 function sendReliable(msg, draft) {
-  const item = { ...msg, cid: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}-${++cidSeq}` };
+  const item = {
+    ...msg,
+    cid: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}-${++cidSeq}`,
+  };
   if (draft) {
     draft = { ...draft, createdAt: Date.now(), sequence: cidSeq };
     sendingDrafts.set(item.cid, draft);
-    try { localStorage.setItem(`ac_sending:${item.cid}`, JSON.stringify(draft)); }
-    catch { toast("Browser storage unavailable. Keep this page open until your message sends."); }
+    try {
+      localStorage.setItem(`ac_sending:${item.cid}`, JSON.stringify(draft));
+    } catch {
+      toast("Browser storage unavailable. Keep this page open until your message sends.");
+    }
   }
   outbox.push(item);
-  if (!send(item)) { toast("Offline. Your message will send when the connection is back."); return false; }
-  if (!state.features.acks) acked(item.cid); // An older server cannot acknowledge: never resend.
+  if (!send(item)) {
+    toast("Offline. Your message will send when the connection is back.");
+    return false;
+  }
+  if (!state.features.acks)
+    acked(item.cid); // An older server cannot acknowledge: never resend.
   else setTimeout(() => outbox.includes(item) && probe(), 2000);
   return true;
 }
@@ -144,15 +226,32 @@ function acked(cid, accepted = true) {
   sendingDrafts.delete(cid);
   if (!accepted && draft) void recoverSendingDraft(cid, draft);
   else if (draft) void finishSendingDraft(cid, draft);
-  else try { localStorage.removeItem(`ac_sending:${cid}`); } catch {}
+  else
+    try {
+      localStorage.removeItem(`ac_sending:${cid}`);
+    } catch {}
 }
-const send = (o) => { if (ws?.readyState !== 1) return false; ws.send(JSON.stringify(o)); return true; };
-const questions = createQuestions({ send, root: () => $("chat"), changed: () => { renderThreads(); updateWorking(); } });
-const latency = createLatencyReporter(samples => {
-  if (ws?.readyState !== 1 || !state.features.latency) return false;
-  ws.send(JSON.stringify({ t: "telemetry", samples }));
+const send = (o) => {
+  if (ws?.readyState !== 1) return false;
+  ws.send(JSON.stringify(o));
   return true;
-}, () => state.features.latency);
+};
+const questions = createQuestions({
+  send,
+  root: () => $("chat"),
+  changed: () => {
+    renderThreads();
+    updateWorking();
+  },
+});
+const latency = createLatencyReporter(
+  (samples) => {
+    if (ws?.readyState !== 1 || !state.features.latency) return false;
+    ws.send(JSON.stringify({ t: "telemetry", samples }));
+    return true;
+  },
+  () => state.features.latency,
+);
 let firstToken = null; // the turn this device just started, until its first token is painted
 const firstTokenMs = new Map(); // thread -> last send -> first token painted, shown in Run details
 function banner(t, action) {
@@ -190,51 +289,93 @@ async function apiFetch(url, opts = {}) {
   return r;
 }
 // The websocket only reports a failed upgrade as a close; ask over plain HTTP whether that is a sign-in problem.
-const checkSignIn = () => apiFetch("/manifest.webmanifest", { cache: "no-store" }).then(() => {}, () => {});
+const checkSignIn = () =>
+  apiFetch("/manifest.webmanifest", { cache: "no-store" }).then(
+    () => {},
+    () => {},
+  );
 
 // File viewing adds no request to startup. Warm its module and stylesheet only after history has painted, in idle time.
-let fileViewer, fileViewerLoad, fileWarmupScheduled = false;
+let fileViewer,
+  fileViewerLoad,
+  fileWarmupScheduled = false;
 function loadFileViewer(metricThread = state.current) {
   const at = performance.now();
-  return fileViewerLoad ||= import("/file-viewer.js").then(async module => {
-    await module.prepare();
-    const viewer = fileViewer ||= module.createFileViewer(apiFetch, sample => latency.record(sample));
-    viewer.record({ kind: "viewer_module", thread: metricThread, total_ms: performance.now() - at, module_ms: performance.now() - at });
-    return viewer;
-  }).catch(error => { fileViewerLoad = null; throw error; });
+  return (fileViewerLoad ||= import("/file-viewer.js")
+    .then(async (module) => {
+      await module.prepare();
+      const viewer = (fileViewer ||= module.createFileViewer(apiFetch, (sample) =>
+        latency.record(sample),
+      ));
+      viewer.record({
+        kind: "viewer_module",
+        thread: metricThread,
+        total_ms: performance.now() - at,
+        module_ms: performance.now() - at,
+      });
+      return viewer;
+    })
+    .catch((error) => {
+      fileViewerLoad = null;
+      throw error;
+    }));
 }
 function warmFileViewer() {
   if (fileWarmupScheduled) return;
   fileWarmupScheduled = true;
-  requestAnimationFrame(() => requestAnimationFrame(() => {
-    const warm = () => { if (!document.hidden) loadFileViewer().catch(() => {}); };
-    if ("requestIdleCallback" in window) window.requestIdleCallback(warm);
-    else setTimeout(warm, 1500);
-  }));
+  requestAnimationFrame(() =>
+    requestAnimationFrame(() => {
+      const warm = () => {
+        if (!document.hidden) loadFileViewer().catch(() => {});
+      };
+      if ("requestIdleCallback" in window) window.requestIdleCallback(warm);
+      else setTimeout(warm, 1500);
+    }),
+  );
 }
 function openFileLink(event) {
   if (event.type === "auxclick" && event.button !== 1) return;
   const link = event.target.closest?.("a");
   if (!link || !$("chat").contains(link)) return;
   const image = link.dataset.viewerImage;
-  const ref = image ? { path: link.title || link.querySelector("img")?.alt || "Image", imageUrl: link.getAttribute("href") } : parseFileRef(link.dataset.fileRef || link.getAttribute("href"));
+  const ref = image
+    ? {
+        path: link.title || link.querySelector("img")?.alt || "Image",
+        imageUrl: link.getAttribute("href"),
+      }
+    : parseFileRef(link.dataset.fileRef || link.getAttribute("href"));
   if (!ref || !state.current) return;
   event.preventDefault(); // modified clicks also stay inside the viewer instead of opening a broken app route
-  const thread = state.current, openedAt = performance.now();
+  const thread = state.current,
+    openedAt = performance.now();
   link.setAttribute("aria-busy", "true");
-  loadFileViewer().then(viewer => {
-    if (state.current === thread && link.isConnected) viewer.open({ thread, ref, opener: link, openedAt, module_ms: performance.now() - openedAt });
-  }).catch(error => toast(error.message || "Could not load the file viewer. Try again.")).finally(() => link.removeAttribute("aria-busy"));
+  loadFileViewer()
+    .then((viewer) => {
+      if (state.current === thread && link.isConnected)
+        viewer.open({
+          thread,
+          ref,
+          opener: link,
+          openedAt,
+          module_ms: performance.now() - openedAt,
+        });
+    })
+    .catch((error) => toast(error.message || "Could not load the file viewer. Try again."))
+    .finally(() => link.removeAttribute("aria-busy"));
 }
 $("files").onclick = async () => {
-  const opener = $("files"), openedAt = performance.now();
+  const opener = $("files"),
+    openedAt = performance.now();
   opener.setAttribute("aria-busy", "true");
   try {
     const viewer = await loadFileViewer("viewer:repos");
     setNav(false);
     viewer.openWorkspace({ opener, openedAt, module_ms: performance.now() - openedAt });
-  } catch (error) { toast(error.message || "Could not load the file viewer. Try again."); }
-  finally { opener.removeAttribute("aria-busy"); }
+  } catch (error) {
+    toast(error.message || "Could not load the file viewer. Try again.");
+  } finally {
+    opener.removeAttribute("aria-busy");
+  }
 };
 $("chat").addEventListener("click", openFileLink);
 $("chat").addEventListener("auxclick", openFileLink);
@@ -249,7 +390,7 @@ function handle(m) {
       state.commands[m.provider] = m.commands;
       updateSlash();
       break;
-    case "hello":
+    case "hello": {
       // the server was swapped for a new build (restart-when-idle): reload to match, unless that would lose a draft
       if (state.build && m.build && m.build !== state.build) {
         if (!$("input").value && !queueEditor && !outbox.length) return void location.reload();
@@ -275,17 +416,35 @@ function handle(m) {
       menus.model.provider = null; // re-read per-agent model lists below
       state.threads = new Map(m.threads.map((t) => [t.id, t]));
       state.tasks = new Map((m.tasks || []).map((t) => [t.id, t]));
-      menus.dProv.setItems(m.providers.map((p) => ({ value: p.id, label: p.label, desc: p.ok ? undefined : p.hint, disabled: !p.ok })), m.providers.find((p) => p.ok)?.id);
-      menus.dCwd.setItems(m.dirs.map((d) => ({ value: d, label: d.replace(/^.*\/repos\/?/, "~/repos/") || d, icon: "folder" })), m.dirs[0]);
+      menus.dProv.setItems(
+        m.providers.map((p) => ({
+          value: p.id,
+          label: p.label,
+          desc: p.ok ? undefined : p.hint,
+          disabled: !p.ok,
+        })),
+        m.providers.find((p) => p.ok)?.id,
+      );
+      menus.dCwd.setItems(
+        m.dirs.map((d) => ({
+          value: d,
+          label: d.replace(/^.*\/repos\/?/, "~/repos/") || d,
+          icon: "folder",
+        })),
+        m.dirs[0],
+      );
       fillDialog(menus.dProv.value);
       state.ready = true; // until the first hello there is nothing true to say, so the chat stays blank rather than "No thread"
       renderThreads();
       let last = null;
-      try { last = localStorage.getItem("ac_thread"); } catch {}
+      try {
+        last = localStorage.getItem("ac_thread");
+      } catch {}
       const linked = linkedThread();
       if (linked && state.threads.has(linked)) openThread(linked);
       else if (state.current && state.threads.has(state.current)) openThread(state.current);
-      else if (last && state.threads.has(last)) openThread(last); // first load: reopen the thread the reader last had open
+      else if (last && state.threads.has(last))
+        openThread(last); // first load: reopen the thread the reader last had open
       else if (state.threads.size) openThread([...state.threads.values()][0].id);
       else {
         clearChat();
@@ -293,6 +452,7 @@ function handle(m) {
         warmFileViewer();
       }
       break;
+    }
     case "thread":
       state.threads.set(m.thread.id, m.thread);
       renderThreads();
@@ -306,7 +466,10 @@ function handle(m) {
       writeDraft(m.thread, "");
       for (const p of attachmentDrafts.get(m.thread) || []) forgetAttachment(p);
       attachmentDrafts.delete(m.thread);
-      if (state.current === m.thread) { pending = []; renderThumbs(); }
+      if (state.current === m.thread) {
+        pending = [];
+        renderThumbs();
+      }
       if (state.current === m.thread) {
         state.current = null;
         $("input").value = "";
@@ -326,7 +489,13 @@ function handle(m) {
       renderThreads();
       break;
     case "task_saved":
-      toast(m.task.repeat === "manual" ? `Saved “${m.task.title}”. Run it from ⋯ → Run now.` : m.task.enabled && m.task.nextRunAt ? `Saved “${m.task.title}”. Next run ${new Date(m.task.nextRunAt).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" })}.` : `Saved “${m.task.title}”.`);
+      toast(
+        m.task.repeat === "manual"
+          ? `Saved “${m.task.title}”. Run it from ⋯ → Run now.`
+          : m.task.enabled && m.task.nextRunAt
+            ? `Saved “${m.task.title}”. Next run ${new Date(m.task.nextRunAt).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" })}.`
+            : `Saved “${m.task.title}”.`,
+      );
       break;
     case "history":
       if (m.thread !== state.current || (m.request != null && m.request !== state.request)) break;
@@ -353,10 +522,12 @@ function handle(m) {
     case "event":
       if (m.event.type === "question" || m.event.type === "question_answer") {
         questions.receive(m.thread, m.event, true);
-        renderThreads(); updateWorking();
+        renderThreads();
+        updateWorking();
       }
       if (views.has(m.thread)) views.get(m.thread).stale = true;
-      if (m.event.type === "rate_limit_event") setUsage(m.event, threadUsageKey(state.threads.get(m.thread)));
+      if (m.event.type === "rate_limit_event")
+        setUsage(m.event, threadUsageKey(state.threads.get(m.thread)));
       if (m.thread !== state.current) break;
       if (state.revalidating && (!state.rendering || state.deferredRefresh)) {
         // Durable events before the history reply are already in its snapshot; deltas are never persisted.
@@ -365,7 +536,8 @@ function handle(m) {
         break;
       }
       if (m.seq) state.end = Math.max(state.end || 0, m.seq);
-      if (state.rendering) state.pendingLive.push(m.event); // history is still being drawn: keep order, replay these after
+      if (state.rendering)
+        state.pendingLive.push(m.event); // history is still being drawn: keep order, replay these after
       else onEvent(m.event, true);
       break;
     case "invalidate":
@@ -388,16 +560,58 @@ function modelMeta(v) {
   const [prov, ...rest] = v.split("/");
   const id = rest.pop();
   const free = id.endsWith(":free");
-  return { label: id.replace(/:free$/, ""), desc: [prov, rest.join("/"), free && "free"].filter(Boolean).join(" · ") };
+  return {
+    label: id.replace(/:free$/, ""),
+    desc: [prov, rest.join("/"), free && "free"].filter(Boolean).join(" · "),
+  };
 }
 const ADV = "advisor:";
 const ADVISOR_LABEL = { default: "Settings default", off: "Off", opus: "Opus", fable: "Fable" };
 // the model list, then (for agents that have an advisor) "Advisor · X" rows: one dropdown covers both choices
-const withAdvisors = (items, p, advisor = "default") => !p?.advisors?.length ? items : [...items, ...["default", ...p.advisors].map((a) => ({ value: ADV + a, label: `Advisor · ${ADVISOR_LABEL[a] || cap(a)}`, desc: a === "default" ? "Use the advisor from your Claude settings." : a === "off" ? "No additional advisor model calls." : "A stronger model Claude consults before big decisions (additional usage).", icon: "sparkle", keep: true, checked: a === advisor }))];
-const modelItems = (models, p) => models.map((v) => ({ value: v, ...modelMeta(v), ...(p?.modelDetails?.[v] ? { label: p.modelDetails[v].label, desc: p.modelDetails[v].description ?? modelMeta(v).desc } : {}) }));
+const withAdvisors = (items, p, advisor = "default") =>
+  !p?.advisors?.length
+    ? items
+    : [
+        ...items,
+        ...["default", ...p.advisors].map((a) => ({
+          value: ADV + a,
+          label: `Advisor · ${ADVISOR_LABEL[a] || cap(a)}`,
+          desc:
+            a === "default"
+              ? "Use the advisor from your Claude settings."
+              : a === "off"
+                ? "No additional advisor model calls."
+                : "A stronger model Claude consults before big decisions (additional usage).",
+          icon: "sparkle",
+          keep: true,
+          checked: a === advisor,
+        })),
+      ];
+const modelItems = (models, p) =>
+  models.map((v) => ({
+    value: v,
+    ...modelMeta(v),
+    ...(p?.modelDetails?.[v]
+      ? { label: p.modelDetails[v].label, desc: p.modelDetails[v].description ?? modelMeta(v).desc }
+      : {}),
+  }));
 function fillEffort(menu, p, model, value = "default") {
   const meta = p?.modelDetails?.[model];
-  menu.setItems([{ value: "default", label: "Effort · default", desc: `Inherit ${p?.label || "agent"} configuration. ${meta?.defaultEffort ? `Model default: ${meta.defaultEffort}.` : meta?.efforts?.length ? "Choose an effort to override the inherited setting." : "This model does not report effort options."}` }, ...(meta?.efforts || []).map(value => ({ value, label: `Effort · ${effortLabel(value)}`, ...(EFFORT_DESC[value] ? { desc: EFFORT_DESC[value] } : {}) }))], value);
+  menu.setItems(
+    [
+      {
+        value: "default",
+        label: "Effort · default",
+        desc: `Inherit ${p?.label || "agent"} configuration. ${meta?.defaultEffort ? `Model default: ${meta.defaultEffort}.` : meta?.efforts?.length ? "Choose an effort to override the inherited setting." : "This model does not report effort options."}`,
+      },
+      ...(meta?.efforts || []).map((value) => ({
+        value,
+        label: `Effort · ${effortLabel(value)}`,
+        ...(EFFORT_DESC[value] ? { desc: EFFORT_DESC[value] } : {}),
+      })),
+    ],
+    value,
+  );
 }
 function dialogEffort(model = menus.dModel.value, id = menus.dProv.value) {
   const p = prov(id);
@@ -406,46 +620,70 @@ function dialogEffort(model = menus.dModel.value, id = menus.dProv.value) {
 }
 const prov = (id) => state.providers.get(id);
 const provLabel = (id) => prov(id)?.label || id || "";
-const claudeAccounts = () => prov("claude")?.accounts || [{ id: "sunny", label: "Sunny", ready: !!prov("claude")?.ok }];
-const threadUsageKey = (t) => t?.provider === "claude" && t.claudeAccount === "nefro" ? "claude:nefro" : t?.provider || "claude";
-const claudeAccount = (id = "sunny") => claudeAccounts().find(a => a.id === id) || { id, label: cap(id) };
+const claudeAccounts = () =>
+  prov("claude")?.accounts || [{ id: "sunny", label: "Sunny", ready: !!prov("claude")?.ok }];
+const threadUsageKey = (t) =>
+  t?.provider === "claude" && t.claudeAccount === "nefro"
+    ? "claude:nefro"
+    : t?.provider || "claude";
+const claudeAccount = (id = "sunny") =>
+  claudeAccounts().find((a) => a.id === id) || { id, label: cap(id) };
 function syncDialogAccount() {
   const visible = menus.dProv.value === "claude" && dialogTask === null;
   $("account-field").hidden = !visible;
   const account = claudeAccount(menus.dAccount.value);
-  $("d-account-note").textContent = account.ready ? "This account supplies the allowance for this thread." : "Sign in to this account before creating a thread.";
+  $("d-account-note").textContent = account.ready
+    ? "This account supplies the allowance for this thread."
+    : "Sign in to this account before creating a thread.";
   $("d-ok").disabled = visible ? !account.ready : !prov(menus.dProv.value)?.ok;
   $("d-signin").hidden = !visible || !!account.ready;
   if (signingIn !== account.id) $("d-signin-code").hidden = true;
   if (dialogFork) syncForkContext();
 }
-const accountItems = () => claudeAccounts().map(a => ({ value: a.id, label: a.label, desc: a.email || (a.ready ? "Signed in" : "Sign-in required") }));
+const accountItems = () =>
+  claudeAccounts().map((a) => ({
+    value: a.id,
+    label: a.label,
+    desc: a.email || (a.ready ? "Signed in" : "Sign-in required"),
+  }));
 // Claude sign-in from the dialog: the server runs `claude auth login`; Anthropic's page shows a code the user pastes back here.
 let signingIn = null;
 async function claudeLogin(account, body) {
-  const r = await apiFetch(`/api/claude-login/${account}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  const r = await apiFetch(`/api/claude-login/${account}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
   const data = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(data.error || "Sign-in failed.");
   return data;
 }
 $("d-signin-go").onclick = async () => {
-  const account = menus.dAccount.value, note = $("d-account-note");
+  const account = menus.dAccount.value,
+    note = $("d-account-note");
   const tab = window.open("", "_blank"); // open now, inside the tap, so the browser does not block it as a popup
   $("d-signin-go").disabled = true;
   note.textContent = "Opening Claude sign-in…";
   try {
     const { url } = await claudeLogin(account, {});
-    if (tab) { tab.opener = null; tab.location.href = url; } else window.open(url, "_blank", "noopener");
+    if (tab) {
+      tab.opener = null;
+      tab.location.href = url;
+    } else window.open(url, "_blank", "noopener");
     signingIn = account;
     $("d-code").value = "";
     $("d-signin-code").hidden = false;
     note.textContent = `Sign in as ${claudeAccount(account).email}, then paste the code Claude shows.`;
     $("d-code").focus();
-  } catch (e) { tab?.close(); note.textContent = e.message; }
+  } catch (e) {
+    tab?.close();
+    note.textContent = e.message;
+  }
   $("d-signin-go").disabled = false;
 };
 async function finishSignIn() {
-  const account = signingIn, note = $("d-account-note");
+  const account = signingIn,
+    note = $("d-account-note");
   if (!account) return;
   $("d-signin-finish").disabled = true;
   note.textContent = "Checking the code…";
@@ -455,17 +693,20 @@ async function finishSignIn() {
     signingIn = null;
     menus.dAccount.setItems(accountItems(), account);
     syncDialogAccount();
-  } catch (e) { note.textContent = e.message; }
+  } catch (e) {
+    note.textContent = e.message;
+  }
   $("d-signin-finish").disabled = false;
 }
 $("d-signin-finish").onclick = finishSignIn;
 // An existing thread whose Claude login expired: open the new-thread dialog on that account so its Sign in button shows.
-const CLAUDE_AUTH_FAILED = /Failed to authenticate|OAuth session expired|Not logged in|Please run \/login/i;
+const CLAUDE_AUTH_FAILED =
+  /Failed to authenticate|OAuth session expired|Not logged in|Please run \/login/i;
 function signInButton(account) {
   const btn = el("button", "btn sm", `Sign in to ${claudeAccount(account).label}`);
   btn.type = "button";
   btn.onclick = () => {
-    const a = claudeAccounts().find(x => x.id === account);
+    const a = claudeAccounts().find((x) => x.id === account);
     if (a) a.ready = false; // hello-time readiness is stale once the CLI has rejected the login
     openNewDialog();
     menus.dProv.setValue("claude");
@@ -475,22 +716,46 @@ function signInButton(account) {
   };
   return btn;
 }
-$("d-code").onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); finishSignIn(); } };
+$("d-code").onkeydown = (e) => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    finishSignIn();
+  }
+};
 // Auto: Sonnet or Sol at medium effort, on whichever five-hour window would otherwise leave the most allowance unused.
-const autoUsable = (r) => !!prov(r.provider)?.ok && prov(r.provider).models?.includes(r.model) && (!r.account || !!claudeAccount(r.account).ready);
-const autoName = (r) => r.provider === "claude" ? `Claude · ${claudeAccount(r.account).label}` : provLabel(r.provider);
+const autoUsable = (r) =>
+  !!prov(r.provider)?.ok &&
+  prov(r.provider).models?.includes(r.model) &&
+  (!r.account || !!claudeAccount(r.account).ready);
+const autoName = (r) =>
+  r.provider === "claude" ? `Claude · ${claudeAccount(r.account).label}` : provLabel(r.provider);
 const AUTO_HINT = "Sonnet or Sol medium, on the allowance closest to going unused.";
-const resetClock = (at) => new Date(at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+const resetClock = (at) =>
+  new Date(at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 function renderAutoPanel() {
-  const list = autoCandidates(state.usage, Date.now(), autoUsable), best = autoPick(list);
+  const list = autoCandidates(state.usage, Date.now(), autoUsable),
+    best = autoPick(list);
   const head = el("div", "auto-line hdr");
   head.append(el("span", "", "5-hour"), el("span", "", "Left"), el("span", "", "Resets"));
-  $("d-auto-panel").replaceChildren(head, ...list.map(c => {
-    const row = el("div", `auto-line${c === best ? " best" : ""}${c.blocked ? " off" : ""}`);
-    row.title = c.blocked ? `Skipped: ${c.blocked}` : c === best ? "Auto picks this one" : "";
-    row.append(el("span", "", autoName(c.route)), el("span", "", c.known ? `${Math.round(c.left)}% left` : "Unknown"), el("span", "", c.resetsAt ? `${resetClock(c.resetsAt)} · ${resetsText(c.resetsAt).replace(/^Resets in /, "")}` : "No reset"));
-    return row;
-  }));
+  $("d-auto-panel").replaceChildren(
+    head,
+    ...list.map((c) => {
+      const row = el("div", `auto-line${c === best ? " best" : ""}${c.blocked ? " off" : ""}`);
+      row.title = c.blocked ? `Skipped: ${c.blocked}` : c === best ? "Auto picks this one" : "";
+      row.append(
+        el("span", "", autoName(c.route)),
+        el("span", "", c.known ? `${Math.round(c.left)}% left` : "Unknown"),
+        el(
+          "span",
+          "",
+          c.resetsAt
+            ? `${resetClock(c.resetsAt)} · ${resetsText(c.resetsAt).replace(/^Resets in /, "")}`
+            : "No reset",
+        ),
+      );
+      return row;
+    }),
+  );
 }
 $("d-auto-info").onclick = () => {
   const open = $("d-auto-panel").hidden;
@@ -500,7 +765,8 @@ $("d-auto-info").onclick = () => {
 };
 $("d-auto").onclick = () => {
   const best = autoPick(autoCandidates(state.usage, Date.now(), autoUsable));
-  if (!best) return void ($("d-auto-note").textContent = "No signed-in agent has five-hour allowance left.");
+  if (!best)
+    return void ($("d-auto-note").textContent = "No signed-in agent has five-hour allowance left.");
   const r = best.route;
   menus.dProv.setValue(r.provider);
   fillDialog(r.provider);
@@ -509,7 +775,8 @@ $("d-auto").onclick = () => {
   dialogEffort(r.model, r.provider);
   menus.dEffort.setValue(r.effort);
   syncDialogAccount();
-  $("d-auto-note").textContent = `${autoName(r)} · ${menus.dModel.items().find(i => i.value === r.model)?.label || r.model} · medium. ${best.known ? `${Math.round(best.left)}% left${best.resetsAt ? `, ${resetsText(best.resetsAt).toLowerCase()}` : ""}` : "Usage unknown"}.`;
+  $("d-auto-note").textContent =
+    `${autoName(r)} · ${menus.dModel.items().find((i) => i.value === r.model)?.label || r.model} · medium. ${best.known ? `${Math.round(best.left)}% left${best.resetsAt ? `, ${resetsText(best.resetsAt).toLowerCase()}` : ""}` : "Usage unknown"}.`;
   if (!$("d-auto-panel").hidden) renderAutoPanel();
 };
 function fillDialog(id) {
@@ -524,7 +791,14 @@ function fillDialog(id) {
   menus.dAccount.setItems(accountItems(), menus.dAccount.value || "sunny");
   syncDialogAccount();
 }
-const modeItems = (modes) => modes.map((v) => ({ value: v, label: MODE_META[v]?.label || v, desc: MODE_META[v]?.desc, icon: MODE_META[v]?.icon, tone: MODE_META[v]?.tone }));
+const modeItems = (modes) =>
+  modes.map((v) => ({
+    value: v,
+    label: MODE_META[v]?.label || v,
+    desc: MODE_META[v]?.desc,
+    icon: MODE_META[v]?.icon,
+    tone: MODE_META[v]?.tone,
+  }));
 
 function chipTrigger(kind) {
   return (it, b) => {
@@ -543,7 +817,10 @@ function chipTrigger(kind) {
       if (it?.tone) b.dataset.tone = it.tone;
       else delete b.dataset.tone;
     }
-    b.setAttribute("aria-label", `${kind === "mode" ? "Permission mode" : kind === "effort" ? "Reasoning effort" : "Model"}: ${it?.label ?? ""}`);
+    b.setAttribute(
+      "aria-label",
+      `${kind === "mode" ? "Permission mode" : kind === "effort" ? "Reasoning effort" : "Model"}: ${it?.label ?? ""}`,
+    );
     b.title = b.getAttribute("aria-label");
   };
 }
@@ -557,36 +834,94 @@ const threadActions = (id) => {
   const items = THREAD_ACTIONS.map((a) => {
     if (a.value === "idle-compaction") {
       const lead = thread?.idleCompactionLeadMs ?? 30_000;
-      const supported = Number.isFinite(thread?.idleCompactionTtlMs) && thread.idleCompactionTtlMs > lead;
-      return { ...a, disabled: !supported,
-        label: !supported ? "Automatic compaction unavailable" : thread.idleCompaction === false ? "Enable automatic compaction" : "Disable automatic compaction",
-        desc: supported ? `Substantial idle contexts; ${lead / 1000}s before estimated cache expiry` : "Cache lifetime is unknown for this provider" };
+      const supported =
+        Number.isFinite(thread?.idleCompactionTtlMs) && thread.idleCompactionTtlMs > lead;
+      return {
+        ...a,
+        disabled: !supported,
+        label: !supported
+          ? "Automatic compaction unavailable"
+          : thread.idleCompaction === false
+            ? "Enable automatic compaction"
+            : "Disable automatic compaction",
+        desc: supported
+          ? `Substantial idle contexts; ${lead / 1000}s before estimated cache expiry`
+          : "Cache lifetime is unknown for this provider",
+      };
     }
-    return a.value === "archive" && filed ? { value: "unarchive", label: "Unarchive", desc: "Back to the working list", icon: "archive" } : a;
+    return a.value === "archive" && filed
+      ? {
+          value: "unarchive",
+          label: "Unarchive",
+          desc: "Back to the working list",
+          icon: "archive",
+        }
+      : a;
   });
   const action = (value) => items.find((item) => item.value === value);
   return [
     action("search"),
     action("rename"),
-    { value: "compaction-menu", label: "Compaction", desc: "Reduce context or manage automatic compaction", icon: "sparkle", children: [action("compact"), action("idle-compaction")] },
+    {
+      value: "compaction-menu",
+      label: "Compaction",
+      desc: "Reduce context or manage automatic compaction",
+      icon: "sparkle",
+      children: [action("compact"), action("idle-compaction")],
+    },
     action("economy"),
     action("fork"),
     action("create-issue"),
-    action("download"), action("share"), action("details"),
-    { value: "archive-menu", label: "Archive", desc: filed ? "Restore or permanently delete this thread" : "Archive or permanently delete this thread", icon: "archive", children: [action(filed ? "unarchive" : "archive"), action("delete")] },
+    action("download"),
+    action("share"),
+    action("details"),
+    {
+      value: "archive-menu",
+      label: "Archive",
+      desc: filed
+        ? "Restore or permanently delete this thread"
+        : "Archive or permanently delete this thread",
+      icon: "archive",
+      children: [action(filed ? "unarchive" : "archive"), action("delete")],
+    },
   ];
 };
 const THREAD_ACTIONS = [
   { value: "search", label: "Search in chat", icon: "search" },
   { value: "rename", label: "Rename", icon: "pencil" },
-  { value: "compact", label: "Compact context", desc: "Reduce context; keep the transcript", icon: "sparkle" },
+  {
+    value: "compact",
+    label: "Compact context",
+    desc: "Reduce context; keep the transcript",
+    icon: "sparkle",
+  },
   { value: "idle-compaction", label: "Automatic compaction", icon: "sparkle" },
-  { value: "economy", label: "Economy settings", desc: "Use medium effort and turn the advisor off; keep the selected model", icon: "sparkle" },
-  { value: "fork", label: "Fork…", desc: "Continue in a new thread; pick agent, model and context", icon: "fork" },
-  { value: "create-issue", label: "Create GitHub issue", desc: "Pi drafts an issue from the composer text; review, then open GitHub", icon: "compose" },
+  {
+    value: "economy",
+    label: "Economy settings",
+    desc: "Use medium effort and turn the advisor off; keep the selected model",
+    icon: "sparkle",
+  },
+  {
+    value: "fork",
+    label: "Fork…",
+    desc: "Continue in a new thread; pick agent, model and context",
+    icon: "fork",
+  },
+  {
+    value: "create-issue",
+    label: "Create GitHub issue",
+    desc: "Pi drafts an issue from the composer text; review, then open GitHub",
+    icon: "compose",
+  },
   { value: "download", label: "Download", desc: "Save as a Markdown file", icon: "download" },
   { value: "share", label: "Share", desc: "Send the conversation as text", icon: "share" },
-  { value: "details", label: "Run details", desc: "Model, effort, tokens and load timings", icon: "code" },
+  {
+    value: "details",
+    label: "Run details",
+    desc: "Model, effort, tokens and load timings",
+    icon: "code",
+  },
   { value: "archive", label: "Archive", desc: "Move out of the working list", icon: "archive" },
   { value: "delete", label: "Delete thread", icon: "trash", tone: "danger" },
 ];
@@ -617,11 +952,19 @@ async function runThreadAction(id, action) {
     send({ t: "update", thread: id, idleCompaction: enabled });
     toast(`Automatic compaction ${enabled ? "enabled" : "disabled"} for this thread.`);
   } else if (action === "economy") {
-    if (t.status === "running") { toast("Apply economy settings when this turn finishes."); return; }
+    if (t.status === "running") {
+      toast("Apply economy settings when this turn finishes.");
+      return;
+    }
     const provider = state.providers.get(t.provider);
     const efforts = provider?.modelDetails?.[t.model]?.efforts || [];
-    const effort = ["medium", "low"].find(e => efforts.includes(e)) || "default";
-    send({ t: "update", thread: id, effort, ...(provider?.advisors?.includes("off") ? { advisor: "off" } : {}) });
+    const effort = ["medium", "low"].find((e) => efforts.includes(e)) || "default";
+    send({
+      t: "update",
+      thread: id,
+      effort,
+      ...(provider?.advisors?.includes("off") ? { advisor: "off" } : {}),
+    });
     toast("Economy settings applied; selected model kept.");
   } else if (action === "details") {
     setNav(false);
@@ -666,38 +1009,140 @@ async function runThreadAction(id, action) {
 }
 
 const menus = {
-  effort: createMenu({ trigger: $("effort"), label: "Reasoning effort", side: "top", renderTrigger: chipTrigger("effort"), onSelect: v => send({ t: "update", thread: state.current, effort: v }) }),
-  dEffort: createMenu({ trigger: $("d-effort"), label: "Reasoning effort", renderTrigger: fieldTrigger }),
-  model: createMenu({ trigger: $("model"), label: "Model", side: "top", renderTrigger: chipTrigger("model"), onSelect: (v) => send(v.startsWith(ADV) ? { t: "update", thread: state.current, advisor: v.slice(ADV.length) } : { t: "update", thread: state.current, model: v }) }),
+  effort: createMenu({
+    trigger: $("effort"),
+    label: "Reasoning effort",
+    side: "top",
+    renderTrigger: chipTrigger("effort"),
+    onSelect: (v) => send({ t: "update", thread: state.current, effort: v }),
+  }),
+  dEffort: createMenu({
+    trigger: $("d-effort"),
+    label: "Reasoning effort",
+    renderTrigger: fieldTrigger,
+  }),
+  model: createMenu({
+    trigger: $("model"),
+    label: "Model",
+    side: "top",
+    renderTrigger: chipTrigger("model"),
+    onSelect: (v) =>
+      send(
+        v.startsWith(ADV)
+          ? { t: "update", thread: state.current, advisor: v.slice(ADV.length) }
+          : { t: "update", thread: state.current, model: v },
+      ),
+  }),
   mode: createMenu({
-    trigger: $("mode"), label: "Permission mode", side: "top", renderTrigger: chipTrigger("mode"),
+    trigger: $("mode"),
+    label: "Permission mode",
+    side: "top",
+    renderTrigger: chipTrigger("mode"),
     onSelect: (v) => {
-      if (v === "bypassPermissions" && !confirm("Bypass mode runs every tool without asking, including shell commands on this machine. Enable for this thread?")) return false;
+      if (
+        v === "bypassPermissions" &&
+        !confirm(
+          "Bypass mode runs every tool without asking, including shell commands on this machine. Enable for this thread?",
+        )
+      )
+        return false;
       send({ t: "update", thread: state.current, mode: v });
     },
   }),
   more: createMenu({
-    trigger: $("more"), kind: "menu", label: "Thread actions", header: () => cur()?.title, align: "end",
-    items: THREAD_ACTIONS, getItems: () => threadActions(state.current),
+    trigger: $("more"),
+    kind: "menu",
+    label: "Thread actions",
+    header: () => cur()?.title,
+    align: "end",
+    items: THREAD_ACTIONS,
+    getItems: () => threadActions(state.current),
     onSelect: (v) => state.current && runThreadAction(state.current, v),
   }),
-  dProv: createMenu({ trigger: $("d-prov"), label: "Agent", renderTrigger: fieldTrigger, onSelect: (v) => { fillDialog(v); queueMicrotask(syncDialogAccount); } }),
-  dAccount: createMenu({ trigger: $("d-account"), label: "Claude account", renderTrigger: fieldTrigger, value: "sunny", onSelect: () => queueMicrotask(syncDialogAccount) }),
-  dContext: createMenu({ trigger: $("d-context"), label: "Context", renderTrigger: fieldTrigger, value: "full" }),
+  dProv: createMenu({
+    trigger: $("d-prov"),
+    label: "Agent",
+    renderTrigger: fieldTrigger,
+    onSelect: (v) => {
+      fillDialog(v);
+      queueMicrotask(syncDialogAccount);
+    },
+  }),
+  dAccount: createMenu({
+    trigger: $("d-account"),
+    label: "Claude account",
+    renderTrigger: fieldTrigger,
+    value: "sunny",
+    onSelect: () => queueMicrotask(syncDialogAccount),
+  }),
+  dContext: createMenu({
+    trigger: $("d-context"),
+    label: "Context",
+    renderTrigger: fieldTrigger,
+    value: "full",
+  }),
   dCwd: createMenu({ trigger: $("d-cwd"), label: "Folder", renderTrigger: fieldTrigger }),
-  dModel: createMenu({ trigger: $("d-model"), label: "Model", renderTrigger: fieldTrigger, onSelect: v => dialogEffort(v) }),
-  dMode: createMenu({ trigger: $("d-mode"), label: "Permission mode", renderTrigger: fieldTrigger, onSelect: (v) => { $("d-warn").hidden = v !== "bypassPermissions"; } }),
-  dRepeat: createMenu({ trigger: $("d-repeat"), label: "Repeat", renderTrigger: fieldTrigger, items: REPEAT_ITEMS, value: "daily", onSelect: () => queueMicrotask(syncWhen) }),
-  dDay: createMenu({ trigger: $("d-day"), label: "Day", renderTrigger: fieldTrigger, items: DAY_ITEMS, value: "1" }),
+  dModel: createMenu({
+    trigger: $("d-model"),
+    label: "Model",
+    renderTrigger: fieldTrigger,
+    onSelect: (v) => dialogEffort(v),
+  }),
+  dMode: createMenu({
+    trigger: $("d-mode"),
+    label: "Permission mode",
+    renderTrigger: fieldTrigger,
+    onSelect: (v) => {
+      $("d-warn").hidden = v !== "bypassPermissions";
+    },
+  }),
+  dRepeat: createMenu({
+    trigger: $("d-repeat"),
+    label: "Repeat",
+    renderTrigger: fieldTrigger,
+    items: REPEAT_ITEMS,
+    value: "daily",
+    onSelect: () => queueMicrotask(syncWhen),
+  }),
+  dDay: createMenu({
+    trigger: $("d-day"),
+    label: "Day",
+    renderTrigger: fieldTrigger,
+    items: DAY_ITEMS,
+    value: "1",
+  }),
 };
 const schedules = createSchedules({
-  state, send, openThread: (id) => openThread(id), setNav: (open) => setNav(open), provLabel: (id) => provLabel(id), editTask: (t) => openTaskDialog(t),
-  confirmDelete: (t) => confirm(`Delete “${t.title}”${t.runs.some(r => r.thread) ? " and its run threads" : ""}? Reports already saved to git stay there.`),
+  state,
+  send,
+  openThread: (id) => openThread(id),
+  setNav: (open) => setNav(open),
+  provLabel: (id) => provLabel(id),
+  editTask: (t) => openTaskDialog(t),
+  confirmDelete: (t) =>
+    confirm(
+      `Delete “${t.title}”${t.runs.some((r) => r.thread) ? " and its run threads" : ""}? Reports already saved to git stay there.`,
+    ),
 });
 
 // ---------- threads UI ----------
 const cur = () => state.threads.get(state.current);
-const autoLane = createAutoLane({ state, openThread: (id) => openThread(id), setNav: (open) => setNav(open), provLabel: (id) => provLabel(id), ago: (ts) => ago(ts), assignPremium: openPremiumDialog, debugIssue: (issue) => openJobDebug({ ...issue, openThread: (id) => { setNav(false); openThread(id); } }) });
+const autoLane = createAutoLane({
+  state,
+  openThread: (id) => openThread(id),
+  setNav: (open) => setNav(open),
+  provLabel: (id) => provLabel(id),
+  ago: (ts) => ago(ts),
+  assignPremium: openPremiumDialog,
+  debugIssue: (issue) =>
+    openJobDebug({
+      ...issue,
+      openThread: (id) => {
+        setNav(false);
+        openThread(id);
+      },
+    }),
+});
 function ago(ts) {
   const s = Math.max(0, (Date.now() - ts) / 1000);
   if (s < 60) return "now";
@@ -715,12 +1160,15 @@ function renderThreads() {
     return;
   }
   renderPending = false;
-  const ul = $("threads"), shelf = $("archived");
+  const ul = $("threads"),
+    shelf = $("archived");
   ul.replaceChildren();
   shelf.replaceChildren();
   // a scheduled task's runs are listed under the task in the Scheduled lane, not here
   // automation-started runs (issue work, reviews) are listed in the Auto lane
-  const list = [...state.threads.values()].filter((t) => !(t.schedule && state.tasks.has(t.schedule.task)) && !t.issueRun).sort((a, b) => b.updatedAt - a.updatedAt);
+  const list = [...state.threads.values()]
+    .filter((t) => !(t.schedule && state.tasks.has(t.schedule.task)) && !t.issueRun)
+    .sort((a, b) => b.updatedAt - a.updatedAt);
   // archived threads sit in their own section below, collapsed unless the user opened it
   const filed = list.filter((t) => t.archived).length;
   $("archive").hidden = !filed;
@@ -758,11 +1206,27 @@ function renderThreads() {
     more.title = "Thread actions";
     more.append(icon("more"));
     more.onclick = (e) => e.stopPropagation(); // the menu opens from its own listener; the row must not also open the thread
-    more.addEventListener("keydown", (e) => (e.key === "Enter" || e.key === " ") && e.stopPropagation());
+    more.addEventListener(
+      "keydown",
+      (e) => (e.key === "Enter" || e.key === " ") && e.stopPropagation(),
+    );
     createMenu({
-      trigger: more, kind: "menu", label: `Actions for ${t.title}`, header: () => state.threads.get(t.id)?.title || t.title, align: "end", items: THREAD_ACTIONS, getItems: () => threadActions(t.id),
-      onOpen: () => { rowMenuOpen = true; li.classList.add("menu-open"); },
-      onClose: () => { rowMenuOpen = false; li.classList.remove("menu-open"); if (renderPending) renderThreads(); },
+      trigger: more,
+      kind: "menu",
+      label: `Actions for ${t.title}`,
+      header: () => state.threads.get(t.id)?.title || t.title,
+      align: "end",
+      items: THREAD_ACTIONS,
+      getItems: () => threadActions(t.id),
+      onOpen: () => {
+        rowMenuOpen = true;
+        li.classList.add("menu-open");
+      },
+      onClose: () => {
+        rowMenuOpen = false;
+        li.classList.remove("menu-open");
+        if (renderPending) renderThreads();
+      },
       onSelect: (v) => runThreadAction(t.id, v),
     });
     more.setAttribute("aria-label", `Actions for ${t.title}`);
@@ -783,8 +1247,11 @@ function renderThreads() {
     };
     (t.archived ? shelf : ul).append(li);
   }
-  if (list.length === filed) ul.append(el("li", "empty-list", list.length ? "Everything is archived." : "No threads yet."));
-  $("lane-threads-dot").hidden = !list.some(t => (questions.count(t.id) || t.waiting) || t.background || t.status === "running");
+  if (list.length === filed)
+    ul.append(el("li", "empty-list", list.length ? "Everything is archived." : "No threads yet."));
+  $("lane-threads-dot").hidden = !list.some(
+    (t) => questions.count(t.id) || t.waiting || t.background || t.status === "running",
+  );
   schedules.render();
   autoLane.render();
 }
@@ -804,7 +1271,8 @@ function writeDraft(id, text) {
     if (text) localStorage.setItem(`ac_draft:${id}`, text);
     else localStorage.removeItem(`ac_draft:${id}`);
   } catch {
-    if (!storageWarning) toast("Browser storage unavailable. Drafts are kept only while this page stays open.");
+    if (!storageWarning)
+      toast("Browser storage unavailable. Drafts are kept only while this page stays open.");
     storageWarning = true;
   }
 }
@@ -813,28 +1281,35 @@ function saveDraft() {
 }
 async function finishSendingDraft(cid, draft) {
   // A synchronous receipt prevents an interrupted IndexedDB deletion from restoring a sent file.
-  try { localStorage.setItem(`ac_sending:${cid}`, JSON.stringify({ ...draft, accepted: true })); } catch {}
-  const keys = new Set(draft.attachments.map(p => p.key));
+  try {
+    localStorage.setItem(`ac_sending:${cid}`, JSON.stringify({ ...draft, accepted: true }));
+  } catch {}
+  const keys = new Set(draft.attachments.map((p) => p.key));
   const list = attachmentDrafts.get(draft.thread) || [];
   for (let i = list.length - 1; i >= 0; i--) if (keys.has(list[i].key)) list.splice(i, 1);
-  await Promise.all(draft.attachments.map(p => attachmentStorage.remove(p.key)));
-  if (!storageWarning) try { localStorage.removeItem(`ac_sending:${cid}`); } catch {}
+  await Promise.all(draft.attachments.map((p) => attachmentStorage.remove(p.key)));
+  if (!storageWarning)
+    try {
+      localStorage.removeItem(`ac_sending:${cid}`);
+    } catch {}
 }
 async function recoverSendingDraft(cid, draft) {
   let text = drafts.get(draft.thread) || "";
-  try { text = localStorage.getItem(`ac_draft:${draft.thread}`) ?? text; } catch {}
+  try {
+    text = localStorage.getItem(`ac_draft:${draft.thread}`) ?? text;
+  } catch {}
   const list = attachmentDrafts.get(draft.thread) || [];
   attachmentDrafts.set(draft.thread, list);
   const saved = [];
   const labels = new Map();
   for (const p of draft.attachments) {
-    const existing = list.find(item => item.key === p.key);
+    const existing = list.find((item) => item.key === p.key);
     if (existing) {
       if (p.n && existing.n !== p.n) labels.set(p.n, existing.n);
       continue;
     }
-    if (p.n && list.some(item => item.n === p.n)) {
-      const n = Math.max(0, ...list.map(item => item.n || 0)) + 1;
+    if (p.n && list.some((item) => item.n === p.n)) {
+      const n = Math.max(0, ...list.map((item) => item.n || 0)) + 1;
       labels.set(p.n, n);
       p.n = n;
     }
@@ -842,25 +1317,36 @@ async function recoverSendingDraft(cid, draft) {
     saved.push(attachmentStorage.save(p));
   }
   list.sort((a, b) => (a.order || 0) - (b.order || 0));
-  const recovered = draft.text.replace(/\[Image #(\d+)\]/g, (token, n) => labels.has(Number(n)) ? `[Image #${labels.get(Number(n))}]` : token);
-  if (recovered && text !== recovered && !text.startsWith(`${recovered}\n\n`)) text = recovered + (text ? `\n\n${text}` : "");
+  const recovered = draft.text.replace(/\[Image #(\d+)\]/g, (token, n) =>
+    labels.has(Number(n)) ? `[Image #${labels.get(Number(n))}]` : token,
+  );
+  if (recovered && text !== recovered && !text.startsWith(`${recovered}\n\n`))
+    text = recovered + (text ? `\n\n${text}` : "");
   writeDraft(draft.thread, text);
   if (state.current === draft.thread) restoreDraft(draft.thread);
   await Promise.all(saved);
-  if (!storageWarning) try { localStorage.removeItem(`ac_sending:${cid}`); } catch {}
+  if (!storageWarning)
+    try {
+      localStorage.removeItem(`ac_sending:${cid}`);
+    } catch {}
 }
 function restoreDraft(id) {
   let text = drafts.get(id) || "";
-  try { text = localStorage.getItem(`ac_draft:${id}`) ?? text; } catch {}
+  try {
+    text = localStorage.getItem(`ac_draft:${id}`) ?? text;
+  } catch {}
   try {
     const legacy = sessionStorage.getItem("ac_draft");
-    if (legacy && !text) { text = legacy; writeDraft(id, text); }
+    if (legacy && !text) {
+      text = legacy;
+      writeDraft(id, text);
+    }
     sessionStorage.removeItem("ac_draft");
   } catch {}
   $("input").value = text;
   pending = attachmentDrafts.get(id) || [];
   attachmentDrafts.set(id, pending);
-  imageCount = Math.max(0, ...pending.map(p => p.n || 0));
+  imageCount = Math.max(0, ...pending.map((p) => p.n || 0));
   for (const p of pending) {
     if (p.id) {
       p.url = `/uploads/${p.thread}/${p.id}/${encodeURIComponent(p.name)}`;
@@ -872,24 +1358,53 @@ function restoreDraft(id) {
   closeSlash();
 }
 addEventListener("pagehide", saveDraft);
-document.addEventListener("visibilitychange", () => { if (document.hidden) saveDraft(); });
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) saveDraft();
+});
 
 function openThread(id) {
   const switching = state.current !== id;
   if (switching) chatSearch.close(false);
   if (switching) saveDraft();
-  if (state.measurement) latency.record({ kind: "cancelled", thread: state.measurement.thread, total_ms: performance.now() - state.measurement.at, hidden: state.measurement.hidden });
+  if (state.measurement)
+    latency.record({
+      kind: "cancelled",
+      thread: state.measurement.thread,
+      total_ms: performance.now() - state.measurement.at,
+      hidden: state.measurement.hidden,
+    });
   state.measurement = null;
   releaseHistoryAnchor();
   const old = cur();
-  if (old && (!state.rendering && !state.loading || state.snapshot)) {
-    if (state.live?.raf) { cancelAnimationFrame(state.live.raf); state.live.raf = 0; }
-    const snapshot = (!state.deferredRefresh && state.snapshot) || { nodes: [...$("chat").childNodes], cards: state.cards, doneTasks: state.doneTasks, subs: state.subs, subTools: state.subTools, live: state.live, compact: state.compact, start: state.start, latestStart: state.latestStart, end: state.end, scroll: $("chat").scrollTop, anchor: viewAnchor(), stats: $("diagnostics").textContent };
+  if (old && ((!state.rendering && !state.loading) || state.snapshot)) {
+    if (state.live?.raf) {
+      cancelAnimationFrame(state.live.raf);
+      state.live.raf = 0;
+    }
+    const snapshot = (!state.deferredRefresh && state.snapshot) || {
+      nodes: [...$("chat").childNodes],
+      cards: state.cards,
+      doneTasks: state.doneTasks,
+      subs: state.subs,
+      subTools: state.subTools,
+      live: state.live,
+      compact: state.compact,
+      start: state.start,
+      latestStart: state.latestStart,
+      end: state.end,
+      scroll: $("chat").scrollTop,
+      anchor: viewAnchor(),
+      stats: $("diagnostics").textContent,
+    };
     snapshot.stale ||= !!state.revalidating || !!state.loadingEarlier || old.id === id;
     views.delete(old.id);
     views.set(old.id, snapshot);
     if (views.size > 5) views.delete(views.keys().next().value);
-    state.cards = new Map(); state.subs = new Map(); state.subTools = new Map(); state.doneTasks = null; state.live = null;
+    state.cards = new Map();
+    state.subs = new Map();
+    state.subTools = new Map();
+    state.doneTasks = null;
+    state.live = null;
   }
   state.revalidating = false;
   state.loadingEarlier = false;
@@ -901,10 +1416,16 @@ function openThread(id) {
   state.openAt = performance.now();
   state.request = (state.request || 0) + 1;
   state.current = id;
-  history.replaceState(null, "", `${location.pathname}${location.search}#thread=${encodeURIComponent(id)}`);
+  history.replaceState(
+    null,
+    "",
+    `${location.pathname}${location.search}#thread=${encodeURIComponent(id)}`,
+  );
   if (switching) restoreDraft(id);
   state.usageTab = threadUsageKey(state.threads.get(id));
-  try { localStorage.setItem("ac_thread", id); } catch {}
+  try {
+    localStorage.setItem("ac_thread", id);
+  } catch {}
   state.stick = true;
   state.renderToken++; // any history still being drawn belongs to the thread we are leaving
   state.rendering = false;
@@ -917,8 +1438,17 @@ function openThread(id) {
   const cached = views.get(id);
   if (cached) {
     if (state.features.selectiveEvents) send({ t: "subscribe", thread: id });
-    clearTimeout(state.loadTimer); state.loading = null;
-    state.cards = cached.cards; state.doneTasks = cached.doneTasks; state.subs = cached.subs; state.subTools = cached.subTools; state.start = cached.start; state.latestStart = cached.latestStart; state.end = cached.end; state.live = cached.live; state.compact = cached.compact;
+    clearTimeout(state.loadTimer);
+    state.loading = null;
+    state.cards = cached.cards;
+    state.doneTasks = cached.doneTasks;
+    state.subs = cached.subs;
+    state.subTools = cached.subTools;
+    state.start = cached.start;
+    state.latestStart = cached.latestStart;
+    state.end = cached.end;
+    state.live = cached.live;
+    state.compact = cached.compact;
     $("chat").replaceChildren(...cached.nodes);
     questions.ensure(id);
     earlierIdle();
@@ -932,8 +1462,15 @@ function openThread(id) {
       state.snapshot = cached;
       state.revalidating = true;
       state.deferredRefresh = cached.start < cached.latestStart && !state.stick;
-      const status = el("div", "loading", state.deferredRefresh ? "Showing saved history. Return to latest to update." : "Updating conversation…");
-      status.id = "conversation-updating"; status.setAttribute("role", "status");
+      const status = el(
+        "div",
+        "loading",
+        state.deferredRefresh
+          ? "Showing saved history. Return to latest to update."
+          : "Updating conversation…",
+      );
+      status.id = "conversation-updating";
+      status.setAttribute("role", "status");
       $("chat").before(status);
       if (!state.deferredRefresh) refreshConversation();
     }
@@ -942,7 +1479,13 @@ function openThread(id) {
   showLoading(id);
   state.measurement = { thread: id, at: state.openAt, hidden: document.hidden };
   state.requestSentAt = performance.now();
-  send({ t: "open", thread: id, request: state.request, foregroundOnly: !!state.features.selectiveEvents, small: SMALL_PAGES });
+  send({
+    t: "open",
+    thread: id,
+    request: state.request,
+    foregroundOnly: !!state.features.selectiveEvents,
+    small: SMALL_PAGES,
+  });
 }
 
 // Saved scroll offsets go stale when virtual rows resolve their real height; remember the first visible message (or "at bottom") instead.
@@ -957,14 +1500,20 @@ function viewAnchor() {
   return null;
 }
 function restoreView(view) {
-  const chat = $("chat"), anchor = view.anchor;
-  if (anchor?.bottom) { scrollDown(true); state.stick = true; }
-  else if (anchor?.node?.isConnected) {
+  const chat = $("chat"),
+    anchor = view.anchor;
+  if (anchor?.bottom) {
+    scrollDown(true);
+    state.stick = true;
+  } else if (anchor?.node?.isConnected) {
     const top = chat.getBoundingClientRect().top;
     chat.scrollTop += anchor.node.getBoundingClientRect().top - top - anchor.offset;
     holdHistoryAnchor(anchor.node, top + anchor.offset);
     state.stick = nearBottom();
-  } else { chat.scrollTop = view.scroll; state.stick = nearBottom(); }
+  } else {
+    chat.scrollTop = view.scroll;
+    state.stick = nearBottom();
+  }
   state.lastScrollTop = chat.scrollTop;
 }
 function refreshConversation() {
@@ -974,7 +1523,14 @@ function refreshConversation() {
   state.refreshAt = performance.now();
   state.measurement = { thread: state.current, at: state.refreshAt, hidden: document.hidden };
   state.requestSentAt = performance.now();
-  send({ t: "open", thread: state.current, request: state.request, foregroundOnly: !!state.features.selectiveEvents, since: state.end, small: SMALL_PAGES });
+  send({
+    t: "open",
+    thread: state.current,
+    request: state.request,
+    foregroundOnly: !!state.features.selectiveEvents,
+    since: state.end,
+    small: SMALL_PAGES,
+  });
 }
 
 // ---------- opening a thread: skeleton while it loads, history drawn in slices so the page never freezes ----------
@@ -992,7 +1548,12 @@ function showLoading(id) {
     status.append(el("i", "spin"), el("span", "", "Loading conversation…"));
     const sk = el("div", "skeleton");
     sk.setAttribute("aria-hidden", "true");
-    for (const [who, widths] of [["u", [42]], ["a", [94, 82, 58]], ["u", [30]], ["a", [90, 66]]]) {
+    for (const [who, widths] of [
+      ["u", [42]],
+      ["a", [94, 82, 58]],
+      ["u", [30]],
+      ["a", [90, 66]],
+    ]) {
       const g = el("div", `sk ${who}`);
       for (const w of widths) {
         const bar = el("i");
@@ -1025,8 +1586,12 @@ async function showHistory(m) {
   const cachedMetrics = refreshing ? window.agentConsoleMetrics : null;
   if (refreshing) {
     if (state.live?.raf) cancelAnimationFrame(state.live.raf);
-    state.live = null; state.compact = null;
-    state.cards = new Map(); state.subs = new Map(); state.subTools = new Map(); state.doneTasks = null;
+    state.live = null;
+    state.compact = null;
+    state.cards = new Map();
+    state.subs = new Map();
+    state.subTools = new Map();
+    state.doneTasks = null;
   } else clearChat();
   state.rendering = true;
   $("chat").setAttribute("aria-busy", "true");
@@ -1043,7 +1608,8 @@ async function showHistory(m) {
   state.into = null;
   const refreshScroll = $("chat").scrollTop;
   const refreshFollow = state.stick && nearBottom();
-  const alignHistory = () => refreshing && !refreshFollow ? ($("chat").scrollTop = refreshScroll) : scrollDown(true);
+  const alignHistory = () =>
+    refreshing && !refreshFollow ? ($("chat").scrollTop = refreshScroll) : scrollDown(true);
   if (refreshing) $("chat").replaceChildren(host);
   else $("chat").append(host);
   if (!m.events.length) {
@@ -1092,8 +1658,31 @@ function showDelta(m) {
 function historyDone(m, refreshing, cachedMetrics) {
   questions.ensure(m.thread);
   updateWorking();
-  const metrics = { thread: m.thread, total_ms: Math.round(performance.now() - (refreshing ? state.refreshAt : state.openAt)), server_ms: m.server_ms, render_ms: Math.round(performance.now() - state.historyAt), events: m.events.length, bytes: m.bytes, prepare_ms: Math.max(0, m.receivedAt - m.roundtrip_ms - (refreshing ? state.refreshAt : state.openAt)), roundtrip_ms: m.roundtrip_ms, decode_ms: m.decode_ms, payload_bytes: m.wire_bytes };
-  latency.record({ ...metrics, kind: refreshing ? "refresh" : "open", wait_ms: m.receivedAt - (refreshing ? state.refreshAt : state.openAt), wire_bytes: m.wire_bytes, prepare_ms: Math.max(0, m.receivedAt - m.roundtrip_ms - (state.measurement?.at || 0)), roundtrip_ms: m.roundtrip_ms, decode_ms: m.decode_ms, hidden: state.measurement?.hidden });
+  const metrics = {
+    thread: m.thread,
+    total_ms: Math.round(performance.now() - (refreshing ? state.refreshAt : state.openAt)),
+    server_ms: m.server_ms,
+    render_ms: Math.round(performance.now() - state.historyAt),
+    events: m.events.length,
+    bytes: m.bytes,
+    prepare_ms: Math.max(
+      0,
+      m.receivedAt - m.roundtrip_ms - (refreshing ? state.refreshAt : state.openAt),
+    ),
+    roundtrip_ms: m.roundtrip_ms,
+    decode_ms: m.decode_ms,
+    payload_bytes: m.wire_bytes,
+  };
+  latency.record({
+    ...metrics,
+    kind: refreshing ? "refresh" : "open",
+    wait_ms: m.receivedAt - (refreshing ? state.refreshAt : state.openAt),
+    wire_bytes: m.wire_bytes,
+    prepare_ms: Math.max(0, m.receivedAt - m.roundtrip_ms - (state.measurement?.at || 0)),
+    roundtrip_ms: m.roundtrip_ms,
+    decode_ms: m.decode_ms,
+    hidden: state.measurement?.hidden,
+  });
   state.measurement = null;
   state.revalidating = false;
   state.snapshot = null;
@@ -1101,7 +1690,11 @@ function historyDone(m, refreshing, cachedMetrics) {
   window.agentConsoleMetrics = refreshing ? { ...cachedMetrics, refresh: metrics } : metrics;
   const other = Math.max(0, metrics.total_ms - metrics.roundtrip_ms - metrics.render_ms);
   const detail = `Network ${fmtMs(metrics.roundtrip_ms)} · drawing ${fmtMs(metrics.render_ms)} · other ${fmtMs(other)} ${metrics.events ? ` · ${metrics.events} events, ${Math.round(metrics.payload_bytes / 1024)} KB` : ""}`;
-  if (refreshing) showLoad(`Opened from cache in ${fmtMs(cachedMetrics.total_ms)}, then updated in ${fmtMs(metrics.total_ms)}`, detail);
+  if (refreshing)
+    showLoad(
+      `Opened from cache in ${fmtMs(cachedMetrics.total_ms)}, then updated in ${fmtMs(metrics.total_ms)}`,
+      detail,
+    );
   else showLoad(`Loaded in ${fmtMs(metrics.total_ms)}`, detail);
   console.debug("Agent Console history", metrics);
   warmFileViewer();
@@ -1134,12 +1727,14 @@ function requestEarlier(thread) {
   state.earlierWanted = thread;
   earlierLoading($("chat").querySelector(":scope > .earlier"));
   // A refresh or page draw in flight would swallow the click, so wait for it instead of ignoring it.
-  if (state.revalidating && !state.deferredRefresh || state.rendering || state.loadingEarlier) return void setTimeout(requestEarlier, 100, thread);
+  if ((state.revalidating && !state.deferredRefresh) || state.rendering || state.loadingEarlier)
+    return void setTimeout(requestEarlier, 100, thread);
   state.pageAt = performance.now();
   state.measurement = { thread, at: state.pageAt, hidden: document.hidden };
   state.requestSentAt = performance.now();
   // The socket may be down (phone woke up, reconnecting): a dropped request would leave the button dead, so retry until it is sent.
-  if (!send({ t: "open", thread, before: state.start, request: state.request, small: SMALL_PAGES })) return void setTimeout(requestEarlier, 300, thread);
+  if (!send({ t: "open", thread, before: state.start, request: state.request, small: SMALL_PAGES }))
+    return void setTimeout(requestEarlier, 300, thread);
   state.earlierWanted = null;
   state.loadingEarlier = true;
 }
@@ -1167,7 +1762,11 @@ async function showEarlier(m) {
   state.start = m.start;
   // Pages are counted in events, and a run of tool/sub-agent events can fold into existing rows and add nothing visible:
   // keep fetching (button stays "Loading…") until a screenful appears, so one tap always shows something.
-  const fetchMore = m.start > 0 && btn && chat.scrollHeight - heightBefore < chat.clientHeight && (state.earlierChain = (state.earlierChain || 0) + 1) < 20;
+  const fetchMore =
+    m.start > 0 &&
+    btn &&
+    chat.scrollHeight - heightBefore < chat.clientHeight &&
+    (state.earlierChain = (state.earlierChain || 0) + 1) < 20;
   if (!fetchMore) state.earlierChain = 0;
   if (m.start > 0 && btn) {
     if (!fetchMore) {
@@ -1180,7 +1779,8 @@ async function showEarlier(m) {
   for (let pass = 0; pass < 3; pass++) {
     await frame();
     if (token !== state.renderToken) return;
-    if (anchor?.isConnected && anchorTop != null) chat.scrollTop += anchor.getBoundingClientRect().top - anchorTop;
+    if (anchor?.isConnected && anchorTop != null)
+      chat.scrollTop += anchor.getBoundingClientRect().top - anchorTop;
   }
   state.live = live;
   state.loadingEarlier = false;
@@ -1188,7 +1788,21 @@ async function showEarlier(m) {
   chat.setAttribute("aria-busy", "false");
   state.lastScrollTop = chat.scrollTop;
   for (const e of state.pendingLive.splice(0)) onEvent(e, true);
-  latency.record({ kind: "page", thread: m.thread, total_ms: performance.now() - pageAt, wait_ms: m.receivedAt - pageAt, server_ms: m.server_ms, render_ms: performance.now() - m.receivedAt, events: m.events.length, bytes: m.bytes, wire_bytes: m.wire_bytes, prepare_ms: Math.max(0, m.receivedAt - m.roundtrip_ms - (state.measurement?.at || 0)), roundtrip_ms: m.roundtrip_ms, decode_ms: m.decode_ms, hidden: state.measurement?.hidden });
+  latency.record({
+    kind: "page",
+    thread: m.thread,
+    total_ms: performance.now() - pageAt,
+    wait_ms: m.receivedAt - pageAt,
+    server_ms: m.server_ms,
+    render_ms: performance.now() - m.receivedAt,
+    events: m.events.length,
+    bytes: m.bytes,
+    wire_bytes: m.wire_bytes,
+    prepare_ms: Math.max(0, m.receivedAt - m.roundtrip_ms - (state.measurement?.at || 0)),
+    roundtrip_ms: m.roundtrip_ms,
+    decode_ms: m.decode_ms,
+    hidden: state.measurement?.hidden,
+  });
   state.measurement = null;
   chatSearch.refresh();
   if (fetchMore) return requestEarlier(m.thread);
@@ -1201,8 +1815,12 @@ function renderHead() {
   $("cwd").hidden = !t;
   $("ttl-archived").hidden = !t?.archived;
   $("thread-account").hidden = t?.provider !== "claude";
-  $("thread-account").textContent = t?.provider === "claude" ? `${claudeAccount(t.claudeAccount).label} ·` : "";
-  $("thread-account").title = t?.provider === "claude" ? `Claude account: ${claudeAccount(t.claudeAccount).email || claudeAccount(t.claudeAccount).label}` : "";
+  $("thread-account").textContent =
+    t?.provider === "claude" ? `${claudeAccount(t.claudeAccount).label} ·` : "";
+  $("thread-account").title =
+    t?.provider === "claude"
+      ? `Claude account: ${claudeAccount(t.claudeAccount).email || claudeAccount(t.claudeAccount).label}`
+      : "";
   $("cwd-t").textContent = t ? t.cwd.replace(/^\/home\/[^/]+/, "~") : "";
   $("cwd").title = t ? t.cwd : "";
   if (t) {
@@ -1213,28 +1831,59 @@ function renderHead() {
       menus.model.setItems(withAdvisors(modelItems(p.models, p), p, t.advisor || "default"));
       menus.mode.setItems(modeItems(p.modes));
     }
-    if (p && menus.model.advisorShown !== (t.advisor || "default")) { // the check mark on the advisor rows follows the thread
+    if (p && menus.model.advisorShown !== (t.advisor || "default")) {
+      // the check mark on the advisor rows follows the thread
       menus.model.advisorShown = t.advisor || "default";
-      menus.model.setItems(withAdvisors(modelItems(p.models, p), p, menus.model.advisorShown), t.model);
+      menus.model.setItems(
+        withAdvisors(modelItems(p.models, p), p, menus.model.advisorShown),
+        t.model,
+      );
     }
     menus.model.setValue(t.model);
     $("effort").hidden = !p?.modelDetails;
     fillEffort(menus.effort, p, t.model, t.effort || "default");
     menus.effort.setDisabled(t.status === "running");
     const run = t.lastRun;
-    const tok = run && [run.input_tokens, run.cached_input_tokens, run.output_tokens].some((n) => n != null);
-    facts([...(run ? [
-      ["Model", run.timing?.model || run.model || t.model],
-      ["Effort", effortLabel(run.effort || t.effort || "default"), run.source && run.source !== "thread settings" ? `from ${run.source}` : ""],
-      ["Last run", run.duration_ms == null ? "Still running" : fmtMs(run.duration_ms)],
-      ...(tok ? [["Tokens", `${run.input_tokens ?? 0} in · ${run.cached_input_tokens ?? 0} from cache · ${run.output_tokens ?? 0} out`, "whole turn, not the context size"]] : []),
-    ] : [["Last run", "None yet"]]),
-      ["Automatic compaction", !t.idleCompactionTtlMs ? "Unavailable: cache lifetime unknown" : t.idleCompaction === false ? "Off" : "On for substantial idle contexts",
-        t.idleCompactionDueAt ? `Scheduled around ${new Date(t.idleCompactionDueAt).toLocaleTimeString()}; cache expiry is estimated.` : "Compaction uses tokens and may shorten details. Full transcript is kept."],
+    const tok =
+      run && [run.input_tokens, run.cached_input_tokens, run.output_tokens].some((n) => n != null);
+    facts([
+      ...(run
+        ? [
+            ["Model", run.timing?.model || run.model || t.model],
+            [
+              "Effort",
+              effortLabel(run.effort || t.effort || "default"),
+              run.source && run.source !== "thread settings" ? `from ${run.source}` : "",
+            ],
+            ["Last run", run.duration_ms == null ? "Still running" : fmtMs(run.duration_ms)],
+            ...(tok
+              ? [
+                  [
+                    "Tokens",
+                    `${run.input_tokens ?? 0} in · ${run.cached_input_tokens ?? 0} from cache · ${run.output_tokens ?? 0} out`,
+                    "whole turn, not the context size",
+                  ],
+                ]
+              : []),
+          ]
+        : [["Last run", "None yet"]]),
+      [
+        "Automatic compaction",
+        !t.idleCompactionTtlMs
+          ? "Unavailable: cache lifetime unknown"
+          : t.idleCompaction === false
+            ? "Off"
+            : "On for substantial idle contexts",
+        t.idleCompactionDueAt
+          ? `Scheduled around ${new Date(t.idleCompactionDueAt).toLocaleTimeString()}; cache expiry is estimated.`
+          : "Compaction uses tokens and may shorten details. Full transcript is kept.",
+      ],
     ]);
     renderThreadId(t.id);
     renderTurnTiming(run?.timing, firstTokenMs.get(t.id));
-    $("diagnostics").title = run ? `Last run: ${run.model || t.model} · effort ${run.effort || t.effort || "default"} (${run.source || "thread settings"})\n${run.duration_ms ?? "?"} ms · input ${run.input_tokens ?? "?"} · cached ${run.cached_input_tokens ?? "?"} · output ${run.output_tokens ?? "?"} tokens` : "No run metrics yet.";
+    $("diagnostics").title = run
+      ? `Last run: ${run.model || t.model} · effort ${run.effort || t.effort || "default"} (${run.source || "thread settings"})\n${run.duration_ms ?? "?"} ms · input ${run.input_tokens ?? "?"} · cached ${run.cached_input_tokens ?? "?"} · output ${run.output_tokens ?? "?"} tokens`
+      : "No run metrics yet.";
     menus.mode.setValue(t.mode);
   }
   const running = t?.status === "running";
@@ -1249,7 +1898,15 @@ function renderHead() {
   const canSteer = !t?.operation && !!prov(t?.provider)?.steer;
   renderAction();
   $("cbox").classList.toggle("running", running);
-  $("input").placeholder = !t ? "Message the agent" : questions.count(t.id) || t.waiting ? "Reply to the agent, or choose an option above…" : running ? (t?.operation ? "Queue a message to send after compaction…" : "Queue a message for after this turn…") : "Message the agent";
+  $("input").placeholder = !t
+    ? "Message the agent"
+    : questions.count(t.id) || t.waiting
+      ? "Reply to the agent, or choose an option above…"
+      : running
+        ? t?.operation
+          ? "Queue a message to send after compaction…"
+          : "Queue a message for after this turn…"
+        : "Message the agent";
   renderQueue();
   renderCtx();
   renderUsage();
@@ -1269,8 +1926,15 @@ function renderAction() {
   $("stop").hidden = !stop;
   $("send").hidden = stop;
   $("send").disabled = !t || (empty && !busy);
-  $("send").title = waiting ? "Reply to the agent (Enter)" : running ? "Queue: sent when this turn ends (Enter)" : "Send (Enter)";
-  $("send").setAttribute("aria-label", waiting ? "Reply to agent" : running ? "Queue message" : "Send");
+  $("send").title = waiting
+    ? "Reply to the agent (Enter)"
+    : running
+      ? "Queue: sent when this turn ends (Enter)"
+      : "Send (Enter)";
+  $("send").setAttribute(
+    "aria-label",
+    waiting ? "Reply to agent" : running ? "Queue message" : "Send",
+  );
 }
 // ---------- queued messages and the context meter ----------
 function renderQueue() {
@@ -1290,11 +1954,18 @@ function renderQueue() {
       edit.onclick = () => editQueuedMessage(q.id);
       const steer = iconButton("steer", "Steer", "btn steer");
       steer.title = "Steer: give this to the agent now, instead of after the turn";
-      steer.hidden = q.editing || cur()?.status !== "running" || !!cur()?.operation || !prov(cur()?.provider)?.steer;
+      steer.hidden =
+        q.editing ||
+        cur()?.status !== "running" ||
+        !!cur()?.operation ||
+        !prov(cur()?.provider)?.steer;
       steer.onclick = () => send({ t: "steer_queued", thread: state.current, id: q.id });
       const tag = el("span", "tag");
       tag.title = q.editing ? "Editing: delivery paused" : "Queued: sent after this turn";
-      tag.append(icon(q.editing ? "pencil" : "queued"), el("span", "sr-only", q.editing ? "Editing" : "Queued"));
+      tag.append(
+        icon(q.editing ? "pencil" : "queued"),
+        el("span", "sr-only", q.editing ? "Editing" : "Queued"),
+      );
       const actions = el("span", "q-actions");
       actions.append(steer, edit, rm);
       li.append(tag, el("span", "txt", q.text), actions);
@@ -1302,19 +1973,24 @@ function renderQueue() {
     }),
   );
 }
-document.addEventListener("visibilitychange", () => { if (state.measurement && document.hidden) state.measurement.hidden = true; });
+document.addEventListener("visibilitychange", () => {
+  if (state.measurement && document.hidden) state.measurement.hidden = true;
+});
 // Quick issue creator: pi drafts title and body from the composer text; the owner reviews them before GitHub opens.
 const MAX_ISSUE_DRAFT = 2000; // keep in sync with server/issue-draft.ts
-let issueDraft = null, issueRequest = 0;
+let issueDraft = null,
+  issueRequest = 0;
 function createIssueDraft(thread) {
   const draft = $("input").value.trim();
   if (!draft) return toast("Type the issue in the composer first.");
-  if (draft.length > MAX_ISSUE_DRAFT) return toast(`Issue text is over ${MAX_ISSUE_DRAFT} characters. Shorten it.`);
+  if (draft.length > MAX_ISSUE_DRAFT)
+    return toast(`Issue text is over ${MAX_ISSUE_DRAFT} characters. Shorten it.`);
   if (ws?.readyState !== 1) return toast("Reconnect before creating an issue.");
   issueDraft = { cid: `issue-${++issueRequest}` };
   $("issue-note").textContent = "Pi is drafting the title and body…";
   $("issue-error").textContent = "";
-  $("issue-title").value = ""; $("issue-body").value = "";
+  $("issue-title").value = "";
+  $("issue-body").value = "";
   $("issue-title").disabled = $("issue-body").disabled = $("issue-open").disabled = true;
   $("issue-review").showModal();
   send({ t: "create_issue", thread, draft, cid: issueDraft.cid });
@@ -1328,30 +2004,41 @@ function issueDraftReply(m) {
   }
   Object.assign(issueDraft, { owner: m.owner, repo: m.repo });
   $("issue-note").textContent = `Review the draft for ${m.owner}/${m.repo}, then open GitHub.`;
-  $("issue-title").value = m.title; $("issue-body").value = m.body;
+  $("issue-title").value = m.title;
+  $("issue-body").value = m.body;
   $("issue-title").disabled = $("issue-body").disabled = $("issue-open").disabled = false;
   $("issue-title").focus();
 }
-$("issue-form").onsubmit = e => {
+$("issue-form").onsubmit = (e) => {
   e.preventDefault();
   if (!issueDraft?.repo) return;
-  const url = new URL(`https://github.com/${encodeURIComponent(issueDraft.owner)}/${encodeURIComponent(issueDraft.repo)}/issues/new`);
+  const url = new URL(
+    `https://github.com/${encodeURIComponent(issueDraft.owner)}/${encodeURIComponent(issueDraft.repo)}/issues/new`,
+  );
   url.searchParams.set("title", $("issue-title").value.trim());
   url.searchParams.set("body", $("issue-body").value);
   window.open(url, "_blank", "noopener");
-  issueDraft = null; $("issue-review").close();
+  issueDraft = null;
+  $("issue-review").close();
 };
-$("issue-cancel").onclick = () => { issueDraft = null; $("issue-review").close(); };
-$("issue-review").addEventListener("cancel", () => { issueDraft = null; });
+$("issue-cancel").onclick = () => {
+  issueDraft = null;
+  $("issue-review").close();
+};
+$("issue-review").addEventListener("cancel", () => {
+  issueDraft = null;
+});
 
-let queueEditor, queueRequest = 0;
+let queueEditor,
+  queueRequest = 0;
 function editQueuedMessage(id) {
   if (ws?.readyState !== 1) return toast("Reconnect before editing a queued message.");
   queueEditor = { id, thread: state.current, request: ++queueRequest };
   $("queue-draft").value = "";
   $("queue-edit-note").textContent = "Pausing delivery and loading the full message…";
   $("queue-edit-error").textContent = "";
-  $("queue-draft").disabled = true; $("queue-save").disabled = true;
+  $("queue-draft").disabled = true;
+  $("queue-save").disabled = true;
   $("queue-cancel").disabled = false;
   $("queue-editor").showModal();
   send({ t: "queue_edit", ...queueEditor });
@@ -1360,12 +2047,15 @@ function queuedEditReply(m) {
   if (!queueEditor || m.request !== queueEditor.request) return;
   queueEditor.pending = false;
   if (m.t === "queue_edit_done") {
-    $("queue-editor").close(); queueEditor = null; return;
+    $("queue-editor").close();
+    queueEditor = null;
+    return;
   }
   if (m.t === "queue_edit") {
     queueEditor.revision = m.revision;
     $("queue-draft").value = m.text;
-    $("queue-edit-note").textContent = `Delivery is paused until Save or Cancel.${m.attachments ? ` ${m.attachments} attachment(s) will be kept.` : ""}`;
+    $("queue-edit-note").textContent =
+      `Delivery is paused until Save or Cancel.${m.attachments ? ` ${m.attachments} attachment(s) will be kept.` : ""}`;
     if (queueEditor.cancelPending) return finishQueuedEdit(true);
   } else {
     $("queue-edit-error").textContent = m.message;
@@ -1384,22 +2074,50 @@ function finishQueuedEdit(cancel) {
     return;
   }
   if (cancel && (queueEditor.revision == null || ws?.readyState !== 1)) {
-    $("queue-editor").close(); queueEditor = null; return;
+    $("queue-editor").close();
+    queueEditor = null;
+    return;
   }
-  if (ws?.readyState !== 1) { $("queue-edit-error").textContent = "Disconnected. Reconnect to save this draft."; return; }
+  if (ws?.readyState !== 1) {
+    $("queue-edit-error").textContent = "Disconnected. Reconnect to save this draft.";
+    return;
+  }
   queueEditor.request = ++queueRequest;
   queueEditor.pending = true;
-  $("queue-save").disabled = true; $("queue-cancel").disabled = true; $("queue-draft").disabled = true;
-  send({ t: cancel ? "queue_cancel_edit" : "queue_save", ...queueEditor, text: $("queue-draft").value });
+  $("queue-save").disabled = true;
+  $("queue-cancel").disabled = true;
+  $("queue-draft").disabled = true;
+  send({
+    t: cancel ? "queue_cancel_edit" : "queue_save",
+    ...queueEditor,
+    text: $("queue-draft").value,
+  });
 }
-$("queue-edit-form").onsubmit = e => { e.preventDefault(); finishQueuedEdit(false); };
+$("queue-edit-form").onsubmit = (e) => {
+  e.preventDefault();
+  finishQueuedEdit(false);
+};
 $("queue-cancel").onclick = () => finishQueuedEdit(true);
-$("queue-editor").addEventListener("cancel", e => { e.preventDefault(); finishQueuedEdit(true); });
+$("queue-editor").addEventListener("cancel", (e) => {
+  e.preventDefault();
+  finishQueuedEdit(true);
+});
 // Run details, in words: one fact per row, times as "167 ms" or "1.2 s".
-const fmtMs = (ms) => (ms == null ? "—" : ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)} s`);
+const fmtMs = (ms) =>
+  ms == null
+    ? "—"
+    : ms < 1000
+      ? `${Math.round(ms)} ms`
+      : `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)} s`;
 function facts(rows) {
   const dl = $("run-metrics");
-  dl.replaceChildren(...rows.flatMap(([k, v, note]) => { const dd = el("dd", "", v); if (note) dd.append(el("span", "note", note)); return [el("dt", "", k), dd]; }));
+  dl.replaceChildren(
+    ...rows.flatMap(([k, v, note]) => {
+      const dd = el("dd", "", v);
+      if (note) dd.append(el("span", "note", note));
+      return [el("dt", "", k), dd];
+    }),
+  );
 }
 // The thread's id, so the user can name it to an agent ("thread c3c67b96") instead of pasting content. Copy takes the full id.
 function renderThreadId(id) {
@@ -1425,30 +2143,75 @@ function renderTurnTiming(x, phoneMs) {
   if (!x) return;
   const head = el("div", "tt-head");
   const big = el("span", "tt-big", x.first_ms == null ? "No output" : fmtMs(x.first_ms));
-  head.append(big, el("span", "tt-cap", x.first_ms == null ? "" : "to first token"), el("span", `tt-tag${x.cold ? " cold" : ""}`, x.cold ? "Cold start" : "Warm"));
-  const start = x.cold ? `New agent process${x.spawn_ms != null ? `, ready in ${fmtMs(x.spawn_ms)}` : ""}` : "Agent process was already running";
-  const parts = [["model", "Model", x.model_ms], ["tools", "Tools", x.tool_ms], ["other", "Other", x.other_ms]];
+  head.append(
+    big,
+    el("span", "tt-cap", x.first_ms == null ? "" : "to first token"),
+    el("span", `tt-tag${x.cold ? " cold" : ""}`, x.cold ? "Cold start" : "Warm"),
+  );
+  const start = x.cold
+    ? `New agent process${x.spawn_ms != null ? `, ready in ${fmtMs(x.spawn_ms)}` : ""}`
+    : "Agent process was already running";
+  const parts = [
+    ["model", "Model", x.model_ms],
+    ["tools", "Tools", x.tool_ms],
+    ["other", "Other", x.other_ms],
+  ];
   const total = parts.reduce((n, p) => n + p[2], 0);
   const bar = el("div", "tt-bar");
   bar.setAttribute("role", "img");
-  bar.setAttribute("aria-label", `Of ${fmtMs(total)}: ${parts.map(([, name, ms]) => `${name.toLowerCase()} ${fmtMs(ms)}`).join(", ")}`);
+  bar.setAttribute(
+    "aria-label",
+    `Of ${fmtMs(total)}: ${parts.map(([, name, ms]) => `${name.toLowerCase()} ${fmtMs(ms)}`).join(", ")}`,
+  );
   const legend = el("ul", "tt-legend");
   for (const [key, name, ms] of parts) {
-    if (total && ms > 0) { const seg = el("i", key); seg.style.flexGrow = String(ms); bar.append(seg); }
+    if (total && ms > 0) {
+      const seg = el("i", key);
+      seg.style.flexGrow = String(ms);
+      bar.append(seg);
+    }
     const li = el("li");
-    li.append(el("i", `sw ${key}`), el("span", "", name), el("b", "", fmtMs(ms)), el("span", "pct", total ? `${Math.round((ms / total) * 100)}%` : ""));
+    li.append(
+      el("i", `sw ${key}`),
+      el("span", "", name),
+      el("b", "", fmtMs(ms)),
+      el("span", "pct", total ? `${Math.round((ms / total) * 100)}%` : ""),
+    );
     legend.append(li);
   }
   legend.setAttribute("aria-hidden", "true"); // the bar's label already reads the same numbers
-  const kids = [head, el("p", "note", `${start}${phoneMs != null ? ` · ${fmtMs(phoneMs)} until shown here` : ""}`), bar, legend,
-    el("p", "note", `${x.steps} model step${x.steps === 1 ? "" : "s"} · ${x.tool_calls} tool call${x.tool_calls === 1 ? "" : "s"} · Other is startup and waiting for you`)];
+  const kids = [
+    head,
+    el("p", "note", `${start}${phoneMs != null ? ` · ${fmtMs(phoneMs)} until shown here` : ""}`),
+    bar,
+    legend,
+    el(
+      "p",
+      "note",
+      `${x.steps} model step${x.steps === 1 ? "" : "s"} · ${x.tool_calls} tool call${x.tool_calls === 1 ? "" : "s"} · Other is startup and waiting for you`,
+    ),
+  ];
   if (x.slow?.length) {
     const list = el("ol", "tt-tools");
     list.setAttribute("aria-label", "Slowest tools");
-    for (const tool of x.slow) { const li = el("li"); li.append(el("span", "n", tool.name), el("span", "ms", `${fmtMs(tool.ms)}${tool.error ? " · failed" : ""}`)); list.append(li); }
+    for (const tool of x.slow) {
+      const li = el("li");
+      li.append(
+        el("span", "n", tool.name),
+        el("span", "ms", `${fmtMs(tool.ms)}${tool.error ? " · failed" : ""}`),
+      );
+      list.append(li);
+    }
     kids.push(el("h4", "", "Slowest tools"), list);
   }
-  if (x.retries) kids.push(el("p", "tt-retry", `${x.retries} API retr${x.retries === 1 ? "y" : "ies"} or rate-limit warning${x.retries === 1 ? "" : "s"} slowed this turn`));
+  if (x.retries)
+    kids.push(
+      el(
+        "p",
+        "tt-retry",
+        `${x.retries} API retr${x.retries === 1 ? "y" : "ies"} or rate-limit warning${x.retries === 1 ? "" : "s"} slowed this turn`,
+      ),
+    );
   const full = el("button", "btn block tb-open");
   full.type = "button";
   full.append(el("span", "", "Full breakdown"), icon("chev-right"));
@@ -1457,29 +2220,64 @@ function renderTurnTiming(x, phoneMs) {
   $("turn-timing-body").replaceChildren(...kids);
 }
 // Escape in the breakdown goes back to the summary; closing the sheet always resets it.
-$("run-details").addEventListener("cancel", (e) => { if ($("run-details").dataset.view === "breakdown") { e.preventDefault(); closeBreakdown(); } });
+$("run-details").addEventListener("cancel", (e) => {
+  if ($("run-details").dataset.view === "breakdown") {
+    e.preventDefault();
+    closeBreakdown();
+  }
+});
 $("run-details").addEventListener("close", () => closeBreakdown(false));
 function showLoad(main, detail) {
-  $("diagnostics").replaceChildren(el("p", "lead", main), ...(detail ? [el("p", "note", detail)] : []));
+  $("diagnostics").replaceChildren(
+    el("p", "lead", main),
+    ...(detail ? [el("p", "note", detail)] : []),
+  );
 }
-const SPEED = [["open", "Open a thread"], ["cached", "Switch back"], ["refresh", "Check for new"], ["page", "Older messages"]];
+const SPEED = [
+  ["open", "Open a thread"],
+  ["cached", "Switch back"],
+  ["refresh", "Check for new"],
+  ["page", "Older messages"],
+];
 const speedWord = (ms) => (ms < 300 ? "fast" : ms < 1000 ? "ok" : "slow");
 // Nearest-rank percentile of times sorted fastest first: p% of loads took this long or less.
-const pct = (sorted, p) => sorted?.length ? sorted[Math.max(0, Math.ceil((p / 100) * sorted.length) - 1)] : null;
-const pctWord = (p) => (p === 100 ? "the slowest load" : p === 50 ? "half of loads are faster" : `${p} in 100 loads are faster`);
+const pct = (sorted, p) =>
+  sorted?.length ? sorted[Math.max(0, Math.ceil((p / 100) * sorted.length) - 1)] : null;
+const pctWord = (p) =>
+  p === 100
+    ? "the slowest load"
+    : p === 50
+      ? "half of loads are faster"
+      : `${p} in 100 loads are faster`;
 let speedData = null;
 // Which percentiles the table shows and over which time window: the reader's choice, kept between visits.
-const speedView = (() => { try { const v = JSON.parse(localStorage.getItem("ac_speed_view")); if (v?.typical && v?.slowest) return { recent: true, ...v }; } catch {} return { typical: 50, slowest: 95, recent: true }; })();
-const saveSpeedView = () => { try { localStorage.setItem("ac_speed_view", JSON.stringify(speedView)); } catch {} };
+const speedView = (() => {
+  try {
+    const v = JSON.parse(localStorage.getItem("ac_speed_view"));
+    if (v?.typical && v?.slowest) return { recent: true, ...v };
+  } catch {}
+  return { typical: 50, slowest: 95, recent: true };
+})();
+const saveSpeedView = () => {
+  try {
+    localStorage.setItem("ac_speed_view", JSON.stringify(speedView));
+  } catch {}
+};
 function speedSlider(name, label, min, max) {
-  const wrap = el("label", "slider"), out = el("output"), input = el("input");
+  const wrap = el("label", "slider"),
+    out = el("output"),
+    input = el("input");
   Object.assign(input, { type: "range", min, max, step: 1, value: speedView[name] });
   input.dataset.pct = name;
-  input.sync = () => { input.value = speedView[name]; out.textContent = `p${speedView[name]} · ${pctWord(speedView[name])}`; };
+  input.sync = () => {
+    input.value = speedView[name];
+    out.textContent = `p${speedView[name]} · ${pctWord(speedView[name])}`;
+  };
   input.oninput = () => {
     speedView[name] = Number(input.value);
     // Typical can never be slower than Slowest: dragging one past the other pushes it along.
-    if (speedView.slowest < speedView.typical) speedView[name === "typical" ? "slowest" : "typical"] = speedView[name];
+    if (speedView.slowest < speedView.typical)
+      speedView[name === "typical" ? "slowest" : "typical"] = speedView[name];
     for (const s of $("latency-summary").querySelectorAll("[data-pct]")) s.sync();
     saveSpeedView();
     renderSpeedTable();
@@ -1490,8 +2288,12 @@ function speedSlider(name, label, min, max) {
 }
 function windowPicker(days) {
   const pick = el("div", "window-pick");
-  pick.setAttribute("role", "group"); pick.setAttribute("aria-label", "Time window");
-  for (const [recent, text] of [[true, "Last 20 loads"], [false, `Last ${days} days`]]) {
+  pick.setAttribute("role", "group");
+  pick.setAttribute("aria-label", "Time window");
+  for (const [recent, text] of [
+    [true, "Last 20 loads"],
+    [false, `Last ${days} days`],
+  ]) {
     const b = el("button", "", text);
     b.type = "button";
     b.setAttribute("aria-pressed", String(speedView.recent === recent));
@@ -1507,23 +2309,42 @@ function windowPicker(days) {
 }
 function renderSpeedTable() {
   const { typical, slowest, recent } = speedView;
-  const table = el("table", "speed"), head = el("tr");
-  table.caption = el("caption", "sr-only", recent ? "Last 20 loads of each kind" : `Every load in the last ${speedData.retention_days} days`);
-  for (const text of ["", `Typical p${typical}`, `Slowest p${slowest}`]) head.append(Object.assign(el("th", "", text), { scope: "col" }));
-  table.append(el("thead"), el("tbody")); table.tHead.append(head);
+  const table = el("table", "speed"),
+    head = el("tr");
+  table.caption = el(
+    "caption",
+    "sr-only",
+    recent
+      ? "Last 20 loads of each kind"
+      : `Every load in the last ${speedData.retention_days} days`,
+  );
+  for (const text of ["", `Typical p${typical}`, `Slowest p${slowest}`])
+    head.append(Object.assign(el("th", "", text), { scope: "col" }));
+  table.append(el("thead"), el("tbody"));
+  table.tHead.append(head);
   for (const [key, label] of SPEED) {
     const times = speedData.groups[`${key}/visible${recent ? "/recent" : ""}`]?.samples_ms;
     if (!times?.length) continue;
-    const tr = el("tr"), name = el("th"), word = speedWord(pct(times, typical));
+    const tr = el("tr"),
+      name = el("th"),
+      word = speedWord(pct(times, typical));
     name.scope = "row";
     name.append(el("span", `dot ${word}`), label, el("span", "sr-only", ` (${word})`));
-    tr.append(name, el("td", "", fmtMs(pct(times, typical))), el("td", "", fmtMs(pct(times, slowest))));
+    tr.append(
+      name,
+      el("td", "", fmtMs(pct(times, typical))),
+      el("td", "", fmtMs(pct(times, slowest))),
+    );
     table.tBodies[0].append(tr);
   }
   $("latency-summary").querySelector("table").replaceWith(table);
 }
 async function loadLatencySummary() {
-  if (!state.features.latency) { $("latency-summary").textContent = "Local measurements will be available after the server reconnects."; return; }
+  if (!state.features.latency) {
+    $("latency-summary").textContent =
+      "Local measurements will be available after the server reconnects.";
+    return;
+  }
   latency.flush();
   $("latency-summary").textContent = "Loading measurements…";
   try {
@@ -1531,16 +2352,37 @@ async function loadLatencySummary() {
     if (!response.ok) throw Error();
     const data = await response.json();
     if (!data.available) throw Error();
-    if (!data.count) { $("latency-summary").textContent = "No measurements yet. Open or switch threads to collect some."; return; }
+    if (!data.count) {
+      $("latency-summary").textContent =
+        "No measurements yet. Open or switch threads to collect some.";
+      return;
+    }
     speedData = data;
     const sliders = el("div", "sliders");
-    sliders.append(speedSlider("typical", "Typical", 50, 95), speedSlider("slowest", "Slowest", 75, 100));
+    sliders.append(
+      speedSlider("typical", "Typical", 50, 95),
+      speedSlider("slowest", "Slowest", 75, 100),
+    );
     $("latency-summary").replaceChildren(windowPicker(data.retention_days), sliders, el("table"));
     renderSpeedTable();
-    $("latency-summary").append(el("p", "note", "A pN time means N in 100 loads were that fast or faster: p50 is the middle load, p100 the slowest one. Counts only loads while the app was on screen."));
-  } catch { $("latency-summary").textContent = "Local measurements are unavailable until the server reconnects."; }
+    $("latency-summary").append(
+      el(
+        "p",
+        "note",
+        "A pN time means N in 100 loads were that fast or faster: p50 is the middle load, p100 the slowest one. Counts only loads while the app was on screen.",
+      ),
+    );
+  } catch {
+    $("latency-summary").textContent =
+      "Local measurements are unavailable until the server reconnects.";
+  }
 }
-const fmtTok = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(n >= 1e7 ? 0 : 1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(n));
+const fmtTok = (n) =>
+  n >= 1e6
+    ? `${(n / 1e6).toFixed(n >= 1e7 ? 0 : 1)}M`
+    : n >= 1e3
+      ? `${Math.round(n / 1e3)}k`
+      : String(n);
 const fmtDur = (ms) => {
   const s = Math.round(ms / 1000);
   return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`;
@@ -1549,11 +2391,13 @@ const fmtDur = (ms) => {
 function renderCtx() {
   const b = $("ctx");
   const threadId = state.current;
-  b.onclick = () => openContextEconomics({ getThread: () => state.threads.get(threadId), send, trigger: b });
+  b.onclick = () =>
+    openContextEconomics({ getThread: () => state.threads.get(threadId), send, trigger: b });
   const c = cur()?.context;
   if (c?.used == null && cur()?.lastCompactedAt) {
     b.hidden = false;
-    b.dataset.level = ""; b.style.color = "";
+    b.dataset.level = "";
+    b.style.color = "";
     b.querySelector(".fill").style.strokeDasharray = "0 100";
     b.querySelector(".pct").textContent = "Compacted";
     b.dataset.tip = "Context compacted. Token usage updates on the next model request.";
@@ -1571,16 +2415,38 @@ function renderCtx() {
   b.querySelector(".fill").style.strokeDasharray = `${pct ?? 0} 100`;
   b.querySelector(".pct").textContent = pct == null ? fmtTok(c.used) : `${pct}%`;
   const head = pct == null ? "Context in use" : "Context window";
-  const body = pct == null ? `${c.used.toLocaleString()} tokens` : `${c.used.toLocaleString()} of ${c.max.toLocaleString()} tokens (${pct}%)`;
-  const hint = pct != null && pct >= 80 ? (cur().provider === "claude" ? "Claude compacts automatically as this fills." : "Getting full: a new thread starts clean.") : "";
+  const body =
+    pct == null
+      ? `${c.used.toLocaleString()} tokens`
+      : `${c.used.toLocaleString()} of ${c.max.toLocaleString()} tokens (${pct}%)`;
+  const hint =
+    pct != null && pct >= 80
+      ? cur().provider === "claude"
+        ? "Claude compacts automatically as this fills."
+        : "Getting full: a new thread starts clean."
+      : "";
   b.dataset.tip = [head, body, hint].filter(Boolean).join("\n");
   b.setAttribute("aria-label", [head, body, hint].filter(Boolean).join(". "));
 }
 // "Working" in the header, plus how many subagents are still going
 function updateWorking() {
   $("state").classList.toggle("waiting", !!(questions.count(state.current) || cur()?.waiting));
-  const n = Math.max(cur()?.background || 0, [...state.cards.values()].filter((c) => c.classList.contains("agent") && (c.classList.contains("pending") || c.querySelector(".task-chip.running"))).length);
-  $("state-t").textContent = questions.count(state.current) || cur()?.waiting ? "Needs your input" : cur()?.operation === "compact" ? "Compacting context" : n ? `Working · ${n} agent${n > 1 ? "s" : ""}` : "Working";
+  const n = Math.max(
+    cur()?.background || 0,
+    [...state.cards.values()].filter(
+      (c) =>
+        c.classList.contains("agent") &&
+        (c.classList.contains("pending") || c.querySelector(".task-chip.running")),
+    ).length,
+  );
+  $("state-t").textContent =
+    questions.count(state.current) || cur()?.waiting
+      ? "Needs your input"
+      : cur()?.operation === "compact"
+        ? "Compacting context"
+        : n
+          ? `Working · ${n} agent${n > 1 ? "s" : ""}`
+          : "Working";
 }
 
 function startRename() {
@@ -1617,7 +2483,11 @@ $("ttl").ondblclick = startRename;
 // ---------- chat rendering ----------
 function emptyState() {
   const box = el("div", "empty");
-  box.append(icon("terminal", "glyph"), el("h2", "", "No thread selected"), el("p", "", "Start a thread to run a coding agent in one of your folders."));
+  box.append(
+    icon("terminal", "glyph"),
+    el("h2", "", "No thread selected"),
+    el("p", "", "Start a thread to run a coding agent in one of your folders."),
+  );
   const b = el("button", "btn primary");
   b.type = "button";
   b.append(icon("plus"), el("span", "", "New thread"));
@@ -1654,21 +2524,30 @@ function onChatScroll() {
   if (upward && top < 200) loadEarlierWhenStill();
 }
 // Coalesce to one pass per frame so scroll bursts don't force layout reads on every event.
-$("chat").addEventListener("scroll", () => {
-  if (readerScrolling()) gesture.at = performance.now(); // momentum after the finger lifts is still the reader's scroll
-  scrollFrame ||= requestAnimationFrame(onChatScroll);
-}, { passive: true });
+$("chat").addEventListener(
+  "scroll",
+  () => {
+    if (readerScrolling()) gesture.at = performance.now(); // momentum after the finger lifts is still the reader's scroll
+    scrollFrame ||= requestAnimationFrame(onChatScroll);
+  },
+  { passive: true },
+);
 // The reader's own scrolling (finger down, wheel, or the fling that follows). While it lasts nothing re-anchors or
 // follows the bottom: on Android a scrollTop write during a drag snaps the list back under the finger.
 const gesture = { touching: false, at: 0, idle: 0 };
-function readerScrolling() { return gesture.touching || performance.now() - gesture.at < 160; }
-function following() { return state.stick && !readerScrolling() && !chatSearch.isOpen(); }
+function readerScrolling() {
+  return gesture.touching || performance.now() - gesture.at < 160;
+}
+function following() {
+  return state.stick && !readerScrolling() && !chatSearch.isOpen();
+}
 function markGesture(touching) {
   if (touching != null) gesture.touching = touching;
   gesture.at = performance.now();
 }
 $("chat").addEventListener("touchstart", () => markGesture(true), { passive: true });
-for (const event of ["touchend", "touchcancel"]) $("chat").addEventListener(event, () => markGesture(false), { passive: true });
+for (const event of ["touchend", "touchcancel"])
+  $("chat").addEventListener(event, () => markGesture(false), { passive: true });
 $("chat").addEventListener("wheel", () => markGesture(), { passive: true });
 // Older pages are fetched and slid in only once the list is still: inserting mid-fling moves content under the finger.
 function loadEarlierWhenStill() {
@@ -1688,9 +2567,10 @@ const followResize = new ResizeObserver(() => {
     }
   });
 });
-new MutationObserver(records => {
+new MutationObserver((records) => {
   for (const record of records) {
-    for (const node of record.removedNodes) if (node instanceof Element) followResize.unobserve(node);
+    for (const node of record.removedNodes)
+      if (node instanceof Element) followResize.unobserve(node);
     for (const node of record.addedNodes) if (node instanceof Element) followResize.observe(node);
   }
 }).observe($("chat"), { childList: true });
@@ -1704,13 +2584,17 @@ function holdHistoryAnchor(node, top) {
   const observer = new ResizeObserver(() => {
     if (!node.isConnected) return releaseHistoryAnchor();
     const delta = node.getBoundingClientRect().top - top;
-    if (Math.abs(delta) > 0.5) { chat.scrollTop += delta; state.lastScrollTop = chat.scrollTop; }
+    if (Math.abs(delta) > 0.5) {
+      chat.scrollTop += delta;
+      state.lastScrollTop = chat.scrollTop;
+    }
   });
   historyAnchor = { observer };
   // Native virtual rendering resolves intrinsic sizes after paint; retain the visible message until the reader moves.
   for (const child of chat.children) observer.observe(child);
 }
-for (const event of ["wheel", "touchstart", "pointerdown"]) $("chat").addEventListener(event, releaseHistoryAnchor, { passive: true });
+for (const event of ["wheel", "touchstart", "pointerdown"])
+  $("chat").addEventListener(event, releaseHistoryAnchor, { passive: true });
 document.addEventListener("keydown", releaseHistoryAnchor, { passive: true });
 function nearBottom() {
   const c = $("chat");
@@ -1734,14 +2618,32 @@ function compactCard(e, live) {
   if (!card) {
     card = state.compact = el("div", "msg compact-card running");
     card.setAttribute("role", "status");
-    card.append(el("span", "cc-ico"), (() => { const b = el("div", "cc-body"); b.append(el("div", "cc-title"), el("div", "cc-sub"), el("div", "cc-bar")); return b; })());
+    card.append(
+      el("span", "cc-ico"),
+      (() => {
+        const b = el("div", "cc-body");
+        b.append(el("div", "cc-title"), el("div", "cc-sub"), el("div", "cc-bar"));
+        return b;
+      })(),
+    );
     push(card, live);
   }
-  const done = e.status === "completed", failed = e.status === "failed";
+  const done = e.status === "completed",
+    failed = e.status === "failed";
   card.className = `msg compact-card ${failed ? "failed" : done ? "done" : "running"}`;
-  card.querySelector(".cc-ico").replaceChildren(done ? icon("check") : failed ? icon("alert") : el("i", "spin"));
-  card.querySelector(".cc-title").textContent = failed ? "Compaction failed" : done ? "Context compacted" : "Compacting context";
-  card.querySelector(".cc-sub").textContent = failed ? (e.text || "The agent did not compact this thread.") : done ? "Earlier turns were summarised. The transcript above is kept." : "Summarising earlier turns to free up room. You can queue a message meanwhile.";
+  card
+    .querySelector(".cc-ico")
+    .replaceChildren(done ? icon("check") : failed ? icon("alert") : el("i", "spin"));
+  card.querySelector(".cc-title").textContent = failed
+    ? "Compaction failed"
+    : done
+      ? "Context compacted"
+      : "Compacting context";
+  card.querySelector(".cc-sub").textContent = failed
+    ? e.text || "The agent did not compact this thread."
+    : done
+      ? "Earlier turns were summarised. The transcript above is kept."
+      : "Summarising earlier turns to free up room. You can queue a message meanwhile.";
   if (done || failed) state.compact = null;
 }
 // a running card whose operation is over (stopped, or the page reloaded after the server gave up) must not spin forever
@@ -1749,7 +2651,8 @@ function settleCompact(outcome = "stopped") {
   for (const c of document.querySelectorAll(".compact-card.running")) {
     c.className = "msg compact-card failed";
     c.querySelector(".cc-ico").replaceChildren(icon("alert"));
-    c.querySelector(".cc-title").textContent = outcome === "stopped" ? "Compaction stopped" : "Compaction interrupted";
+    c.querySelector(".cc-title").textContent =
+      outcome === "stopped" ? "Compaction stopped" : "Compaction interrupted";
     c.querySelector(".cc-sub").textContent = "Context was not compacted.";
   }
   state.compact = null;
@@ -1773,13 +2676,32 @@ function fileView(name, input) {
   const path = FILE_TOOLS.has(name) && (input?.file_path || input?.notebook_path);
   if (!path || typeof path !== "string" || !parseFileRef(path)) return [];
   const a = el("a", "file-view");
-  a.href = "#"; a.dataset.fileRef = path; a.title = "Open file"; a.setAttribute("aria-label", `Open ${path}`);
+  a.href = "#";
+  a.dataset.fileRef = path;
+  a.title = "Open file";
+  a.setAttribute("aria-label", `Open ${path}`);
   a.append(icon("eye"));
   return [a];
 }
 // A shell command is cryptic; when the agent said what it is for, show that and keep the command in the card body and on hover.
-const describedAs = (name, input) => (name === "Bash" && typeof input?.description === "string" && input.description.trim()) || "";
-const TOOL_ICON = { Bash: "terminal", Edit: "pencil", MultiEdit: "pencil", NotebookEdit: "pencil", Write: "file", Read: "file", Grep: "search", Glob: "search", WebFetch: "globe", WebSearch: "globe", WebFind: "globe", WebBrowse: "globe", Task: "sparkle", Agent: "sparkle" };
+const describedAs = (name, input) =>
+  (name === "Bash" && typeof input?.description === "string" && input.description.trim()) || "";
+const TOOL_ICON = {
+  Bash: "terminal",
+  Edit: "pencil",
+  MultiEdit: "pencil",
+  NotebookEdit: "pencil",
+  Write: "file",
+  Read: "file",
+  Grep: "search",
+  Glob: "search",
+  WebFetch: "globe",
+  WebSearch: "globe",
+  WebFind: "globe",
+  WebBrowse: "globe",
+  Task: "sparkle",
+  Agent: "sparkle",
+};
 
 function codePre(text, lang) {
   const pre = el("pre");
@@ -1825,7 +2747,10 @@ function materializeTool(card) {
   if (!card.toolInput) return;
   const body = card.querySelector(".body");
   const { name, input } = card.toolInput;
-  body.replaceChildren(...toolBody(name, input).childNodes, ...body.querySelectorAll(".tool-result"));
+  body.replaceChildren(
+    ...toolBody(name, input).childNodes,
+    ...body.querySelectorAll(".tool-result"),
+  );
   card.toolInput = null;
 }
 
@@ -1887,7 +2812,9 @@ function copyActions(getText, label = "Copy message") {
 // "[Image #2]" in what the user typed becomes a link to that image, as in the composer
 function userText(text, attachments) {
   const frag = document.createDocumentFragment();
-  const byN = new Map((attachments ?? []).filter((a) => a.kind === "image" && a.n).map((a) => [a.n, a]));
+  const byN = new Map(
+    (attachments ?? []).filter((a) => a.kind === "image" && a.n).map((a) => [a.n, a]),
+  );
   let last = 0;
   for (const m of text.matchAll(/\[Image #(\d+)\]/g)) {
     const a = byN.get(Number(m[1]));
@@ -1970,7 +2897,9 @@ function renderLive(kind) {
     L.raf = 0;
     const stick = following() && nearBottom();
     if (L.textEl && L.prose) renderMarkdown(L.text || "", L.prose);
-    if (L.thinkingEl) L.thinkingEl.querySelector("span").textContent = "Thinking… " + (L.thinking || "").slice(-200).replace(/\s+/g, " ");
+    if (L.thinkingEl)
+      L.thinkingEl.querySelector("span").textContent =
+        "Thinking… " + (L.thinking || "").slice(-200).replace(/\s+/g, " ");
     if (stick) scrollDown(true);
   });
 }
@@ -1992,7 +2921,15 @@ function agentCard(b) {
   const kind = b.input?.subagent_type;
   const chip = el("span", "task-chip");
   chip.hidden = true;
-  sum.append(icon("sparkle", "tool"), el("span", "name", kind ? `Agent · ${kind}` : "Agent"), el("span", "sum human", b.input?.description || "Subagent"), el("span", "stats"), chip, st, icon("chev-right", "chev"));
+  sum.append(
+    icon("sparkle", "tool"),
+    el("span", "name", kind ? `Agent · ${kind}` : "Agent"),
+    el("span", "sum human", b.input?.description || "Subagent"),
+    el("span", "stats"),
+    chip,
+    st,
+    icon("chev-right", "chev"),
+  );
   const body = el("div", "body");
   if (b.input?.prompt) {
     const det = el("details", "sub-prompt");
@@ -2028,7 +2965,18 @@ function subEvent(e, live) {
         const st = el("span", "st");
         st.append(el("i", "spin"));
         const why = describedAs(b.name, b.input);
-        li.append(icon(TOOL_ICON[b.name] || "code", "tool"), el("span", "name", isAgent(b.name) ? "Agent" : toolName(b.name, b.input)), el("span", why || isAgent(b.name) ? "sum human" : "sum", why || (isAgent(b.name) ? b.input?.description || "Subagent" : summarize(b.name, b.input))), ...fileView(b.name, b.input), st);
+        li.append(
+          icon(TOOL_ICON[b.name] || "code", "tool"),
+          el("span", "name", isAgent(b.name) ? "Agent" : toolName(b.name, b.input)),
+          el(
+            "span",
+            why || isAgent(b.name) ? "sum human" : "sum",
+            why ||
+              (isAgent(b.name) ? b.input?.description || "Subagent" : summarize(b.name, b.input)),
+          ),
+          ...fileView(b.name, b.input),
+          st,
+        );
         li.title = summarize(b.name, b.input);
         state.subTools.set(b.id, li);
         if (isAgent(b.name)) {
@@ -2052,7 +3000,10 @@ function subEvent(e, live) {
 }
 // task_started / task_progress / task_notification: live stats on the card, and a status chip for work that outlives the call
 function finishChip(card, chip, e) {
-  const word = { completed: "finished", failed: "failed", stopped: "stopped" }[e.status] || e.status || "finished";
+  const word =
+    { completed: "finished", failed: "failed", stopped: "stopped" }[e.status] ||
+    e.status ||
+    "finished";
   chip.className = `task-chip ${e.status === "failed" ? "err" : "done"}`;
   chip.replaceChildren(icon(e.status === "failed" ? "x" : "check"), el("span", "", word));
   if (e.summary) chip.title = e.summary;
@@ -2068,7 +3019,13 @@ function taskEvent(e) {
   }
   if (e.subtype === "task_progress" && card.classList.contains("agent")) {
     const u = e.usage || {};
-    card.querySelector(".stats").textContent = [u.tool_uses != null && `${u.tool_uses} tool${u.tool_uses === 1 ? "" : "s"}`, u.total_tokens != null && `${fmtTok(u.total_tokens)} tokens`, u.duration_ms != null && fmtDur(u.duration_ms)].filter(Boolean).join(" · ");
+    card.querySelector(".stats").textContent = [
+      u.tool_uses != null && `${u.tool_uses} tool${u.tool_uses === 1 ? "" : "s"}`,
+      u.total_tokens != null && `${fmtTok(u.total_tokens)} tokens`,
+      u.duration_ms != null && fmtDur(u.duration_ms),
+    ]
+      .filter(Boolean)
+      .join(" · ");
     card.querySelector(".now").textContent = e.description ? `Now: ${e.description}` : "";
     return;
   }
@@ -2083,18 +3040,29 @@ function taskEvent(e) {
     chip.className = "task-chip running";
     chip.replaceChildren(el("i", "spin"), el("span", "", "in background"));
     const done = state.doneTasks?.get(e.tool_use_id);
-    if (done) { state.doneTasks.delete(e.tool_use_id); finishChip(card, chip, done); }
+    if (done) {
+      state.doneTasks.delete(e.tool_use_id);
+      finishChip(card, chip, done);
+    }
   } else if (e.subtype === "task_notification" && chip && !chip.hidden) finishChip(card, chip, e);
   updateWorking();
 }
 
 // Client-perceived latency: send tap -> first reply token painted, for the turn this device started (latency kind first_token).
 function watchFirstToken(e) {
-  if (firstToken.thread !== state.current || e.type === "result" || e.type === "aborted") { firstToken = null; return; }
+  if (firstToken.thread !== state.current || e.type === "result" || e.type === "aborted") {
+    firstToken = null;
+    return;
+  }
   if (e.parent_tool_use_id) return;
-  const output = e.type === "stream_event" ? e.event?.type === "content_block_delta" : e.type === "assistant" && e.message?.content?.some((b) => ["text", "thinking", "tool_use"].includes(b?.type));
+  const output =
+    e.type === "stream_event"
+      ? e.event?.type === "content_block_delta"
+      : e.type === "assistant" &&
+        e.message?.content?.some((b) => ["text", "thinking", "tool_use"].includes(b?.type));
   if (!output) return;
-  const { thread, at, wait_ms } = firstToken, hidden = document.visibilityState !== "visible";
+  const { thread, at, wait_ms } = firstToken,
+    hidden = document.visibilityState !== "visible";
   firstToken = null;
   requestAnimationFrame(() => {
     const total_ms = performance.now() - at;
@@ -2106,7 +3074,11 @@ function watchFirstToken(e) {
 function onEvent(e, live) {
   if (live && firstToken) watchFirstToken(e);
   // what a subagent says and does arrives with the id of the call that spawned it: it belongs inside that card, not in the main thread
-  if (e.parent_tool_use_id && (e.type === "assistant" || e.type === "user" || e.type === "stream_event")) return subEvent(e, live);
+  if (
+    e.parent_tool_use_id &&
+    (e.type === "assistant" || e.type === "user" || e.type === "stream_event")
+  )
+    return subEvent(e, live);
   switch (e.type) {
     case "question":
       push(questions.mount(state.current, e), live);
@@ -2114,8 +3086,16 @@ function onEvent(e, live) {
     case "question_answer": {
       questions.receive(state.current, e);
       const host = state.into || $("chat");
-      const exists = [...host.querySelectorAll(".question-card")].some(card => card.dataset.questionId === e.id);
-      if (!exists && ![...$("chat").querySelectorAll(".question-card")].some(card => card.dataset.questionId === e.id)) push(questions.mount(state.current, e), live);
+      const exists = [...host.querySelectorAll(".question-card")].some(
+        (card) => card.dataset.questionId === e.id,
+      );
+      if (
+        !exists &&
+        ![...$("chat").querySelectorAll(".question-card")].some(
+          (card) => card.dataset.questionId === e.id,
+        )
+      )
+        push(questions.mount(state.current, e), live);
       questions.refresh(host);
       break;
     }
@@ -2127,11 +3107,17 @@ function onEvent(e, live) {
       if (e.questionAnswer) break; // The inline answered card already shows this async reply.
       if (e.command) break; // /compact is shown as its progress card, not as a message bubble
       if (e.auto === "brain") {
-        push(el("div", "msg note", "Reminder sent: save anything durable to the shared brain."), live);
+        push(
+          el("div", "msg note", "Reminder sent: save anything durable to the shared brain."),
+          live,
+        );
         break;
       }
       if (e.auto === "subagent") {
-        push(el("div", "msg note", "Background subagent finished. Its result was sent to the agent."), live);
+        push(
+          el("div", "msg note", "Background subagent finished. Its result was sent to the agent."),
+          live,
+        );
         break;
       }
       const d = el("div", "msg user");
@@ -2140,8 +3126,26 @@ function onEvent(e, live) {
         const bubble = el("div", "bubble");
         bubble.append(userText(e.text, e.attachments));
         d.append(bubble);
-        if (e.delivery) d.append(el("div", "delivery", e.delivery === "steer" ? "Sent while the agent was working" : "Was queued"));
-        if (e.scheduled) d.append(el("div", "delivery", e.scheduled === "catch-up" ? "Scheduled run · catch-up for a missed time" : e.scheduled === "manual" ? "Scheduled task · run now" : "Scheduled run"));
+        if (e.delivery)
+          d.append(
+            el(
+              "div",
+              "delivery",
+              e.delivery === "steer" ? "Sent while the agent was working" : "Was queued",
+            ),
+          );
+        if (e.scheduled)
+          d.append(
+            el(
+              "div",
+              "delivery",
+              e.scheduled === "catch-up"
+                ? "Scheduled run · catch-up for a missed time"
+                : e.scheduled === "manual"
+                  ? "Scheduled task · run now"
+                  : "Scheduled run",
+            ),
+          );
         d.append(copyActions(() => e.text));
       }
       push(d, live);
@@ -2192,7 +3196,14 @@ function onEvent(e, live) {
           const st = el("span", "st");
           st.append(el("i", "spin"), el("span", "sr-only", "running"));
           const why = describedAs(b.name, b.input);
-          sum.append(tool, el("span", "name", toolName(b.name, b.input)), el("span", why ? "sum human" : "sum", why || summarize(b.name, b.input)), ...fileView(b.name, b.input), st, icon("chev-right", "chev"));
+          sum.append(
+            tool,
+            el("span", "name", toolName(b.name, b.input)),
+            el("span", why ? "sum human" : "sum", why || summarize(b.name, b.input)),
+            ...fileView(b.name, b.input),
+            st,
+            icon("chev-right", "chev"),
+          );
           sum.title = summarize(b.name, b.input);
           card.toolInput = { name: b.name, input: b.input };
           card.append(sum, el("div", "body")); // the open row wraps to show the whole label, so it is not repeated below
@@ -2218,10 +3229,18 @@ function onEvent(e, live) {
         card.classList.remove("pending");
         card.classList.add(c.is_error ? "err" : "done");
         const st = card.querySelector(".st");
-        st.replaceChildren(icon(c.is_error ? "x" : "check"), el("span", "sr-only", c.is_error ? "error" : "done"));
-        const text = typeof c.content === "string" ? c.content : (c.content ?? []).map((x) => x.text ?? "").join("\n");
+        st.replaceChildren(
+          icon(c.is_error ? "x" : "check"),
+          el("span", "sr-only", c.is_error ? "error" : "done"),
+        );
+        const text =
+          typeof c.content === "string"
+            ? c.content
+            : (c.content ?? []).map((x) => x.text ?? "").join("\n");
         // a background subagent's launch receipt is harness bookkeeping; its status chip and activity say the same
-        const launched = card.classList.contains("agent") && (card.querySelector(".task-chip:not([hidden])") || /^Async agent launched/.test(text));
+        const launched =
+          card.classList.contains("agent") &&
+          (card.querySelector(".task-chip:not([hidden])") || /^Async agent launched/.test(text));
         if (text && !launched) {
           const out = toolOutput(text, !!c.is_error);
           card.querySelector(".body").append(out);
@@ -2237,18 +3256,28 @@ function onEvent(e, live) {
       const bits = [];
       const at = new Date(e.ts || Date.now());
       const clock = at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-      bits.push(at.toDateString() === new Date().toDateString() ? clock : `${at.toLocaleDateString([], { month: "short", day: "numeric" })} ${clock}`);
+      bits.push(
+        at.toDateString() === new Date().toDateString()
+          ? clock
+          : `${at.toLocaleDateString([], { month: "short", day: "numeric" })} ${clock}`,
+      );
       if (e.duration_ms) bits.push(`${(e.duration_ms / 1000).toFixed(1)}s`);
       if (typeof e.total_cost_usd === "number") bits.push(`$${e.total_cost_usd.toFixed(4)}`);
       // Claude CLI reports failed turns (expired login, API errors) as subtype "success" with is_error set.
-      if (e.is_error || (e.subtype && e.subtype !== "success")) bits.push(e.subtype && e.subtype !== "success" ? e.subtype : "error");
+      if (e.is_error || (e.subtype && e.subtype !== "success"))
+        bits.push(e.subtype && e.subtype !== "success" ? e.subtype : "error");
       const last = (state.into || $("chat")).lastElementChild;
       const row = last?.matches(".msg.asst") ? last.querySelector(".actions") : null;
       const foot = el("span", "foot", bits.join(" · "));
-      if (row) row.append(foot); // stats sit on the reply's action row
+      if (row)
+        row.append(foot); // stats sit on the reply's action row
       else push(el("div", "msg foot", bits.join(" · ")), live);
       const t = cur();
-      if (e.is_error && t?.provider === "claude" && CLAUDE_AUTH_FAILED.test(e.result || "")) (row ? foot : (state.into || $("chat")).lastElementChild).append(" ", signInButton(t.claudeAccount || "sunny"));
+      if (e.is_error && t?.provider === "claude" && CLAUDE_AUTH_FAILED.test(e.result || ""))
+        (row ? foot : (state.into || $("chat")).lastElementChild).append(
+          " ",
+          signInButton(t.claudeAccount || "sunny"),
+        );
       break;
     }
     case "system":
@@ -2267,7 +3296,10 @@ function onEvent(e, live) {
       if (body) {
         card.toolInput = { name: e.name, input: e.input };
         if (card.open) {
-          body.replaceChildren(...toolBody(e.name, e.input).childNodes, ...body.querySelectorAll(".tool-result"));
+          body.replaceChildren(
+            ...toolBody(e.name, e.input).childNodes,
+            ...body.querySelectorAll(".tool-result"),
+          );
           card.toolInput = null;
         }
       }
@@ -2275,7 +3307,9 @@ function onEvent(e, live) {
     }
     case "tool_label": {
       // The helper model's plain-English version of a command that came without a description; arrives a few seconds after the card
-      const sumEl = (state.cards.get(e.tool_use_id) ?? state.subTools.get(e.tool_use_id))?.querySelector(".sum");
+      const sumEl = (
+        state.cards.get(e.tool_use_id) ?? state.subTools.get(e.tool_use_id)
+      )?.querySelector(".sum");
       if (sumEl && !sumEl.classList.contains("human")) {
         sumEl.textContent = e.label;
         sumEl.classList.add("human");
@@ -2299,103 +3333,219 @@ function onEvent(e, live) {
   }
 }
 
-function meterColor(pct) { return pct >= 90 ? "var(--bad)" : pct >= 70 ? "var(--warn)" : "var(--ok)"; }
+function meterColor(pct) {
+  return pct >= 90 ? "var(--bad)" : pct >= 70 ? "var(--warn)" : "var(--ok)";
+}
 function setUsage(e, provider = threadUsageKey(cur())) {
   const w = e.rate_limit_info?.unifiedWindows;
   if (!w) return;
-  state.usage[provider] = { updatedAt: Date.now(), windows: [["5-hour", w.five_hour], ["7-day", w.seven_day]].filter(([,x]) => Number.isFinite(x?.utilization)).map(([label,x]) => ({ label, used: x.utilization * 100, limit: 100, unit: "%", ...((x.resetsAt || x.resets_at) ? { resetsAt: (x.resetsAt || x.resets_at) * 1000 } : {}) })) };
+  state.usage[provider] = {
+    updatedAt: Date.now(),
+    windows: [
+      ["5-hour", w.five_hour],
+      ["7-day", w.seven_day],
+    ]
+      .filter(([, x]) => Number.isFinite(x?.utilization))
+      .map(([label, x]) => ({
+        label,
+        used: x.utilization * 100,
+        limit: 100,
+        unit: "%",
+        ...(x.resetsAt || x.resets_at ? { resetsAt: (x.resetsAt || x.resets_at) * 1000 } : {}),
+      })),
+  };
   renderUsage();
 }
 function resetsText(at) {
   const ms = at - Date.now();
   if (ms <= 0) return "Reset passed";
-  const m = Math.round(ms / 60000), d = Math.floor(m / 1440), h = Math.floor(m % 1440 / 60);
+  const m = Math.round(ms / 60000),
+    d = Math.floor(m / 1440),
+    h = Math.floor((m % 1440) / 60);
   return `Resets in ${d ? `${d}d ${h}h` : h ? `${h}h ${m % 60}m` : `${m}m`}`;
 }
 function usageMeter(label, used, limit, unit = "%", resetsAt) {
-  const pct = Math.max(0, Math.min(100, used / limit * 100));
+  const pct = Math.max(0, Math.min(100, (used / limit) * 100));
   const row = el("div", "u");
   const bar = el("div", "bar");
   bar.setAttribute("role", "meter");
   bar.setAttribute("aria-label", label);
-  bar.setAttribute("aria-valuemin", "0"); bar.setAttribute("aria-valuemax", String(limit)); bar.setAttribute("aria-valuenow", String(used));
-  const text = unit === "%" ? `${Math.round(pct)}%` : unit === "$" ? `$${used.toFixed(2)} / $${limit.toFixed(2)}` : unit === "tokens" ? `${fmtTok(used)} / ${fmtTok(limit)}` : `${used} / ${limit}`;
+  bar.setAttribute("aria-valuemin", "0");
+  bar.setAttribute("aria-valuemax", String(limit));
+  bar.setAttribute("aria-valuenow", String(used));
+  const text =
+    unit === "%"
+      ? `${Math.round(pct)}%`
+      : unit === "$"
+        ? `$${used.toFixed(2)} / $${limit.toFixed(2)}`
+        : unit === "tokens"
+          ? `${fmtTok(used)} / ${fmtTok(limit)}`
+          : `${used} / ${limit}`;
   bar.setAttribute("aria-valuetext", text);
   row.title = `${label}: ${text}${resetsAt ? ` · resets ${new Date(resetsAt).toLocaleString()}` : ""}`;
-  const fill = el("i"); fill.style.width = `${pct}%`; fill.style.background = meterColor(pct); bar.append(fill);
-  const value = el("span", "pct", unit === "%" || unit === "tokens" ? `${Math.round(pct)}%` : text); value.style.color = meterColor(pct);
+  const fill = el("i");
+  fill.style.width = `${pct}%`;
+  fill.style.background = meterColor(pct);
+  bar.append(fill);
+  const value = el("span", "pct", unit === "%" || unit === "tokens" ? `${Math.round(pct)}%` : text);
+  value.style.color = meterColor(pct);
   row.append(el("span", "", label), bar, value);
   if (resetsAt) row.append(el("span", "u-reset", resetsText(resetsAt)));
   return row;
 }
-const usageName = (p) => p?.id === "claude" ? "Claude" : p?.id === "pi" ? "OpenRouter" : p?.label || "";
+const usageName = (p) =>
+  p?.id === "claude" ? "Claude" : p?.id === "pi" ? "OpenRouter" : p?.label || "";
 let usagePicker;
 function renderUsage() {
-  const providers = [...state.providers.values()].filter(p => p.id !== "mock").flatMap(p => p.id === "claude"
-    ? claudeAccounts().map(a => ({ id: a.id === "sunny" ? "claude" : `claude:${a.id}`, label: a.label, email: a.email, claude: true, ready: a.ready }))
-    : [p]);
+  const providers = [...state.providers.values()]
+    .filter((p) => p.id !== "mock")
+    .flatMap((p) =>
+      p.id === "claude"
+        ? claudeAccounts().map((a) => ({
+            id: a.id === "sunny" ? "claude" : `claude:${a.id}`,
+            label: a.label,
+            email: a.email,
+            claude: true,
+            ready: a.ready,
+          }))
+        : [p],
+    );
   if (!providers.length) return;
-  if (!providers.some(p => p.id === state.usageTab)) state.usageTab = providers[0].id;
+  if (!providers.some((p) => p.id === state.usageTab)) state.usageTab = providers[0].id;
   const root = $("usage");
   const focusedControl = root.contains(document.activeElement) ? document.activeElement.id : null;
   let picker = root.querySelector("#usage-provider");
   if (!picker) {
     picker = el("button", "btn field usage-picker");
-    picker.id = "usage-provider"; picker.type = "button";
+    picker.id = "usage-provider";
+    picker.type = "button";
     usagePicker = createMenu({
-      trigger: picker, label: "Usage account", side: "top",
+      trigger: picker,
+      label: "Usage account",
+      side: "top",
       renderTrigger: (item, button) => {
         fieldTrigger(item, button);
         button.setAttribute("aria-label", `Usage account: ${item?.label || ""}`);
       },
-      onSelect: value => { state.usageTab = value; renderUsage(); },
+      onSelect: (value) => {
+        state.usageTab = value;
+        renderUsage();
+      },
     });
   }
-  usagePicker.setItems(providers.map(p => ({
-    value: p.id, label: p.claude ? `Claude · ${p.label}` : usageName(p),
-    ...(p.email ? { desc: p.email } : {}),
-  })), state.usageTab);
+  usagePicker.setItems(
+    providers.map((p) => ({
+      value: p.id,
+      label: p.claude ? `Claude · ${p.label}` : usageName(p),
+      ...(p.email ? { desc: p.email } : {}),
+    })),
+    state.usageTab,
+  );
   const pane = el("div", "usage-pane");
-  pane.id = "usage-panel"; pane.setAttribute("role", "region"); pane.setAttribute("aria-labelledby", picker.id);
+  pane.id = "usage-panel";
+  pane.setAttribute("role", "region");
+  pane.setAttribute("aria-labelledby", picker.id);
   const sample = state.usage[state.usageTab];
   const head = el("div", "usage-head", "");
   const refresh = iconButton("refresh", "Refresh usage", "btn icon sm ghost usage-refresh");
-  refresh.onclick = () => { refresh.classList.add("spinning"); refresh.disabled = true; send({ t: "refresh_usage" }); setTimeout(() => { refresh.classList.remove("spinning"); refresh.disabled = false; }, 4000); };
-  const stamp = sample?.updatedAt ? el("span", "usage-stamp", new Date(sample.updatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })) : null;
-  if (stamp) { stamp.title = `Updated ${new Date(sample.updatedAt).toLocaleString()}`; refresh.setAttribute("aria-label", `Refresh usage (updated ${stamp.textContent})`); }
-  const selectedAccount = providers.find(p => p.id === state.usageTab);
+  refresh.onclick = () => {
+    refresh.classList.add("spinning");
+    refresh.disabled = true;
+    send({ t: "refresh_usage" });
+    setTimeout(() => {
+      refresh.classList.remove("spinning");
+      refresh.disabled = false;
+    }, 4000);
+  };
+  const stamp = sample?.updatedAt
+    ? el(
+        "span",
+        "usage-stamp",
+        new Date(sample.updatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+      )
+    : null;
+  if (stamp) {
+    stamp.title = `Updated ${new Date(sample.updatedAt).toLocaleString()}`;
+    refresh.setAttribute("aria-label", `Refresh usage (updated ${stamp.textContent})`);
+  }
+  const selectedAccount = providers.find((p) => p.id === state.usageTab);
   head.append(el("span", "usage-label", "Allowance"), ...(stamp ? [stamp] : []), refresh);
   pane.append(head);
   if (sample?.windows?.length) {
-    for (const w of sample.windows) pane.append(usageMeter(w.label, w.used, w.limit, w.unit || "requests", w.resetsAt));
-  } else pane.append(el("div", "usage-note", sample?.note || (selectedAccount?.claude ? selectedAccount.ready ? "Claude reports this account’s allowance after each turn." : "Sign in to this account on the server to see its allowance." : "No allowance telemetry yet. Tap refresh.")));
-  if (sample?.windows?.some(w => w.resetsAt && w.resetsAt < Date.now())) pane.append(el("div", "usage-note", "Last reported usage · reset passed; awaiting refresh."));
-  if (sample?.spendToday != null) pane.append(el("div", "usage-note", `$${sample.spendToday.toFixed(4)} spent today`));
-  const t = cur() && threadUsageKey(cur()) === state.usageTab ? cur() : [...state.threads.values()].filter(t => threadUsageKey(t) === state.usageTab).sort((a,b) => b.updatedAt-a.updatedAt)[0];
+    for (const w of sample.windows)
+      pane.append(usageMeter(w.label, w.used, w.limit, w.unit || "requests", w.resetsAt));
+  } else
+    pane.append(
+      el(
+        "div",
+        "usage-note",
+        sample?.note ||
+          (selectedAccount?.claude
+            ? selectedAccount.ready
+              ? "Claude reports this account’s allowance after each turn."
+              : "Sign in to this account on the server to see its allowance."
+            : "No allowance telemetry yet. Tap refresh."),
+      ),
+    );
+  if (sample?.windows?.some((w) => w.resetsAt && w.resetsAt < Date.now()))
+    pane.append(el("div", "usage-note", "Last reported usage · reset passed; awaiting refresh."));
+  if (sample?.spendToday != null)
+    pane.append(el("div", "usage-note", `$${sample.spendToday.toFixed(4)} spent today`));
+  const t =
+    cur() && threadUsageKey(cur()) === state.usageTab
+      ? cur()
+      : [...state.threads.values()]
+          .filter((t) => threadUsageKey(t) === state.usageTab)
+          .sort((a, b) => b.updatedAt - a.updatedAt)[0];
   const hasCtx = t?.context?.used != null && t.context.max;
-  const detail = hasCtx ? `${fmtTok(t.context.used)} of ${fmtTok(t.context.max)} tokens`
-    : t?.context?.used != null ? `${fmtTok(t.context.used)} tokens · window not reported`
-    : t?.lastCompactedAt ? "Compacted · token usage updates on the next request." : "Context not reported yet.";
-  const ctxRow = hasCtx ? usageMeter("Context", t.context.used, t.context.max, "tokens") : el("div", "u u-empty", "");
+  const detail = hasCtx
+    ? `${fmtTok(t.context.used)} of ${fmtTok(t.context.max)} tokens`
+    : t?.context?.used != null
+      ? `${fmtTok(t.context.used)} tokens · window not reported`
+      : t?.lastCompactedAt
+        ? "Compacted · token usage updates on the next request."
+        : "Context not reported yet.";
+  const ctxRow = hasCtx
+    ? usageMeter("Context", t.context.used, t.context.max, "tokens")
+    : el("div", "u u-empty", "");
   ctxRow.classList.add("u-ctx");
-  if (!hasCtx) ctxRow.append(el("span", "", "Context"), el("span", "bar"), el("span", "pct", "\u2013"));
+  if (!hasCtx)
+    ctxRow.append(el("span", "", "Context"), el("span", "bar"), el("span", "pct", "\u2013"));
   const info = iconButton("info", "Context details", "btn icon sm ghost usage-info");
-  info.id = "usage-ctx-info"; info.setAttribute("aria-haspopup", "dialog");
+  info.id = "usage-ctx-info";
+  info.setAttribute("aria-haspopup", "dialog");
   info.title = "Compare continuing versus compacting";
-  const openForecast = trigger => openContextEconomics({ getThread: () => state.threads.get(t?.id), send, trigger });
+  const openForecast = (trigger) =>
+    openContextEconomics({ getThread: () => state.threads.get(t?.id), send, trigger });
   info.onclick = () => openForecast(info);
-  ctxRow.setAttribute("role", "button"); ctxRow.tabIndex = 0;
-  ctxRow.setAttribute("aria-label", `Context forecast: ${detail}`); ctxRow.setAttribute("aria-haspopup", "dialog");
+  ctxRow.setAttribute("role", "button");
+  ctxRow.tabIndex = 0;
+  ctxRow.setAttribute("aria-label", `Context forecast: ${detail}`);
+  ctxRow.setAttribute("aria-haspopup", "dialog");
   ctxRow.onclick = () => openForecast(ctxRow);
-  ctxRow.onkeydown = event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); openForecast(ctxRow); } };
-  const ctxWrap = el("div", "usage-ctx"); ctxWrap.setAttribute("role", "group"); ctxWrap.setAttribute("aria-label", "Thread context");
-  const line = el("div", "usage-ctx-line"); line.append(ctxRow, info);
-  ctxWrap.append(line); pane.append(ctxWrap);
+  ctxRow.onkeydown = (event) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      openForecast(ctxRow);
+    }
+  };
+  const ctxWrap = el("div", "usage-ctx");
+  ctxWrap.setAttribute("role", "group");
+  ctxWrap.setAttribute("aria-label", "Thread context");
+  const line = el("div", "usage-ctx-line");
+  line.append(ctxRow, info);
+  ctxWrap.append(line);
+  pane.append(ctxWrap);
   if (hasCtx && t.context.used / t.context.max >= 0.7) {
-    const note = el("div", "usage-note", "Long context increases repeated input. Compact this task, or start a fresh thread for unrelated work.");
+    const note = el(
+      "div",
+      "usage-note",
+      "Long context increases repeated input. Compact this task, or start a fresh thread for unrelated work.",
+    );
     if (t.status === "idle") {
       const compact = el("button", "btn sm ghost", "Compact context");
-      compact.type = "button"; compact.onclick = () => send({ t: "compact", thread: t.id });
+      compact.type = "button";
+      compact.onclick = () => send({ t: "compact", thread: t.id });
       note.append(compact);
     }
     pane.append(note);
@@ -2417,22 +3567,56 @@ async function submit(mode) {
   try {
     await Promise.all(pending.map((p) => p.ready));
     if (state.current !== thread) return; // Upload completion must not submit another thread's draft.
-    if (pending.some(p => !p.id)) { toast("Retry or remove failed attachments before sending."); return; }
+    if (pending.some((p) => !p.id)) {
+      toast("Retry or remove failed attachments before sending.");
+      return;
+    }
     const text = box.value.trim();
     if (/^\/(model|effort)$/i.test(text)) {
-      if (text.toLowerCase() === "/effort" && $("effort").hidden) { toast("This agent does not expose effort settings."); return; }
-      if (cur()?.status === "running") { toast("Stop the running operation before changing settings."); return; }
-      box.value = ""; saveDraft(); closeSlash();
+      if (text.toLowerCase() === "/effort" && $("effort").hidden) {
+        toast("This agent does not expose effort settings.");
+        return;
+      }
+      if (cur()?.status === "running") {
+        toast("Stop the running operation before changing settings.");
+        return;
+      }
+      box.value = "";
+      saveDraft();
+      closeSlash();
       menus[text.slice(1).toLowerCase()].open();
       return;
     }
-    const attachments = pending.filter((p) => p.id).map((p) => ({ id: p.id, ...(p.n ? { n: p.n } : {}) }));
+    const attachments = pending
+      .filter((p) => p.id)
+      .map((p) => ({ id: p.id, ...(p.n ? { n: p.n } : {}) }));
     if (!text && !attachments.length) return;
-    if (!mode && !attachments.length && (questions.count(state.current) || cur()?.waiting)) mode = "steer";
+    if (!mode && !attachments.length && (questions.count(state.current) || cur()?.waiting))
+      mode = "steer";
     // mid-turn a message queues until the turn ends; mode "steer" (Alt+Enter, or Steer on a queued card) hands it to the agent now
     const startsTurn = !mode && cur()?.status !== "running";
-    const draft = { thread, text: box.value, attachments: pending.map(({ key, thread, name, kind, size, n, id, order }) => ({ key, thread, name, kind, size, n, id, order })) };
-    if (sendReliable({ t: "send", thread: state.current, text, attachments, ...(mode ? { mode } : {}) }, draft) && startsTurn) firstToken = { thread: state.current, at: tapAt, wait_ms: performance.now() - tapAt };
+    const draft = {
+      thread,
+      text: box.value,
+      attachments: pending.map(({ key, thread, name, kind, size, n, id, order }) => ({
+        key,
+        thread,
+        name,
+        kind,
+        size,
+        n,
+        id,
+        order,
+      })),
+    };
+    if (
+      sendReliable(
+        { t: "send", thread: state.current, text, attachments, ...(mode ? { mode } : {}) },
+        draft,
+      ) &&
+      startsTurn
+    )
+      firstToken = { thread: state.current, at: tapAt, wait_ms: performance.now() - tapAt };
     box.value = "";
     saveDraft();
     box.style.height = "";
@@ -2448,7 +3632,8 @@ async function submit(mode) {
 $("send").onclick = () => submit();
 // Pre-warm: ask the server to start the open thread's agent before the first send (no prompt, no tokens). Debounced so flicking
 // through threads starts nothing; repeated for the same thread at most once a minute (the server ignores live agents anyway).
-let warmTimer = 0, lastWarm = { id: null, at: 0 };
+let warmTimer = 0,
+  lastWarm = { id: null, at: 0 };
 function warmSoon(delay = 600) {
   clearTimeout(warmTimer);
   warmTimer = setTimeout(() => {
@@ -2487,7 +3672,9 @@ function insertToken(token) {
 function removeToken(n) {
   const box = $("input");
   const token = `[Image #${n}]`;
-  box.value = box.value.includes(token + " ") ? box.value.replace(token + " ", "") : box.value.replace(token, "");
+  box.value = box.value.includes(token + " ")
+    ? box.value.replace(token + " ", "")
+    : box.value.replace(token, "");
   box.dispatchEvent(new Event("input"));
 }
 const attachmentDrafts = new Map();
@@ -2495,11 +3682,17 @@ let attachmentOrder = Date.now();
 let pending = [];
 let storageWarning = false;
 const attachmentStorage = attachmentDraftStore(() => {
-  if (!storageWarning) toast("Browser storage unavailable. Attachments are kept only while this page stays open.");
+  if (!storageWarning)
+    toast("Browser storage unavailable. Attachments are kept only while this page stays open.");
   storageWarning = true;
 });
 
-const fmtSize = (n) => (n < 1024 ? `${n} B` : n < 1048576 ? `${Math.round(n / 1024)} KB` : `${(n / 1048576).toFixed(1)} MB`);
+const fmtSize = (n) =>
+  n < 1024
+    ? `${n} B`
+    : n < 1048576
+      ? `${Math.round(n / 1024)} KB`
+      : `${(n / 1048576).toFixed(1)} MB`;
 const readDataUrl = (blob) =>
   new Promise((resolve, reject) => {
     const r = new FileReader();
@@ -2512,7 +3705,10 @@ const readDataUrl = (blob) =>
 async function prepare(file) {
   const label = file.name || "That file";
   // Keyboard image insertion on Android (Gboard clipboard, stickers) hands over raw bytes, possibly with no type: try decoding.
-  const bmp = !file.type || file.type.startsWith("image/") ? await createImageBitmap(file).catch(() => null) : null;
+  const bmp =
+    !file.type || file.type.startsWith("image/")
+      ? await createImageBitmap(file).catch(() => null)
+      : null;
   if (!bmp) {
     if (!file.size) throw new Error(`${label} is empty (or a folder).`);
     if (file.size > MAX_FILE_BYTES) throw new Error(`${label} is over ${MAX_FILE_BYTES >> 20} MB.`);
@@ -2541,12 +3737,22 @@ async function prepare(file) {
 }
 
 async function upload(thread, blob, name) {
-  const r = await apiFetch(`/uploads/${thread}`, { method: "POST", headers: { "Content-Type": blob.type || "application/octet-stream", "X-Name": encodeURIComponent(name) }, body: blob });
+  const r = await apiFetch(`/uploads/${thread}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": blob.type || "application/octet-stream",
+      "X-Name": encodeURIComponent(name),
+    },
+    body: blob,
+  });
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(j.error || `Upload failed (${r.status}).`);
   return j;
 }
-const discard = (p) => Promise.resolve(p.ready).then(() => p.id && apiFetch(`/uploads/${p.thread}/${p.id}`, { method: "DELETE" }).catch(() => {}));
+const discard = (p) =>
+  Promise.resolve(p.ready).then(
+    () => p.id && apiFetch(`/uploads/${p.thread}/${p.id}`, { method: "DELETE" }).catch(() => {}),
+  );
 function forgetAttachment(p) {
   p.removed = true;
   attachmentStorage.remove(p.key);
@@ -2570,7 +3776,7 @@ function startUpload(p) {
       if (p.removed) return;
       Object.assign(p, prep, { size: prep.blob.size, prepared: true });
       if (p.kind === "image" && !p.n) {
-        p.n = Math.max(0, ...(attachmentDrafts.get(p.thread) || []).map(item => item.n || 0)) + 1;
+        p.n = Math.max(0, ...(attachmentDrafts.get(p.thread) || []).map((item) => item.n || 0)) + 1;
         p.labelPending = true;
       }
       await attachmentStorage.save(p);
@@ -2583,7 +3789,8 @@ function startUpload(p) {
         if (!$("input").value.includes(token)) insertToken(token);
       } else {
         const text = drafts.get(p.thread) || "";
-        if (!text.includes(token)) writeDraft(p.thread, `${text}${text && !/\s$/.test(text) ? " " : ""}${token} `);
+        if (!text.includes(token))
+          writeDraft(p.thread, `${text}${text && !/\s$/.test(text) ? " " : ""}${token} `);
       }
       p.labelPending = false;
       await attachmentStorage.save(p);
@@ -2594,13 +3801,15 @@ function startUpload(p) {
     Object.assign(p, { id: result.id, name: result.name, kind: result.kind });
     if (!p.removed) await attachmentStorage.save(p);
     delete p.blob;
-  })().catch(error => {
-    p.error = true;
-    if (!p.removed && state.current === p.thread) toast(`${p.name}: ${error.message}`);
-  }).finally(() => {
-    p.busy = false;
-    if (state.current === p.thread) renderThumbs();
-  });
+  })()
+    .catch((error) => {
+      p.error = true;
+      if (!p.removed && state.current === p.thread) toast(`${p.name}: ${error.message}`);
+    })
+    .finally(() => {
+      p.busy = false;
+      if (state.current === p.thread) renderThumbs();
+    });
 }
 
 function renderThumbs() {
@@ -2627,7 +3836,10 @@ function renderThumbs() {
         const retry = el("button", "btn", "Retry");
         retry.type = "button";
         retry.setAttribute("aria-label", `Retry ${p.name}`);
-        retry.onclick = () => { startUpload(p); renderThumbs(); };
+        retry.onclick = () => {
+          startUpload(p);
+          renderThumbs();
+        };
         li.append(retry);
       }
       const rm = el("button", "btn rm");
@@ -2663,8 +3875,18 @@ async function addFilesNow(files, thread) {
     }
     try {
       if (!f.size) throw new Error(`${f.name || "That file"} is empty (or a folder).`);
-      if (f.size > MAX_FILE_BYTES && f.type && !f.type.startsWith("image/")) throw new Error(`${f.name || "That file"} is over ${MAX_FILE_BYTES >> 20} MB.`);
-      const p = { key: crypto.randomUUID(), thread, name: f.name || "file", kind: "file", size: f.size, blob: f, n: 0, order: attachmentOrder = Math.max(Date.now(), attachmentOrder + 1) };
+      if (f.size > MAX_FILE_BYTES && f.type && !f.type.startsWith("image/"))
+        throw new Error(`${f.name || "That file"} is over ${MAX_FILE_BYTES >> 20} MB.`);
+      const p = {
+        key: crypto.randomUUID(),
+        thread,
+        name: f.name || "file",
+        kind: "file",
+        size: f.size,
+        blob: f,
+        n: 0,
+        order: (attachmentOrder = Math.max(Date.now(), attachmentOrder + 1)),
+      };
       list.push(p);
       startUpload(p);
       if (state.current === thread) renderThumbs();
@@ -2744,7 +3966,13 @@ function slashMatches(q) {
     if (c.description.toLowerCase().includes(q)) return 4;
     return 9;
   };
-  return (state.commands[cur()?.provider || "claude"] || []).filter((c) => !c.name.startsWith("_")).map((c) => [rank(c), c]).filter(([r]) => r < 9).sort((a, b) => a[0] - b[0] || a[1].name.localeCompare(b[1].name)).slice(0, 60).map(([, c]) => c);
+  return (state.commands[cur()?.provider || "claude"] || [])
+    .filter((c) => !c.name.startsWith("_"))
+    .map((c) => [rank(c), c])
+    .filter(([r]) => r < 9)
+    .sort((a, b) => a[0] - b[0] || a[1].name.localeCompare(b[1].name))
+    .slice(0, 60)
+    .map(([, c]) => c);
 }
 function closeSlash() {
   slashEl.hidden = true;
@@ -2755,7 +3983,13 @@ function closeSlash() {
 function renderSlash() {
   slashEl.replaceChildren();
   if (!slash.items.length) {
-    const li = el("li", "none", (state.commands[cur()?.provider || "claude"] || []).length ? "No matching commands" : "Commands load after your first message.");
+    const li = el(
+      "li",
+      "none",
+      (state.commands[cur()?.provider || "claude"] || []).length
+        ? "No matching commands"
+        : "Commands load after your first message.",
+    );
     slashEl.append(li);
     return;
   }
@@ -2785,7 +4019,9 @@ function updateSlash() {
 function moveSlash(d) {
   if (!slash.items.length) return;
   slash.idx = (slash.idx + d + slash.items.length) % slash.items.length;
-  [...slashEl.children].forEach((li, i) => li.setAttribute("aria-selected", String(i === slash.idx)));
+  [...slashEl.children].forEach((li, i) => {
+    li.setAttribute("aria-selected", String(i === slash.idx));
+  });
   slashEl.children[slash.idx]?.scrollIntoView({ block: "nearest" });
   $("input").setAttribute("aria-activedescendant", `slash-${slash.idx}`);
 }
@@ -2835,25 +4071,37 @@ function sizeInput() {
   const viewport = window.visualViewport?.height || window.innerHeight;
   const line = parseFloat(getComputedStyle(box).lineHeight);
   const chat = getComputedStyle($("chat"));
-  const reserve = $("head").offsetHeight + $("composer").offsetHeight - box.offsetHeight
-    + parseFloat(chat.paddingTop) + parseFloat(chat.paddingBottom) + line;
-  box.style.height = Math.max(line, Math.min(box.scrollHeight, viewport * 0.35, viewport - reserve)) + "px";
+  const reserve =
+    $("head").offsetHeight +
+    $("composer").offsetHeight -
+    box.offsetHeight +
+    parseFloat(chat.paddingTop) +
+    parseFloat(chat.paddingBottom) +
+    line;
+  box.style.height =
+    Math.max(line, Math.min(box.scrollHeight, viewport * 0.35, viewport - reserve)) + "px";
   // Measuring at full height clears the editable's scroll position. Restore it before revealing the caret.
   box.scrollTop = scrollTop;
   const selection = getSelection();
-  if (document.activeElement !== box || !selection?.focusNode || !box.contains(selection.focusNode)) return;
+  if (document.activeElement !== box || !selection?.focusNode || !box.contains(selection.focusNode))
+    return;
   const caret = document.createRange();
   caret.setStart(selection.focusNode, selection.focusOffset);
   caret.collapse(true);
   let rect = caret.getBoundingClientRect();
   // Blank lines need their newline or placeholder <br> to supply the range's bounds.
-  if (!rect.height && selection.focusNode.nodeType === Node.TEXT_NODE
-      && selection.focusNode.textContent[selection.focusOffset] === "\n") {
+  if (
+    !rect.height &&
+    selection.focusNode.nodeType === Node.TEXT_NODE &&
+    selection.focusNode.textContent[selection.focusOffset] === "\n"
+  ) {
     caret.setEnd(selection.focusNode, selection.focusOffset + 1);
     rect = caret.getBoundingClientRect();
   }
-  const next = selection.focusNode.nodeType === Node.TEXT_NODE
-    ? selection.focusNode.nextSibling : selection.focusNode.childNodes[selection.focusOffset];
+  const next =
+    selection.focusNode.nodeType === Node.TEXT_NODE
+      ? selection.focusNode.nextSibling
+      : selection.focusNode.childNodes[selection.focusOffset];
   if (!rect.height && next?.nodeName === "BR") {
     caret.selectNode(next);
     rect = caret.getBoundingClientRect();
@@ -2902,29 +4150,48 @@ document.addEventListener("keydown", (e) => {
 let dialogTask = null; // "new" or the task being edited; null for a new thread
 let dialogAssignment = null;
 let assignmentPending = false;
-$("dlg").addEventListener("cancel", (event) => { if (assignmentPending) event.preventDefault(); });
+$("dlg").addEventListener("cancel", (event) => {
+  if (assignmentPending) event.preventDefault();
+});
 function setDialogKind(task) {
   dialogAssignment = null;
   $("d-assignment-error").hidden = true;
-  menus.dProv.setItems([...state.providers.values()].map(p => ({ value: p.id, label: p.label, disabled: !p.ok })), menus.dProv.value);
+  menus.dProv.setItems(
+    [...state.providers.values()].map((p) => ({ value: p.id, label: p.label, disabled: !p.ok })),
+    menus.dProv.value,
+  );
   const wasTask = dialogTask !== null;
   dialogTask = task;
   $("d-auto-panel").hidden = true;
   $("d-auto-info").setAttribute("aria-expanded", "false");
   $("d-auto-note").textContent = AUTO_HINT;
-  const isTask = task !== null, editing = isTask && task !== "new";
+  const isTask = task !== null,
+    editing = isTask && task !== "new";
   $("task-fields").hidden = $("save-field").hidden = !isTask;
-  $("dlg-title").textContent = editing ? "Edit scheduled task" : isTask ? "New scheduled task" : "New thread";
-  $("dlg-sub").textContent = isTask ? "Runs on this server with nobody watching. Each run opens a thread you can reply to." : "Run a coding agent in one of your folders.";
+  $("dlg-title").textContent = editing
+    ? "Edit scheduled task"
+    : isTask
+      ? "New scheduled task"
+      : "New thread";
+  $("dlg-sub").textContent = isTask
+    ? "Runs on this server with nobody watching. Each run opens a thread you can reply to."
+    : "Run a coding agent in one of your folders.";
   $("d-title").required = $("d-prompt").required = isTask;
   if (isTask) {
     const id = editing ? task.provider : prov("pi")?.ok ? "pi" : menus.dProv.value;
     menus.dProv.setValue(id);
     fillDialog(id);
     if (editing) {
-      if (!menus.dCwd.items().some((i) => i.value === task.cwd)) menus.dCwd.setItems([...menus.dCwd.items(), { value: task.cwd, label: task.cwd.replace(/^.*\/repos\/?/, "~/repos/"), icon: "folder" }]);
+      if (!menus.dCwd.items().some((i) => i.value === task.cwd))
+        menus.dCwd.setItems([
+          ...menus.dCwd.items(),
+          { value: task.cwd, label: task.cwd.replace(/^.*\/repos\/?/, "~/repos/"), icon: "folder" },
+        ]);
       menus.dCwd.setValue(task.cwd);
-      if (menus.dModel.items().some((i) => i.value === task.model)) { menus.dModel.setValue(task.model); dialogEffort(task.model, id); }
+      if (menus.dModel.items().some((i) => i.value === task.model)) {
+        menus.dModel.setValue(task.model);
+        dialogEffort(task.model, id);
+      }
       menus.dEffort.setValue(task.effort || "default");
       menus.dMode.setValue(task.mode);
       $("d-warn").hidden = task.mode !== "bypassPermissions";
@@ -2938,7 +4205,10 @@ function setDialogKind(task) {
     syncWhen();
   } else if (wasTask) {
     const first = [...state.providers.values()].find((p) => p.ok)?.id;
-    if (first) { menus.dProv.setValue(first); fillDialog(first); }
+    if (first) {
+      menus.dProv.setValue(first);
+      fillDialog(first);
+    }
   }
   $("d-ok").textContent = editing ? "Save task" : isTask ? "Schedule task" : "Create thread";
   dialogFork = null;
@@ -2950,31 +4220,55 @@ function setDialogKind(task) {
 let dialogFork = null; // the thread being forked
 function syncForkContext() {
   const t = state.threads.get(dialogFork);
-  const native = t && menus.dProv.value === t.provider && (t.provider !== "claude" || menus.dAccount.value === (t.claudeAccount || "sunny"));
-  menus.dContext.setItems([
-    { value: "full", label: "Full conversation", desc: native ? "Continue the same session; nothing is lost." : "Replay the whole conversation as text." },
-    { value: "recent", label: "Recent context only", desc: "Carry a short handoff; the full transcript stays available." },
-  ], menus.dContext.value || "full");
+  const native =
+    t &&
+    menus.dProv.value === t.provider &&
+    (t.provider !== "claude" || menus.dAccount.value === (t.claudeAccount || "sunny"));
+  menus.dContext.setItems(
+    [
+      {
+        value: "full",
+        label: "Full conversation",
+        desc: native
+          ? "Continue the same session; nothing is lost."
+          : "Replay the whole conversation as text.",
+      },
+      {
+        value: "recent",
+        label: "Recent context only",
+        desc: "Carry a short handoff; the full transcript stays available.",
+      },
+    ],
+    menus.dContext.value || "full",
+  );
 }
 function openForkDialog(id) {
   const t = state.threads.get(id);
   if (!t) return;
-  if (t.status === "running") return void toast("Wait for the current turn to finish before forking.");
+  if (t.status === "running")
+    return void toast("Wait for the current turn to finish before forking.");
   setNav(false);
   setDialogKind(null);
   dialogFork = id;
-  const pid = prov(t.provider)?.ok !== false ? t.provider : [...state.providers.values()].find((p) => p.ok)?.id;
+  const pid =
+    prov(t.provider)?.ok !== false
+      ? t.provider
+      : [...state.providers.values()].find((p) => p.ok)?.id;
   menus.dProv.setValue(pid);
   fillDialog(pid);
   if (pid === t.provider) {
     menus.dAccount.setValue(t.claudeAccount || "sunny");
-    if (menus.dModel.items().some((i) => i.value === t.model)) { menus.dModel.setValue(t.model); dialogEffort(t.model, pid); }
+    if (menus.dModel.items().some((i) => i.value === t.model)) {
+      menus.dModel.setValue(t.model);
+      dialogEffort(t.model, pid);
+    }
     if (menus.dEffort.items().some((i) => i.value === t.effort)) menus.dEffort.setValue(t.effort);
     if (menus.dMode.items().some((i) => i.value === t.mode)) menus.dMode.setValue(t.mode);
     $("d-warn").hidden = menus.dMode.value !== "bypassPermissions";
   }
   $("dlg-title").textContent = "Fork thread";
-  $("dlg-sub").textContent = `Continue “${t.title}” in a new thread, in ${t.cwd.replace(/^.*\/repos\/?/, "~/repos/")}.`;
+  $("dlg-sub").textContent =
+    `Continue “${t.title}” in a new thread, in ${t.cwd.replace(/^.*\/repos\/?/, "~/repos/")}.`;
   $("context-field").hidden = false;
   $("cwd-field").hidden = true;
   menus.dContext.setValue("full");
@@ -2985,15 +4279,23 @@ function openForkDialog(id) {
 function openPremiumDialog(issue) {
   setNav(false);
   setDialogKind(null);
-  const providers = [...state.providers.values()].filter(p => ["claude", "codex"].includes(p.id));
-  const chosen = providers.find(p => p.ok);
+  const providers = [...state.providers.values()].filter((p) => ["claude", "codex"].includes(p.id));
+  const chosen = providers.find((p) => p.ok);
   if (!chosen) return void toast("No premium agent is ready. Sign in to Claude or Codex first.");
   dialogAssignment = issue;
-  menus.dProv.setItems(providers.map(p => ({ value: p.id, label: p.label, disabled: !p.ok })), chosen.id);
+  menus.dProv.setItems(
+    providers.map((p) => ({ value: p.id, label: p.label, disabled: !p.ok })),
+    chosen.id,
+  );
   fillDialog(chosen.id);
-  const related = [...state.threads.values()].filter(t => t.issueRun?.repo?.toLowerCase() === issue.repo.toLowerCase() && t.issueRun.number === issue.number);
+  const related = [...state.threads.values()].filter(
+    (t) =>
+      t.issueRun?.repo?.toLowerCase() === issue.repo.toLowerCase() &&
+      t.issueRun.number === issue.number,
+  );
   $("dlg-title").textContent = "Assign to premium";
-  $("dlg-sub").textContent = `${issue.repo}#${issue.number} · ${related.length} related runs. The new session receives remaining work, current state, failed thread IDs and linked PRs.`;
+  $("dlg-sub").textContent =
+    `${issue.repo}#${issue.number} · ${related.length} related runs. The new session receives remaining work, current state, failed thread IDs and linked PRs.`;
   $("cwd-field").hidden = true;
   $("d-ok").textContent = "Start premium session";
   $("dlg").showModal();
@@ -3007,11 +4309,20 @@ async function submitPremiumAssignment(settings, account) {
   $("d-ok").disabled = true;
   $("d-ok").textContent = "Starting…";
   $("d-assignment-error").hidden = true;
-  const reset = () => { assignmentPending = false; cancel.disabled = false; $("d-ok").textContent = "Start premium session"; syncDialogAccount(); };
+  const reset = () => {
+    assignmentPending = false;
+    cancel.disabled = false;
+    $("d-ok").textContent = "Start premium session";
+    syncDialogAccount();
+  };
   let response;
   try {
     const { cwd, ...choice } = settings;
-    response = await apiFetch("/api/automation/assign", { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/x-ndjson" }, body: JSON.stringify({ v: 1, ...issue, ...choice, ...account }) });
+    response = await apiFetch("/api/automation/assign", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/x-ndjson" },
+      body: JSON.stringify({ v: 1, ...issue, ...choice, ...account }),
+    });
     if (!response.ok || !response.headers.get("content-type")?.includes("ndjson")) {
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || "Could not start a premium session.");
@@ -3029,7 +4340,10 @@ async function submitPremiumAssignment(settings, account) {
   reset();
   const back = (message) => {
     if (dialogAssignment !== issue) openPremiumDialog(issue);
-    else { setNav(false); $("dlg").showModal(); }
+    else {
+      setNav(false);
+      $("dlg").showModal();
+    }
     $("d-assignment-error").textContent = message;
     $("d-assignment-error").hidden = false;
   };
@@ -3037,7 +4351,10 @@ async function submitPremiumAssignment(settings, account) {
     await showAssignmentProgress(response, {
       title: `${issue.repo}#${issue.number}`,
       onBack: () => back($("ap-error").textContent),
-      onOpen: (id) => { if (dialogAssignment === issue) dialogAssignment = null; openThread(id); },
+      onOpen: (id) => {
+        if (dialogAssignment === issue) dialogAssignment = null;
+        openThread(id);
+      },
     });
     if (!$("ap").open) toast("Premium session started.");
   } catch (error) {
@@ -3050,7 +4367,12 @@ function syncWhen() {
   $("d-time").hidden = r === "manual";
   $("d-time").required = r !== "manual";
   const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  $("d-next").textContent = r === "manual" ? "Runs only when you press Run now." : r === "hourly" ? `Every hour at the minute shown (${zone}).` : `Your time zone: ${zone}.`;
+  $("d-next").textContent =
+    r === "manual"
+      ? "Runs only when you press Run now."
+      : r === "hourly"
+        ? `Every hour at the minute shown (${zone}).`
+        : `Your time zone: ${zone}.`;
 }
 function openNewDialog() {
   setNav(false);
@@ -3069,8 +4391,14 @@ $("new-task").onclick = () => openTaskDialog();
 // Threads | Scheduled: two views of the same sidebar place, remembered per device
 function setLane(lane, focus = false) {
   state.lane = lane;
-  try { localStorage.setItem("ac_lane", lane); } catch {}
-  for (const [name, tab, pane] of [["threads", "lane-threads", "pane-threads"], ["tasks", "lane-tasks", "pane-tasks"], ["auto", "lane-auto", "pane-auto"]]) {
+  try {
+    localStorage.setItem("ac_lane", lane);
+  } catch {}
+  for (const [name, tab, pane] of [
+    ["threads", "lane-threads", "pane-threads"],
+    ["tasks", "lane-tasks", "pane-tasks"],
+    ["auto", "lane-auto", "pane-auto"],
+  ]) {
     $(tab).setAttribute("aria-selected", String(lane === name));
     $(tab).tabIndex = lane === name ? 0 : -1;
     $(pane).hidden = lane !== name;
@@ -3083,8 +4411,16 @@ $("lane-auto").onclick = () => setLane("auto");
 $("lanes").addEventListener("keydown", (e) => {
   if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) return;
   e.preventDefault();
-  const order = ["threads", "tasks", "auto"], at = order.indexOf(state.lane);
-  setLane(e.key === "Home" ? order[0] : e.key === "End" ? order.at(-1) : order[(at + (e.key === "ArrowRight" ? 1 : order.length - 1)) % order.length], true);
+  const order = ["threads", "tasks", "auto"],
+    at = order.indexOf(state.lane);
+  setLane(
+    e.key === "Home"
+      ? order[0]
+      : e.key === "End"
+        ? order.at(-1)
+        : order[(at + (e.key === "ArrowRight" ? 1 : order.length - 1)) % order.length],
+    true,
+  );
 });
 setLane(state.lane);
 $("new").onclick = openNewDialog;
@@ -3096,21 +4432,41 @@ $("archive-toggle").onclick = () => {
 $("reload").onclick = () => location.reload();
 // sidebar More: rare console actions behind one button; each item drives the element that owns its behaviour
 createMenu({
-  trigger: $("side-more"), kind: "menu", label: "Console", align: "end",
+  trigger: $("side-more"),
+  kind: "menu",
+  label: "Console",
+  align: "end",
   getItems: () => [
     { value: "new", label: "New thread", icon: "plus" },
     { value: "task", label: "New scheduled task", icon: "clock" },
-    { value: "notifications", label: "Notifications", desc: /: on$/.test($("notifications").getAttribute("aria-label") || "") ? "On for this device" : "Off", icon: "bell" },
+    {
+      value: "notifications",
+      label: "Notifications",
+      desc: /: on$/.test($("notifications").getAttribute("aria-label") || "")
+        ? "On for this device"
+        : "Off",
+      icon: "bell",
+    },
     { value: "dashboard", label: "Usage dashboard", icon: "chart" },
     { value: "benchmarks", label: "Model benchmarks", icon: "chart" },
     { value: "automation", label: "Automation dashboard", icon: "play" },
     { value: "host", label: "Host dashboard", icon: "terminal" },
-    { value: "security", label: "Security scans", desc: "Malware, CVEs, open ports", icon: "shield" },
+    {
+      value: "security",
+      label: "Security scans",
+      desc: "Malware, CVEs, open ports",
+      icon: "shield",
+    },
     { value: "vault", label: "Vault", desc: "API tokens, write-only", icon: "key" },
     { value: "doctor", label: "Doctor", desc: "Check and repair the setup", icon: "alert" },
     { value: "ideas", label: "App ideas", icon: "sparkle" },
     { value: "reload", label: "Reload page", icon: "refresh" },
-    { value: "restart", label: "Restart server…", desc: "Once every thread is idle", icon: "power" },
+    {
+      value: "restart",
+      label: "Restart server…",
+      desc: "Once every thread is idle",
+      icon: "power",
+    },
   ],
   onSelect: (v) => {
     if (v === "dashboard") location.href = $("dash-link").href;
@@ -3121,31 +4477,62 @@ createMenu({
     else if (v === "vault") location.href = $("vault-link").href;
     else if (v === "doctor") location.href = "/doctor";
     else if (v === "ideas") location.href = $("ideas-link").href;
-    else if (v === "task") { setLane("tasks"); openTaskDialog(); }
-    else (v === "new" ? $("new") : $(v)).click();
+    else if (v === "task") {
+      setLane("tasks");
+      openTaskDialog();
+    } else (v === "new" ? $("new") : $(v)).click();
   },
 });
 $("restart").onclick = async () => {
   const r = await apiFetch("/restart", { method: "POST" }).catch(() => null);
-  toast(r?.ok ? "Restart scheduled. It happens once every thread is idle, then this page reloads." : "Could not schedule a restart.");
+  toast(
+    r?.ok
+      ? "Restart scheduled. It happens once every thread is idle, then this page reloads."
+      : "Could not schedule a restart.",
+  );
 };
 $("dform").addEventListener("submit", (e) => {
   if (e.submitter?.value !== "ok") return;
-  const settings = { provider: menus.dProv.value, cwd: menus.dCwd.value, model: menus.dModel.value, effort: menus.dEffort.value, mode: menus.dMode.value };
-  const account = settings.provider === "claude" ? { claudeAccount: menus.dAccount.value || "sunny" } : {};
+  const settings = {
+    provider: menus.dProv.value,
+    cwd: menus.dCwd.value,
+    model: menus.dModel.value,
+    effort: menus.dEffort.value,
+    mode: menus.dMode.value,
+  };
+  const account =
+    settings.provider === "claude" ? { claudeAccount: menus.dAccount.value || "sunny" } : {};
   if (dialogAssignment) {
     e.preventDefault();
     return void submitPremiumAssignment(settings, account);
   }
   if (dialogFork) {
     const { cwd, ...pick } = settings;
-    return void send({ t: "fork", thread: dialogFork, ...pick, ...account, context: menus.dContext.value });
+    return void send({
+      t: "fork",
+      thread: dialogFork,
+      ...pick,
+      ...account,
+      context: menus.dContext.value,
+    });
   }
-  if (dialogTask === null) return void send({ t: "create", ...settings, ...(settings.provider === "claude" ? { claudeAccount: menus.dAccount.value || "sunny" } : {}) });
+  if (dialogTask === null)
+    return void send({
+      t: "create",
+      ...settings,
+      ...(settings.provider === "claude" ? { claudeAccount: menus.dAccount.value || "sunny" } : {}),
+    });
   send({
-    t: "task_save", ...(dialogTask !== "new" ? { id: dialogTask.id } : {}), ...settings,
-    title: $("d-title").value, prompt: $("d-prompt").value, repeat: menus.dRepeat.value, day: Number(menus.dDay.value), time: $("d-time").value || "09:00",
-    tz: Intl.DateTimeFormat().resolvedOptions().timeZone, saveOutput: $("d-save").checked,
+    t: "task_save",
+    ...(dialogTask !== "new" ? { id: dialogTask.id } : {}),
+    ...settings,
+    title: $("d-title").value,
+    prompt: $("d-prompt").value,
+    repeat: menus.dRepeat.value,
+    day: Number(menus.dDay.value),
+    time: $("d-time").value || "09:00",
+    tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    saveOutput: $("d-save").checked,
   });
   setLane("tasks");
 });
@@ -3159,10 +4546,14 @@ addEventListener("hashchange", () => {
 });
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("/sw.js").catch(() => {});
-  navigator.serviceWorker.addEventListener("message", event => {
+  navigator.serviceWorker.addEventListener("message", (event) => {
     if (event.data?.type !== "notification-open") return;
     let url;
-    try { url = new URL(event.data.url, location.origin); } catch { return; }
+    try {
+      url = new URL(event.data.url, location.origin);
+    } catch {
+      return;
+    }
     if (url.origin !== location.origin || url.pathname !== "/") return;
     const id = new URLSearchParams(url.hash.slice(1)).get("thread");
     if (id && state.ready && state.threads.has(id)) openThread(id);
@@ -3179,8 +4570,12 @@ for (const p of await attachmentStorage.load()) {
   attachmentDrafts.set(p.thread, list);
 }
 try {
-  const recovered = Object.keys(localStorage).filter(key => key.startsWith("ac_sending:")).map(key => ({ key, draft: JSON.parse(localStorage.getItem(key)) }));
-  recovered.sort((a, b) => b.draft.createdAt - a.draft.createdAt || b.draft.sequence - a.draft.sequence);
+  const recovered = Object.keys(localStorage)
+    .filter((key) => key.startsWith("ac_sending:"))
+    .map((key) => ({ key, draft: JSON.parse(localStorage.getItem(key)) }));
+  recovered.sort(
+    (a, b) => b.draft.createdAt - a.draft.createdAt || b.draft.sequence - a.draft.sequence,
+  );
   for (const { key, draft } of recovered) {
     if (draft?.thread && typeof draft.text === "string" && Array.isArray(draft.attachments)) {
       const cid = key.slice("ac_sending:".length);
@@ -3188,6 +4583,8 @@ try {
       else await recoverSendingDraft(cid, draft);
     }
   }
-} catch { toast("A message recovery copy could not be loaded."); }
+} catch {
+  toast("A message recovery copy could not be loaded.");
+}
 draftsLoaded = true;
 connect();

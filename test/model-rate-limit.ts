@@ -2,9 +2,13 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import { DatabaseSync } from "node:sqlite";
-import { AdmissionUnavailable, ModelRateLimit, MODEL_REQUEST_INTERVAL_MS } from "../server/providers/model-rate-limit.ts";
+import { setTimeout as delay } from "node:timers/promises";
+import {
+  AdmissionUnavailable,
+  MODEL_REQUEST_INTERVAL_MS,
+  ModelRateLimit,
+} from "../server/providers/model-rate-limit.ts";
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ac-model-rate-limit-"));
 const gates: ModelRateLimit[] = [];
@@ -44,7 +48,9 @@ try {
   const providers = make("providers", { intervalMs: 10 });
   const until = providers.report429("1", "nvidia");
   let nvidiaStarted = 0;
-  const nvidia = providers.acquire({ provider: "nvidia" }).then(() => { nvidiaStarted = Date.now(); });
+  const nvidia = providers.acquire({ provider: "nvidia" }).then(() => {
+    nvidiaStarted = Date.now();
+  });
   await providers.acquire({ provider: "openrouter" });
   assert.equal(nvidiaStarted, 0, "NVIDIA cooldown must not block OpenRouter");
   await nvidia;
@@ -64,12 +70,18 @@ try {
   assert.ok(providers.report429("invalid", "other") >= Date.now() + 29_900);
   assert.ok(providers.report429("9999999", "other") <= Date.now() + 900_000);
 
-  const minute = make("minute", { intervalMs: 5, openRouterMinuteLimit: 2, openRouterWindowMs: 400 });
+  const minute = make("minute", {
+    intervalMs: 5,
+    openRouterMinuteLimit: 2,
+    openRouterWindowMs: 400,
+  });
   const start = Date.now();
   await minute.acquire({ provider: "openrouter" });
   await minute.acquire({ provider: "openrouter" });
   let thirdDone = false;
-  const third = minute.acquire({ provider: "openrouter" }).then(() => { thirdDone = true; });
+  const third = minute.acquire({ provider: "openrouter" }).then(() => {
+    thirdDone = true;
+  });
   await minute.acquire({ provider: "nvidia" });
   assert.equal(thirdDone, false, "Minute quota waits outside the global queue");
   await third;
@@ -103,11 +115,15 @@ try {
   const streaming = make("streaming", { intervalMs: 10 });
   await streaming.acquire();
   let responseFinished = false;
-  const response = delay(100).then(() => { responseFinished = true; });
+  const response = delay(100).then(() => {
+    responseFinished = true;
+  });
   await streaming.acquire();
   assert.equal(responseFinished, false);
   await response;
-  console.log("model-rate-limit: priorities, provider cooldowns, rolling/day quotas, cancellation, restart and streaming passed");
+  console.log(
+    "model-rate-limit: priorities, provider cooldowns, rolling/day quotas, cancellation, restart and streaming passed",
+  );
 } finally {
   for (const gate of gates) gate.close();
   fs.rmSync(dir, { recursive: true, force: true });

@@ -8,8 +8,13 @@ import { fixtureEffortModel } from "./fixtures/triage-effort.ts";
 const now = 1_800_000_000_000;
 const model = structuredClone(fixtureEffortModel);
 if (model.status !== "ready") throw Error("Invalid fixture");
-model.model.validation = { status: "experimental", sampleCount: 34, groupCount: 32,
-  workCoverage: { p80: 1, p95: 1 }, activeCoverage: { total: { p80: 0.353, p95: 0.882 }, work: { p80: 1, p95: 1 } } };
+model.model.validation = {
+  status: "experimental",
+  sampleCount: 34,
+  groupCount: 32,
+  workCoverage: { p80: 1, p95: 1 },
+  activeCoverage: { total: { p80: 0.353, p95: 0.882 }, work: { p80: 1, p95: 1 } },
+};
 const health = calibrationHealth({ model, now, updatedAt: now - 1000 });
 assert.equal(health.available, true);
 assert.equal(health.p80Coverage, 0.353);
@@ -68,5 +73,9 @@ try {
   fs.chmodSync(file, 0o600);
   fs.writeFileSync(file, "{}");
   assert.equal(calibrationHealth({ path: file, now }).available, false);
-} finally { fs.rmSync(directory, { recursive: true, force: true }); }
-console.log("PASS calibration freshness, active coverage gaps, private artifacts, and assessment revisions");
+} finally {
+  fs.rmSync(directory, { recursive: true, force: true });
+}
+console.log(
+  "PASS calibration freshness, active coverage gaps, private artifacts, and assessment revisions",
+);

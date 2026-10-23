@@ -10,7 +10,10 @@ import { DATA_DIR } from "./auth.ts";
      The harness processes (direct children) keep normal priority. Lowering priority needs no privilege; raising it does,
      so nothing here can make a process faster than default. AGENT_CONSOLE_TOOL_NICE=0 turns it off. */
 const PROC = "/proc";
-export const TOOL_NICE = Math.max(0, Math.min(19, Number(process.env.AGENT_CONSOLE_TOOL_NICE ?? 10)));
+export const TOOL_NICE = Math.max(
+  0,
+  Math.min(19, Number(process.env.AGENT_CONSOLE_TOOL_NICE ?? 10)),
+);
 const SWEEP_MS = 2000;
 
 let envFile: string | null = null;
@@ -19,7 +22,11 @@ export function toolEnvFile(): string | null {
   if (envFile) return envFile;
   const file = path.join(DATA_DIR, "tool-env.sh");
   try {
-    fs.writeFileSync(file, `# Written by agent-console: Bash tool commands run below the agent's own priority.\nrenice -n ${TOOL_NICE} -p $$ >/dev/null 2>&1\n`, { mode: 0o644 });
+    fs.writeFileSync(
+      file,
+      `# Written by agent-console: Bash tool commands run below the agent's own priority.\nrenice -n ${TOOL_NICE} -p $$ >/dev/null 2>&1\n`,
+      { mode: 0o644 },
+    );
     envFile = file;
   } catch {}
   return envFile;
@@ -28,10 +35,17 @@ export function toolEnvFile(): string | null {
 function children(pid: number): number[] {
   const out: number[] = [];
   let tasks: string[] = [];
-  try { tasks = fs.readdirSync(path.join(PROC, String(pid), "task")); } catch { return out; }
+  try {
+    tasks = fs.readdirSync(path.join(PROC, String(pid), "task"));
+  } catch {
+    return out;
+  }
   for (const tid of tasks) {
     try {
-      for (const c of fs.readFileSync(path.join(PROC, String(pid), "task", tid, "children"), "utf8").split(" ")) if (c.trim()) out.push(Number(c));
+      for (const c of fs
+        .readFileSync(path.join(PROC, String(pid), "task", tid, "children"), "utf8")
+        .split(" "))
+        if (c.trim()) out.push(Number(c));
     } catch {}
   }
   return out;
@@ -48,7 +62,12 @@ export function lowerToolPriority(root = process.pid, nice = TOOL_NICE): number 
       if (seen.has(pid)) continue;
       seen.add(pid);
       if (depth >= 2) {
-        try { if (os.getPriority(pid) < nice) { os.setPriority(pid, nice); lowered++; } } catch {}
+        try {
+          if (os.getPriority(pid) < nice) {
+            os.setPriority(pid, nice);
+            lowered++;
+          }
+        } catch {}
       }
       next.push(...children(pid));
     }

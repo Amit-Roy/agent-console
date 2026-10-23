@@ -25,7 +25,9 @@ export function selectAutomationPiModel(models: readonly string[], override?: st
   }
   const selected = AUTOMATION_PI_MODELS.find((model) => models.includes(model));
   if (!selected) {
-    throw new Error("Pi automation is blocked: no approved coding model is available. Configure an NVIDIA NIM Nemotron model or the OpenRouter free Nemotron.");
+    throw new Error(
+      "Pi automation is blocked: no approved coding model is available. Configure an NVIDIA NIM Nemotron model or the OpenRouter free Nemotron.",
+    );
   }
   return selected;
 }

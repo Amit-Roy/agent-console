@@ -29,7 +29,13 @@ function createThread(threads: Threads, provider: string, model = "sonnet"): str
 function simulateQuotaExhausted(threads: Threads, threadId: string, provider: string) {
   const thread = threads.get(threadId);
   if (!thread) throw new Error("Thread not found");
-  const ev = { type: "result", is_error: true, subtype: "error", error: { message: "Rate limit exceeded. Try again later." }, duration_ms: 1000 };
+  const ev = {
+    type: "result",
+    is_error: true,
+    subtype: "error",
+    error: { message: "Rate limit exceeded. Try again later." },
+    duration_ms: 1000,
+  };
   (threads as any).turns.set(threadId, { start: Date.now() - 1000, tools: {} });
   (threads as any).onEvent(thread, ev);
 }
@@ -37,7 +43,13 @@ function simulateQuotaExhausted(threads: Threads, threadId: string, provider: st
 function simulateOtherError(threads: Threads, threadId: string) {
   const thread = threads.get(threadId);
   if (!thread) throw new Error("Thread not found");
-  const ev = { type: "result", is_error: true, subtype: "error", error: { message: "Network error" }, duration_ms: 1000 };
+  const ev = {
+    type: "result",
+    is_error: true,
+    subtype: "error",
+    error: { message: "Network error" },
+    duration_ms: 1000,
+  };
   (threads as any).turns.set(threadId, { start: Date.now() - 1000, tools: {} });
   (threads as any).onEvent(thread, ev);
 }
@@ -83,7 +95,9 @@ threads.send = (id: string, text: string, opts: any = {}) => {
 };
 
 let testNum = 0;
-function pass(msg: string) { console.log(`PASS Test ${++testNum}: ${msg}`); }
+function pass(msg: string) {
+  console.log(`PASS Test ${++testNum}: ${msg}`);
+}
 
 // Test 1: Thread marked as quota-paused when turn ends with rate limit error and quota exhausted
 const claudeThread = createThread(threads, "claude");
@@ -101,7 +115,10 @@ const archivedThread = createThread(threads, "claude", "opus");
 threads.archive(archivedThread, true);
 recordExhaustedUsage("claude");
 simulateQuotaExhausted(threads, archivedThread, "claude");
-assert.ok(!threads.get(archivedThread)?.quotaPaused, "Archived thread should NOT be marked as quota-paused");
+assert.ok(
+  !threads.get(archivedThread)?.quotaPaused,
+  "Archived thread should NOT be marked as quota-paused",
+);
 pass("Archived thread not marked as quota-paused");
 
 // Test 3: Thread with non-exhausted quota should NOT be marked as quota-paused
@@ -109,29 +126,73 @@ const normalThread = createThread(threads, "codex");
 recordResetUsage("codex");
 assert.equal(usage.exhausted("codex"), false, "Quota should NOT be exhausted");
 simulateQuotaExhausted(threads, normalThread, "codex");
-assert.ok(!threads.get(normalThread)?.quotaPaused, "Thread should NOT be quota-paused when quota not exhausted");
+assert.ok(
+  !threads.get(normalThread)?.quotaPaused,
+  "Thread should NOT be quota-paused when quota not exhausted",
+);
 pass("Thread not quota-paused when quota available");
 
 // Test 4: Non-rate-limit error should NOT mark thread as quota-paused even if quota exhausted
 const otherErrorThread = createThread(threads, "codex", "gpt-6.1-sol");
 recordExhaustedUsage("codex");
 simulateOtherError(threads, otherErrorThread);
-assert.ok(!threads.get(otherErrorThread)?.quotaPaused, "Non-rate-limit error should NOT mark thread as quota-paused");
+assert.ok(
+  !threads.get(otherErrorThread)?.quotaPaused,
+  "Non-rate-limit error should NOT mark thread as quota-paused",
+);
 pass("Non-rate-limit error does not mark quota-paused");
 
 // Test 5: resumeDue uses the Deep-issue gate: last 180 min of a window below 60% used, last 90 min otherwise, never at 90%+
 const now0 = Date.now();
 const cfg = { ...DEFAULTS, enabled: true, dryRun: false };
-const win = (used: number, minutesLeft: number, label = "5-hour") => ({ label, used, limit: 100, unit: "%", resetsAt: now0 + minutesLeft * 60_000 });
+const win = (used: number, minutesLeft: number, label = "5-hour") => ({
+  label,
+  used,
+  limit: 100,
+  unit: "%",
+  resetsAt: now0 + minutesLeft * 60_000,
+});
 const at = (windows: any[]) => ({ windows, updatedAt: now0 });
-assert.deepEqual(resumeDue({ claude: at([win(10, 175)]) }, now0, cfg), ["claude"], "low-usage window resumes 180 min before its end");
-assert.deepEqual(resumeDue({ claude: at([win(10, 185)]) }, now0, cfg), [], "not before 180 min left");
-assert.deepEqual(resumeDue({ codex: at([win(70, 120)]) }, now0, cfg), [], "a busier window waits for the last 90 min");
-assert.deepEqual(resumeDue({ codex: at([win(70, 85)]) }, now0, cfg), ["codex"], "busier window resumes in its last 90 min");
-assert.deepEqual(resumeDue({ codex: at([win(95, 30)]) }, now0, cfg), [], "a window at maxUsedPct has no room");
-assert.deepEqual(resumeDue({ claude: at([win(10, 60), win(100, 3 * 24 * 60, "7-day")]) }, now0, cfg), [], "an exhausted 7-day window blocks");
-assert.deepEqual(resumeDue({ "claude:nefro": at([win(10, 60)]), pi: at([win(10, 60)]) }, now0, cfg), ["claude:nefro"], "premium usage keys only");
-assert.deepEqual(resumeDue({ claude: at([win(10, 175)]) }, now0, { ...cfg, lowUsageLeadMinutes: 120 }), [], "lead time follows the dispatch config");
+assert.deepEqual(
+  resumeDue({ claude: at([win(10, 175)]) }, now0, cfg),
+  ["claude"],
+  "low-usage window resumes 180 min before its end",
+);
+assert.deepEqual(
+  resumeDue({ claude: at([win(10, 185)]) }, now0, cfg),
+  [],
+  "not before 180 min left",
+);
+assert.deepEqual(
+  resumeDue({ codex: at([win(70, 120)]) }, now0, cfg),
+  [],
+  "a busier window waits for the last 90 min",
+);
+assert.deepEqual(
+  resumeDue({ codex: at([win(70, 85)]) }, now0, cfg),
+  ["codex"],
+  "busier window resumes in its last 90 min",
+);
+assert.deepEqual(
+  resumeDue({ codex: at([win(95, 30)]) }, now0, cfg),
+  [],
+  "a window at maxUsedPct has no room",
+);
+assert.deepEqual(
+  resumeDue({ claude: at([win(10, 60), win(100, 3 * 24 * 60, "7-day")]) }, now0, cfg),
+  [],
+  "an exhausted 7-day window blocks",
+);
+assert.deepEqual(
+  resumeDue({ "claude:nefro": at([win(10, 60)]), pi: at([win(10, 60)]) }, now0, cfg),
+  ["claude:nefro"],
+  "premium usage keys only",
+);
+assert.deepEqual(
+  resumeDue({ claude: at([win(10, 175)]) }, now0, { ...cfg, lowUsageLeadMinutes: 120 }),
+  [],
+  "lead time follows the dispatch config",
+);
 pass("resumeDue follows the Deep-issue window gate");
 
 // Test 6: a quota-paused thread resumes once, for any window label on its provider
@@ -142,7 +203,11 @@ assert.ok(threads.get(resumeThread)?.quotaPaused, "Thread should be quota-paused
 resumedThreads.length = 0;
 assert.equal(threads.resumeQuotaPaused("codex"), 1, "One thread resumed");
 assert.ok(!threads.get(resumeThread)?.quotaPaused, "quotaPaused cleared after resumption");
-assert.deepEqual(resumedThreads, [resumeThread], "The quota-paused thread receives a resume message");
+assert.deepEqual(
+  resumedThreads,
+  [resumeThread],
+  "The quota-paused thread receives a resume message",
+);
 assert.equal(threads.resumeQuotaPaused("codex"), 0, "Second resume call resumes nothing");
 pass("Quota-paused thread resumed once");
 
@@ -154,8 +219,15 @@ const archivedResumeThread = createThread(threads, "claude", "sonnet");
 recordExhaustedUsage("claude");
 simulateQuotaExhausted(threads, archivedResumeThread, "claude");
 threads.archive(archivedResumeThread, true);
-assert.equal(threads.resumeQuotaPaused("claude"), 0, "Archived thread should not be resumed; no other quota-paused threads exist");
-assert.ok(!threads.get(archivedResumeThread)?.quotaPaused, "quotaPaused should be cleared on archive");
+assert.equal(
+  threads.resumeQuotaPaused("claude"),
+  0,
+  "Archived thread should not be resumed; no other quota-paused threads exist",
+);
+assert.ok(
+  !threads.get(archivedResumeThread)?.quotaPaused,
+  "quotaPaused should be cleared on archive",
+);
 pass("Archived thread not resumed; quotaPaused cleared on archive");
 
 // Test 8: only the given provider's threads are resumed
@@ -175,25 +247,47 @@ pass("Multiple providers - only affected provider's threads resumed");
 // Test 9: a running thread does not make resumeQuotaPaused throw or lose the other resumes
 const busyThread = createThread(threads, "codex");
 const idleThread = createThread(threads, "codex");
-for (const id of [busyThread, idleThread]) threads.get(id)!.quotaPaused = { provider: "codex", windowLabel: "weekly", resetsAt: Date.now() + 1000 };
+for (const id of [busyThread, idleThread])
+  threads.get(id)!.quotaPaused = {
+    provider: "codex",
+    windowLabel: "weekly",
+    resetsAt: Date.now() + 1000,
+  };
 threads.get(busyThread)!.status = "running";
 assert.doesNotThrow(() => threads.resumeQuotaPaused("codex", "weekly"));
-assert.ok(!threads.get(busyThread)?.quotaPaused && !threads.get(idleThread)?.quotaPaused, "both pauses cleared");
+assert.ok(
+  !threads.get(busyThread)?.quotaPaused && !threads.get(idleThread)?.quotaPaused,
+  "both pauses cleared",
+);
 pass("Running quota-paused thread does not abort resume");
 
 // An active premium owner holds its paused sibling without consuming the saved pause.
 const heldSibling = createThread(threads, "codex");
 const unrelatedSibling = createThread(threads, "codex");
 const pausedOwner = createThread(threads, "codex");
-for (const id of [heldSibling, unrelatedSibling, pausedOwner]) threads.get(id)!.quotaPaused = { provider: "codex", windowLabel: "assignment", resetsAt: Date.now() + 1000 };
+for (const id of [heldSibling, unrelatedSibling, pausedOwner])
+  threads.get(id)!.quotaPaused = {
+    provider: "codex",
+    windowLabel: "assignment",
+    resetsAt: Date.now() + 1000,
+  };
 let ownerRunning = true;
-const eligible = (t: { id: string }) => t.id === pausedOwner || !ownerRunning || t.id !== heldSibling;
+const eligible = (t: { id: string }) =>
+  t.id === pausedOwner || !ownerRunning || t.id !== heldSibling;
 resumedThreads.length = 0;
-assert.equal(threads.resumeQuotaPaused("codex", "assignment", eligible), 2, "owner and unrelated issue resume while assignment holds its sibling");
+assert.equal(
+  threads.resumeQuotaPaused("codex", "assignment", eligible),
+  2,
+  "owner and unrelated issue resume while assignment holds its sibling",
+);
 assert.deepEqual(resumedThreads, [unrelatedSibling, pausedOwner]);
 assert.ok(threads.get(heldSibling)!.quotaPaused, "held sibling retains its pending quota resume");
 ownerRunning = false;
-assert.equal(threads.resumeQuotaPaused("codex", "assignment", eligible), 1, "held sibling resumes after owner releases issue");
+assert.equal(
+  threads.resumeQuotaPaused("codex", "assignment", eligible),
+  1,
+  "held sibling resumes after owner releases issue",
+);
 assert.deepEqual(resumedThreads, [unrelatedSibling, pausedOwner, heldSibling]);
 assert.ok(!threads.get(heldSibling)!.quotaPaused);
 pass("Premium ownership defers sibling quota resume without losing it");

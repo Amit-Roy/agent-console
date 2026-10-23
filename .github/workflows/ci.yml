@@ -57,6 +57,10 @@ jobs:
       # No setup-python: CI runs only stdlib Python tests on the runner's python3. requirements-triage.txt
       # serves the offline calibration fit (npm run test:effort-fit), which CI does not run.
       - run: npm ci
+      # Pinned to the versions the shared ~/repos lint config targets; test/repos-lint.ts runs both.
+      - name: Install Biome and Ruff
+        run: npm install -g @biomejs/biome@2.5.15 && pipx install ruff==0.17.1
+      - run: npm run lint
       - name: Start resource sampler
         run: nohup node scripts/ci-resources.mjs sample "$RUNNER_TEMP/resources.csv" >/dev/null 2>&1 &
       - name: Cache Playwright browsers

@@ -8,10 +8,9 @@ This installs a root-owned refresh worker, process watchdog, and timer. The Cons
 remains behind Coder authentication; only POST webhooks reach the signed receiver.
 """
 
-from pathlib import Path
 import os
 import subprocess
-
+from pathlib import Path
 
 REFRESH_SOURCE = r'''#!/usr/bin/env python3
 """Refresh the webhook route and supervise triage in an already-running workspace."""
@@ -195,9 +194,16 @@ WantedBy=timers.target
         destination.write_text(content)
         destination.chmod(0o644)
     subprocess.run(["systemctl", "daemon-reload"], check=True)
-    subprocess.run([
-        "systemctl", "enable", "--now", "agent-console-github-triage-caddy.timer",
-    ], check=True, capture_output=True)
+    subprocess.run(
+        [
+            "systemctl",
+            "enable",
+            "--now",
+            "agent-console-github-triage-caddy.timer",
+        ],
+        check=True,
+        capture_output=True,
+    )
     print("The webhook route, triage watchdog, and five-minute reconciliation are installed.")
 
 

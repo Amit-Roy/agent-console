@@ -9,7 +9,8 @@ export function codexWebTool(item: any) {
     name = "WebSearch";
     if (nonempty(action.query)) input.query = action.query;
     else if (nonempty(item.query)) input.query = item.query;
-    if (Array.isArray(action.queries) && action.queries.some(nonempty)) input.queries = action.queries.filter(nonempty);
+    if (Array.isArray(action.queries) && action.queries.some(nonempty))
+      input.queries = action.queries.filter(nonempty);
     if (!input.query && !input.queries) input.description = "Search query not reported by Codex";
   } else if (["open_page", "openPage"].includes(action.type)) {
     name = "WebFetch";

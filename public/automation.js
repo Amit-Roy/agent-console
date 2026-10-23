@@ -20,14 +20,18 @@ const ICONS = {
   clock: "M8 2.25a5.75 5.75 0 1 0 0 11.5 5.75 5.75 0 0 0 0-11.5zM8 4.75V8l2.25 1.5",
   gauge: "M2.5 11.5a5.5 5.5 0 1 1 11 0M8 11.5l2.5-3.5",
   play: "M5.25 3.75v8.5L12 8z",
-  route: "M4 5.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM12 13.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM5.5 4H9a2 2 0 0 1 2 2v1M10.5 12H7a2 2 0 0 1-2-2V9",
-  branch: "M4.5 5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM4.5 14a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM11.5 8a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM4.5 5v6M11.5 8v.5a2 2 0 0 1-2 2H6",
+  route:
+    "M4 5.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM12 13.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM5.5 4H9a2 2 0 0 1 2 2v1M10.5 12H7a2 2 0 0 1-2-2V9",
+  branch:
+    "M4.5 5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM4.5 14a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM11.5 8a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM4.5 5v6M11.5 8v.5a2 2 0 0 1-2 2H6",
   bot: "M4.5 5h7A1.5 1.5 0 0 1 13 6.5v5a1.5 1.5 0 0 1-1.5 1.5h-7A1.5 1.5 0 0 1 3 11.5v-5A1.5 1.5 0 0 1 4.5 5zM8 5V3M6 8.5v1M10 8.5v1",
   check: "m3.5 8.5 3 3 6-7",
   pr: "M4.5 5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM4.5 14a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM11.5 14a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM4.5 5v6M11.5 11V7a2 2 0 0 0-2-2H8M9.5 3.5 8 5l1.5 1.5",
   eye: "M1.75 8s2.25-4.5 6.25-4.5S14.25 8 14.25 8s-2.25 4.5-6.25 4.5S1.75 8 1.75 8zM8 9.75a1.75 1.75 0 1 0 0-3.5 1.75 1.75 0 0 0 0 3.5z",
-  merge: "M4.5 5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM4.5 14a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM11.5 11a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM4.5 5v6M4.5 5.5c0 2.2 2.2 3 5.5 3",
-  rocket: "M9.5 2.5c2.5 0 4 1.5 4 4-1.2 3-3.5 4.5-5.5 5l-3-3c.5-2 2-4.3 4.5-6zM6 10l-2.5 2.5M5 7.5 3 8l1.5-2.5M8.5 11 8 13l2.5-1.5",
+  merge:
+    "M4.5 5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM4.5 14a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM11.5 11a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM4.5 5v6M4.5 5.5c0 2.2 2.2 3 5.5 3",
+  rocket:
+    "M9.5 2.5c2.5 0 4 1.5 4 4-1.2 3-3.5 4.5-5.5 5l-3-3c.5-2 2-4.3 4.5-6zM6 10l-2.5 2.5M5 7.5 3 8l1.5-2.5M8.5 11 8 13l2.5-1.5",
   redo: "M3 8a5 5 0 0 1 8.5-3.5L13 6M13 2.5V6H9.5M13 8a5 5 0 0 1-8.5 3.5L3 10M3 13.5V10h3.5",
   next: "M2.5 8h10M9 4.5 12.5 8 9 11.5",
   back: "M13.5 8h-10M7 4.5 3.5 8 7 11.5",
@@ -38,9 +42,17 @@ const icon = (name) => {
   return s;
 };
 
-const STATE_TEXT = { idle: "Idle", active: "Working", ok: "OK", failed: "Failed", abandoned: "Abandoned", disabled: "Off" };
+const STATE_TEXT = {
+  idle: "Idle",
+  active: "Working",
+  ok: "OK",
+  failed: "Failed",
+  abandoned: "Abandoned",
+  disabled: "Off",
+};
 
-const time = (ts) => new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+const time = (ts) =>
+  new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 const day = (ts) => new Date(ts).toLocaleDateString([], { month: "short", day: "numeric" });
 const when = (ts, now) => {
   const s = Math.max(0, (now - ts) / 1000);
@@ -111,8 +123,10 @@ function buildPipeline(s, p) {
       const inLoop = ph.loop?.steps.includes(id);
       if (j) {
         // A step after a loop leaves from the loop step that links to it; inside the loop, steps link both ways.
-        const prev = (!inLoop && ph.loop?.steps.find((x) => edges.has(`${x}>${id}`))) || ph.steps[j - 1];
-        const fwd = edges.get(`${prev}>${id}`), back = inLoop && box && edges.get(`${id}>${prev}`);
+        const prev =
+          (!inLoop && ph.loop?.steps.find((x) => edges.has(`${x}>${id}`))) || ph.steps[j - 1];
+        const fwd = edges.get(`${prev}>${id}`),
+          back = inLoop && box && edges.get(`${id}>${prev}`);
         const link = el("span", `link${back ? " loop" : ""}`);
         link.dataset.to = id;
         link.append(arrow("next", fwd?.label));
@@ -138,15 +152,26 @@ function updateFlow(s) {
     const b = document.querySelector(`[data-step="${st.id}"]`);
     if (!b) continue;
     b.dataset.state = st.state;
-    const sub = st.state === "idle" ? STATE_TEXT.idle : `${STATE_TEXT[st.state]}${st.lastAt ? ` · ${when(st.lastAt, s.now)}` : ""}`;
+    const sub =
+      st.state === "idle"
+        ? STATE_TEXT.idle
+        : `${STATE_TEXT[st.state]}${st.lastAt ? ` · ${when(st.lastAt, s.now)}` : ""}`;
     b.querySelector(".ns").textContent = sub;
-    b.setAttribute("aria-label", `${s.flow.nodes.find((n) => n.id === st.id)?.label}: ${STATE_TEXT[st.state].toLowerCase()}${st.failures ? `, ${st.failures} failures in 24 hours` : ""}`);
+    b.setAttribute(
+      "aria-label",
+      `${s.flow.nodes.find((n) => n.id === st.id)?.label}: ${STATE_TEXT[st.state].toLowerCase()}${st.failures ? `, ${st.failures} failures in 24 hours` : ""}`,
+    );
     let badge = b.querySelector(".badge");
     if (st.failures) {
-      if (!badge) { badge = el("span", "badge"); b.append(badge); }
+      if (!badge) {
+        badge = el("span", "badge");
+        b.append(badge);
+      }
       badge.textContent = String(st.failures);
     } else badge?.remove();
-    document.querySelector(`.link[data-to="${st.id}"]`)?.classList.toggle("live", st.state === "active");
+    document
+      .querySelector(`.link[data-to="${st.id}"]`)
+      ?.classList.toggle("live", st.state === "active");
   }
   for (const t of s.triggers) {
     const w = document.querySelector(`[data-trigger="${t.id}"] .w`);
@@ -168,12 +193,19 @@ function panel(title, sub) {
 const empty = (text) => el("div", "empty-c", text);
 
 function triggersPanel(s) {
-  const p = panel("Other triggers", "Scheduled prompts and manual starts outside the workflows above");
+  const p = panel(
+    "Other triggers",
+    "Scheduled prompts and manual starts outside the workflows above",
+  );
   const ul = el("ul", "rows");
   ul.id = "triggers";
   for (const t of s.triggers.filter((x) => !x.pipeline)) {
     const li = el("li");
-    li.append(el("span", "a", t.label), el("span", "b", t.enabled ? (t.lastAt ? when(t.lastAt, s.now) : "waiting") : "off"), el("span", "c", `${t.kind} · ${t.detail}`));
+    li.append(
+      el("span", "a", t.label),
+      el("span", "b", t.enabled ? (t.lastAt ? when(t.lastAt, s.now) : "waiting") : "off"),
+      el("span", "c", `${t.kind} · ${t.detail}`),
+    );
     ul.append(li);
   }
   p.append(ul);
@@ -188,7 +220,11 @@ function failuresPanel(s) {
   for (const f of s.failures) {
     const li = el("li");
     const label = s.flow.nodes.find((n) => n.id === f.step)?.label || f.step;
-    li.append(el("span", "a", `${label}${f.ref ? ` · ${f.ref}` : ""}`), el("span", "b", when(f.ts, s.now)), el("span", "c bad", f.msg || "No message"));
+    li.append(
+      el("span", "a", `${label}${f.ref ? ` · ${f.ref}` : ""}`),
+      el("span", "b", when(f.ts, s.now)),
+      el("span", "c bad", f.msg || "No message"),
+    );
     li.style.cursor = "pointer";
     li.onclick = () => openDrawer(f.step);
     ul.append(li);
@@ -201,10 +237,18 @@ function hooksPanel(s) {
   const p = panel("Git hooks", "Dispatched worktrees refuse pushes to the default branch");
   const ul = el("ul", "rows");
   ul.id = "hooks";
-  if (!s.hooks.length) { const li = el("li"); li.append(el("span", "c", "No dispatched worktrees have hooks right now.")); ul.append(li); }
+  if (!s.hooks.length) {
+    const li = el("li");
+    li.append(el("span", "c", "No dispatched worktrees have hooks right now."));
+    ul.append(li);
+  }
   for (const h of s.hooks) {
     const li = el("li");
-    li.append(el("span", "a", h.worktree), el("span", "b", `${h.hook} blocks ${h.protects}`), el("span", "c", h.path));
+    li.append(
+      el("span", "a", h.worktree),
+      el("span", "b", `${h.hook} blocks ${h.protects}`),
+      el("span", "c", h.path),
+    );
     ul.append(li);
   }
   p.append(ul);
@@ -222,7 +266,11 @@ function runsPanel(s) {
     a.href = `/#thread=${encodeURIComponent(r.thread)}`;
     const name = el("span", "a");
     name.append(a);
-    li.append(name, el("span", "b", `${r.role} · ${r.effort} · ${r.state}`), el("span", "c", r.key));
+    li.append(
+      name,
+      el("span", "b", `${r.role} · ${r.effort} · ${r.state}`),
+      el("span", "c", r.key),
+    );
     ul.append(li);
   }
   if (s.runs.length) p.append(ul);
@@ -232,20 +280,27 @@ function runsPanel(s) {
 function configPanel(s) {
   const p = panel("Settings", "~/.config/agent-console/window-dispatch.json");
   const dl = el("dl", "kv");
-  const add = (k, v) => dl.append(el("dt", "", k), el("dd", "", Array.isArray(v) ? v.join(", ") : String(v)));
-  const d = s.config.dispatch, o = s.config.opener;
+  const add = (k, v) =>
+    dl.append(el("dt", "", k), el("dd", "", Array.isArray(v) ? v.join(", ") : String(v)));
+  const d = s.config.dispatch,
+    o = s.config.opener;
   add("Dispatcher", d.enabled ? (d.dryRun ? "dry run" : "live") : "off");
-  add("Last minutes of a window", d.leadMinutes); add("Skip windows used above", `${d.maxUsedPct}%`); add("Issues per window", d.perWindow);
-  add("Repositories", d.repos); add("Issue authors", d.authors);
+  add("Last minutes of a window", d.leadMinutes);
+  add("Skip windows used above", `${d.maxUsedPct}%`);
+  add("Issues per window", d.perWindow);
+  add("Repositories", d.repos);
+  add("Issue authors", d.authors);
   add("Routing", `${d.routing?.mode}${d.routing?.bauOnPi ? ", BAU on Pi" : ""}`);
   add("Opener", o.enabled ? (o.dryRun ? "dry run" : "live") : "off");
-  add("Opener hours", `${o.from}–${o.to} ${o.tz}`); add("Opener providers", o.providers);
+  add("Opener hours", `${o.from}–${o.to} ${o.tz}`);
+  add("Opener providers", o.providers);
   p.append(dl);
   return p;
 }
 
 const modeChip = (label, c) => {
-  const on = c.enabled, text = !on ? "off" : c.dryRun ? "dry run" : "live";
+  const on = c.enabled,
+    text = !on ? "off" : c.dryRun ? "dry run" : "live";
   return el("span", `chip-s ${!on ? "off" : c.dryRun ? "dry" : "live"}`, `${label}: ${text}`);
 };
 
@@ -253,9 +308,16 @@ function render(s) {
   snap = s;
   const main = $("am");
   main.setAttribute("aria-busy", "false");
-  $("mode").replaceChildren(modeChip("Dispatcher", s.config.dispatch), modeChip("Opener", s.config.opener));
+  $("mode").replaceChildren(
+    modeChip("Dispatcher", s.config.dispatch),
+    modeChip("Opener", s.config.opener),
+  );
   if (!main.querySelector(".pipeline")) {
-    main.replaceChildren(...s.flow.pipelines.map((p) => buildPipeline(s, p)), el("div", "cols"), el("div", "cols"));
+    main.replaceChildren(
+      ...s.flow.pipelines.map((p) => buildPipeline(s, p)),
+      el("div", "cols"),
+      el("div", "cols"),
+    );
   }
   updateFlow(s);
   const [a, b] = main.querySelectorAll(".cols");
@@ -266,7 +328,8 @@ function render(s) {
 
 // ---------- drawer ----------
 function fillDrawerFacts(id) {
-  const st = snap.steps.find((x) => x.id === id), node = snap.flow.nodes.find((n) => n.id === id);
+  const st = snap.steps.find((x) => x.id === id),
+    node = snap.flow.nodes.find((n) => n.id === id);
   if (!st || !node) return;
   $("drawer-title").textContent = node.label;
   $("drawer-hint").textContent = node.hint;
@@ -283,7 +346,11 @@ function fillDrawerFacts(id) {
 function renderLog() {
   const ol = $("drawer-log");
   ol.replaceChildren();
-  if (!logState.entries.length) { const li = el("li"); li.append(el("span", "m", "Nothing recorded for this step yet.")); ol.append(li); }
+  if (!logState.entries.length) {
+    const li = el("li");
+    li.append(el("span", "m", "Nothing recorded for this step yet."));
+    ol.append(li);
+  }
   for (const e of logState.entries) {
     const li = el("li");
     const m = el("span", "m", e.msg || "");
@@ -306,11 +373,15 @@ async function loadLog(more = false) {
 
 function openDrawer(id) {
   openStep = id;
-  logState.entries = []; logState.next = undefined;
+  logState.entries = [];
+  logState.next = undefined;
   fillDrawerFacts(id);
   $("drawer").hidden = false;
   renderLog();
-  loadLog().catch((e) => { logState.entries = []; $("drawer-log").replaceChildren(el("li", "m", e.message)); });
+  loadLog().catch((e) => {
+    logState.entries = [];
+    $("drawer-log").replaceChildren(el("li", "m", e.message));
+  });
   $("drawer-close").focus();
 }
 function closeDrawer() {
@@ -322,20 +393,28 @@ function closeDrawer() {
 }
 $("drawer-close").onclick = closeDrawer;
 $("drawer-more").onclick = () => loadLog(true).catch(() => {});
-document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeDrawer(); });
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") closeDrawer();
+});
 
 // ---------- debug ----------
 $("debug").onclick = async () => {
   const b = $("debug");
   b.disabled = true;
   try {
-    const r = await getJson("/api/automation/debug", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ v: 1, ...(openStep ? { focus: openStep } : {}) }) });
+    const r = await getJson("/api/automation/debug", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ v: 1, ...(openStep ? { focus: openStep } : {}) }),
+    });
     location.href = `/#thread=${encodeURIComponent(r.thread)}`;
   } catch (e) {
     $("status")?.remove();
     b.title = e.message;
     alert(`Could not start debugging: ${e.message}`);
-  } finally { b.disabled = false; }
+  } finally {
+    b.disabled = false;
+  }
 };
 
 // ---------- refresh ----------
@@ -350,6 +429,9 @@ async function refresh() {
   }
 }
 await refresh();
-setInterval(() => { if (!document.hidden) refresh(); }, 5000);
-document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
-
+setInterval(() => {
+  if (!document.hidden) refresh();
+}, 5000);
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) refresh();
+});

@@ -4,7 +4,10 @@ export function splitFrontmatter(src) {
   if (!/^---\s*$/.test(lines[0])) return { meta: null, body: src };
   let end = -1;
   for (let i = 1; i < lines.length; i++) {
-    if (/^(---|\.\.\.)\s*$/.test(lines[i])) { end = i; break; }
+    if (/^(---|\.\.\.)\s*$/.test(lines[i])) {
+      end = i;
+      break;
+    }
   }
   if (end === -1) return { meta: null, body: src };
   const meta = lines.slice(1, end).join("\n");
@@ -32,6 +35,10 @@ export function frontmatterToMarkdown(src) {
     }
   }
   if (!rows.length) return body;
-  const table = ["| Field | Value |", "| --- | --- |", ...rows.map(([k, v]) => `| ${cell(k)} | ${cell(v)} |`)];
+  const table = [
+    "| Field | Value |",
+    "| --- | --- |",
+    ...rows.map(([k, v]) => `| ${cell(k)} | ${cell(v)} |`),
+  ];
   return `${table.join("\n")}\n\n${body}`;
 }

@@ -1,5 +1,10 @@
 import assert from "node:assert/strict";
-import { AUTOMATION_PI_MODELS, defaultPiModel, isAutomationPiModel, selectAutomationPiModel } from "../server/providers/pi-model.ts";
+import {
+  AUTOMATION_PI_MODELS,
+  defaultPiModel,
+  isAutomationPiModel,
+  selectAutomationPiModel,
+} from "../server/providers/pi-model.ts";
 
 const direct = "nvidia/nvidia/nemotron-3-ultra-550b-a55b";
 const retired = "nvidia/nvidia/nemotron-3-super-120b-a12b";
@@ -18,7 +23,10 @@ assert.throws(() => selectAutomationPiModel([vision]), /no approved coding model
 assert.throws(() => selectAutomationPiModel([]), /no approved coding model/);
 assert.throws(() => selectAutomationPiModel([direct], router), /unavailable/);
 assert.throws(() => selectAutomationPiModel([vision, direct], vision), /not approved/);
-assert.throws(() => selectAutomationPiModel([direct], "nvidia/nemotron-3-ultra-550b-a55b"), /not approved/);
+assert.throws(
+  () => selectAutomationPiModel([direct], "nvidia/nemotron-3-ultra-550b-a55b"),
+  /not approved/,
+);
 // NVIDIA 404s nemotron-3-super; a catalog that still lists it must fall through to the next working NIM model.
 assert.equal(isAutomationPiModel(retired), false);
 assert.equal(selectAutomationPiModel([retired, superVl, router]), superVl);

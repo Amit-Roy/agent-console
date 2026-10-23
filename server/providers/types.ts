@@ -86,7 +86,10 @@ export function cleanQuestions(raw: unknown): Question[] {
     id: String(q?.id ?? i),
     ...(q?.header ? { header: String(q.header).slice(0, 40) } : {}),
     question: String(q?.question ?? "").slice(0, 2000),
-    options: (Array.isArray(q?.options) ? q.options : []).slice(0, 20).map((o: any) => ({ label: String(o?.label ?? o).slice(0, 200), ...(o?.description ? { description: String(o.description).slice(0, 500) } : {}) })),
+    options: (Array.isArray(q?.options) ? q.options : []).slice(0, 20).map((o: any) => ({
+      label: String(o?.label ?? o).slice(0, 200),
+      ...(o?.description ? { description: String(o.description).slice(0, 500) } : {}),
+    })),
     ...(q?.multiSelect ? { multiSelect: true } : {}),
     ...(q?.allowOther ? { allowOther: true } : {}),
     ...(q?.secret ? { secret: true } : {}),
@@ -120,7 +123,10 @@ export interface Provider {
   advisors?: string[]; // second-opinion models the harness can consult (Claude's advisor tool)
   steer?: boolean; // the harness accepts messages mid-turn (Agent.steer)
   models(): string[];
-  modelDetails?(): Record<string, { label: string; description?: string; efforts: string[]; defaultEffort?: string }>;
+  modelDetails?(): Record<
+    string,
+    { label: string; description?: string; efforts: string[]; defaultEffort?: string }
+  >;
   defaultModel(): string;
   // Cheap, synchronous readiness check shown in the UI. Never touches the network.
   status(): { ok: boolean; hint?: string };
@@ -128,4 +134,5 @@ export interface Provider {
 }
 
 export const MAX_RESULT_CHARS = 20_000;
-export const clip = (s: string, n = MAX_RESULT_CHARS) => (s.length > n ? s.slice(0, n) + `\n… (${s.length - n} more characters truncated)` : s);
+export const clip = (s: string, n = MAX_RESULT_CHARS) =>
+  s.length > n ? s.slice(0, n) + `\n… (${s.length - n} more characters truncated)` : s;
