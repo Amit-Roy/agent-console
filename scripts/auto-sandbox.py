@@ -73,8 +73,10 @@ def _landlock(roots):
     attr = Ruleset(WRITE_ACCESS)
     ruleset = _syscall(444, ctypes.byref(attr), ctypes.c_size_t(ctypes.sizeof(attr)), 0)
     try:
-        for path, rights in [*( (root, WRITE_ACCESS) for root in roots),
-                             (Path("/dev/null"), WRITE_FILE | TRUNCATE)]:
+        for path, rights in [
+            *((root, WRITE_ACCESS) for root in roots),
+            (Path("/dev/null"), WRITE_FILE | TRUNCATE),
+        ]:
             fd = os.open(path, os.O_PATH | os.O_CLOEXEC)
             try:
                 rule = PathRule(rights, fd)
@@ -87,8 +89,12 @@ def _landlock(roots):
 
 
 class Filter(ctypes.Structure):
-    _fields_ = [("code", ctypes.c_ushort), ("jt", ctypes.c_ubyte),
-                ("jf", ctypes.c_ubyte), ("k", ctypes.c_uint32)]
+    _fields_ = [
+        ("code", ctypes.c_ushort),
+        ("jt", ctypes.c_ubyte),
+        ("jf", ctypes.c_ubyte),
+        ("k", ctypes.c_uint32),
+    ]
 
 
 class FilterProgram(ctypes.Structure):
@@ -101,16 +107,17 @@ def _seccomp():
     # Keep ordinary chmod/utime available for Git and package installation.
     deny = (101, 311, 425, 438)  # ptrace, process_vm_writev, io_uring_setup, pidfd_getfd
     instructions = [
-        Filter(0x20, 0, 0, 4),             # load seccomp_data.arch
-        Filter(0x15, 1, 0, 0xC000003E),    # AUDIT_ARCH_X86_64
-        Filter(0x06, 0, 0, 0x80000000),    # KILL_PROCESS (also denies int 0x80)
-        Filter(0x20, 0, 0, 0),             # load syscall number
-        Filter(0x35, 0, 1, 0x40000000),    # reject x32 syscall table
+        Filter(0x20, 0, 0, 4),  # load seccomp_data.arch
+        Filter(0x15, 1, 0, 0xC000003E),  # AUDIT_ARCH_X86_64
+        Filter(0x06, 0, 0, 0x80000000),  # KILL_PROCESS (also denies int 0x80)
+        Filter(0x20, 0, 0, 0),  # load syscall number
+        Filter(0x35, 0, 1, 0x40000000),  # reject x32 syscall table
         Filter(0x06, 0, 0, 0x80000000),
     ]
     for number in deny:
-        instructions.extend((Filter(0x15, 0, 1, number),
-                             Filter(0x06, 0, 0, 0x00050000 | errno.EPERM)))
+        instructions.extend(
+            (Filter(0x15, 0, 1, number), Filter(0x06, 0, 0, 0x00050000 | errno.EPERM))
+        )
     instructions.append(Filter(0x06, 0, 0, 0x7FFF0000))  # ALLOW
     array = (Filter * len(instructions))(*instructions)
     program = FilterProgram(len(instructions), array)

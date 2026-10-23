@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Build the dependency-free Acode plugin with stable archive metadata."""
+
 from pathlib import Path
 from zipfile import ZipFile, ZipInfo, ZIP_DEFLATED
 

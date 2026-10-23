@@ -1,4 +1,5 @@
 """Exercise host supervision and Caddy routing without touching Docker or the host."""
+
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import runpy
@@ -18,7 +19,9 @@ with TemporaryDirectory(prefix="triage-caddy-fixture-") as temporary:
     config.write_text(worker["SITE"] + "\n}\n")
     worker["CONFIG"] = config
     worker["SNIPPET"] = snippet
-    worker["Path"] = lambda value: environment if str(value) == "/etc/caddy/duckdns.env" else Path(value)
+    worker["Path"] = lambda value: (
+        environment if str(value) == "/etc/caddy/duckdns.env" else Path(value)
+    )
     calls = []
     state = {"inspect": "true\n172.18.0.4\nno\n", "code": 0}
 
@@ -54,4 +57,6 @@ with TemporaryDirectory(prefix="triage-caddy-fixture-") as temporary:
     assert calls[0][-1] == "watchdog"
     assert not any(call[:2] in (["docker", "start"], ["docker", "restart"]) for call in calls)
 
-print("GitHub triage host watchdog: restart policy, stopped-workspace preservation, route refresh, and user-scoped supervision passed.")
+print(
+    "GitHub triage host watchdog: restart policy, stopped-workspace preservation, route refresh, and user-scoped supervision passed."
+)

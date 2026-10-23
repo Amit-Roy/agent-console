@@ -9,7 +9,9 @@ process.env.AGENT_CONSOLE_DATA = tmp;
 process.env.PATH = `${tmp}/bin:${process.env.PATH}`;
 fs.mkdirSync(`${tmp}/bin`);
 // FAKE_PI_MODE: "recover" = 2nd prompt works; "always" = every prompt 429s; "tool" = 1st reply made a tool call, then 429s
-fs.writeFileSync(`${tmp}/bin/pi`, `#!/usr/bin/env node
+fs.writeFileSync(
+  `${tmp}/bin/pi`,
+  `#!/usr/bin/env node
 const rl = require("node:readline").createInterface({ input: process.stdin });
 const out = (o) => console.log(JSON.stringify(o));
 const mode = process.env.FAKE_PI_MODE; let n = 0;
@@ -29,7 +31,9 @@ rl.on("line", (l) => {
   } else out({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "ok:" + r.message }], stopReason: "stop" } });
   out({ type: "agent_settled" });
 });
-`, { mode: 0o755 });
+`,
+  { mode: 0o755 },
+);
 
 const { pi } = await import("../server/providers/pi.ts");
 const { startModelRateBroker } = await import("../server/providers/model-rate-client.ts");
@@ -40,13 +44,24 @@ async function run(mode: string) {
   const events: any[] = [];
   let done!: () => void;
   const finished = new Promise<void>((r) => (done = r));
-  const agent = pi.start({ id: `t-${mode}`, model: "nvidia/x", cwd: tmp, mode: "bypassPermissions" } as any, {
-    event(ev) { events.push(ev); if (ev.type === "result") done(); },
-    commands() {},
-    exited() {},
-  });
+  const agent = pi.start(
+    { id: `t-${mode}`, model: "nvidia/x", cwd: tmp, mode: "bypassPermissions" } as any,
+    {
+      event(ev) {
+        events.push(ev);
+        if (ev.type === "result") done();
+      },
+      commands() {},
+      exited() {},
+    },
+  );
   agent.send("hello", []);
-  await Promise.race([finished, new Promise((_, rej) => setTimeout(() => rej(new Error(`timeout ${mode}: ${JSON.stringify(events)}`)), 15_000))]);
+  await Promise.race([
+    finished,
+    new Promise((_, rej) =>
+      setTimeout(() => rej(new Error(`timeout ${mode}: ${JSON.stringify(events)}`)), 15_000),
+    ),
+  ]);
   await new Promise((r) => setTimeout(r, 300)); // any stray second result
   agent.kill();
   return events;
@@ -55,7 +70,10 @@ async function run(mode: string) {
 const ok = await run("recover");
 assert.equal(ok.filter((e) => e.type === "result").length, 1, "one result");
 assert.equal(ok.find((e) => e.type === "result").is_error, false, "recovered turn succeeds");
-assert.ok(ok.some((e) => e.subtype === "api_retry" && e.error_status === 429), "retry notice shown");
+assert.ok(
+  ok.some((e) => e.subtype === "api_retry" && e.error_status === 429),
+  "retry notice shown",
+);
 assert.ok(!ok.some((e) => e.type === "console_error"), "no error surfaced");
 
 const again = await run("always");
@@ -66,7 +84,14 @@ const tool = await run("tool");
 assert.equal(tool.find((e) => e.type === "result").is_error, true, "tool call blocks re-send");
 assert.ok(!tool.some((e) => e.subtype === "api_retry"), "no re-send after tool call");
 const toolThenError = await run("tool-then-error");
-assert.equal(toolThenError.find((e) => e.type === "result").is_error, true, "error after an earlier tool call fails the turn");
-assert.ok(!toolThenError.some((e) => e.subtype === "api_retry"), "no full prompt replay after an earlier completed tool call");
+assert.equal(
+  toolThenError.find((e) => e.type === "result").is_error,
+  true,
+  "error after an earlier tool call fails the turn",
+);
+assert.ok(
+  !toolThenError.some((e) => e.subtype === "api_retry"),
+  "no full prompt replay after an earlier completed tool call",
+);
 console.log("pi-429-retry ok");
 process.exit(0);

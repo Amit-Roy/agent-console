@@ -3,7 +3,9 @@ import { readFileSync } from "node:fs";
 import vm from "node:vm";
 
 const source = readFileSync(new URL("../acode-plugin/main.js", import.meta.url), "utf8");
-const manifest = JSON.parse(readFileSync(new URL("../acode-plugin/plugin.json", import.meta.url), "utf8"));
+const manifest = JSON.parse(
+  readFileSync(new URL("../acode-plugin/plugin.json", import.meta.url), "utf8"),
+);
 assert.equal(manifest.minVersionCode, 1011); // Acode v1.13.5 config.xml.
 
 type Event = { preventDefault(): void; respondWith?(value: Promise<boolean>): void };
@@ -21,14 +23,23 @@ class MockFile {
   events: Record<string, (event: Event) => void> = {};
   session = {
     getValue: () => this.text,
-    setValue: (text: string) => { this.text = text; this.docVersion++; this.isUnsaved = true; },
+    setValue: (text: string) => {
+      this.text = text;
+      this.docVersion++;
+      this.isUnsaved = true;
+    },
     doc: {},
   };
   constructor(filename: string, options: { text: string; uri?: string; id?: string }) {
     this.id = options.id;
     // Released Acode returns a partial instance when an existing tab matches.
-    const duplicate = liveFiles.find((file) => options.id ? file.id === options.id : options.uri && file.uri === options.uri);
-    if (duplicate) { duplicate.makeActive(); return; }
+    const duplicate = liveFiles.find((file) =>
+      options.id ? file.id === options.id : options.uri && file.uri === options.uri,
+    );
+    if (duplicate) {
+      duplicate.makeActive();
+      return;
+    }
     this.filename = filename;
     this.uri = options.uri;
     this.text = options.text;
@@ -37,14 +48,23 @@ class MockFile {
     liveFiles.push(this);
     newFile?.(this);
   }
-  on(event: string, callback: (event: Event) => void) { this.events[event] = callback; }
-  off(event: string, callback: (event: Event) => void) { if (this.events[event] === callback) delete this.events[event]; }
-  makeActive() { if (!this.rendered) throw new Error("Cannot read properties of undefined (reading 'classList')"); }
+  on(event: string, callback: (event: Event) => void) {
+    this.events[event] = callback;
+  }
+  off(event: string, callback: (event: Event) => void) {
+    if (this.events[event] === callback) delete this.events[event];
+  }
+  makeActive() {
+    if (!this.rendered)
+      throw new Error("Cannot read properties of undefined (reading 'classList')");
+  }
   markSaved({ savedVersion = this.docVersion } = {}) {
     this.savedVersion = savedVersion;
     this.isUnsaved = this.docVersion !== savedVersion;
   }
-  edit(text: string) { this.session.setValue(text); }
+  edit(text: string) {
+    this.session.setValue(text);
+  }
 }
 const liveFiles: MockFile[] = [];
 
@@ -57,8 +77,18 @@ const folders: any[] = [];
 let projectEnabled = false;
 let projectExpired = false;
 let paginated = false;
-let handler: (event: { module: string; action: string; value: string; preventDefault(): void }) => void;
-let remote = { token: "token-1", path: "/tmp/file with spaces.js", content: "initial", revision: "r1" };
+let handler: (event: {
+  module: string;
+  action: string;
+  value: string;
+  preventDefault(): void;
+}) => void;
+let remote = {
+  token: "token-1",
+  path: "/tmp/file with spaces.js",
+  content: "initial",
+  revision: "r1",
+};
 let conflict = false;
 let releaseWrite: (() => void) | undefined;
 let gate: Promise<void> | undefined;
@@ -70,42 +100,120 @@ vm.runInNewContext(source, {
   TextEncoder,
   fetch: async (url: string, options: any) => {
     calls.push({ url, options });
-    if (url.endsWith("/exchange")) return { ok: true, json: async () => ({ ...remote,
-      ...(projectEnabled ? { project: { token: "project-token", root: "/tmp", name: "tmp" } } : {}),
-    }) };
-    if (url.includes("/tree?")) return { ok: true, json: async () => ({ path: "", entries: paginated
-      ? (url.includes("cursor=") ? [{ name: "sibling.js", path: "sibling.js", type: "file" }] : [{ name: "nested", path: "nested", type: "directory" }])
-      : [{ name: "nested", path: "nested", type: "directory" }, { name: "sibling.js", path: "sibling.js", type: "file" }],
-      ...(paginated && !url.includes("cursor=") ? { next: "page-2" } : {}),
-    }) };
-    if (url.endsWith("/open") && JSON.parse(options.body).path === "tsconfig.json") return { ok: false, status: 404, json: async () => ({ error: "File not found." }) };
-    if (url.endsWith("/open") && projectExpired) return { ok: false, status: 401, json: async () => ({ error: "Expired" }) };
-    if (url.endsWith("/open")) return { ok: true, json: async () => ({ token: "sibling-token", name: "sibling.js", path: "/tmp/sibling.js", content: "sibling", revision: "sibling-r1" }) };
+    if (url.endsWith("/exchange"))
+      return {
+        ok: true,
+        json: async () => ({
+          ...remote,
+          ...(projectEnabled
+            ? { project: { token: "project-token", root: "/tmp", name: "tmp" } }
+            : {}),
+        }),
+      };
+    if (url.includes("/tree?"))
+      return {
+        ok: true,
+        json: async () => ({
+          path: "",
+          entries: paginated
+            ? url.includes("cursor=")
+              ? [{ name: "sibling.js", path: "sibling.js", type: "file" }]
+              : [{ name: "nested", path: "nested", type: "directory" }]
+            : [
+                { name: "nested", path: "nested", type: "directory" },
+                { name: "sibling.js", path: "sibling.js", type: "file" },
+              ],
+          ...(paginated && !url.includes("cursor=") ? { next: "page-2" } : {}),
+        }),
+      };
+    if (url.endsWith("/open") && JSON.parse(options.body).path === "tsconfig.json")
+      return { ok: false, status: 404, json: async () => ({ error: "File not found." }) };
+    if (url.endsWith("/open") && projectExpired)
+      return { ok: false, status: 401, json: async () => ({ error: "Expired" }) };
+    if (url.endsWith("/open"))
+      return {
+        ok: true,
+        json: async () => ({
+          token: "sibling-token",
+          name: "sibling.js",
+          path: "/tmp/sibling.js",
+          content: "sibling",
+          revision: "sibling-r1",
+        }),
+      };
     if (gate) await gate;
     return { ok: !conflict, status: conflict ? 409 : 200, json: async () => ({ revision: "r2" }) };
   },
   acode: {
-    require: (name: string) => ({
-      intent: { addHandler: (cb: typeof handler) => { handler = cb; }, removeHandler() {} },
-      editorFile: MockFile,
-      fs: { extend: (test: typeof accepts, factory: typeof provider) => { accepts = test; provider = factory; }, remove: () => { provider = undefined; } },
-      addedfolder: folders,
-      openfolder: (url: string, options: any) => { const folder = { url, ...options, remove() { folders.splice(folders.indexOf(folder), 1); } }; folders.push(folder); },
-      alert: (_title: string, message: string) => { alerts.push(message); },
-    })[name],
-    setPluginInit: (_id: string, callback: () => void) => { init = callback; },
-    setPluginUnmount: (_id: string, callback: () => void) => { unmount = callback; },
+    require: (name: string) =>
+      ({
+        intent: {
+          addHandler: (cb: typeof handler) => {
+            handler = cb;
+          },
+          removeHandler() {},
+        },
+        editorFile: MockFile,
+        fs: {
+          extend: (test: typeof accepts, factory: typeof provider) => {
+            accepts = test;
+            provider = factory;
+          },
+          remove: () => {
+            provider = undefined;
+          },
+        },
+        addedfolder: folders,
+        openfolder: (url: string, options: any) => {
+          const folder = {
+            url,
+            ...options,
+            remove() {
+              folders.splice(folders.indexOf(folder), 1);
+            },
+          };
+          folders.push(folder);
+        },
+        alert: (_title: string, message: string) => {
+          alerts.push(message);
+        },
+      })[name],
+    setPluginInit: (_id: string, callback: () => void) => {
+      init = callback;
+    },
+    setPluginUnmount: (_id: string, callback: () => void) => {
+      unmount = callback;
+    },
   },
-  editorManager: { files: liveFiles, on: (_event: string, cb: typeof newFile) => { newFile = cb; }, off: () => { newFile = undefined; }, editor: { gotoLine: (...position: number[]) => positions.push(position) } },
+  editorManager: {
+    files: liveFiles,
+    on: (_event: string, cb: typeof newFile) => {
+      newFile = cb;
+    },
+    off: () => {
+      newFile = undefined;
+    },
+    editor: { gotoLine: (...position: number[]) => positions.push(position) },
+  },
 });
 init!();
 const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
 async function launch() {
   let prevented = false;
   handler!({
-    module: "agent-console", action: "edit",
-    value: encodeURIComponent(JSON.stringify({ endpoint: "https://console.example", ticket: "test-ticket", line: 8, column: 5 })),
-    preventDefault() { prevented = true; },
+    module: "agent-console",
+    action: "edit",
+    value: encodeURIComponent(
+      JSON.stringify({
+        endpoint: "https://console.example",
+        ticket: "test-ticket",
+        line: 8,
+        column: 5,
+      }),
+    ),
+    preventDefault() {
+      prevented = true;
+    },
   });
   assert.equal(prevented, true);
   await settle();
@@ -113,7 +221,14 @@ async function launch() {
 function save(file: MockFile) {
   let response: Promise<boolean> | undefined;
   let prevented = false;
-  file.events.save({ preventDefault() { prevented = true; }, respondWith(value) { response = value; } });
+  file.events.save({
+    preventDefault() {
+      prevented = true;
+    },
+    respondWith(value) {
+      response = value;
+    },
+  });
   assert.equal(prevented, true);
   assert.ok(response);
   return response;
@@ -153,10 +268,16 @@ assert.equal(file.isUnsaved, true);
 assert.match(alerts.at(-1)!, /changed on the server/);
 const conflictWrite = calls.at(-1)!;
 assert.equal(conflictWrite.options.headers.Authorization, "Bearer token-3");
-assert.equal(JSON.parse(conflictWrite.options.body).revision, "renewed-r", "unchanged server content refreshes the revision without discarding edits");
+assert.equal(
+  JSON.parse(conflictWrite.options.body).revision,
+  "renewed-r",
+  "unchanged server content refreshes the revision without discarding edits",
+);
 
 conflict = false;
-gate = new Promise<void>((resolve) => { releaseWrite = resolve; });
+gate = new Promise<void>((resolve) => {
+  releaseWrite = resolve;
+});
 const before = calls.length;
 const save1 = save(file);
 const save2 = save(file);
@@ -176,7 +297,11 @@ assert.equal(opened[1].isUnsaved, false);
 // Released Acode 1.13.5 has preventDefault but no SaveFileEvent.respondWith.
 opened[1].edit("legacy save event");
 let legacyPrevented = false;
-opened[1].events.save({ preventDefault() { legacyPrevented = true; } });
+opened[1].events.save({
+  preventDefault() {
+    legacyPrevented = true;
+  },
+});
 await settle();
 assert.equal(legacyPrevented, true);
 assert.equal(opened[1].isUnsaved, false);
@@ -185,7 +310,10 @@ await launch();
 assert.equal(folders.length, 1);
 assert.equal(folders[0].saveState, false);
 assert.equal(folders[0].listFiles, false);
-assert.ok(opened[1].uri?.startsWith(folders[0].url), "an existing single-file tab adopts its project URI");
+assert.ok(
+  opened[1].uri?.startsWith(folders[0].url),
+  "an existing single-file tab adopts its project URI",
+);
 assert.ok(!JSON.stringify(folders).includes("token"));
 assert.equal(calls.filter((call) => call.url.includes("/tree?")).length, 0);
 const rootFs = provider!(folders[0].url);
@@ -205,7 +333,10 @@ assert.equal(sibling.persistInSession, false);
 sibling.edit("sibling edited");
 assert.equal(await save(sibling), true);
 assert.equal(calls.at(-1)!.options.headers.Authorization, "Bearer sibling-token");
-assert.deepEqual(JSON.parse(calls.at(-1)!.options.body), { content: "sibling edited", revision: "sibling-r1" });
+assert.deepEqual(JSON.parse(calls.at(-1)!.options.body), {
+  content: "sibling edited",
+  revision: "sibling-r1",
+});
 await assert.rejects(siblingFs.createFile("test"), /create, rename/);
 const alertsBeforeProbe = alerts.length;
 const probe = provider!(folders[0].url + "tsconfig.json");
@@ -250,4 +381,6 @@ assert.equal(calls.length, beforeUnknownSave);
 assert.match(alerts.at(-1)!, /Copy your edits/);
 assert.equal(retained.text, "older unsaved edits");
 unmount!();
-console.log("Acode plugin passed: launch, save, conflict, single flight, refresh, navigation, reopen, native tree, pagination, tree file saves, expiration, unload.");
+console.log(
+  "Acode plugin passed: launch, save, conflict, single flight, refresh, navigation, reopen, native tree, pagination, tree file saves, expiration, unload.",
+);

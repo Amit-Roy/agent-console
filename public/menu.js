@@ -8,7 +8,17 @@ let uid = 0;
 const openMenus = new Set();
 
 export function createMenu(opts) {
-  const o = { kind: "listbox", side: "bottom", align: "start", onSelect() {}, onOpen() {}, onClose() {}, renderTrigger: null, label: "", ...opts };
+  const o = {
+    kind: "listbox",
+    side: "bottom",
+    align: "start",
+    onSelect() {},
+    onOpen() {},
+    onClose() {},
+    renderTrigger: null,
+    label: "",
+    ...opts,
+  };
   const trigger = o.trigger;
   const id = `menu-${++uid}`;
   const itemRole = o.kind === "menu" ? "menuitem" : "option";
@@ -45,7 +55,8 @@ export function createMenu(opts) {
     // Scroll the list itself; scrollIntoView also moves the dialog and dismisses this menu.
     if (scroll) {
       if (node.offsetTop < pop.scrollTop) pop.scrollTop = node.offsetTop;
-      else if (node.offsetTop + node.offsetHeight > pop.scrollTop + pop.clientHeight) pop.scrollTop = node.offsetTop + node.offsetHeight - pop.clientHeight;
+      else if (node.offsetTop + node.offsetHeight > pop.scrollTop + pop.clientHeight)
+        pop.scrollTop = node.offsetTop + node.offsetHeight - pop.clientHeight;
     }
   }
   function move(delta, from = active) {
@@ -59,11 +70,17 @@ export function createMenu(opts) {
 
   function place() {
     const r = trigger.getBoundingClientRect();
-    const vw = document.documentElement.clientWidth, vh = window.innerHeight, gap = 6, pad = 8;
-    pop.style.minWidth = o.kind === "listbox" && trigger.classList.contains("field") ? `${r.width}px` : "";
+    const vw = document.documentElement.clientWidth,
+      vh = window.innerHeight,
+      gap = 6,
+      pad = 8;
+    pop.style.minWidth =
+      o.kind === "listbox" && trigger.classList.contains("field") ? `${r.width}px` : "";
     pop.style.maxHeight = "";
-    const h = pop.offsetHeight, w = pop.offsetWidth;
-    const below = vh - r.bottom - gap - pad, above = r.top - gap - pad;
+    const h = pop.offsetHeight,
+      w = pop.offsetWidth;
+    const below = vh - r.bottom - gap - pad,
+      above = r.top - gap - pad;
     let side = o.side;
     if (side === "bottom" && h > below && above > below) side = "top";
     else if (side === "top" && h > above && below > above) side = "bottom";
@@ -90,14 +107,18 @@ export function createMenu(opts) {
     pop.id = id;
     pop.tabIndex = -1;
     pop.setAttribute("role", o.kind);
-    pop.setAttribute("aria-label", o.label || trigger.getAttribute("aria-label") || trigger.title || "Menu");
+    pop.setAttribute(
+      "aria-label",
+      o.label || trigger.getAttribute("aria-label") || trigger.title || "Menu",
+    );
     const head = !nested && (typeof o.header === "function" ? o.header() : o.header); // read-only context line, e.g. a thread's full title
     if (head) pop.append(el("div", "m-head", head));
     items.forEach((it, i) => {
       const n = el("div");
       n.id = `${id}-${i}`;
       n.setAttribute("role", itemRole);
-      if (o.kind === "listbox") n.setAttribute("aria-selected", String(it.keep ? !!it.checked : it.value === value));
+      if (o.kind === "listbox")
+        n.setAttribute("aria-selected", String(it.keep ? !!it.checked : it.value === value));
       if (it.disabled) n.setAttribute("aria-disabled", "true");
       if (it.tone) n.dataset.tone = it.tone;
       if (it.icon) {
@@ -119,7 +140,8 @@ export function createMenu(opts) {
     place();
     const sel = items.findIndex((it) => it.value === value && !it.disabled);
     const first = items.findIndex((_, i) => enabled(i));
-    const last = items.length - 1 - [...items].reverse().findIndex((_, i) => enabled(items.length - 1 - i));
+    const last =
+      items.length - 1 - [...items].reverse().findIndex((_, i) => enabled(items.length - 1 - i));
     setActive(start === "last" ? last : start === "first" ? first : sel >= 0 ? sel : first);
     pop.focus({ preventScroll: true });
     pop.addEventListener("keydown", onKey);
@@ -166,7 +188,10 @@ export function createMenu(opts) {
       return showItems([{ value: "menu-back", label: "Back", back: true }, ...it.children]);
     }
     close(true);
-    if (it.keep) { o.onSelect(it.value, it); return; } // an action row (e.g. "Advisor · Opus"): acts without becoming the menu's value
+    if (it.keep) {
+      o.onSelect(it.value, it);
+      return;
+    } // an action row (e.g. "Advisor · Opus"): acts without becoming the menu's value
     if (o.kind === "listbox") {
       if (it.value === value) return;
       if (o.onSelect(it.value, it) === false) return;
@@ -179,24 +204,42 @@ export function createMenu(opts) {
     if (e.altKey || e.ctrlKey || e.metaKey) return;
     switch (e.key) {
       case "ArrowRight":
-        if (items[active]?.children) { e.preventDefault(); choose(active); }
+        if (items[active]?.children) {
+          e.preventDefault();
+          choose(active);
+        }
         return;
       case "ArrowLeft":
-        if (parents.length) { e.preventDefault(); back(); }
+        if (parents.length) {
+          e.preventDefault();
+          back();
+        }
         return;
-      case "ArrowDown": e.preventDefault(); return move(1);
-      case "ArrowUp": e.preventDefault(); return move(-1);
-      case "Home": e.preventDefault(); return move(1, -1);
-      case "End": e.preventDefault(); return move(-1, items.length);
+      case "ArrowDown":
+        e.preventDefault();
+        return move(1);
+      case "ArrowUp":
+        e.preventDefault();
+        return move(-1);
+      case "Home":
+        e.preventDefault();
+        return move(1, -1);
+      case "End":
+        e.preventDefault();
+        return move(-1, items.length);
       case "Enter":
       case " ":
         e.preventDefault();
         if (typed && e.key === " ") break; // space inside a typeahead word
         return enabled(active) && choose(active);
-      case "Escape": e.preventDefault(); e.stopPropagation(); return parents.length ? back() : close(true);
-      case "Tab": return close(true); // focus is back on the trigger, so Tab moves on from there
+      case "Escape":
+        e.preventDefault();
+        e.stopPropagation();
+        return parents.length ? back() : close(true);
+      case "Tab":
+        return close(true); // focus is back on the trigger, so Tab moves on from there
     }
-    if (e.key.length === 1 && /\S/.test(e.key) || (e.key === " " && typed)) {
+    if ((e.key.length === 1 && /\S/.test(e.key)) || (e.key === " " && typed)) {
       const now = Date.now();
       typed = now - typedAt > 700 ? e.key.toLowerCase() : typed + e.key.toLowerCase();
       typedAt = now;
@@ -211,9 +254,14 @@ export function createMenu(opts) {
   function onOutside(e) {
     if (pop && !pop.contains(e.target) && !trigger.contains(e.target)) close(false);
   }
-  function onDismiss() { close(false); }
+  function onDismiss() {
+    close(false);
+  }
   // only scrolling that moves the trigger dismisses the menu (the chat scrolling while history loads must not)
-  function onScroll(e) { if (pop && !pop.contains(e.target) && (e.target === document || e.target.contains?.(trigger))) close(false); }
+  function onScroll(e) {
+    if (pop && !pop.contains(e.target) && (e.target === document || e.target.contains?.(trigger)))
+      close(false);
+  }
 
   trigger.addEventListener("click", () => (pop ? close(true) : open()));
   trigger.addEventListener("keydown", (e) => {
@@ -224,12 +272,27 @@ export function createMenu(opts) {
   });
 
   const api = {
-    open, close,
-    get value() { return value; },
-    get isOpen() { return !!pop; },
-    setValue(v) { value = v; paintTrigger(); },
-    setItems(next, v = value) { rootItems = items = next; value = v; paintTrigger(); },
-    setDisabled(b) { trigger.disabled = b; if (b) close(false); },
+    open,
+    close,
+    get value() {
+      return value;
+    },
+    get isOpen() {
+      return !!pop;
+    },
+    setValue(v) {
+      value = v;
+      paintTrigger();
+    },
+    setItems(next, v = value) {
+      rootItems = items = next;
+      value = v;
+      paintTrigger();
+    },
+    setDisabled(b) {
+      trigger.disabled = b;
+      if (b) close(false);
+    },
     items: () => items,
   };
   paintTrigger();

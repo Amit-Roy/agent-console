@@ -6,14 +6,22 @@ import path from "node:path";
 const data = fs.mkdtempSync(path.join(os.tmpdir(), "ac-pi-models-"));
 process.env.AGENT_CONSOLE_DATA = data;
 delete process.env.AGENT_CONSOLE_PI_MODELS;
-fs.writeFileSync(path.join(data, "pi-models.txt"), [
-  "provider    model                                               context  max-out  thinking  images",
-  "nvidia      openai/gpt-oss-20b                                  131.1K   32.8K    yes       no    ",
-  "openrouter  cohere/north-mini-code:free                         256K     64K      yes       no    ",
-  "openrouter  paid/model                                          256K     64K      yes       no    ",
-].join("\n"));
+fs.writeFileSync(
+  path.join(data, "pi-models.txt"),
+  [
+    "provider    model                                               context  max-out  thinking  images",
+    "nvidia      openai/gpt-oss-20b                                  131.1K   32.8K    yes       no    ",
+    "openrouter  cohere/north-mini-code:free                         256K     64K      yes       no    ",
+    "openrouter  paid/model                                          256K     64K      yes       no    ",
+  ].join("\n"),
+);
 try {
   const { pi } = await import("../server/providers/pi.ts");
-  assert.deepEqual(pi.models(), ["nvidia/openai/gpt-oss-20b", "openrouter/cohere/north-mini-code:free"]);
+  assert.deepEqual(pi.models(), [
+    "nvidia/openai/gpt-oss-20b",
+    "openrouter/cohere/north-mini-code:free",
+  ]);
   console.log("pi models cache: ok");
-} finally { fs.rmSync(data, { recursive: true, force: true }); }
+} finally {
+  fs.rmSync(data, { recursive: true, force: true });
+}

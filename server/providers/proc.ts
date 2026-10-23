@@ -52,7 +52,9 @@ export function spawnLines(
   proc.stderr!.setEncoding("utf8");
   proc.stderr!.on("data", (c: string) => (stderr = (stderr + c).slice(-2000)));
   proc.stdin!.on("error", () => {}); // EPIPE when the child exits first; the exit handler reports it
-  proc.on("error", (err) => ctx.event({ type: "console_error", text: `Could not start ${name}: ${err.message}` }));
+  proc.on("error", (err) =>
+    ctx.event({ type: "console_error", text: `Could not start ${name}: ${err.message}` }),
+  );
   proc.on("exit", (code, signal) => ctx.exited({ code, signal, stderr, aborted: p.aborted }));
   return p;
 }

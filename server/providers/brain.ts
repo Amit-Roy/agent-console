@@ -9,25 +9,43 @@ import { SESSION_INSTRUCTIONS } from "./console-mcp.mjs";
 // user-level hooks. Pi and Codex have no equivalent installed, so we do the same two jobs here, for any harness:
 //   recall: hand the harness only the same brain index the Claude hook injects when its process starts
 //   save:   agents edit wiki pages themselves; after each turn we run `brain commit` (file-locked, idempotent)
-export const BRAIN_BIN = process.env.AGENT_CONSOLE_BRAIN || path.join(os.homedir(), "repos", "brain", "bin", "brain");
+export const BRAIN_BIN =
+  process.env.AGENT_CONSOLE_BRAIN || path.join(os.homedir(), "repos", "brain", "bin", "brain");
 // `brain context` prints wiki/index.md. Run it off the event loop (a sync exec stalled every request ~250 ms) and keep the result until
 // the index changes (mtime+size, a cheap stat) or 5 minutes pass. Concurrent starts share one run.
 const TTL = 5 * 60_000;
-const INDEX = process.env.AGENT_CONSOLE_BRAIN_INDEX || path.join(path.dirname(path.dirname(BRAIN_BIN)), "wiki", "index.md");
+const INDEX =
+  process.env.AGENT_CONSOLE_BRAIN_INDEX ||
+  path.join(path.dirname(path.dirname(BRAIN_BIN)), "wiki", "index.md");
 const run = promisify(execFile);
 let cache: { at: number; stamp: string; text: string } | undefined;
 let inflight: { stamp: string; promise: Promise<string> } | undefined;
-const indexStamp = () => { try { const s = fs.statSync(INDEX); return `${s.mtimeMs}:${s.size}`; } catch { return ""; } };
+const indexStamp = () => {
+  try {
+    const s = fs.statSync(INDEX);
+    return `${s.mtimeMs}:${s.size}`;
+  } catch {
+    return "";
+  }
+};
 
 export const brainAvailable = () => fs.existsSync(BRAIN_BIN);
 
 export function brainContext(): Promise<string> {
   if (!brainAvailable()) return Promise.resolve("");
   const stamp = indexStamp();
-  if (cache && cache.stamp === stamp && Date.now() - cache.at < TTL) return Promise.resolve(cache.text);
+  if (cache && cache.stamp === stamp && Date.now() - cache.at < TTL)
+    return Promise.resolve(cache.text);
   if (inflight?.stamp === stamp) return inflight.promise;
-  const promise: Promise<string> = run(BRAIN_BIN, ["context"], { encoding: "utf8", timeout: 5000, env: { ...process.env, BRAIN_NO_NUDGE: "1" } })
-    .then((r) => String(r.stdout).trim(), () => "")
+  const promise: Promise<string> = run(BRAIN_BIN, ["context"], {
+    encoding: "utf8",
+    timeout: 5000,
+    env: { ...process.env, BRAIN_NO_NUDGE: "1" },
+  })
+    .then(
+      (r) => String(r.stdout).trim(),
+      () => "",
+    )
     .then((text) => {
       cache = { at: Date.now(), stamp, text };
       if (inflight?.promise === promise) inflight = undefined;
@@ -42,10 +60,16 @@ export function brainCommit() {
 }
 
 // Reply-style preamble (ADHD + caveman ultra) shared by every harness, replacing the always-loaded caveman / i-have-adhd skills.
-export const STYLE_FILE = process.env.AGENT_CONSOLE_STYLE || path.join(os.homedir(), "repos", "brain", "config", "style-preamble.md");
+export const STYLE_FILE =
+  process.env.AGENT_CONSOLE_STYLE ||
+  path.join(os.homedir(), "repos", "brain", "config", "style-preamble.md");
 
 export function stylePreamble(): string {
-  try { return fs.readFileSync(STYLE_FILE, "utf8").trim(); } catch { return ""; }
+  try {
+    return fs.readFileSync(STYLE_FILE, "utf8").trim();
+  } catch {
+    return "";
+  }
 }
 
 /** Keep the write contract discoverable without loading the schema or full memory pages. */
@@ -66,4 +90,7 @@ export function brainInstructions(): string {
 }
 
 /** Style, memory write contract, and index for harnesses accepting one instruction string. */
-export const harnessInstructions = async () => [stylePreamble(), brainInstructions(), SESSION_INSTRUCTIONS, await brainContext()].filter(Boolean).join("\n\n");
+export const harnessInstructions = async () =>
+  [stylePreamble(), brainInstructions(), SESSION_INSTRUCTIONS, await brainContext()]
+    .filter(Boolean)
+    .join("\n\n");

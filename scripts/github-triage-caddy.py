@@ -195,9 +195,16 @@ WantedBy=timers.target
         destination.write_text(content)
         destination.chmod(0o644)
     subprocess.run(["systemctl", "daemon-reload"], check=True)
-    subprocess.run([
-        "systemctl", "enable", "--now", "agent-console-github-triage-caddy.timer",
-    ], check=True, capture_output=True)
+    subprocess.run(
+        [
+            "systemctl",
+            "enable",
+            "--now",
+            "agent-console-github-triage-caddy.timer",
+        ],
+        check=True,
+        capture_output=True,
+    )
     print("The webhook route, triage watchdog, and five-minute reconciliation are installed.")
 
 

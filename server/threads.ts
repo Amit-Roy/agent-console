@@ -2,10 +2,19 @@ import os from "node:os";
 import { headroom } from "./headroom.ts";
 import { isAutomationPiModel, selectAutomationPiModel } from "./providers/pi-model.ts";
 import { assertAutomationSandbox } from "./automation/sandbox.ts";
-import { normalizeClaudeAccount, requireClaudeAccount, claudeUsageKey, type ClaudeAccount } from "./providers/claude-accounts.ts";
+import {
+  normalizeClaudeAccount,
+  requireClaudeAccount,
+  claudeUsageKey,
+  type ClaudeAccount,
+} from "./providers/claude-accounts.ts";
 import type { ThreadNotice } from "./notifications.ts";
 import type { IssueRun } from "./window-dispatch.ts";
-import { IdleCompactionTimers, idleCompactionPolicy, idleCompactionDeadline } from "./idle-compaction.ts";
+import {
+  IdleCompactionTimers,
+  idleCompactionPolicy,
+  idleCompactionDeadline,
+} from "./idle-compaction.ts";
 import { HistoryIndex } from "./history.ts";
 import { historyWireEvent } from "./history-wire.ts";
 import { commandList, CONSOLE_COMMANDS, parseCommand } from "./commands.ts";
@@ -17,15 +26,36 @@ import path from "node:path";
 import { DATA_DIR } from "./auth.ts";
 import { Questions, type PendingQuestion } from "./questions.ts";
 import { brainCommit } from "./providers/brain.ts";
-import { createLabeler, needsLabel, mcpSketch, readSketch, editSketch, type Labeler } from "./providers/label.ts";
+import {
+  createLabeler,
+  needsLabel,
+  mcpSketch,
+  readSketch,
+  editSketch,
+  type Labeler,
+} from "./providers/label.ts";
 import { suggestTitle, titleText } from "./providers/title.ts";
 import { recentPreamble, replayPreamble } from "./export.ts";
 import { backfill, restoreAccounting, recordTurn, readTurns, type Turn } from "./analytics.ts";
 import { repairAccounting } from "./accounting-repair.ts";
 import { SessionAccounting, codexAccounting, piAccounting, type ModelUsage } from "./accounting.ts";
 import { TurnClock, TurnTimingStore, fromProcess, runFacts } from "./turn-timing.ts";
-import { MAX_ATTACHMENTS, removeUploads, resolveAttachments, threadDir, withFileList } from "./uploads.ts";
-import { clip, DEFAULT_PROVIDER, PROVIDERS, type Agent, type AgentCtx, type Command, type Mode } from "./providers/index.ts";
+import {
+  MAX_ATTACHMENTS,
+  removeUploads,
+  resolveAttachments,
+  threadDir,
+  withFileList,
+} from "./uploads.ts";
+import {
+  clip,
+  DEFAULT_PROVIDER,
+  PROVIDERS,
+  type Agent,
+  type AgentCtx,
+  type Command,
+  type Mode,
+} from "./providers/index.ts";
 
 export type { Command, Mode };
 
@@ -52,7 +82,16 @@ export interface Thread {
   lastUserActivityAt?: number;
   lastProviderActivityAt?: number;
   idleCompactionConsumedAt?: number;
-  lastRun?: { model?: string; effort?: string; source?: string; duration_ms?: number; input_tokens?: number; output_tokens?: number; cached_input_tokens?: number; timing?: ReturnType<typeof runFacts> };
+  lastRun?: {
+    model?: string;
+    effort?: string;
+    source?: string;
+    duration_ms?: number;
+    input_tokens?: number;
+    output_tokens?: number;
+    cached_input_tokens?: number;
+    timing?: ReturnType<typeof runFacts>;
+  };
   sessionId?: string;
   forkFrom?: string; // forked from a Claude session: the first run continues a copy of it (cleared once the fork has its own session id)
   context?: { used?: number; max?: number; source?: string }; // tokens in the agent's context now, and the model's window when the harness reports it
@@ -93,19 +132,37 @@ const WARM_MAX = Number(process.env.AGENT_CONSOLE_WARM_MAX ?? 2);
 const WARM_IDLE_MS = 10 * 60 * 1000;
 // Background tasks keep an idle thread's agent alive and block restart-when-idle. Claude caps a background command at 2 hours
 // and a working subagent reports progress, so tasks silent for longer than this are hung: the sweep kills the agent.
-const BACKGROUND_STALE_MS = Number(process.env.AGENT_CONSOLE_BACKGROUND_STALE_MS ?? 135 * 60 * 1000);
+const BACKGROUND_STALE_MS = Number(
+  process.env.AGENT_CONSOLE_BACKGROUND_STALE_MS ?? 135 * 60 * 1000,
+);
 // A running turn streams tokens, tool results or progress; a foreground tool call is capped at 10 minutes. A turn silent for longer
 // than this, with no blocking question waiting on the user, is hung and would block restart-when-idle forever: the sweep ends it.
 const TURN_STALE_MS = Number(process.env.AGENT_CONSOLE_TURN_STALE_MS ?? 30 * 60 * 1000);
 
 // First-party turn timing (metadata only, never sent anywhere). Unavailable storage must never affect a turn.
 let timing: TurnTimingStore | undefined;
-try { timing = new TurnTimingStore(path.join(DATA_DIR, "latency.sqlite")); } catch { console.warn("Turn timing storage is unavailable."); }
+try {
+  timing = new TurnTimingStore(path.join(DATA_DIR, "latency.sqlite"));
+} catch {
+  console.warn("Turn timing storage is unavailable.");
+}
 export const turnTiming = () => timing;
-const timed = (fn: () => void) => { try { fn(); } catch {} };
+const timed = (fn: () => void) => {
+  try {
+    fn();
+  } catch {}
+};
 
 // Chatter the UI never shows. Dropped before it is logged or sent (and filtered from older logs): a long Claude thread was 15% of it.
-const NOISE = new Set(["system/thinking_tokens", "system/status", "system/hook_started", "system/hook_response", "system/task_updated", "system/background_tasks_changed", "tool_progress"]);
+const NOISE = new Set([
+  "system/thinking_tokens",
+  "system/status",
+  "system/hook_started",
+  "system/hook_response",
+  "system/task_updated",
+  "system/background_tasks_changed",
+  "tool_progress",
+]);
 const kindOf = (e: any) => `${e?.type}${e?.subtype ? "/" + e.subtype : ""}`;
 const PAGE = Number(process.env.AGENT_CONSOLE_PAGE) || 40; // events the UI gets when it opens a thread; older ones load on request
 const PAGE_BYTES = Number(process.env.AGENT_CONSOLE_PAGE_BYTES) || 96_000; // sent JSON per page: a page widened back to its turn's start can exceed 150 events
@@ -125,32 +182,57 @@ const attachList = (q: Queued): any[] => (Array.isArray(q.attachments) ? q.attac
 // The newest Claude rate-limit event in a log. Boot restores one per thread: read only the tail, never the transcript.
 function lastClaudeWindows(file: string, provider: string) {
   let fd: number;
-  try { fd = fs.openSync(file, "r"); } catch { return undefined; }
+  try {
+    fd = fs.openSync(file, "r");
+  } catch {
+    return undefined;
+  }
   try {
     const size = fs.fstatSync(fd).size;
     for (const span of [64 * 1024, 4 * 1024 * 1024]) {
-      const start = Math.max(0, size - span), buf = Buffer.alloc(size - start);
+      const start = Math.max(0, size - span),
+        buf = Buffer.alloc(size - start);
       fs.readSync(fd, buf, 0, buf.length, start);
-      for (let at = buf.lastIndexOf('"unifiedWindows"'); at !== -1; at = buf.lastIndexOf('"unifiedWindows"', at - 1)) {
+      for (
+        let at = buf.lastIndexOf('"unifiedWindows"');
+        at !== -1;
+        at = buf.lastIndexOf('"unifiedWindows"', at - 1)
+      ) {
         const from = buf.lastIndexOf(10, at) + 1;
         if (from === 0 && start > 0) break; // the line began before this window
         const to = buf.indexOf(10, at);
         try {
           const ev = JSON.parse(buf.toString("utf8", from, to === -1 ? buf.length : to));
-          if (Number.isFinite(ev.observedAt) && ev.usageProvider === provider && claudeWindows(ev).length) return ev;
+          if (
+            Number.isFinite(ev.observedAt) &&
+            ev.usageProvider === provider &&
+            claudeWindows(ev).length
+          )
+            return ev;
         } catch {}
         if (from === 0) break;
         at = from;
       }
       if (start === 0) break;
     }
-  } finally { fs.closeSync(fd); }
+  } finally {
+    fs.closeSync(fd);
+  }
   return undefined;
 }
 
 // One prompt from several queued messages. "[Image #n]" is numbered per message, so renumber to keep the references unambiguous.
-function mergeQueued(items: Queued[]): { text: string; attachments: unknown; questionAnswer?: true } {
-  if (items.length === 1) return { text: items[0].text, attachments: items[0].attachments, ...(items[0].questionAnswer ? { questionAnswer: true } : {}) };
+function mergeQueued(items: Queued[]): {
+  text: string;
+  attachments: unknown;
+  questionAnswer?: true;
+} {
+  if (items.length === 1)
+    return {
+      text: items[0].text,
+      attachments: items[0].attachments,
+      ...(items[0].questionAnswer ? { questionAnswer: true } : {}),
+    };
   let next = 0;
   const attachments: any[] = [];
   const parts = items.map((item) => {
@@ -159,14 +241,33 @@ function mergeQueued(items: Queued[]): { text: string; attachments: unknown; que
       if (Number.isInteger(a?.n)) renumber.set(a.n, ++next);
       attachments.push(Number.isInteger(a?.n) ? { ...a, n: renumber.get(a.n) } : a);
     }
-    return renumber.size ? item.text.replace(/\[Image #(\d+)\]/g, (m, k) => (renumber.has(+k) ? `[Image #${renumber.get(+k)}]` : m)) : item.text;
+    return renumber.size
+      ? item.text.replace(/\[Image #(\d+)\]/g, (m, k) =>
+          renumber.has(+k) ? `[Image #${renumber.get(+k)}]` : m,
+        )
+      : item.text;
   });
-  return { text: parts.filter((x) => x.trim()).join("\n\n"), attachments, ...(items.every(item => item.questionAnswer) ? { questionAnswer: true } : {}) };
+  return {
+    text: parts.filter((x) => x.trim()).join("\n\n"),
+    attachments,
+    ...(items.every((item) => item.questionAnswer) ? { questionAnswer: true } : {}),
+  };
 }
-const queuePreview = ({ id, text, revision, editing }: Queued) => ({ id, text: text.slice(0, 200), revision, editing: !!editing });
+const queuePreview = ({ id, text, revision, editing }: Queued) => ({
+  id,
+  text: text.slice(0, 200),
+  revision,
+  editing: !!editing,
+});
 
 // what the usage dashboard needs to know about the turn in flight
-interface TurnState { start: number; tools: Record<string, number>; usage?: any; models?: ModelUsage[]; clock?: TurnClock }
+interface TurnState {
+  start: number;
+  tools: Record<string, number>;
+  usage?: any;
+  models?: ModelUsage[];
+  clock?: TurnClock;
+}
 
 interface Live {
   agent: Agent;
@@ -198,8 +299,12 @@ export class Threads {
   private turns = new Map<string, TurnState>(); // the turn in flight, per thread
   // Replaying every Claude log takes a few hundred ms; only a finished turn needs the baselines, so boot leaves it to warmAccounting()
   private restoredAccounting?: SessionAccounting;
-  private get accounting() { return this.restoredAccounting ??= restoreAccounting([...this.threads.values()]); }
-  warmAccounting() { void this.accounting; }
+  private get accounting() {
+    return (this.restoredAccounting ??= restoreAccounting([...this.threads.values()]));
+  }
+  warmAccounting() {
+    void this.accounting;
+  }
   private queues = new Map<string, Queued[]>(); // messages to send, in order, once the running turn ends
   private emit: Emit;
   private notificationTurns = new Set<string>();
@@ -213,7 +318,8 @@ export class Threads {
     this.onNotification = onNotification;
     this.emit = emit;
     this.labeler = createLabeler((job, label) => {
-      if (this.threads.has(job.thread)) this.publish(job.thread, { type: "tool_label", tool_use_id: job.id, label });
+      if (this.threads.has(job.thread))
+        this.publish(job.thread, { type: "tool_label", tool_use_id: job.id, label });
     });
     try {
       const c = JSON.parse(fs.readFileSync(COMMANDS_FILE, "utf8"));
@@ -227,8 +333,12 @@ export class Threads {
         delete t.background;
         t.provider ||= DEFAULT_PROVIDER;
         if (t.provider === "claude") {
-          try { t.claudeAccount = normalizeClaudeAccount(t.claudeAccount); }
-          catch { console.warn("Skipped a thread with an unknown Claude account."); continue; }
+          try {
+            t.claudeAccount = normalizeClaudeAccount(t.claudeAccount);
+          } catch {
+            console.warn("Skipped a thread with an unknown Claude account.");
+            continue;
+          }
         }
         if (t.provider === "codex" && t.context?.source !== "codex/last_request") delete t.context;
         this.threads.set(t.id, t);
@@ -240,28 +350,53 @@ export class Threads {
         if (!this.threads.has(id) || !Array.isArray(requests)) continue;
         for (const request of requests) {
           if (request?.async !== true) continue;
-          try { this.questions.add(id, request); } catch {}
+          try {
+            this.questions.add(id, request);
+          } catch {}
         }
         const count = this.questions.list(id).length;
         if (count) this.threads.get(id)!.waiting = count;
       }
     } catch {}
-    try { backfill([...this.threads.values()]); } catch {} // usage history from logs written before the dashboard existed
+    try {
+      backfill([...this.threads.values()]);
+    } catch {} // usage history from logs written before the dashboard existed
     try {
       repairAccounting(DATA_DIR, true); // startup precedes new turns; preserves an exclusive original backup
-      const rows = readTurns(0, Date.now(), Number.MAX_SAFE_INTEGER).filter(r => r.accounting === 2);
+      const rows = readTurns(0, Date.now(), Number.MAX_SAFE_INTEGER).filter(
+        (r) => r.accounting === 2,
+      );
       for (const t of this.threads.values()) {
-        const known = rows.filter(r => r.thread === t.id && r.cost != null);
+        const known = rows.filter((r) => r.thread === t.id && r.cost != null);
         t.cost = known.reduce((sum, r) => sum + r.cost!, 0);
         t.costMeasured = known.length > 0;
       }
-    } catch { /* malformed/incomplete legacy history must not stop the console */ }
+    } catch {
+      /* malformed/incomplete legacy history must not stop the console */
+    }
     try {
-      for (const [id, items] of Object.entries(JSON.parse(fs.readFileSync(QUEUES_FILE, "utf8"))) as [string, Queued[]][]) {
+      for (const [id, items] of Object.entries(
+        JSON.parse(fs.readFileSync(QUEUES_FILE, "utf8")),
+      ) as [string, Queued[]][]) {
         if (!this.threads.has(id) || !Array.isArray(items)) continue;
-        this.queues.set(id, items.filter(q => typeof q.id === "string" && typeof q.text === "string" && q.text.length <= 100_000).slice(0, MAX_QUEUE).map(q => ({ ...q, revision: Number.isSafeInteger(q.revision) ? q.revision : 0, editing: q.editing === true })));
+        this.queues.set(
+          id,
+          items
+            .filter(
+              (q) =>
+                typeof q.id === "string" && typeof q.text === "string" && q.text.length <= 100_000,
+            )
+            .slice(0, MAX_QUEUE)
+            .map((q) => ({
+              ...q,
+              revision: Number.isSafeInteger(q.revision) ? q.revision : 0,
+              editing: q.editing === true,
+            })),
+        );
       }
-      setImmediate(() => { for (const id of this.queues.keys()) this.drain(id); });
+      setImmediate(() => {
+        for (const id of this.queues.keys()) this.drain(id);
+      });
     } catch {}
     for (const thread of this.threads.values()) this.refreshIdleCompaction(thread);
   }
@@ -272,21 +407,41 @@ export class Threads {
     for (const t of this.threads.values()) {
       try {
         if (t.provider === "claude") {
-          const last = lastClaudeWindows(path.join(LOG_DIR, `${t.id}.jsonl`), claudeUsageKey(t.claudeAccount));
-          if (last && Number.isFinite(last.observedAt) && last.usageProvider === claudeUsageKey(t.claudeAccount)) {
-            usage.record(last.usageProvider, { windows: claudeWindows(last) }, last.observedAt, { observedAt: last.observedAt, usageProvider: last.usageProvider, ...(typeof last.session_id === "string" && typeof last.uuid === "string" ? { sourceSessionId: last.session_id, sourceEventUuid: last.uuid } : {}) });
+          const last = lastClaudeWindows(
+            path.join(LOG_DIR, `${t.id}.jsonl`),
+            claudeUsageKey(t.claudeAccount),
+          );
+          if (
+            last &&
+            Number.isFinite(last.observedAt) &&
+            last.usageProvider === claudeUsageKey(t.claudeAccount)
+          ) {
+            usage.record(last.usageProvider, { windows: claudeWindows(last) }, last.observedAt, {
+              observedAt: last.observedAt,
+              usageProvider: last.usageProvider,
+              ...(typeof last.session_id === "string" && typeof last.uuid === "string"
+                ? { sourceSessionId: last.session_id, sourceEventUuid: last.uuid }
+                : {}),
+            });
           }
         }
         if (t.provider === "codex") {
           const samples = t.sessionId ? new CodexTelemetry(t.sessionId).read() : [];
-          for (const s of samples) if (s.context) {
-            const c = s.context;
-            if ("reset" in c) { t.context = { max: t.context?.max, source: c.source }; t.lastCompactedAt = s.observedAt || t.lastCompactedAt; }
-            else t.context = { ...t.context, ...c };
+          for (const s of samples)
+            if (s.context) {
+              const c = s.context;
+              if ("reset" in c) {
+                t.context = { max: t.context?.max, source: c.source };
+                t.lastCompactedAt = s.observedAt || t.lastCompactedAt;
+              } else t.context = { ...t.context, ...c };
+            }
+          const quota = samples.findLast((s) => s.rateLimits);
+          if (quota)
+            usage.record("codex", { windows: codexWindows(quota.rateLimits) }, quota.observedAt);
+          if (samples.length) {
+            this.refreshIdleCompaction(t);
+            this.emit({ t: "thread", thread: t });
           }
-          const quota = samples.findLast(s => s.rateLimits);
-          if (quota) usage.record("codex", { windows: codexWindows(quota.rateLimits) }, quota.observedAt);
-          if (samples.length) { this.refreshIdleCompaction(t); this.emit({ t: "thread", thread: t }); }
         }
       } catch {} // one unreadable log must not stop the rest
     }
@@ -309,19 +464,30 @@ export class Threads {
       const current = this.threads.get(t.id);
       if (this.closed || current !== t || t.lastUserActivityAt !== cycle || t.background) return;
       const currentPolicy = idleCompactionPolicy(t);
-      if (idleCompactionDeadline(t, currentPolicy, !!this.queues.get(t.id)?.length) !== deadline) { this.refreshIdleCompaction(t); return; }
+      if (idleCompactionDeadline(t, currentPolicy, !!this.queues.get(t.id)?.length) !== deadline) {
+        this.refreshIdleCompaction(t);
+        return;
+      }
       // A stalled event loop must not buy compaction after the estimated cache expiry.
       t.idleCompactionConsumedAt = cycle;
       delete t.idleCompactionDueAt;
       this.persist();
-      if (Date.now() >= t.lastProviderActivityAt! + currentPolicy.ttlMs!) { this.touch(t); return; }
-      try { this.compact(t.id); }
-      catch { this.touch(t); } // consume failed attempts; never create a paid retry loop
+      if (Date.now() >= t.lastProviderActivityAt! + currentPolicy.ttlMs!) {
+        this.touch(t);
+        return;
+      }
+      try {
+        this.compact(t.id);
+      } catch {
+        this.touch(t);
+      } // consume failed attempts; never create a paid retry loop
     });
   }
 
   getCommands(): Record<string, Command[]> {
-    return Object.fromEntries([...PROVIDERS.keys()].map(id => [id, commandList(this.commands[id])]));
+    return Object.fromEntries(
+      [...PROVIDERS.keys()].map((id) => [id, commandList(this.commands[id])]),
+    );
   }
 
   list(): Thread[] {
@@ -332,18 +498,31 @@ export class Threads {
   }
   getQuestions(): Record<string, PendingQuestion[]>;
   getQuestions(id: string): PendingQuestion[];
-  getQuestions(id?: string) { return id === undefined ? this.questions.all() : this.questions.list(id); }
+  getQuestions(id?: string) {
+    return id === undefined ? this.questions.all() : this.questions.list(id);
+  }
 
   answer(thread: string, id: string, answers: unknown, skip = false) {
-    const request = this.questions.list(thread).find(q => q.id === id);
-    const result = this.questions.answer(thread, id, answers, this.live.get(thread)?.agent, skip, undefined,
-      request?.async ? reply => {
-        if (!reply.skip) {
-          const text = request.questions.map(q => `${q.question}\n${reply.answers[q.id].join(", ")}`).join("\n\n");
-          this.send(thread, text, { mode: "steer", questionAnswer: true });
-        }
-        return true;
-      } : undefined);
+    const request = this.questions.list(thread).find((q) => q.id === id);
+    const result = this.questions.answer(
+      thread,
+      id,
+      answers,
+      this.live.get(thread)?.agent,
+      skip,
+      undefined,
+      request?.async
+        ? (reply) => {
+            if (!reply.skip) {
+              const text = request.questions
+                .map((q) => `${q.question}\n${reply.answers[q.id].join(", ")}`)
+                .join("\n\n");
+              this.send(thread, text, { mode: "steer", questionAnswer: true });
+            }
+            return true;
+          }
+        : undefined,
+    );
     this.publish(thread, result.event);
     this.updateWaiting(thread);
   }
@@ -356,7 +535,7 @@ export class Threads {
     else delete t.waiting;
     const durable: Record<string, PendingQuestion[]> = {};
     for (const [key, requests] of Object.entries(this.questions.all())) {
-      const asyncRequests = requests.filter(q => q.async);
+      const asyncRequests = requests.filter((q) => q.async);
       if (asyncRequests.length) durable[key] = asyncRequests;
     }
     fs.writeFileSync(QUESTIONS_FILE + ".tmp", JSON.stringify(durable), { mode: 0o600 });
@@ -367,15 +546,22 @@ export class Threads {
   }
 
   private cancelQuestions(id: string, includeAsync = false) {
-    const pending = this.questions.list(id).filter(q => includeAsync || !q.async);
+    const pending = this.questions.list(id).filter((q) => includeAsync || !q.async);
     for (const request of pending) {
       this.questions.remove(id, request.id);
-      this.publish(id, { type: "question_answer", id: request.id, cancelled: true, ts: Date.now() });
+      this.publish(id, {
+        type: "question_answer",
+        id: request.id,
+        cancelled: true,
+        ts: Date.now(),
+      });
     }
     if (pending.length) this.updateWaiting(id);
   }
   private persist() {
-    fs.writeFileSync(THREADS_FILE, JSON.stringify([...this.threads.values()], null, 1), { mode: 0o600 });
+    fs.writeFileSync(THREADS_FILE, JSON.stringify([...this.threads.values()], null, 1), {
+      mode: 0o600,
+    });
   }
   private touch(t: Thread) {
     t.updatedAt = Date.now();
@@ -384,17 +570,31 @@ export class Threads {
     this.emit({ t: "thread", thread: t });
   }
 
-  create(opts: { claudeAccount?: string; provider?: string; cwd: string; mode?: Mode; model?: string; effort?: string; title?: string; schedule?: Thread["schedule"]; issueRun?: Thread["issueRun"] }): Thread {
+  create(opts: {
+    claudeAccount?: string;
+    provider?: string;
+    cwd: string;
+    mode?: Mode;
+    model?: string;
+    effort?: string;
+    title?: string;
+    schedule?: Thread["schedule"];
+    issueRun?: Thread["issueRun"];
+  }): Thread {
     const prov = PROVIDERS.get(opts.provider || DEFAULT_PROVIDER);
     if (!prov) throw new Error("Unknown provider.");
     const st = prov.status();
     if (!st.ok) throw new Error(`${prov.label} is not ready. ${st.hint ?? ""}`.trim());
     const mode = opts.mode && prov.modes.includes(opts.mode) ? opts.mode : prov.defaultMode;
-    const model = opts.issueRun && prov.id === "pi"
-      ? selectAutomationPiModel(prov.models(), opts.model === "default" ? undefined : opts.model)
-      : opts.model && prov.models().includes(opts.model) ? opts.model : prov.defaultModel();
+    const model =
+      opts.issueRun && prov.id === "pi"
+        ? selectAutomationPiModel(prov.models(), opts.model === "default" ? undefined : opts.model)
+        : opts.model && prov.models().includes(opts.model)
+          ? opts.model
+          : prov.defaultModel();
     if (!model) throw new Error(`${prov.label} has no models available.`);
-    if (opts.issueRun) assertAutomationSandbox({ id: "preflight", cwd: opts.cwd, issueRun: opts.issueRun });
+    if (opts.issueRun)
+      assertAutomationSandbox({ id: "preflight", cwd: opts.cwd, issueRun: opts.issueRun });
     const now = Date.now();
     const t: Thread = {
       id: crypto.randomUUID(),
@@ -423,7 +623,8 @@ export class Threads {
 
   private validEffort(prov: any, model: string, effort?: string): string {
     if (!effort || effort === "default") return "default";
-    if (!prov?.modelDetails?.()[model]?.efforts.includes(effort)) throw new Error("Unsupported effort for this model.");
+    if (!prov?.modelDetails?.()[model]?.efforts.includes(effort))
+      throw new Error("Unsupported effort for this model.");
     return effort;
   }
 
@@ -442,43 +643,79 @@ export class Threads {
   }
 
   /** Resume all non-archived threads quota-paused on the given provider (usage key), optionally only those paused by one window. */
-  resumeQuotaPaused(provider: string, windowLabel?: string, eligible?: (thread: Thread) => boolean) {
+  resumeQuotaPaused(
+    provider: string,
+    windowLabel?: string,
+    eligible?: (thread: Thread) => boolean,
+  ) {
     let resumed = 0;
     for (const t of this.threads.values()) {
       if (t.archived || (eligible && !eligible(t))) continue;
-      if (t.quotaPaused?.provider === provider && (!windowLabel || t.quotaPaused.windowLabel === windowLabel)) {
+      if (
+        t.quotaPaused?.provider === provider &&
+        (!windowLabel || t.quotaPaused.windowLabel === windowLabel)
+      ) {
         delete t.quotaPaused;
         if (t.status === "running") continue; // the user already continued it; send would throw and abort the other resumes
-        try { this.send(t.id, "Continue.", { auto: "quota-resume" }); resumed++; }
-        catch (error) { console.error(`[quota-resume] ${t.id}: ${error instanceof Error ? error.message : error}`); }
+        try {
+          this.send(t.id, "Continue.", { auto: "quota-resume" });
+          resumed++;
+        } catch (error) {
+          console.error(
+            `[quota-resume] ${t.id}: ${error instanceof Error ? error.message : error}`,
+          );
+        }
       }
     }
     return resumed;
   }
 
-  update(id: string, patch: { claudeAccount?: string; mode?: Mode; model?: string; effort?: string; advisor?: string; title?: string; idleCompaction?: boolean }) {
+  update(
+    id: string,
+    patch: {
+      claudeAccount?: string;
+      mode?: Mode;
+      model?: string;
+      effort?: string;
+      advisor?: string;
+      title?: string;
+      idleCompaction?: boolean;
+    },
+  ) {
     const t = this.threads.get(id);
     if (!t) return;
     const prov = PROVIDERS.get(t.provider);
     let accountChanged = false;
     let selectedAccount: ClaudeAccount | undefined;
     if (patch.claudeAccount !== undefined) {
-      if (t.provider !== "claude") throw new Error("Account selection is available only for Claude threads.");
+      if (t.provider !== "claude")
+        throw new Error("Account selection is available only for Claude threads.");
       const account = normalizeClaudeAccount(patch.claudeAccount);
       accountChanged = account !== normalizeClaudeAccount(t.claudeAccount);
-      if (accountChanged && (t.status === "running" || t.sessionId || t.forkFrom)) throw new Error("Choose the Claude account in a new thread. Existing sessions keep their original account.");
+      if (accountChanged && (t.status === "running" || t.sessionId || t.forkFrom))
+        throw new Error(
+          "Choose the Claude account in a new thread. Existing sessions keep their original account.",
+        );
       requireClaudeAccount(account);
       selectedAccount = account;
     }
     if (patch.mode && !prov?.modes.includes(patch.mode)) patch.mode = undefined;
     if (patch.model && !prov?.models().includes(patch.model)) patch.model = undefined;
-    if (patch.advisor && patch.advisor !== "default" && !prov?.advisors?.includes(patch.advisor)) patch.advisor = undefined;
-    const effort = patch.model || patch.effort ? this.validEffort(prov, patch.model || t.model, patch.effort || "default") : t.effort;
-    if (t.status === "running" && (patch.mode || patch.model || patch.effort || patch.advisor)) throw new Error("Stop the running turn before changing mode, model or effort.");
+    if (patch.advisor && patch.advisor !== "default" && !prov?.advisors?.includes(patch.advisor))
+      patch.advisor = undefined;
+    const effort =
+      patch.model || patch.effort
+        ? this.validEffort(prov, patch.model || t.model, patch.effort || "default")
+        : t.effort;
+    if (t.status === "running" && (patch.mode || patch.model || patch.effort || patch.advisor))
+      throw new Error("Stop the running turn before changing mode, model or effort.");
     const before = { mode: t.mode, model: t.model, effort: t.effort, advisor: t.advisor };
     if (selectedAccount) t.claudeAccount = selectedAccount;
     if (patch.mode) t.mode = patch.mode;
-    if (patch.model && patch.model !== t.model) { delete t.context; delete t.resolvedModel; } // the old model's window is no longer authoritative
+    if (patch.model && patch.model !== t.model) {
+      delete t.context;
+      delete t.resolvedModel;
+    } // the old model's window is no longer authoritative
     if (patch.model) t.model = patch.model;
     t.effort = effort;
     if (patch.advisor) t.advisor = patch.advisor;
@@ -490,9 +727,11 @@ export class Threads {
     }
     if (accountChanged) this.kill(id, "settings", true);
     if (patch.mode || patch.model || patch.effort || patch.advisor) {
-      const live = this.live.get(id), after = { mode: t.mode, model: t.model, effort: t.effort, advisor: t.advisor };
+      const live = this.live.get(id),
+        after = { mode: t.mode, model: t.model, effort: t.effort, advisor: t.advisor };
       // the idle process takes the new settings in place, or restarts with new flags (history kept via the harness's session)
-      if (!live?.agent.alive || live.interrupting || !live.agent.configure?.(before, after)) this.kill(id, "settings", true);
+      if (!live?.agent.alive || live.interrupting || !live.agent.configure?.(before, after))
+        this.kill(id, "settings", true);
     }
     this.touch(t);
   }
@@ -502,7 +741,12 @@ export class Threads {
   // With `provider` set to another agent the fork switches harness: its native session cannot carry over, so it always replays text.
   // The same holds for another Claude account, whose profile cannot read this account's sessions. `pick` sets the fork's model,
   // effort, permission mode and Claude account; anything left out keeps the source's choice.
-  fork(id: string, provider?: string, recent = false, pick: { model?: string; effort?: string; mode?: string; claudeAccount?: string } = {}): Thread {
+  fork(
+    id: string,
+    provider?: string,
+    recent = false,
+    pick: { model?: string; effort?: string; mode?: string; claudeAccount?: string } = {},
+  ): Thread {
     const src = this.threads.get(id);
     if (!src) throw new Error("Unknown thread");
     const target = provider && provider !== src.provider ? PROVIDERS.get(provider) : undefined;
@@ -512,7 +756,8 @@ export class Threads {
       if (!st.ok) throw new Error(`${target.label} is not ready. ${st.hint ?? ""}`.trim());
       if (!target.defaultModel()) throw new Error(`${target.label} has no models available.`);
     }
-    if (src.status === "running") throw new Error("Wait for the current turn to finish before forking.");
+    if (src.status === "running")
+      throw new Error("Wait for the current turn to finish before forking.");
     const now = Date.now();
     const t: Thread = {
       id: crypto.randomUUID(),
@@ -523,7 +768,11 @@ export class Threads {
       model: target ? target.defaultModel() : src.model,
       effort: target ? "default" : src.effort,
       advisor: target ? undefined : src.advisor,
-      ...(!target && src.provider === "claude" ? { claudeAccount: normalizeClaudeAccount(src.claudeAccount) } : target?.id === "claude" ? { claudeAccount: "sunny" as const } : {}),
+      ...(!target && src.provider === "claude"
+        ? { claudeAccount: normalizeClaudeAccount(src.claudeAccount) }
+        : target?.id === "claude"
+          ? { claudeAccount: "sunny" as const }
+          : {}),
       context: target || recent ? undefined : src.context,
       status: "idle",
       cost: 0,
@@ -532,24 +781,34 @@ export class Threads {
     };
     const prov = target ?? PROVIDERS.get(src.provider);
     if (pick.model && prov?.models().includes(pick.model)) t.model = pick.model;
-    if (pick.effort || t.model !== src.model) t.effort = this.validEffort(prov, t.model, pick.effort ?? t.effort);
+    if (pick.effort || t.model !== src.model)
+      t.effort = this.validEffort(prov, t.model, pick.effort ?? t.effort);
     if (pick.mode && prov?.modes.includes(pick.mode as Mode)) t.mode = pick.mode as Mode;
-    if (t.provider === "claude" && pick.claudeAccount !== undefined) t.claudeAccount = requireClaudeAccount(pick.claudeAccount);
-    const otherAccount = !target && src.provider === "claude" && t.claudeAccount !== normalizeClaudeAccount(src.claudeAccount);
+    if (t.provider === "claude" && pick.claudeAccount !== undefined)
+      t.claudeAccount = requireClaudeAccount(pick.claudeAccount);
+    const otherAccount =
+      !target &&
+      src.provider === "claude" &&
+      t.claudeAccount !== normalizeClaudeAccount(src.claudeAccount);
     if (otherAccount) t.context = undefined;
     const log = (x: string) => path.join(LOG_DIR, `${x}.jsonl`);
     const hasHistory = fs.existsSync(log(src.id));
     if (hasHistory) fs.copyFileSync(log(src.id), log(t.id));
-    if (fs.existsSync(threadDir(src.id))) fs.cpSync(threadDir(src.id), threadDir(t.id), { recursive: true });
+    if (fs.existsSync(threadDir(src.id)))
+      fs.cpSync(threadDir(src.id), threadDir(t.id), { recursive: true });
     if (recent) {
-      if (hasHistory) { t.replay = true; t.replayLimit = 6000; }
+      if (hasHistory) {
+        t.replay = true;
+        t.replayLimit = 6000;
+      }
     } else if (target || otherAccount) {
       if (hasHistory) t.replay = true;
     } else if (src.provider === "claude") {
       if (src.sessionId) t.forkFrom = src.sessionId;
     } else if (src.provider === "pi") {
       const dir = path.join(DATA_DIR, "pi-sessions", src.id);
-      if (fs.existsSync(dir)) fs.cpSync(dir, path.join(DATA_DIR, "pi-sessions", t.id), { recursive: true });
+      if (fs.existsSync(dir))
+        fs.cpSync(dir, path.join(DATA_DIR, "pi-sessions", t.id), { recursive: true });
     } else if (hasHistory) t.replay = true;
     this.threads.set(t.id, t);
     this.persist();
@@ -595,36 +854,73 @@ export class Threads {
   // With `since` (the last line a cached view holds) it is only the lines after that, or a full page when too many arrived meanwhile.
   // `small` (phones) gets 60% of the events and half the bytes: less to download and draw on every open and older page.
   page(id: string, before?: number, since?: number, small = false) {
-    const limit = small ? Math.ceil(PAGE * 0.6) : PAGE, maxBytes = small ? PAGE_BYTES / 2 : PAGE_BYTES;
+    const limit = small ? Math.ceil(PAGE * 0.6) : PAGE,
+      maxBytes = small ? PAGE_BYTES / 2 : PAGE_BYTES;
     const at = performance.now();
     const file = path.join(LOG_DIR, `${id}.jsonl`);
-    const delta = since != null && before == null ? this.historyIndex.after(file, since, PAGE) : null;
+    const delta =
+      since != null && before == null ? this.historyIndex.after(file, since, PAGE) : null;
     const page = delta || this.historyIndex.read(file, before, limit);
-    let items = page.events.map((e, i) => ({ line: page.start + i, e })).filter(({ e }) => !NOISE.has(kindOf(e))).map(({ line, e }) => {
-      if (e?.type === "user" && Array.isArray(e.message?.content)) e = { ...e, message: { ...e.message, content: e.message.content.map((c: any) => (c?.type === "tool_result" && typeof c.content === "string" && c.content.length > RESULT_CLIP ? { ...c, content: clip(c.content, RESULT_CLIP) } : c)) } };
-      e = historyWireEvent(e);
-      return { line, e, size: JSON.stringify(e).length };
-    });
+    let items = page.events
+      .map((e, i) => ({ line: page.start + i, e }))
+      .filter(({ e }) => !NOISE.has(kindOf(e)))
+      .map(({ line, e }) => {
+        if (e?.type === "user" && Array.isArray(e.message?.content))
+          e = {
+            ...e,
+            message: {
+              ...e.message,
+              content: e.message.content.map((c: any) =>
+                c?.type === "tool_result" &&
+                typeof c.content === "string" &&
+                c.content.length > RESULT_CLIP
+                  ? { ...c, content: clip(c.content, RESULT_CLIP) }
+                  : c,
+              ),
+            },
+          };
+        e = historyWireEvent(e);
+        return { line, e, size: JSON.stringify(e).length };
+      });
     let start = page.start;
     let rest = items.reduce((n, x) => n + x.size, 0);
     if (!delta && rest > maxBytes && items.length > 1) {
       // Too big: begin at the earliest later user message that fits, else just the newest PAGE events (mid-turn, like an unaligned page).
-      let cut = items.findIndex((x) => (rest -= x.size) + x.size <= maxBytes && x.e?.type === "user_input");
+      let cut = items.findIndex(
+        (x) => (rest -= x.size) + x.size <= maxBytes && x.e?.type === "user_input",
+      );
       if (cut < 0) cut = Math.max(0, items.length - limit);
-      if (cut > 0) { start = items[cut].line; items = items.slice(cut); }
+      if (cut > 0) {
+        start = items[cut].line;
+        items = items.slice(cut);
+      }
     }
-    return { ...page, start, events: items.map((x) => x.e), questions: this.questions.list(id), ...(delta ? { delta: true } : {}), server_ms: Math.round((performance.now() - at) * 10) / 10 };
+    return {
+      ...page,
+      start,
+      events: items.map((x) => x.e),
+      questions: this.questions.list(id),
+      ...(delta ? { delta: true } : {}),
+      server_ms: Math.round((performance.now() - at) * 10) / 10,
+    };
   }
 
   private log(id: string, ev: unknown) {
-    fs.appendFileSync(path.join(LOG_DIR, `${id}.jsonl`), JSON.stringify(ev) + "\n", { mode: 0o600 });
+    fs.appendFileSync(path.join(LOG_DIR, `${id}.jsonl`), JSON.stringify(ev) + "\n", {
+      mode: 0o600,
+    });
   }
 
   private publish(id: string, ev: any, persistIt = true) {
     if (!persistIt) return void this.emit({ t: "event", thread: id, event: ev });
     if (ev && typeof ev === "object" && ev.ts == null) ev.ts = Date.now(); // server receive time: logs stay analyzable whatever the harness stamps
     this.log(id, ev);
-    this.emit({ t: "event", thread: id, event: ev, seq: this.historyIndex.count(path.join(LOG_DIR, `${id}.jsonl`)) });
+    this.emit({
+      t: "event",
+      thread: id,
+      event: ev,
+      seq: this.historyIndex.count(path.join(LOG_DIR, `${id}.jsonl`)),
+    });
   }
 
   private setCommands(provider: string, list: Command[]) {
@@ -635,7 +931,11 @@ export class Threads {
   }
 
   private notify(t: Thread, kind: ThreadNotice["kind"]) {
-    try { this.onNotification?.({ kind, thread: t.id, title: t.title }); } catch { /* notification transport cannot interrupt a turn */ }
+    try {
+      this.onNotification?.({ kind, thread: t.id, title: t.title });
+    } catch {
+      /* notification transport cannot interrupt a turn */
+    }
   }
 
   private start(t: Thread, warm = false): Live {
@@ -644,17 +944,40 @@ export class Threads {
     if (t.issueRun) {
       assertAutomationSandbox(t);
       // A model removed from the approved list (retired upstream) is re-selected, not kept: the run continues on a working model.
-      if (t.provider === "pi") t.model = selectAutomationPiModel(prov.models(), isAutomationPiModel(t.model) ? t.model : undefined);
+      if (t.provider === "pi")
+        t.model = selectAutomationPiModel(
+          prov.models(),
+          isAutomationPiModel(t.model) ? t.model : undefined,
+        );
     }
     const proxy = headroom.url();
-    const inherited = (t.provider === "claude" ? process.env.ANTHROPIC_BASE_URL : process.env.OPENAI_BASE_URL)?.replace(/\/+$/, "");
+    const inherited = (
+      t.provider === "claude" ? process.env.ANTHROPIC_BASE_URL : process.env.OPENAI_BASE_URL
+    )?.replace(/\/+$/, "");
     const managed = t.provider === "claude" ? headroom.state().url : `${headroom.state().url}/v1`;
-    const proxyUrl = ["claude", "codex"].includes(t.provider) && (!inherited || inherited === managed) ? proxy : undefined;
-    const live: Live = { agent: undefined as unknown as Agent, aborted: false, spawnAt: Date.now(), warm, held: [], proxyUrl };
+    const proxyUrl =
+      ["claude", "codex"].includes(t.provider) && (!inherited || inherited === managed)
+        ? proxy
+        : undefined;
+    const live: Live = {
+      agent: undefined as unknown as Agent,
+      aborted: false,
+      spawnAt: Date.now(),
+      warm,
+      held: [],
+      proxyUrl,
+    };
     const ready = () => {
       if (live.readyAt != null) return;
       live.readyAt = Date.now();
-      timed(() => timing?.recordProcess({ thread: t.id, provider: t.provider, kind: "ready", ms: live.readyAt! - live.spawnAt! }));
+      timed(() =>
+        timing?.recordProcess({
+          thread: t.id,
+          provider: t.provider,
+          kind: "ready",
+          ms: live.readyAt! - live.spawnAt!,
+        }),
+      );
     };
     timed(() => timing?.recordProcess({ thread: t.id, provider: t.provider, kind: "spawn" }));
     const ctx: AgentCtx = {
@@ -665,33 +988,78 @@ export class Threads {
         if (fromProcess(ev)) ready();
         live.heardAt = Date.now();
         if (live.aborted) return;
-        if (live.interrupting) { if (ev.type === "result") { clearTimeout(live.interrupting); live.interrupting = undefined; } return; }
-        if (live.held) { if (live.held.length < 500) live.held.push(ev); }
-        else if (this.live.get(t.id) === live) this.onEvent(t, ev);
+        if (live.interrupting) {
+          if (ev.type === "result") {
+            clearTimeout(live.interrupting);
+            live.interrupting = undefined;
+          }
+          return;
+        }
+        if (live.held) {
+          if (live.held.length < 500) live.held.push(ev);
+        } else if (this.live.get(t.id) === live) this.onEvent(t, ev);
       },
-      commands: (list) => { ready(); this.setCommands(t.provider, list); },
+      commands: (list) => {
+        ready();
+        this.setCommands(t.provider, list);
+      },
       exited: (info) => {
-        timed(() => timing?.recordProcess({ thread: t.id, provider: t.provider, kind: "exit", ms: Date.now() - live.spawnAt!, code: info.code, signal: info.signal, reason: live.exitReason ?? (info.aborted || live.aborted ? "stop" : "crash") }));
+        timed(() =>
+          timing?.recordProcess({
+            thread: t.id,
+            provider: t.provider,
+            kind: "exit",
+            ms: Date.now() - live.spawnAt!,
+            code: info.code,
+            signal: info.signal,
+            reason: live.exitReason ?? (info.aborted || live.aborted ? "stop" : "crash"),
+          }),
+        );
         const current = this.live.get(t.id) === live;
         if (current) this.live.delete(t.id);
-        if (live.rewarm) { live.rewarm = false; setImmediate(() => this.warm(t.id)); } // the old process no longer holds the session
-        if (current && t.background) { delete t.background; this.emit({ t: "thread", thread: t }); }
+        if (live.rewarm) {
+          live.rewarm = false;
+          setImmediate(() => this.warm(t.id));
+        } // the old process no longer holds the session
+        if (current && t.background) {
+          delete t.background;
+          this.emit({ t: "thread", thread: t });
+        }
         if (!current || t.status !== "running") return; // a replaced or aborted agent's exit says nothing about the new turn
-        const notifyFailure = !t.operation && !info.aborted && !live.aborted && this.notificationTurns.delete(t.id);
+        const notifyFailure =
+          !t.operation && !info.aborted && !live.aborted && this.notificationTurns.delete(t.id);
         this.notificationTurns.delete(t.id);
         this.cancelQuestions(t.id);
         t.status = "idle";
         delete t.operation;
         if (!info.aborted && !live.aborted) {
-          this.publish(t.id, { type: "console_error", text: `${prov.label} exited (${info.signal ?? info.code}). ${info.stderr.trim().slice(-500)}` });
+          this.publish(t.id, {
+            type: "console_error",
+            text: `${prov.label} exited (${info.signal ?? info.code}). ${info.stderr.trim().slice(-500)}`,
+          });
         }
         if (notifyFailure) this.notify(t, "failed");
         this.endTiming(t, { subtype: "exited", is_error: true });
         this.touch(t);
-        if (parseCommand(this.queues.get(t.id)?.[0]?.text || "")?.name === "compact") this.drain(t.id);
+        if (parseCommand(this.queues.get(t.id)?.[0]?.text || "")?.name === "compact")
+          this.drain(t.id);
       },
     };
-    live.agent = prov.start({ id: t.id, cwd: t.cwd, mode: t.mode, model: t.model, effort: t.effort, advisor: t.advisor, claudeAccount: t.claudeAccount, sessionId: t.sessionId, forkFrom: t.sessionId ? undefined : t.forkFrom, issueRun: t.issueRun }, ctx);
+    live.agent = prov.start(
+      {
+        id: t.id,
+        cwd: t.cwd,
+        mode: t.mode,
+        model: t.model,
+        effort: t.effort,
+        advisor: t.advisor,
+        claudeAccount: t.claudeAccount,
+        sessionId: t.sessionId,
+        forkFrom: t.sessionId ? undefined : t.forkFrom,
+        issueRun: t.issueRun,
+      },
+      ctx,
+    );
     this.live.set(t.id, live);
     if (!warm) this.release(t, live);
     return live;
@@ -701,27 +1069,47 @@ export class Threads {
     const held = live.held ?? [];
     live.held = undefined;
     live.warm = false;
-    for (const event of held) if (!live.aborted && this.live.get(t.id) === live) this.onEvent(t, event);
+    for (const event of held)
+      if (!live.aborted && this.live.get(t.id) === live) this.onEvent(t, event);
   }
 
   // Spawn the thread's agent ahead of the first send. No prompt is written, so no tokens are spent.
   warm(id: string): boolean {
     const t = this.threads.get(id);
-    if (WARM_MAX < 1 || this.closed || !t || t.archived || t.status !== "idle" || t.operation || this.live.get(id)?.agent.alive) return false;
+    if (
+      WARM_MAX < 1 ||
+      this.closed ||
+      !t ||
+      t.archived ||
+      t.status !== "idle" ||
+      t.operation ||
+      this.live.get(id)?.agent.alive
+    )
+      return false;
     if (!PROVIDERS.get(t.provider)?.status().ok) return false;
     const unused = [...this.live].filter(([, l]) => l.warm).map(([other]) => other); // oldest first
-    for (const other of unused.slice(0, Math.max(0, unused.length - WARM_MAX + 1))) this.kill(other, "warm-cap");
-    try { this.start(t, true); return true; }
-    catch { return false; }
+    for (const other of unused.slice(0, Math.max(0, unused.length - WARM_MAX + 1)))
+      this.kill(other, "warm-cap");
+    try {
+      this.start(t, true);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   // Canonical events from any harness. We only interpret the two that change thread state.
   private onEvent(t: Thread, ev: any) {
     const compacting = t.operation === "compact";
-    if (ev.type === "system" && ev.subtype === "background_tasks_changed" && Array.isArray(ev.tasks)) {
+    if (
+      ev.type === "system" &&
+      ev.subtype === "background_tasks_changed" &&
+      Array.isArray(ev.tasks)
+    ) {
       const n = ev.tasks.length;
       if ((t.background ?? 0) !== n) {
-        if (n) t.background = n; else delete t.background;
+        if (n) t.background = n;
+        else delete t.background;
         this.emit({ t: "thread", thread: t });
         if (!n) this.refreshIdleCompaction(t);
       }
@@ -729,20 +1117,43 @@ export class Threads {
     }
     if (ev.type === "subagent_wake") return this.wake(t, String(ev.text || ""));
     // Claude starts a turn by itself when a background subagent finishes after the turn ended: show it as running
-    if (ev.type === "system" && ev.subtype === "init" && t.status === "idle" && t.provider === "claude" && !compacting) {
+    if (
+      ev.type === "system" &&
+      ev.subtype === "init" &&
+      t.status === "idle" &&
+      t.provider === "claude" &&
+      !compacting
+    ) {
       t.status = "running";
       this.turns.set(t.id, { start: Date.now(), tools: {} });
       this.touch(t);
     }
     if (NOISE.has(kindOf(ev))) return;
     const clock = this.turns.get(t.id)?.clock;
-    if (clock) timed(() => { clock.event(ev); const live = this.live.get(t.id); if (live && clock.resolvedModel) live.model = clock.resolvedModel; });
-    if (t.provider === "codex" && ev.type === "system" && ev.subtype === "init" && typeof ev.model === "string") {
+    if (clock)
+      timed(() => {
+        clock.event(ev);
+        const live = this.live.get(t.id);
+        if (live && clock.resolvedModel) live.model = clock.resolvedModel;
+      });
+    if (
+      t.provider === "codex" &&
+      ev.type === "system" &&
+      ev.subtype === "init" &&
+      typeof ev.model === "string"
+    ) {
       t.resolvedModel = ev.model;
     }
     if (ev.type === "question") {
-      try { ev = this.questions.add(t.id, ev); }
-      catch { this.publish(t.id, { type: "console_error", text: "The agent sent an invalid question request." }); return; }
+      try {
+        ev = this.questions.add(t.id, ev);
+      } catch {
+        this.publish(t.id, {
+          type: "console_error",
+          text: "The agent sent an invalid question request.",
+        });
+        return;
+      }
       this.updateWaiting(t.id);
       if (!compacting && this.notificationTurns.has(t.id)) this.notify(t, "needs_input");
     }
@@ -753,7 +1164,7 @@ export class Threads {
     if (ev.type === "provider_usage") {
       const windows = codexWindows(ev.rateLimits);
       if (windows.length) {
-        const merged = new Map((usage.get(t.provider)?.windows || []).map(w => [w.label, w]));
+        const merged = new Map((usage.get(t.provider)?.windows || []).map((w) => [w.label, w]));
         for (const w of windows) merged.set(w.label, w); // app-server quota notifications can be sparse
         usage.record(t.provider, { windows: [...merged.values()] });
       }
@@ -764,25 +1175,49 @@ export class Threads {
       if (windows.length) {
         const provider = t.provider === "claude" ? claudeUsageKey(t.claudeAccount) : t.provider;
         if (provider.startsWith("claude")) {
-          const observedAt = ev.usageProvider === provider && Number.isFinite(ev.observedAt) ? ev.observedAt : Date.now();
+          const observedAt =
+            ev.usageProvider === provider && Number.isFinite(ev.observedAt)
+              ? ev.observedAt
+              : Date.now();
           ev = { ...ev, observedAt, usageProvider: provider };
-          usage.record(provider, { windows }, ev.observedAt, { observedAt: ev.observedAt, usageProvider: provider, ...(typeof ev.session_id === "string" && typeof ev.uuid === "string" ? { sourceSessionId: ev.session_id, sourceEventUuid: ev.uuid } : {}) });
+          usage.record(provider, { windows }, ev.observedAt, {
+            observedAt: ev.observedAt,
+            usageProvider: provider,
+            ...(typeof ev.session_id === "string" && typeof ev.uuid === "string"
+              ? { sourceSessionId: ev.session_id, sourceEventUuid: ev.uuid }
+              : {}),
+          });
         } else usage.record(provider, { windows });
       }
     }
-    if (ev.type === "token_usage") { const turn = this.turns.get(t.id); if (turn) turn.usage = ev; }
+    if (ev.type === "token_usage") {
+      const turn = this.turns.get(t.id);
+      if (turn) turn.usage = ev;
+    }
     if (ev.type === "run_settings" || ev.type === "token_usage") {
-      t.lastRun = { ...(ev.type === "run_settings" ? {} : t.lastRun), ...Object.fromEntries(Object.entries(ev).filter(([k]) => k !== "type")) };
+      t.lastRun = {
+        ...(ev.type === "run_settings" ? {} : t.lastRun),
+        ...Object.fromEntries(Object.entries(ev).filter(([k]) => k !== "type")),
+      };
       this.touch(t);
       return;
     }
     if (ev.type === "context_usage") {
       // not part of the conversation: remember it on the thread so the context meter survives reloads
-      t.context = { used: ev.reset ? undefined : ev.used ?? t.context?.used, max: ev.max ?? t.context?.max, ...(ev.source ? { source: ev.source } : {}) };
+      t.context = {
+        used: ev.reset ? undefined : (ev.used ?? t.context?.used),
+        max: ev.max ?? t.context?.max,
+        ...(ev.source ? { source: ev.source } : {}),
+      };
       this.emit({ t: "thread", thread: t });
       return;
     }
-    if (ev.type === "system" && ev.subtype === "init" && ev.session_id && t.sessionId !== ev.session_id) {
+    if (
+      ev.type === "system" &&
+      ev.subtype === "init" &&
+      ev.session_id &&
+      t.sessionId !== ev.session_id
+    ) {
       if (t.forkFrom) this.accounting.seedFork(ev.session_id, t.forkFrom);
       t.sessionId = ev.session_id;
       delete t.forkFrom; // the fork now has its own session
@@ -798,29 +1233,55 @@ export class Threads {
     }
     if (ev.type === "assistant") {
       const turn = this.turns.get(t.id);
-      if (turn) for (const b of ev.message?.content ?? []) if (b?.type === "tool_use") turn.tools[b.name] = (turn.tools[b.name] ?? 0) + 1;
+      if (turn)
+        for (const b of ev.message?.content ?? [])
+          if (b?.type === "tool_use") turn.tools[b.name] = (turn.tools[b.name] ?? 0) + 1;
     }
     if (ev.type === "result") {
       this.cancelQuestions(t.id);
       const live = this.live.get(t.id);
       // Claude answers /compact with an empty result straight away, then compacts and sends compact_boundary and the real result
-      if (t.operation === "compact" && t.provider === "claude" && live && !live.compactConfirmed && !live.compactWait && !ev.is_error && !ev.num_turns) {
-        live.compactWait = setTimeout(() => { live.compactWait = undefined; if (t.operation === "compact" && !live.compactConfirmed) this.onEvent(t, { ...ev, is_error: true, subtype: "error" }); }, 10 * 60_000);
+      if (
+        t.operation === "compact" &&
+        t.provider === "claude" &&
+        live &&
+        !live.compactConfirmed &&
+        !live.compactWait &&
+        !ev.is_error &&
+        !ev.num_turns
+      ) {
+        live.compactWait = setTimeout(() => {
+          live.compactWait = undefined;
+          if (t.operation === "compact" && !live.compactConfirmed)
+            this.onEvent(t, { ...ev, is_error: true, subtype: "error" });
+        }, 10 * 60_000);
         return;
       }
-      if (live?.compactWait) { clearTimeout(live.compactWait); live.compactWait = undefined; }
+      if (live?.compactWait) {
+        clearTimeout(live.compactWait);
+        live.compactWait = undefined;
+      }
       this.finishTurn(t, ev);
       // Mark thread as quota-paused if turn ended due to rate limit and quota is exhausted
       if (ev.is_error && !t.archived && !t.quotaPaused) {
         const errMsg = String(ev.error?.message ?? ev.error ?? "");
-        const isRateLimit = /\b429\b|rate.?limit|too many requests|usage.?limit|quota/i.test(errMsg);
+        const isRateLimit = /\b429\b|rate.?limit|too many requests|usage.?limit|quota/i.test(
+          errMsg,
+        );
         if (isRateLimit) {
-          const providerKey = t.provider === "claude" ? claudeUsageKey(t.claudeAccount) : t.provider;
+          const providerKey =
+            t.provider === "claude" ? claudeUsageKey(t.claudeAccount) : t.provider;
           if (usage.exhausted(providerKey)) {
             const u = usage.get(providerKey);
-            const window = u?.windows.find(w => w.used >= w.limit && w.resetsAt && w.resetsAt > Date.now());
+            const window = u?.windows.find(
+              (w) => w.used >= w.limit && w.resetsAt && w.resetsAt > Date.now(),
+            );
             if (window) {
-              t.quotaPaused = { provider: providerKey, windowLabel: window.label, resetsAt: window.resetsAt };
+              t.quotaPaused = {
+                provider: providerKey,
+                windowLabel: window.label,
+                resetsAt: window.resetsAt,
+              };
               this.touch(t);
             }
           }
@@ -833,9 +1294,19 @@ export class Threads {
       if (t.operation === "compact") {
         if (!ev.is_error && !this.live.get(t.id)?.compactConfirmed) {
           ev = { ...ev, is_error: true, subtype: "error" };
-          this.publish(t.id, { type: "console_error", text: "The agent did not confirm compaction. Context has not been marked as compacted." });
+          this.publish(t.id, {
+            type: "console_error",
+            text: "The agent did not confirm compaction. Context has not been marked as compacted.",
+          });
         }
-        this.publish(t.id, { type: "command_status", command: "compact", status: ev.is_error ? "failed" : "completed", text: ev.is_error ? "Context compaction failed." : "Context compacted. The conversation transcript is kept." });
+        this.publish(t.id, {
+          type: "command_status",
+          command: "compact",
+          status: ev.is_error ? "failed" : "completed",
+          text: ev.is_error
+            ? "Context compaction failed."
+            : "Context compacted. The conversation transcript is kept.",
+        });
         delete t.operation;
       }
       t.lastRun = { ...t.lastRun, duration_ms: ev.duration_ms };
@@ -850,17 +1321,37 @@ export class Threads {
       this.touch(t);
       this.recycleRouting(t.id);
       brainCommit(); // agents may have written wiki pages this turn; keep the shared brain's git history current
-      if (t.status === "idle" && (!ev.is_error || parseCommand(this.queues.get(t.id)?.[0]?.text || "")?.name === "compact")) this.drain(t.id);
+      if (
+        t.status === "idle" &&
+        (!ev.is_error || parseCommand(this.queues.get(t.id)?.[0]?.text || "")?.name === "compact")
+      )
+        this.drain(t.id);
       if (t.status === "idle" && !ev.is_error) this.wake(t);
     }
     this.publish(t.id, ev, ev.type !== "stream_event");
-    if (ev.type === "result" && t.schedule && t.status === "idle") try { this.onTurnEnd?.(t, ev); } catch {}
-    if (ev.type === "result" && t.status === "idle") try { this.onTurnDone?.(t, ev); } catch {}
-    if (ev.type === "result" && t.issueRun && t.status === "idle") try { this.onIssueTurnEnd?.(t, ev); } catch {}
+    if (ev.type === "result" && t.schedule && t.status === "idle")
+      try {
+        this.onTurnEnd?.(t, ev);
+      } catch {}
+    if (ev.type === "result" && t.status === "idle")
+      try {
+        this.onTurnDone?.(t, ev);
+      } catch {}
+    if (ev.type === "result" && t.issueRun && t.status === "idle")
+      try {
+        this.onIssueTurnEnd?.(t, ev);
+      } catch {}
     if (ev.type === "assistant") {
       for (const b of ev.message?.content ?? []) {
         if (b?.type === "tool_use" && needsLabel(b.name, b.input)) {
-          const command = b.name === "Bash" ? String(b.input.command ?? "") : b.name === "Read" ? readSketch(b.input) : b.name === "Edit" ? editSketch(b.input) : mcpSketch(b.name, b.input);
+          const command =
+            b.name === "Bash"
+              ? String(b.input.command ?? "")
+              : b.name === "Read"
+                ? readSketch(b.input)
+                : b.name === "Edit"
+                  ? editSketch(b.input)
+                  : mcpSketch(b.name, b.input);
           this.labeler.request({ thread: t.id, id: b.id, name: b.name, command, cwd: t.cwd });
         }
       }
@@ -874,38 +1365,70 @@ export class Threads {
     if (text) (live.wakes ??= []).push(text);
     if (!live.wakes?.length) return;
     setTimeout(() => {
-      if (this.live.get(t.id) !== live || t.status !== "idle" || this.queues.get(t.id)?.length || !live.wakes?.length) return;
+      if (
+        this.live.get(t.id) !== live ||
+        t.status !== "idle" ||
+        this.queues.get(t.id)?.length ||
+        !live.wakes?.length
+      )
+        return;
       const msg = live.wakes.splice(0).join("\n\n");
-      try { this.send(t.id, msg, { auto: "subagent" }); }
-      catch (e: any) { this.publish(t.id, { type: "console_error", text: `Could not resume after the subagent finished: ${e.message}` }); }
+      try {
+        this.send(t.id, msg, { auto: "subagent" });
+      } catch (e: any) {
+        this.publish(t.id, {
+          type: "console_error",
+          text: `Could not resume after the subagent finished: ${e.message}`,
+        });
+      }
     }, 50);
   }
 
   private finishTurn(t: Thread, ev: any) {
-    const measured = ev.modelUsage ? this.accounting.consume(ev.session_id || t.sessionId || t.id, ev) : undefined;
+    const measured = ev.modelUsage
+      ? this.accounting.consume(ev.session_id || t.sessionId || t.id, ev)
+      : undefined;
     if (measured?.duplicate) return;
     const turn = this.turns.get(t.id);
     if (!turn) return;
     this.endTiming(t, ev);
     this.turns.delete(t.id);
-    const row: Turn = { ts: turn.start, thread: t.id, provider: t.provider, model: t.lastRun?.model || t.model, effort: t.effort, ms: ev.duration_ms, accounting: 2 };
+    const row: Turn = {
+      ts: turn.start,
+      thread: t.id,
+      provider: t.provider,
+      model: t.lastRun?.model || t.model,
+      effort: t.effort,
+      ms: ev.duration_ms,
+      accounting: 2,
+    };
     if (Object.keys(turn.tools).length) row.tools = turn.tools;
     if (ev.is_error) row.err = 1;
     if (measured) Object.assign(row, measured);
     else if (t.provider === "codex") Object.assign(row, codexAccounting(turn.usage, row.model!));
     else if (ev.usageModels) Object.assign(row, piAccounting(ev.usageModels));
-    if (row.cost != null) { t.cost += row.cost; t.costMeasured = true; }
-    try { recordTurn(row); } catch {}
+    if (row.cost != null) {
+      t.cost += row.cost;
+      t.costMeasured = true;
+    }
+    try {
+      recordTurn(row);
+    } catch {}
   }
 
   // Close the turn's clock: one timing row, and the compact facts the Run details panel shows for the last run.
   private endTiming(t: Thread, ev: any) {
-    const turn = this.turns.get(t.id), clock = turn?.clock;
+    const turn = this.turns.get(t.id),
+      clock = turn?.clock;
     if (!clock) return;
     turn.clock = undefined;
     timed(() => {
       const live = this.live.get(t.id);
-      const row = clock.finish(ev, Date.now(), live?.readyAt != null && live.spawnAt != null ? live.readyAt - live.spawnAt : null);
+      const row = clock.finish(
+        ev,
+        Date.now(),
+        live?.readyAt != null && live.spawnAt != null ? live.readyAt - live.spawnAt : null,
+      );
       t.lastRun = { ...t.lastRun, timing: runFacts(row) };
       timing?.recordTurn(t.id, row);
     });
@@ -915,61 +1438,145 @@ export class Threads {
     const command = /^\/\s*$/.test(text.trim()) ? { name: "help", args: "" } : parseCommand(text);
     if (!command) return false;
     const { name, args } = command;
-    const host = CONSOLE_COMMANDS.some(c => c.name === name);
+    const host = CONSOLE_COMMANDS.some((c) => c.name === name);
     if (!host) {
       if (t.provider === "claude" || t.provider === "pi") return false; // their native command/skill registries are authoritative, including commands in the first prompt
-      throw new Error(`/${name} is not available for this agent. Type /help for supported commands.`);
+      throw new Error(
+        `/${name} is not available for this agent. Type /help for supported commands.`,
+      );
     }
-    if (Array.isArray(attachments) && attachments.length) throw new Error("Run commands without attachments.");
-    if (name === "stop") { this.abort(t.id); return true; }
-    if (name === "compact") { this.compact(t.id, args); return true; }
+    if (Array.isArray(attachments) && attachments.length)
+      throw new Error("Run commands without attachments.");
+    if (name === "stop") {
+      this.abort(t.id);
+      return true;
+    }
+    if (name === "compact") {
+      this.compact(t.id, args);
+      return true;
+    }
     if (name === "model" && args) {
-      if (!PROVIDERS.get(t.provider)?.models().includes(args)) throw new Error("Unknown model. Choose one from the model menu.");
+      if (!PROVIDERS.get(t.provider)?.models().includes(args))
+        throw new Error("Unknown model. Choose one from the model menu.");
       this.update(t.id, { model: args });
     } else if (name === "effort" && args) this.update(t.id, { effort: args });
-    const message = name === "help" ? this.getCommands()[t.provider].map(c => `/${c.name}${c.argumentHint ? " " + c.argumentHint : ""} — ${c.description}`).join("\n")
-      : `${PROVIDERS.get(t.provider)?.label}: ${t.model} · effort ${t.effort || "default"} · ${t.operation === "compact" ? "compacting" : t.status}${t.context?.used != null ? ` · ${t.context.used.toLocaleString()} context tokens` : ""}`;
-    this.publish(t.id, { type: "command_status", command: name, status: "completed", text: message });
+    const message =
+      name === "help"
+        ? this.getCommands()
+            [t.provider].map(
+              (c) => `/${c.name}${c.argumentHint ? " " + c.argumentHint : ""} — ${c.description}`,
+            )
+            .join("\n")
+        : `${PROVIDERS.get(t.provider)?.label}: ${t.model} · effort ${t.effort || "default"} · ${t.operation === "compact" ? "compacting" : t.status}${t.context?.used != null ? ` · ${t.context.used.toLocaleString()} context tokens` : ""}`;
+    this.publish(t.id, {
+      type: "command_status",
+      command: name,
+      status: "completed",
+      text: message,
+    });
     return true;
   }
 
   compact(id: string, instructions = "") {
     const t = this.threads.get(id);
     if (!t) throw new Error("Unknown thread");
-    if (t.provider === "codex" && instructions) throw new Error("Codex /compact does not accept extra instructions.");
-    if (t.operation === "compact" || this.queues.get(id)?.some(q => parseCommand(q.text)?.name === "compact")) throw new Error("Context compaction is already running or queued.");
-    if (t.status === "running") return this.whileRunning(t, `/compact${instructions ? " " + instructions : ""}`, { mode: "queue" });
-    if (!fs.existsSync(path.join(LOG_DIR, `${id}.jsonl`)) || (t.provider === "codex" && !t.sessionId)) throw new Error("Send a message before compacting this thread.");
+    if (t.provider === "codex" && instructions)
+      throw new Error("Codex /compact does not accept extra instructions.");
+    if (
+      t.operation === "compact" ||
+      this.queues.get(id)?.some((q) => parseCommand(q.text)?.name === "compact")
+    )
+      throw new Error("Context compaction is already running or queued.");
+    if (t.status === "running")
+      return this.whileRunning(t, `/compact${instructions ? " " + instructions : ""}`, {
+        mode: "queue",
+      });
+    if (
+      !fs.existsSync(path.join(LOG_DIR, `${id}.jsonl`)) ||
+      (t.provider === "codex" && !t.sessionId)
+    )
+      throw new Error("Send a message before compacting this thread.");
     t.idleCompactionConsumedAt = t.lastUserActivityAt;
     this.idleCompactionTimers.cancel(id);
     delete t.idleCompactionDueAt;
     this.kill(id, "compact"); // native sessions resume from disk; never share a mutable session with an idle subprocess
     const live = this.start(t);
-    if (!live.agent.compact) { this.kill(id); throw new Error("This agent does not support context compaction."); }
+    if (!live.agent.compact) {
+      this.kill(id);
+      throw new Error("This agent does not support context compaction.");
+    }
     live.compactConfirmed = false;
     t.operation = "compact";
     t.status = "running";
-    this.publish(id, { type: "user_input", text: `/compact${instructions ? " " + instructions : ""}`, command: true, ts: Date.now() });
-    this.publish(id, { type: "command_status", command: "compact", status: "running", text: "Compacting context…" });
-    this.turns.set(id, { start: Date.now(), tools: {}, clock: new TurnClock({ provider: t.provider, alias: t.model, start: Date.now(), cold: true }) });
+    this.publish(id, {
+      type: "user_input",
+      text: `/compact${instructions ? " " + instructions : ""}`,
+      command: true,
+      ts: Date.now(),
+    });
+    this.publish(id, {
+      type: "command_status",
+      command: "compact",
+      status: "running",
+      text: "Compacting context…",
+    });
+    this.turns.set(id, {
+      start: Date.now(),
+      tools: {},
+      clock: new TurnClock({ provider: t.provider, alias: t.model, start: Date.now(), cold: true }),
+    });
     this.touch(t);
-    try { live.agent.compact(instructions); }
-    catch (error) { this.kill(id); delete t.operation; t.status = "idle"; this.touch(t); throw error; }
+    try {
+      live.agent.compact(instructions);
+    } catch (error) {
+      this.kill(id);
+      delete t.operation;
+      t.status = "idle";
+      this.touch(t);
+      throw error;
+    }
   }
 
   // `attachments` is untrusted browser input: [{id}] naming files already uploaded to this thread
   // While a turn is running a message either steers it (delivered to the agent now, picked up after its current tool call) or waits in
   // a queue for the turn to end. `mode: "queue"` forces the queue; so does an agent that cannot take input mid-turn.
   // `instructions` go to the agent after the text but stay out of the transcript bubble; `scheduled` labels a scheduled run's prompt.
-  send(id: string, text: string, opts: { auto?: "brain" | "subagent" | "quota-resume"; attachments?: unknown; mode?: "steer" | "queue"; delivery?: "queued"; questionAnswer?: true; queuedAt?: number; instructions?: string; scheduled?: string } = {}) {
+  send(
+    id: string,
+    text: string,
+    opts: {
+      auto?: "brain" | "subagent" | "quota-resume";
+      attachments?: unknown;
+      mode?: "steer" | "queue";
+      delivery?: "queued";
+      questionAnswer?: true;
+      queuedAt?: number;
+      instructions?: string;
+      scheduled?: string;
+    } = {},
+  ) {
     const t = this.threads.get(id);
     if (!t) throw new Error("Unknown thread");
     if (!opts.auto && !opts.questionAnswer && this.command(t, text, opts.attachments)) return;
     const incomingAttachments = resolveAttachments(id, opts.attachments);
-    if (!opts.auto && !opts.delivery && !opts.questionAnswer && text.trim() &&
-        !incomingAttachments.length && (t.status !== "running" || opts.mode !== "queue")) {
-      for (const question of this.questions.list(id).filter(q => q.async)) {
-        const result = this.questions.answer(id, question.id, {}, undefined, false, text, () => false);
+    if (
+      !opts.auto &&
+      !opts.delivery &&
+      !opts.questionAnswer &&
+      text.trim() &&
+      !incomingAttachments.length &&
+      (t.status !== "running" || opts.mode !== "queue")
+    ) {
+      for (const question of this.questions.list(id).filter((q) => q.async)) {
+        const result = this.questions.answer(
+          id,
+          question.id,
+          {},
+          undefined,
+          false,
+          text,
+          () => false,
+        );
         this.publish(id, result.event);
         this.updateWaiting(id);
       }
@@ -990,23 +1597,41 @@ export class Threads {
       return this.drain(id);
     }
     const attachments = incomingAttachments;
-    let prompt = withFileList(text, attachments) + (opts.instructions ? `\n\n---\n${opts.instructions}` : "");
+    let prompt =
+      withFileList(text, attachments) + (opts.instructions ? `\n\n---\n${opts.instructions}` : "");
     if (t.replay && !opts.auto) {
-      prompt = (t.replayLimit === 6000 ? recentPreamble(this.history(id)) : replayPreamble(this.history(id))) + prompt; // exclude this new message
+      prompt =
+        (t.replayLimit === 6000
+          ? recentPreamble(this.history(id))
+          : replayPreamble(this.history(id))) + prompt; // exclude this new message
       t.replay = false;
       delete t.replayLimit;
     }
     if (!opts.auto) delete t.archived; // writing to an archived thread puts it back to work (touch below persists it)
     this.recycleRouting(id);
     let live = this.live.get(id);
-    if (live?.interrupting) { this.kill(id, "stop"); live = undefined; } // its interrupted turn has not ended yet
+    if (live?.interrupting) {
+      this.kill(id, "stop");
+      live = undefined;
+    } // its interrupted turn has not ended yet
     const cold = !live || !live.agent.alive; // a pre-warmed agent counts as warm
     const start = Date.now();
     if (cold) live = this.start(t);
     live = live!;
     live.aborted = false;
     t.status = "running";
-    this.turns.set(id, { start, tools: {}, clock: new TurnClock({ provider: t.provider, alias: t.model, start, cold, model: live.model, queueMs: opts.queuedAt != null ? Math.max(0, start - opts.queuedAt) : undefined }) });
+    this.turns.set(id, {
+      start,
+      tools: {},
+      clock: new TurnClock({
+        provider: t.provider,
+        alias: t.model,
+        start,
+        cold,
+        model: live.model,
+        queueMs: opts.queuedAt != null ? Math.max(0, start - opts.queuedAt) : undefined,
+      }),
+    });
     this.publish(id, {
       type: "user_input",
       text,
@@ -1015,14 +1640,29 @@ export class Threads {
       ...(opts.delivery ? { delivery: opts.delivery } : {}),
       ...(opts.questionAnswer ? { questionAnswer: true } : {}),
       ...(opts.scheduled ? { scheduled: opts.scheduled } : {}),
-      ...(attachments.length ? { attachments: attachments.map(({ id, name, kind, media_type, size, n }) => ({ id, name, kind, media_type, size, ...(n ? { n } : {}) })) } : {}),
+      ...(attachments.length
+        ? {
+            attachments: attachments.map(({ id, name, kind, media_type, size, n }) => ({
+              id,
+              name,
+              kind,
+              media_type,
+              size,
+              ...(n ? { n } : {}),
+            })),
+          }
+        : {}),
     });
     this.touch(t);
     if (live.held) this.release(t, live); // a warm agent's start-up events, after the message as on a cold start
     if (opts.auto) this.notificationTurns.delete(id);
     else this.notificationTurns.add(id);
-    try { live.agent.send(prompt, attachments.filter((a) => a.kind === "image")); }
-    catch (error) {
+    try {
+      live.agent.send(
+        prompt,
+        attachments.filter((a) => a.kind === "image"),
+      );
+    } catch (error) {
       if (this.notificationTurns.delete(id)) this.notify(t, "failed");
       throw error;
     }
@@ -1039,12 +1679,16 @@ export class Threads {
     if (!t.titleLocked) void this.retitle(t, clean);
   }
 
-  private whileRunning(t: Thread, text: string, opts: { attachments?: unknown; mode?: "steer" | "queue"; questionAnswer?: true }) {
+  private whileRunning(
+    t: Thread,
+    text: string,
+    opts: { attachments?: unknown; mode?: "steer" | "queue"; questionAnswer?: true },
+  ) {
     const attachments = resolveAttachments(t.id, opts.attachments); // reject bad ids now, not when the queue drains
     const agent = this.live.get(t.id)?.agent;
     // A normal chat reply also releases a waiting tool; otherwise steering can sit behind that tool forever.
     if (opts.mode !== "queue" && !attachments.length && text.trim()) {
-      for (const question of this.questions.list(t.id).filter(q => !q.async)) {
+      for (const question of this.questions.list(t.id).filter((q) => !q.async)) {
         const result = this.questions.answer(t.id, question.id, {}, agent, false, text);
         this.publish(t.id, result.event);
         this.updateWaiting(t.id);
@@ -1052,21 +1696,48 @@ export class Threads {
       }
     }
     if (t.operation !== "compact" && opts.mode !== "queue" && agent?.steer) {
-      const accepted = () => { this.notificationTurns.add(t.id); this.notePrompt(t, text); this.publish(t.id, {
-        type: "user_input",
-        text,
-        ts: Date.now(),
-        delivery: "steer",
-        ...(opts.questionAnswer ? { questionAnswer: true } : {}),
-        ...(attachments.length ? { attachments: attachments.map(({ id, name, kind, media_type, size, n }) => ({ id, name, kind, media_type, size, ...(n ? { n } : {}) })) } : {}),
-      }); };
-      const delivery = agent.steer(withFileList(text, attachments), attachments.filter((a) => a.kind === "image"));
+      const accepted = () => {
+        this.notificationTurns.add(t.id);
+        this.notePrompt(t, text);
+        this.publish(t.id, {
+          type: "user_input",
+          text,
+          ts: Date.now(),
+          delivery: "steer",
+          ...(opts.questionAnswer ? { questionAnswer: true } : {}),
+          ...(attachments.length
+            ? {
+                attachments: attachments.map(({ id, name, kind, media_type, size, n }) => ({
+                  id,
+                  name,
+                  kind,
+                  media_type,
+                  size,
+                  ...(n ? { n } : {}),
+                })),
+              }
+            : {}),
+        });
+      };
+      const delivery = agent.steer(
+        withFileList(text, attachments),
+        attachments.filter((a) => a.kind === "image"),
+      );
       if (delivery instanceof Promise) {
         void delivery.then(accepted).catch((error) => {
           if (!this.threads.has(t.id) || this.live.get(t.id)?.agent !== agent) return;
-          this.publish(t.id, { type: "console_error", text: `Steering was not accepted: ${error.message}. Sending as the next message.` });
-          try { this.send(t.id, text, { ...opts, mode: "queue" }); }
-          catch (e: any) { this.publish(t.id, { type: "console_error", text: `Message could not be sent: ${e.message}` }); }
+          this.publish(t.id, {
+            type: "console_error",
+            text: `Steering was not accepted: ${error.message}. Sending as the next message.`,
+          });
+          try {
+            this.send(t.id, text, { ...opts, mode: "queue" });
+          } catch (e: any) {
+            this.publish(t.id, {
+              type: "console_error",
+              text: `Message could not be sent: ${e.message}`,
+            });
+          }
         });
       } else accepted();
       return;
@@ -1077,13 +1748,22 @@ export class Threads {
   private enqueue(t: Thread, text: string, opts: { attachments?: unknown; questionAnswer?: true }) {
     const q = this.queues.get(t.id) ?? [];
     if (q.length >= MAX_QUEUE) throw new Error("Too many queued messages.");
-    q.push({ id: crypto.randomUUID(), text, attachments: opts.attachments, revision: 0, at: Date.now(), ...(opts.questionAnswer ? { questionAnswer: true } : {}) });
+    q.push({
+      id: crypto.randomUUID(),
+      text,
+      attachments: opts.attachments,
+      revision: 0,
+      at: Date.now(),
+      ...(opts.questionAnswer ? { questionAnswer: true } : {}),
+    });
     this.queues.set(t.id, q);
     this.emitQueue(t.id);
   }
 
   private emitQueue(id: string) {
-    fs.writeFileSync(QUEUES_FILE + ".tmp", JSON.stringify(Object.fromEntries(this.queues)), { mode: 0o600 });
+    fs.writeFileSync(QUEUES_FILE + ".tmp", JSON.stringify(Object.fromEntries(this.queues)), {
+      mode: 0o600,
+    });
     fs.renameSync(QUEUES_FILE + ".tmp", QUEUES_FILE);
     this.emit({ t: "queue", thread: id, items: (this.queues.get(id) ?? []).map(queuePreview) });
   }
@@ -1093,17 +1773,31 @@ export class Threads {
     return out;
   }
   editQueued(id: string, qid: string) {
-    const item = this.queues.get(id)?.find(q => q.id === qid);
+    const item = this.queues.get(id)?.find((q) => q.id === qid);
     if (!item) throw new Error("This message is no longer queued. It may already have been sent.");
     item.editing = true;
     this.emitQueue(id);
-    return { id: item.id, text: item.text, revision: item.revision, attachments: Array.isArray(item.attachments) ? item.attachments.length : 0 };
+    return {
+      id: item.id,
+      text: item.text,
+      revision: item.revision,
+      attachments: Array.isArray(item.attachments) ? item.attachments.length : 0,
+    };
   }
   saveQueued(id: string, qid: string, revision: number, text: unknown) {
-    const item = this.queues.get(id)?.find(q => q.id === qid);
-    if (!item) throw new Error("This message is no longer queued. Your draft has been kept in the editor.");
-    if (!item.editing || item.revision !== revision) throw new Error("This queued message changed in another window. Reopen it to edit the latest version.");
-    if (typeof text !== "string" || text.length > 100_000 || (!text.trim() && !(Array.isArray(item.attachments) && item.attachments.length))) throw new Error("Enter a message of up to 100,000 characters, or keep an attachment.");
+    const item = this.queues.get(id)?.find((q) => q.id === qid);
+    if (!item)
+      throw new Error("This message is no longer queued. Your draft has been kept in the editor.");
+    if (!item.editing || item.revision !== revision)
+      throw new Error(
+        "This queued message changed in another window. Reopen it to edit the latest version.",
+      );
+    if (
+      typeof text !== "string" ||
+      text.length > 100_000 ||
+      (!text.trim() && !(Array.isArray(item.attachments) && item.attachments.length))
+    )
+      throw new Error("Enter a message of up to 100,000 characters, or keep an attachment.");
     item.text = text;
     item.revision++;
     item.editing = false;
@@ -1111,7 +1805,7 @@ export class Threads {
     this.drain(id);
   }
   cancelQueuedEdit(id: string, qid: string, revision: number) {
-    const item = this.queues.get(id)?.find(q => q.id === qid);
+    const item = this.queues.get(id)?.find((q) => q.id === qid);
     if (item && item.revision === revision) {
       item.editing = false;
       this.emitQueue(id);
@@ -1123,18 +1817,32 @@ export class Threads {
     const t = this.threads.get(id);
     const q = this.queues.get(id);
     const item = q?.find((x) => x.id === qid);
-    if (!t || !item) throw new Error("This message is no longer queued. It may already have been sent.");
+    if (!t || !item)
+      throw new Error("This message is no longer queued. It may already have been sent.");
     if (item.editing) throw new Error("Finish editing this message first.");
     if (t.status !== "running") return this.drain(id);
-    if (t.operation || !this.live.get(id)?.agent.steer) throw new Error("This agent cannot take a message mid-turn. It will be sent when the turn ends.");
-    this.queues.set(id, q!.filter((x) => x !== item));
+    if (t.operation || !this.live.get(id)?.agent.steer)
+      throw new Error(
+        "This agent cannot take a message mid-turn. It will be sent when the turn ends.",
+      );
+    this.queues.set(
+      id,
+      q!.filter((x) => x !== item),
+    );
     this.emitQueue(id);
-    this.whileRunning(t, item.text, { attachments: item.attachments, mode: "steer", ...(item.questionAnswer ? { questionAnswer: true } : {}) });
+    this.whileRunning(t, item.text, {
+      attachments: item.attachments,
+      mode: "steer",
+      ...(item.questionAnswer ? { questionAnswer: true } : {}),
+    });
   }
   unqueue(id: string, qid: string) {
     const q = this.queues.get(id);
     if (!q) return;
-    this.queues.set(id, q.filter((x) => x.id !== qid));
+    this.queues.set(
+      id,
+      q.filter((x) => x.id !== qid),
+    );
     this.emitQueue(id);
     this.drain(id);
   }
@@ -1149,16 +1857,30 @@ export class Threads {
       let n = 1;
       let files = attachList(q[0]).length;
       if (!parseCommand(q[0].text)) {
-        while (n < q.length && !q[n].editing && !parseCommand(q[n].text) && files + attachList(q[n]).length <= MAX_ATTACHMENTS) files += attachList(q[n++]).length;
+        while (
+          n < q.length &&
+          !q[n].editing &&
+          !parseCommand(q[n].text) &&
+          files + attachList(q[n]).length <= MAX_ATTACHMENTS
+        )
+          files += attachList(q[n++]).length;
       }
       const items = q.splice(0, n);
       const { text, attachments, questionAnswer } = mergeQueued(items);
       const queuedAt = Math.min(...items.map((x) => x.at ?? Infinity));
       this.emitQueue(id);
       try {
-        this.send(id, text, { attachments, delivery: "queued", ...(questionAnswer ? { questionAnswer: true } : {}), ...(Number.isFinite(queuedAt) ? { queuedAt } : {}) });
+        this.send(id, text, {
+          attachments,
+          delivery: "queued",
+          ...(questionAnswer ? { questionAnswer: true } : {}),
+          ...(Number.isFinite(queuedAt) ? { queuedAt } : {}),
+        });
       } catch (e: any) {
-        this.publish(id, { type: "console_error", text: `A queued message could not be sent: ${e?.message ?? e}` });
+        this.publish(id, {
+          type: "console_error",
+          text: `A queued message could not be sent: ${e?.message ?? e}`,
+        });
       }
     }, 250).unref();
   }
@@ -1174,10 +1896,23 @@ export class Threads {
 
   private userTexts(id: string): string[] {
     try {
-      return fs.readFileSync(path.join(LOG_DIR, `${id}.jsonl`), "utf8").split("\n")
-        .filter(l => l.includes('"user_input"'))
-        .flatMap(l => { try { const e = JSON.parse(l); return e.type === "user_input" && !e.auto && !e.command && typeof e.text === "string" ? [e.text] : []; } catch { return []; } });
-    } catch { return []; }
+      return fs
+        .readFileSync(path.join(LOG_DIR, `${id}.jsonl`), "utf8")
+        .split("\n")
+        .filter((l) => l.includes('"user_input"'))
+        .flatMap((l) => {
+          try {
+            const e = JSON.parse(l);
+            return e.type === "user_input" && !e.auto && !e.command && typeof e.text === "string"
+              ? [e.text]
+              : [];
+          } catch {
+            return [];
+          }
+        });
+    } catch {
+      return [];
+    }
   }
 
   // Name the thread after all its user messages (newest weigh most). Never blocks the turn; on any failure the current title stays.
@@ -1202,12 +1937,18 @@ export class Threads {
     delete t.idleCompactionDueAt;
     this.persist();
     if (this.queues.delete(id)) this.emitQueue(id); // Stop means stop: nothing queued behind it runs
-    if (!live) { delete t.background; this.touch(t); return; }
+    if (!live) {
+      delete t.background;
+      this.touch(t);
+      return;
+    }
     this.endTiming(t, { subtype: "aborted", is_error: true });
     // interrupt keeps the process, and with it any background subagents: stop with subagents working must kill the agent
     if (!t.operation && !t.background && live.agent.interrupt && live.agent.alive && !live.held) {
       // keep the process: the harness ends the turn itself; restart only if it does not within 3 s
-      live.interrupting = setTimeout(() => { if (this.live.get(id) === live && live.interrupting) this.kill(id, "stop", true); }, 3000);
+      live.interrupting = setTimeout(() => {
+        if (this.live.get(id) === live && live.interrupting) this.kill(id, "stop", true);
+      }, 3000);
       live.interrupting.unref();
       live.agent.interrupt();
     } else {
@@ -1237,15 +1978,19 @@ export class Threads {
       live.agent.kill();
     }
     const t = this.threads.get(id);
-    if (t?.background) { delete t.background; this.emit({ t: "thread", thread: t }); } // the tasks died with the process
+    if (t?.background) {
+      delete t.background;
+      this.emit({ t: "thread", thread: t });
+    } // the tasks died with the process
   }
 
   private staleRouting(live: Live) {
-    return live.recycleRouting || !!live.proxyUrl && live.proxyUrl !== headroom.url();
+    return live.recycleRouting || (!!live.proxyUrl && live.proxyUrl !== headroom.url());
   }
 
   private recycleRouting(id: string) {
-    const live = this.live.get(id), t = this.threads.get(id);
+    const live = this.live.get(id),
+      t = this.threads.get(id);
     if (!live || !t || !this.staleRouting(live)) return false;
     live.recycleRouting = true;
     // Background subagents and running turns retain their process until they finish.
@@ -1255,7 +2000,9 @@ export class Threads {
   }
 
   routingHealth() {
-    let idle = 0, active = 0, silent = 0;
+    let idle = 0,
+      active = 0,
+      silent = 0;
     for (const [id, live] of this.live) {
       const t = this.threads.get(id);
       if (!t) continue;
@@ -1269,21 +2016,31 @@ export class Threads {
   }
 
   private staleTurn(t: Thread, live: Live) {
-    return t.status === "running" && !t.background && !this.questions.list(t.id).some(q => !q.async) &&
-      Date.now() - Math.max(live.heardAt ?? 0, live.spawnAt ?? 0, this.turns.get(t.id)?.start ?? 0) > TURN_STALE_MS;
+    return (
+      t.status === "running" &&
+      !t.background &&
+      !this.questions.list(t.id).some((q) => !q.async) &&
+      Date.now() -
+        Math.max(live.heardAt ?? 0, live.spawnAt ?? 0, this.turns.get(t.id)?.start ?? 0) >
+        TURN_STALE_MS
+    );
   }
 
   repairStaleTurns() {
     let fixed = 0;
     for (const [id, live] of this.live) {
       const t = this.threads.get(id);
-      if (t && this.staleTurn(t, live)) { this.expire(t); fixed++; }
+      if (t && this.staleTurn(t, live)) {
+        this.expire(t);
+        fixed++;
+      }
     }
     return fixed;
   }
 
   repairRouting() {
-    let fixed = 0, deferred = 0;
+    let fixed = 0,
+      deferred = 0;
     for (const [id, live] of this.live) {
       if (!this.staleRouting(live)) continue;
       if (this.recycleRouting(id)) fixed++;
@@ -1298,17 +2055,42 @@ export class Threads {
     const idle: [string, number][] = [];
     for (const [id, live] of this.live) {
       const t = this.threads.get(id);
-      if (t?.status === "running" && this.questions.list(id).some((q) => !q.async)) live.heardAt = Date.now(); // waiting on the user is not silence
-      if (t?.status === "running" && Date.now() - Math.max(live.heardAt ?? 0, live.spawnAt!, this.turns.get(id)?.start ?? 0) > TURN_STALE_MS) this.expire(t);
-      else if (t && t.status === "idle" && t.background && Date.now() - (live.heardAt ?? live.spawnAt!) > BACKGROUND_STALE_MS) this.kill(id, "stale-background");
-      else if (t && t.status === "idle" && !t.background && Date.now() - Math.max(t.updatedAt, live.spawnAt!) > (live.warm ? WARM_IDLE_MS : IDLE_KILL_MS)) this.kill(id, "idle");
-      else if (t && t.status === "idle" && !t.background && !t.operation) idle.push([id, Math.max(t.updatedAt, live.spawnAt!)]);
+      if (t?.status === "running" && this.questions.list(id).some((q) => !q.async))
+        live.heardAt = Date.now(); // waiting on the user is not silence
+      if (
+        t?.status === "running" &&
+        Date.now() - Math.max(live.heardAt ?? 0, live.spawnAt!, this.turns.get(id)?.start ?? 0) >
+          TURN_STALE_MS
+      )
+        this.expire(t);
+      else if (
+        t &&
+        t.status === "idle" &&
+        t.background &&
+        Date.now() - (live.heardAt ?? live.spawnAt!) > BACKGROUND_STALE_MS
+      )
+        this.kill(id, "stale-background");
+      else if (
+        t &&
+        t.status === "idle" &&
+        !t.background &&
+        Date.now() - Math.max(t.updatedAt, live.spawnAt!) >
+          (live.warm ? WARM_IDLE_MS : IDLE_KILL_MS)
+      )
+        this.kill(id, "idle");
+      else if (t && t.status === "idle" && !t.background && !t.operation)
+        idle.push([id, Math.max(t.updatedAt, live.spawnAt!)]);
     }
     idle.sort((a, b) => a[1] - b[1]); // oldest first
     const keep = memAvailable < IDLE_MEM_FLOOR ? 2 : IDLE_MAX;
-    for (const [id] of idle.slice(0, Math.max(0, idle.length - keep))) this.kill(id, memAvailable < IDLE_MEM_FLOOR ? "memory" : "idle-cap");
+    for (const [id] of idle.slice(0, Math.max(0, idle.length - keep)))
+      this.kill(id, memAvailable < IDLE_MEM_FLOOR ? "memory" : "idle-cap");
     // no process left to finish them
-    for (const t of this.threads.values()) if (t.background && !this.live.has(t.id)) { delete t.background; this.emit({ t: "thread", thread: t }); }
+    for (const t of this.threads.values())
+      if (t.background && !this.live.has(t.id)) {
+        delete t.background;
+        this.emit({ t: "thread", thread: t });
+      }
   }
 
   // End a hung turn like a crash, except that whatever was queued behind it still goes out.
@@ -1317,7 +2099,10 @@ export class Threads {
     this.kill(t.id, "stale-turn");
     t.status = "idle";
     delete t.operation;
-    this.publish(t.id, { type: "console_error", text: `No output for ${Math.round(TURN_STALE_MS / 60_000)} minutes, so the hung turn was stopped. Send a message to continue the session.` });
+    this.publish(t.id, {
+      type: "console_error",
+      text: `No output for ${Math.round(TURN_STALE_MS / 60_000)} minutes, so the hung turn was stopped. Send a message to continue the session.`,
+    });
     if (notify) this.notify(t, "failed");
     this.endTiming(t, { subtype: "stale", is_error: true });
     this.touch(t);

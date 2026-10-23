@@ -18,7 +18,10 @@ const ownUrl = {
       if (args.path.includes(`${path.sep}node_modules${path.sep}`)) return undefined;
       const source = await fs.promises.readFile(args.path, "utf8");
       return {
-        contents: source.replaceAll("import.meta.url", JSON.stringify(pathToFileURL(args.path).href)),
+        contents: source.replaceAll(
+          "import.meta.url",
+          JSON.stringify(pathToFileURL(args.path).href),
+        ),
         loader: args.path.endsWith(".ts") ? "ts" : "js",
       };
     });
@@ -36,7 +39,9 @@ await build({
   // ws loads these optional native speedups when present; web-push loads lazily through createRequire.
   external: ["bufferutil", "utf-8-validate", "web-push"],
   // CommonJS dependencies (Express) call require() for Node built-ins.
-  banner: { js: 'import { createRequire as __bundleRequire } from "node:module"; const require = __bundleRequire(import.meta.url);' },
+  banner: {
+    js: 'import { createRequire as __bundleRequire } from "node:module"; const require = __bundleRequire(import.meta.url);',
+  },
   plugins: [ownUrl],
   logLevel: "warning",
 });

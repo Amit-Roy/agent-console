@@ -3,7 +3,11 @@ import path from "node:path";
 import { createRequire } from "node:module";
 import type webpushModule from "web-push";
 
-export type ThreadNotice = { kind: "finished" | "failed" | "needs_input"; thread: string; title: string };
+export type ThreadNotice = {
+  kind: "finished" | "failed" | "needs_input";
+  thread: string;
+  title: string;
+};
 type Subscription = { endpoint: string; keys: { p256dh: string; auth: string }; silent?: boolean };
 type Device = { subscription: Subscription; origin: string; silent?: boolean };
 type State = { publicKey: string; privateKey: string; devices: Device[] };
@@ -16,16 +20,36 @@ export function validSubscription(value: any): value is Subscription {
   try {
     const url = new URL(value.endpoint);
     const host = url.hostname;
-    if (url.protocol !== "https:" || url.port || url.username || url.password || url.hash
-      || !(host === "fcm.googleapis.com" || host === "web.push.apple.com"
-        || host.endsWith(".push.services.mozilla.com") || host.endsWith(".notify.windows.com"))) return false;
-    const key = value.keys?.p256dh, auth = value.keys?.auth;
-    return (value.silent === undefined || typeof value.silent === "boolean")
-      && typeof key === "string" && typeof auth === "string"
-      && /^[A-Za-z0-9_-]+$/.test(key) && /^[A-Za-z0-9_-]+$/.test(auth)
-      && Buffer.from(key, "base64url").length === 65 && Buffer.from(key, "base64url")[0] === 4
-      && Buffer.from(auth, "base64url").length === 16 && value.endpoint.length <= 4096;
-  } catch { return false; }
+    if (
+      url.protocol !== "https:" ||
+      url.port ||
+      url.username ||
+      url.password ||
+      url.hash ||
+      !(
+        host === "fcm.googleapis.com" ||
+        host === "web.push.apple.com" ||
+        host.endsWith(".push.services.mozilla.com") ||
+        host.endsWith(".notify.windows.com")
+      )
+    )
+      return false;
+    const key = value.keys?.p256dh,
+      auth = value.keys?.auth;
+    return (
+      (value.silent === undefined || typeof value.silent === "boolean") &&
+      typeof key === "string" &&
+      typeof auth === "string" &&
+      /^[A-Za-z0-9_-]+$/.test(key) &&
+      /^[A-Za-z0-9_-]+$/.test(auth) &&
+      Buffer.from(key, "base64url").length === 65 &&
+      Buffer.from(key, "base64url")[0] === 4 &&
+      Buffer.from(auth, "base64url").length === 16 &&
+      value.endpoint.length <= 4096
+    );
+  } catch {
+    return false;
+  }
 }
 
 export class Notifications {
@@ -48,7 +72,9 @@ export class Notifications {
     }
   }
 
-  get publicKey() { return this.state.publicKey; }
+  get publicKey() {
+    return this.state.publicKey;
+  }
 
   private save() {
     fs.mkdirSync(path.dirname(this.file), { recursive: true });
@@ -59,44 +85,65 @@ export class Notifications {
   subscribe(value: unknown, origin: string) {
     if (!validSubscription(value)) throw new Error("Invalid browser push subscription.");
     const parsed = new URL(origin);
-    if (!["https:", "http:"].includes(parsed.protocol) || parsed.origin !== origin) throw new Error("Invalid origin.");
-    const previous = this.state.devices.find(d => d.subscription.endpoint === value.endpoint);
-    if (!previous && this.state.devices.length >= 32) throw new Error("Too many notification devices.");
+    if (!["https:", "http:"].includes(parsed.protocol) || parsed.origin !== origin)
+      throw new Error("Invalid origin.");
+    const previous = this.state.devices.find((d) => d.subscription.endpoint === value.endpoint);
+    if (!previous && this.state.devices.length >= 32)
+      throw new Error("Too many notification devices.");
     const device = {
-      subscription: { endpoint: value.endpoint, keys: { p256dh: value.keys.p256dh, auth: value.keys.auth } },
-      origin, silent: value.silent ?? previous?.silent ?? false,
+      subscription: {
+        endpoint: value.endpoint,
+        keys: { p256dh: value.keys.p256dh, auth: value.keys.auth },
+      },
+      origin,
+      silent: value.silent ?? previous?.silent ?? false,
     };
-    this.state.devices = this.state.devices.filter(d => d.subscription.endpoint !== value.endpoint);
+    this.state.devices = this.state.devices.filter(
+      (d) => d.subscription.endpoint !== value.endpoint,
+    );
     this.state.devices.push(device);
     this.save();
   }
 
   unsubscribe(endpoint: string, origin: string) {
-    this.state.devices = this.state.devices.filter(d => d.subscription.endpoint !== endpoint || d.origin !== origin);
+    this.state.devices = this.state.devices.filter(
+      (d) => d.subscription.endpoint !== endpoint || d.origin !== origin,
+    );
     this.save();
   }
 
   async notify(notice: ThreadNotice) {
     const labels = { finished: "Finished", failed: "Failed", needs_input: "Needs input" };
-    await Promise.all(this.state.devices.map(async device => {
-      const payload = JSON.stringify({
-        ...notice, title: `${labels[notice.kind]} · Agent Console`, body: notice.title.slice(0, 160),
-        url: `${device.origin}/#thread=${encodeURIComponent(notice.thread)}`,
-        tag: `thread-${notice.thread}`, silent: device.silent === true,
-      });
-      try {
-        await this.send(device.subscription, payload, {
-          vapidDetails: { subject: "https://github.com/Amit-Roy/agent-console", publicKey: this.state.publicKey, privateKey: this.state.privateKey },
-          TTL: 3600, urgency: "high", timeout: 10_000,
+    await Promise.all(
+      this.state.devices.map(async (device) => {
+        const payload = JSON.stringify({
+          ...notice,
+          title: `${labels[notice.kind]} · Agent Console`,
+          body: notice.title.slice(0, 160),
+          url: `${device.origin}/#thread=${encodeURIComponent(notice.thread)}`,
+          tag: `thread-${notice.thread}`,
+          silent: device.silent === true,
         });
-      } catch (error: any) {
-        if (error?.statusCode === 404 || error?.statusCode === 410) {
-          this.unsubscribe(device.subscription.endpoint, device.origin);
-        } else {
-          // Errors can contain subscription URLs and keys; keep logs free of credentials.
-          console.warn("Browser notification delivery failed.");
+        try {
+          await this.send(device.subscription, payload, {
+            vapidDetails: {
+              subject: "https://github.com/Amit-Roy/agent-console",
+              publicKey: this.state.publicKey,
+              privateKey: this.state.privateKey,
+            },
+            TTL: 3600,
+            urgency: "high",
+            timeout: 10_000,
+          });
+        } catch (error: any) {
+          if (error?.statusCode === 404 || error?.statusCode === 410) {
+            this.unsubscribe(device.subscription.endpoint, device.origin);
+          } else {
+            // Errors can contain subscription URLs and keys; keep logs free of credentials.
+            console.warn("Browser notification delivery failed.");
+          }
         }
-      }
-    }));
+      }),
+    );
   }
 }

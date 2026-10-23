@@ -18,7 +18,8 @@ export const SESSION_INSTRUCTIONS = [
 const exposed = (name) => name.startsWith("session_") || name === "pi_research";
 
 export function consoleMcpServer() {
-  if (!process.env.AGENT_CONSOLE_TOOL_URL || !process.env.AGENT_CONSOLE_TOOL_TOKEN) return undefined;
+  if (!process.env.AGENT_CONSOLE_TOOL_URL || !process.env.AGENT_CONSOLE_TOOL_TOKEN)
+    return undefined;
   return { command: process.execPath, args: [fileURLToPath(import.meta.url)] };
 }
 
@@ -26,9 +27,14 @@ export function consoleCodexMcpArgs() {
   const server = consoleMcpServer();
   if (!server) return [];
   // TOML accepts JSON string/array literals. Credentials remain inherited environment values.
-  return ["-c", `mcp_servers.agent_console.command=${JSON.stringify(server.command)}`,
-    "-c", `mcp_servers.agent_console.args=${JSON.stringify(server.args)}`,
-    "-c", 'mcp_servers.agent_console.env_vars=["AGENT_CONSOLE_TOOL_URL","AGENT_CONSOLE_TOOL_TOKEN","AGENT_CONSOLE_THREAD"]'];
+  return [
+    "-c",
+    `mcp_servers.agent_console.command=${JSON.stringify(server.command)}`,
+    "-c",
+    `mcp_servers.agent_console.args=${JSON.stringify(server.args)}`,
+    "-c",
+    'mcp_servers.agent_console.env_vars=["AGENT_CONSOLE_TOOL_URL","AGENT_CONSOLE_TOOL_TOKEN","AGENT_CONSOLE_THREAD"]',
+  ];
 }
 
 export async function handleMcp(request) {
@@ -36,16 +42,40 @@ export async function handleMcp(request) {
   const result = (value) => ({ jsonrpc: "2.0", id: request.id, result: value });
   const error = (code, message) => ({ jsonrpc: "2.0", id: request.id, error: { code, message } });
   switch (request.method) {
-    case "initialize": return result({ protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "agent-console-sessions", version: "1.0.0" }, instructions: SESSION_INSTRUCTIONS });
-    case "ping": return result({});
-    case "tools/list": return result({ tools: TOOLS.filter((t) => exposed(t.name)).map((t) => ({ name: t.name, description: t.description, inputSchema: t.parameters, annotations: { readOnlyHint: true, destructiveHint: false } })) });
+    case "initialize":
+      return result({
+        protocolVersion: "2024-11-05",
+        capabilities: { tools: {} },
+        serverInfo: { name: "agent-console-sessions", version: "1.0.0" },
+        instructions: SESSION_INSTRUCTIONS,
+      });
+    case "ping":
+      return result({});
+    case "tools/list":
+      return result({
+        tools: TOOLS.filter((t) => exposed(t.name)).map((t) => ({
+          name: t.name,
+          description: t.description,
+          inputSchema: t.parameters,
+          annotations: { readOnlyHint: true, destructiveHint: false },
+        })),
+      });
     case "tools/call": {
       const name = request.params?.name;
-      if (!TOOLS.some((t) => t.name === name && exposed(name))) return error(-32602, "Unknown session tool.");
-      const text = await callTool(name, request.params?.arguments, AbortSignal.timeout(name === "pi_research" ? 11 * 60_000 : 30_000));
-      return result({ content: [{ type: "text", text }], ...(text.startsWith("Error:") ? { isError: true } : {}) });
+      if (!TOOLS.some((t) => t.name === name && exposed(name)))
+        return error(-32602, "Unknown session tool.");
+      const text = await callTool(
+        name,
+        request.params?.arguments,
+        AbortSignal.timeout(name === "pi_research" ? 11 * 60_000 : 30_000),
+      );
+      return result({
+        content: [{ type: "text", text }],
+        ...(text.startsWith("Error:") ? { isError: true } : {}),
+      });
     }
-    default: return error(-32601, "Method not found.");
+    default:
+      return error(-32601, "Method not found.");
   }
 }
 
@@ -56,7 +86,13 @@ if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) 
       const reply = await handleMcp(JSON.parse(line));
       if (reply) process.stdout.write(JSON.stringify(reply) + "\n");
     } catch {
-      process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "Invalid JSON-RPC request." } }) + "\n");
+      process.stdout.write(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: null,
+          error: { code: -32700, message: "Invalid JSON-RPC request." },
+        }) + "\n",
+      );
     }
   });
 }

@@ -5,24 +5,48 @@ const base = process.env.BASE || "http://127.0.0.1:7071";
 const browser = await chromium.launch();
 try {
   for (const width of [1280, 390]) {
-    const ctx = await browser.newContext({ viewport: { width, height: 900 }, isMobile: width === 390, hasTouch: width === 390 });
+    const ctx = await browser.newContext({
+      viewport: { width, height: 900 },
+      isMobile: width === 390,
+      hasTouch: width === 390,
+    });
     await ctx.addCookies([{ name: "ac_session", value: makeToken(), url: base }]);
     const page = await ctx.newPage();
-    const errors: string[] = []; page.on("pageerror", e => errors.push(e.message));
+    const errors: string[] = [];
+    page.on("pageerror", (e) => errors.push(e.message));
     let hello: any, client: any;
-    await page.routeWebSocket(/\/ws$/, socket => {
+    await page.routeWebSocket(/\/ws$/, (socket) => {
       client = socket;
-      const server = socket.connectToServer(); socket.onMessage(m => server.send(m));
-      server.onMessage(raw => {
+      const server = socket.connectToServer();
+      socket.onMessage((m) => server.send(m));
+      server.onMessage((raw) => {
         const m = JSON.parse(String(raw));
         if (m.t === "hello") {
           hello = m;
-          const codex = m.threads.find((t: any) => t.provider === "codex" && t.context?.source === "codex/last_request");
-          assert.ok(codex && codex.context.used < codex.context.max, "persisted cumulative context is replaced with actual session telemetry");
+          const codex = m.threads.find(
+            (t: any) => t.provider === "codex" && t.context?.source === "codex/last_request",
+          );
+          assert.ok(
+            codex && codex.context.used < codex.context.max,
+            "persisted cumulative context is replaced with actual session telemetry",
+          );
           m.usage = {
-            claude: { updatedAt: Date.now(), windows: [{ label: "5-hour", used: 100, limit: 100, unit: "%" }] },
-            codex: { updatedAt: Date.now(), windows: [{ label: "5-hour", used: 15, limit: 100, unit: "%" }, { label: "7-day", used: 4, limit: 100, unit: "%" }] },
-            pi: { updatedAt: Date.now(), windows: [{ label: "Free/day", used: 40, limit: 50 }], spendToday: 0 },
+            claude: {
+              updatedAt: Date.now(),
+              windows: [{ label: "5-hour", used: 100, limit: 100, unit: "%" }],
+            },
+            codex: {
+              updatedAt: Date.now(),
+              windows: [
+                { label: "5-hour", used: 15, limit: 100, unit: "%" },
+                { label: "7-day", used: 4, limit: 100, unit: "%" },
+              ],
+            },
+            pi: {
+              updatedAt: Date.now(),
+              windows: [{ label: "Free/day", used: 40, limit: 50 }],
+              spendToday: 0,
+            },
           };
         }
         socket.send(JSON.stringify(m));
@@ -34,15 +58,30 @@ try {
     const selector = page.locator("#usage-provider");
     const selectUsage = async (label: string) => {
       await selector.click();
-      await page.getByRole("listbox", { name: "Usage account", exact: true }).getByRole("option", { name: new RegExp(`^${label}`) }).click();
+      await page
+        .getByRole("listbox", { name: "Usage account", exact: true })
+        .getByRole("option", { name: new RegExp(`^${label}`) })
+        .click();
     };
     await selector.click();
-    assert.deepEqual(await page.getByRole("listbox", { name: "Usage account", exact: true }).locator(".m-label").allTextContents(), ["Claude · Sunny", "Claude · Nefro", "OpenRouter", "Codex"]);
+    assert.deepEqual(
+      await page
+        .getByRole("listbox", { name: "Usage account", exact: true })
+        .locator(".m-label")
+        .allTextContents(),
+      ["Claude · Sunny", "Claude · Nefro", "OpenRouter", "Codex"],
+    );
     await page.keyboard.press("Escape");
-    const color = async () => page.locator("#usage .bar i").first().evaluate(e => getComputedStyle(e).backgroundColor);
-    await selectUsage("Claude · Sunny"); const red = await color();
+    const color = async () =>
+      page
+        .locator("#usage .bar i")
+        .first()
+        .evaluate((e) => getComputedStyle(e).backgroundColor);
+    await selectUsage("Claude · Sunny");
+    const red = await color();
     assert.match(await page.locator("#usage").innerText(), /Claude · Sunny/);
-    await selectUsage("Codex"); const green = await color();
+    await selectUsage("Codex");
+    const green = await color();
     const info = page.locator("#usage-ctx-info");
     assert.equal(await info.getAttribute("aria-haspopup"), "dialog");
     await info.click();
@@ -53,14 +92,32 @@ try {
     await forecast.waitFor({ state: "detached" });
     const selectorNode = await selector.elementHandle();
     await selector.click();
-    const menuNode = await page.getByRole("listbox", { name: "Usage account", exact: true }).elementHandle();
+    const menuNode = await page
+      .getByRole("listbox", { name: "Usage account", exact: true })
+      .elementHandle();
     const refreshThread = hello.threads.find((t: any) => t.provider === "codex");
-    client.send(JSON.stringify({ t: "thread", thread: { ...refreshThread, title: refreshThread.title + " usage refresh" } }));
-    await page.waitForFunction(() => [...document.querySelectorAll("#threads .t")].some(t => t.textContent?.includes(" usage refresh")));
-    assert.ok(await selectorNode!.evaluate(e => e.isConnected), "background telemetry retains the usage selector");
-    assert.ok(await menuNode!.evaluate(e => e.isConnected), "background telemetry retains the open usage menu");
+    client.send(
+      JSON.stringify({
+        t: "thread",
+        thread: { ...refreshThread, title: refreshThread.title + " usage refresh" },
+      }),
+    );
+    await page.waitForFunction(() =>
+      [...document.querySelectorAll("#threads .t")].some((t) =>
+        t.textContent?.includes(" usage refresh"),
+      ),
+    );
+    assert.ok(
+      await selectorNode!.evaluate((e) => e.isConnected),
+      "background telemetry retains the usage selector",
+    );
+    assert.ok(
+      await menuNode!.evaluate((e) => e.isConnected),
+      "background telemetry retains the open usage menu",
+    );
     await page.keyboard.press("Escape");
-    await selectUsage("OpenRouter"); const amber = await color();
+    await selectUsage("OpenRouter");
+    const amber = await color();
     assert.equal(new Set([red, green, amber]).size, 3, JSON.stringify({ red, green, amber }));
     assert.match(await page.locator("#usage").innerText(), /40 \/ 50/);
     await selector.press("ArrowDown");
@@ -69,7 +126,10 @@ try {
     assert.equal(await selector.innerText(), "Codex");
     const claude = hello.threads.find((t: any) => t.provider === "claude");
     if (claude) {
-      await page.locator("#threads li", { has: page.locator(".t", { hasText: claude.title }) }).first().click();
+      await page
+        .locator("#threads li", { has: page.locator(".t", { hasText: claude.title }) })
+        .first()
+        .click();
       assert.equal(await page.locator("#effort").isVisible(), true);
       await page.locator("#effort").click();
       assert.ok(await page.getByRole("option", { name: "Effort · High", exact: true }).count());
@@ -78,21 +138,56 @@ try {
         // a real running state from the server: settings stay visible on mobile (user rule), Stop replaces Send until text is typed
         client.send(JSON.stringify({ t: "thread", thread: { ...claude, status: "running" } }));
         await page.locator("#stop").waitFor();
-        assert.equal(await page.locator("#effort").isVisible(), true, "effort stays visible during a run");
-        assert.equal(await page.locator("#model").isVisible(), true, "model stays visible during a run");
-        assert.equal(await page.locator("#mode").isVisible(), true, "permissions stay visible during a run");
+        assert.equal(
+          await page.locator("#effort").isVisible(),
+          true,
+          "effort stays visible during a run",
+        );
+        assert.equal(
+          await page.locator("#model").isVisible(),
+          true,
+          "model stays visible during a run",
+        );
+        assert.equal(
+          await page.locator("#mode").isVisible(),
+          true,
+          "permissions stay visible during a run",
+        );
         assert.equal(await page.locator("#send").isVisible(), false);
         await page.locator("#input").fill("queued follow-up");
-        assert.equal(await page.locator("#send").isVisible(), true, "typing mid-run offers Send (queues)");
+        assert.equal(
+          await page.locator("#send").isVisible(),
+          true,
+          "typing mid-run offers Send (queues)",
+        );
         assert.equal(await page.locator("#stop").isVisible(), false);
         await page.locator("#input").fill("");
-        assert.ok(await page.evaluate(() => { const toolbar = document.querySelector(".toolbar")!; return toolbar.scrollWidth <= toolbar.clientWidth + 1 && [...toolbar.querySelectorAll("button")].every(b => { const r = b.getBoundingClientRect(); return !r.width || r.right <= innerWidth; }); }), "running toolbar fits the phone width");
+        assert.ok(
+          await page.evaluate(() => {
+            const toolbar = document.querySelector(".toolbar")!;
+            return (
+              toolbar.scrollWidth <= toolbar.clientWidth + 1 &&
+              [...toolbar.querySelectorAll("button")].every((b) => {
+                const r = b.getBoundingClientRect();
+                return !r.width || r.right <= innerWidth;
+              })
+            );
+          }),
+          "running toolbar fits the phone width",
+        );
       }
     }
-    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+    assert.equal(
+      await page.evaluate(() => document.documentElement.scrollWidth > innerWidth),
+      false,
+    );
     assert.deepEqual(errors, []);
     await page.screenshot({ path: `/tmp/ac-provider-usage-${width}.png` });
-    console.log(`PASS ${width}px usage dropdown, real context migration, green/amber/red meters, keyboard navigation, composer effort, no overflow`);
+    console.log(
+      `PASS ${width}px usage dropdown, real context migration, green/amber/red meters, keyboard navigation, composer effort, no overflow`,
+    );
     await ctx.close();
   }
-} finally { await browser.close(); }
+} finally {
+  await browser.close();
+}
