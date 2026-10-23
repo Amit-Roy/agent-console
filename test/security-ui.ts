@@ -1,7 +1,7 @@
 // Security page: real browser, phone + desktop, mocked /api/security, no console errors, first-party only.
 import { chromium } from "playwright";
 import { makeToken } from "../server/auth.ts";
-import { LATEST, HISTORY } from "./security-mock.ts";
+import { LATEST, HISTORY, LOG_ID, LOG_LINES } from "./security-mock.ts";
 
 const BASE = process.env.BASE || "http://127.0.0.1:7070";
 const OUT = process.env.OUT || "/tmp";
@@ -17,18 +17,21 @@ async function shoot(page: any, name: string) {
   await page.screenshot({ path: `${OUT}/security-${name}-end.png` });
 }
 
-async function open(viewport: { width: number; height: number }, scheme: "light" | "dark", routes: Record<string, (n: number) => unknown>) {
+async function open(viewport: { width: number; height: number }, scheme: "light" | "dark", routes: Record<string, (n: number, url: URL) => unknown>) {
   const ctx = await browser.newContext({ viewport, colorScheme: scheme });
   await ctx.addCookies([{ name: "ac_session", value: makeToken(), url: BASE }]);
   const page = await ctx.newPage();
   const errors: string[] = [], external: string[] = [], hits: Record<string, number> = {};
-  page.on("console", (m) => m.type() === "error" && !/status of (50\d)/.test(m.text()) && errors.push(m.text()));
+  page.on("console", (m) => m.type() === "error" && !/status of (404|50\d)/.test(m.text()) && errors.push(m.text()));
   page.on("pageerror", (e) => errors.push(String(e)));
   page.on("request", (r) => { const u = r.url(); if (!/^(data:|blob:|about:)/.test(u) && !u.startsWith(BASE)) external.push(u); });
   await page.route("**/api/security/**", (route) => {
-    const p = new URL(route.request().url()).pathname.replace("/api/security/", "").replace(/^scans\/.*/, "scans");
+    const url = new URL(route.request().url());
+    const p = url.pathname.replace("/api/security/", "").replace(/^scans\/[^/]+\/log$/, "log").replace(/^scans\/.*/, "scans");
     hits[p] = (hits[p] || 0) + 1;
-    const f = routes[p]; return f ? route.fulfill(json(f(hits[p]), (f(hits[p]) as any)?.__status || 200)) : route.fulfill(json({ error: "unmocked" }, 500));
+    const f = routes[p]; if (!f) return route.fulfill(json({ error: "unmocked" }, 500));
+    const body = f(hits[p], url) as any;
+    return route.fulfill(json(body, body?.__status || 200));
   });
   return { ctx, page, errors, external, hits };
 }
@@ -79,6 +82,80 @@ for (const [name, viewport, scheme] of [["desktop-light", { width: 1280, height:
   check("run: click starts and shows banner", hits.run === 1);
   await ctx.close();
 }
+// scan log sheet
+const many = Array.from({ length: 80 }, (_, i) => `2026-10-23T00:${String(10 + Math.floor(i / 6)).padStart(2, "0")}:${String((i * 7) % 60).padStart(2, "0")}Z ${["clamav", "trivy", "nmap", "falco"][i % 4]}: line ${i + 1} of the scan`);
+// serves `lines` in pages; running until the caller has read everything and `n` polls have passed
+const logApi = (lines: string[], doneAfter = 3) => (n: number, url: URL) => {
+  const after = Number(url.searchParams.get("after") || 0), end = n >= doneAfter ? lines.length : Math.min(lines.length, 40 + n * 10);
+  return { id: LOG_ID, running: n < doneAfter, from: after, total: end, lines: lines.slice(after, end) };
+};
+const runningStatus = () => ({ running: true, id: LOG_ID, startedAt: new Date().toISOString(), currentTool: "trivy" });
+for (const [name, viewport, scheme] of [["phone-light", { width: 390, height: 844 }, "light"], ["desktop-dark", { width: 1280, height: 900 }, "dark"], ["phone-dark", { width: 390, height: 844 }, "dark"], ["desktop-light", { width: 1280, height: 900 }, "light"]] as const) {
+  const { ctx, page, errors, hits } = await open(viewport, scheme, { ...findings, status: runningStatus, log: logApi(many, name === "phone-light" ? 4 : 99) });
+  await page.goto(`${BASE}/security`);
+  await page.waitForSelector("#running:not([hidden])");
+  await page.click("#running >> text=View live log");
+  await page.waitForSelector("#logsheet[open] .ll");
+  check(`log ${name}: sheet opens with lines`, await page.locator("#log-body .ll").count() === 50 && (await page.locator("#log-state").innerText()).includes("Live"));
+  check(`log ${name}: tool names highlighted`, await page.locator("#log-body .lk.clamav").count() > 0 && await page.locator("#log-body .lk.trivy").count() > 0);
+  check(`log ${name}: local short time`, /^\d{1,2}:\d{2}:\d{2}/.test(await page.locator("#log-body .lt").first().innerText()));
+  check(`log ${name}: following scrolls to bottom`, await page.evaluate(() => { const b = document.getElementById("log-body")!; return b.scrollHeight - b.scrollTop - b.clientHeight < 4; }));
+  check(`log ${name}: no horizontal overflow`, !(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)));
+  await page.screenshot({ path: `${OUT}/security-log-running-${name}.png` });
+  if (name === "phone-light") {
+    await page.locator("#log-body").evaluate((b) => { b.scrollTop = 0; });
+    await page.waitForSelector("#log-jump:not([hidden])");
+    const top = await page.locator("#log-body").evaluate((b) => b.scrollTop);
+    await page.waitForFunction(() => document.querySelectorAll("#log-body .ll").length > 50, null, { timeout: 15000 });
+    check("log: scrolled up pauses follow", await page.locator("#log-body").evaluate((b) => b.scrollTop) === top && await page.locator("#log-jump").isVisible());
+    await page.click("#log-jump");
+    check("log: jump to latest resumes follow", await page.evaluate(() => { const b = document.getElementById("log-body")!; return b.scrollHeight - b.scrollTop - b.clientHeight < 4; }) && await page.locator("#log-jump").isHidden());
+    await page.waitForFunction(() => document.querySelectorAll("#log-body .ll").length === 80, null, { timeout: 15000 });
+    await page.waitForFunction(() => document.getElementById("log-state")!.textContent === "Finished", null, { timeout: 5000 });
+    const latestBefore = hits.latest;
+    check("log: polling stops when finished and page refreshes", await page.locator("#log-state").innerText() === "Finished" && (hits.latest ?? 0) >= latestBefore);
+    const polls = hits.log;
+    await page.waitForTimeout(3500);
+    check("log: no polls after finish", hits.log === polls, `${polls} -> ${hits.log}`);
+    await page.screenshot({ path: `${OUT}/security-log-finished-${name}.png` });
+    await page.keyboard.press("Escape");
+    check("log: Escape closes", await page.locator("#logsheet[open]").count() === 0);
+    await page.click("text=View live log").catch(() => {});
+  } else {
+    await page.click("#log-close");
+    check(`log ${name}: close button`, await page.locator("#logsheet[open]").count() === 0);
+    await page.click("#running >> text=View live log");
+    await page.mouse.click(5, 5);
+    check(`log ${name}: backdrop closes`, await page.locator("#logsheet[open]").count() === 0);
+  }
+  check(`log ${name}: no console errors`, errors.length === 0, errors.join(" | ").slice(0, 200));
+  await ctx.close();
+}
+// finished scan from the history strip, missing log, older server
+{
+  const { ctx, page } = await open({ width: 390, height: 844 }, "dark", { ...findings, log: () => logApi(LOG_LINES, 0)(1, new URL(`${BASE}/x?after=0`)) });
+  await page.goto(`${BASE}/security`);
+  await page.waitForSelector(".tool");
+  await page.locator("#strip .tick").first().click();
+  await page.click("#verdict >> text=Scan log");
+  await page.waitForSelector("#logsheet[open] .ll");
+  check("log: finished scan shows all lines, no Live", await page.locator("#log-body .ll").count() === LOG_LINES.length && (await page.locator("#log-state").innerText()) === "Finished");
+  await page.screenshot({ path: `${OUT}/security-log-finished-phone-dark.png` });
+  await ctx.close();
+}
+for (const [label, body] of [["no log", { error: "No such scan.", __status: 404 }], ["older server", { error: "Not found", __status: 404 }]] as const) {
+  const { ctx, page, errors } = await open({ width: 390, height: 844 }, "light", { ...findings, log: () => body });
+  await page.goto(`${BASE}/security`);
+  await page.waitForSelector(".tool");
+  await page.click("#verdict >> text=Scan log");
+  await page.waitForSelector("#log-body .lmsg");
+  check(`log ${label}: graceful message`, (await page.locator("#log-body").innerText()).includes("No log for this scan") && await page.locator("#log-state").isHidden());
+  await page.screenshot({ path: `${OUT}/security-log-empty.png` });
+  await page.click("#log-close");
+  check(`log ${label}: page still works`, await page.locator(".tool").count() === 4 && errors.length === 0, errors.join(" | ").slice(0, 200));
+  await ctx.close();
+}
+
 // empty, unreachable and error states
 {
   const { ctx, page, errors } = await open({ width: 390, height: 844 }, "dark", { latest: () => ({ result: null }), history: () => ({ scans: [] }), status: () => ({ running: false, startedAt: null, currentTool: null }) });

@@ -8,6 +8,7 @@ import type express from "express";
 const LATEST_TTL = 30_000;
 const SSH_TIMEOUT = 20_000;
 const ID = /^[0-9A-Za-z_-]{6,40}$/;
+const SCAN_ID = /^[0-9]{8}T[0-9]{6}Z$/;
 
 const target = () => process.env.SECSCAN_SSH_TARGET || "root@206.51.227.101";
 const keyFile = () => process.env.SECSCAN_SSH_KEY || path.join(os.homedir(), ".ssh", "id_secscan");
@@ -59,6 +60,15 @@ export function mountSecurity(app: express.Express, sameOrigin: express.RequestH
     return guard(async () => {
       const result = await remote(`get ${req.params.id}`);
       if (!result || !result.id) throw new NotFound("not found");
+      return result;
+    })(req, res, next);
+  });
+  app.get("/api/security/scans/:id/log", async (req, res, next) => {
+    const after = req.query.after === undefined ? "0" : String(req.query.after);
+    if (!SCAN_ID.test(req.params.id) || !/^[0-9]{1,9}$/.test(after)) return void res.status(400).json({ error: "Invalid scan id or position." });
+    return guard(async () => {
+      const result = await remote(`log ${req.params.id} ${Number(after)}`);
+      if (!result || result.error || !Array.isArray(result.lines)) throw new NotFound("not found");
       return result;
     })(req, res, next);
   });

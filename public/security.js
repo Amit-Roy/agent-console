@@ -80,10 +80,15 @@ function renderVerdict() {
     b.addEventListener("click", () => { void load(); });
     v.append(b);
   }
-  if (state.viewing) {
-    const b = el("button", "btn sm", "Back to latest"); b.type = "button";
-    b.addEventListener("click", () => { state.viewing = null; render(); });
-    v.append(b);
+  if (r?.id || state.viewing) {
+    const bar = el("div", "vbtns");
+    if (state.viewing) {
+      const b = el("button", "btn sm", "Back to latest"); b.type = "button";
+      b.addEventListener("click", () => { state.viewing = null; render(); });
+      bar.append(b);
+    }
+    if (r?.id) bar.append(logButton(r.id, "Scan log"));
+    v.append(bar);
   }
   if (r) {
     const c = totals(r);
@@ -110,6 +115,7 @@ function renderRunning() {
   h.append(el("i", "spin"), el("b", "", "Scan running"), el("span", "", s.startedAt ? `started ${ago(s.startedAt)}` : ""));
   box.append(h, el("p", "", tool ? `Now running ${tool[1]} (${tool[2].toLowerCase()}).` : "Starting up."),
     el("p", "note", "A full scan takes 10 to 40 minutes. You can leave this page; results appear here when it finishes."));
+  if (s.id) box.append(logButton(s.id, "View live log"));
 }
 
 /* ---------- findings (what the scan caught) ---------- */
@@ -295,13 +301,89 @@ function renderHistory() {
     b.addEventListener("click", () => openScan(s.id));
     strip.append(b);
   }
-  $("hist-note").textContent = "Newest on the right. Taller bar means more findings. Tap one to read that scan.";
+  $("hist-note").textContent = "Newest on the right. Taller bar means more findings. Tap one to read that scan, then open its log.";
 }
 async function openScan(id) {
   if (id === state.latest?.id) { state.viewing = null; return render(); }
   try { state.viewing = await getJSON(`/api/security/scans/${encodeURIComponent(id)}`); render(); }
   catch (e) { toast(`Could not load that scan: ${e.message}`, "bad"); }
 }
+
+/* ---------- scan log sheet ---------- */
+const LOG_POLL = 3000, LOG_MAX = 5000;
+const LTIME = { hour: "2-digit", minute: "2-digit", second: "2-digit" };
+const log = { id: null, total: 0, running: false, follow: true, gen: 0, timer: null, shown: 0 };
+const sheet = $("logsheet"), lbody = $("log-body");
+function logButton(id, label) {
+  const b = el("button", "btn sm", label); b.type = "button";
+  b.addEventListener("click", () => { void openLog(id); });
+  return b;
+}
+const scanStart = id => { const m = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/.exec(id || ""); return m ? when(`${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}Z`) : ""; };
+function logLine(raw) {
+  const m = /^(\S+) ([a-z][a-z0-9_-]*): ([\s\S]*)$/.exec(raw);
+  const row = el("div", "ll");
+  if (!m) { row.textContent = raw; return row; }
+  const d = new Date(m[1]);
+  row.append(el("span", "lt", Number.isNaN(+d) ? m[1] : d.toLocaleTimeString([], LTIME)), el("span", `lk ${m[2]}`, m[2]), document.createTextNode(m[3]));
+  return row;
+}
+function logState() {
+  const p = $("log-state");
+  p.hidden = !log.id || !!lbody.querySelector(".lmsg");
+  p.replaceChildren();
+  p.className = log.running ? "pill live" : "pill";
+  if (log.running) p.append(el("i", "spin"), document.createTextNode("Live"));
+  else p.textContent = "Finished";
+}
+function logMessage(text, cls) { lbody.replaceChildren(el("p", `lmsg ${cls || ""}`, text)); log.shown = 0; logState(); $("log-jump").hidden = true; }
+const atBottom = () => lbody.scrollHeight - lbody.scrollTop - lbody.clientHeight < 24;
+function appendLines(lines, from) {
+  lbody.querySelector(".lmsg")?.remove();
+  if (from > 0 && !log.shown && !lbody.querySelector(".lmore")) lbody.append(el("p", "lmore", `${from} earlier lines not shown.`));
+  const frag = document.createDocumentFragment();
+  for (const l of lines) frag.append(logLine(l));
+  lbody.append(frag);
+  log.shown += lines.length;
+  for (let n = lbody.querySelectorAll(".ll").length; n > LOG_MAX; n--) lbody.querySelector(".ll").remove();
+  if (log.follow) lbody.scrollTop = lbody.scrollHeight;
+  else $("log-jump").hidden = false;
+}
+async function fetchLog(gen) {
+  let j;
+  try { j = await getJSON(`/api/security/scans/${encodeURIComponent(log.id)}/log?after=${log.total}`); }
+  catch (e) {
+    if (gen !== log.gen) return;
+    // 404: scan has no log (finished before logs existed) or an older server without the route
+    if (/HTTP 404|not found|No such scan/i.test(e.message) && !log.total) return logMessage("No log for this scan.");
+    if (!log.total) return logMessage(`Could not load the log: ${e.message}`, "warn");
+    return schedule(gen);
+  }
+  if (gen !== log.gen) return;
+  const was = log.running;
+  log.running = !!j.running;
+  if (j.lines?.length) { appendLines(j.lines, j.from || 0); }
+  else if (!log.total && !lbody.querySelector(".ll")) logMessage(log.running ? "Waiting for the first log line…" : "This log is empty.");
+  log.total = Number.isFinite(j.total) ? j.total : log.total + (j.lines?.length || 0);
+  logState();
+  if (log.running) return schedule(gen);
+  if (was) { toast("Scan finished.", "ok"); await load(); }
+}
+function schedule(gen) { clearTimeout(log.timer); log.timer = setTimeout(() => { void fetchLog(gen); }, LOG_POLL); }
+async function openLog(id) {
+  clearTimeout(log.timer);
+  Object.assign(log, { id, total: 0, running: state.running?.running && state.running.id === id, follow: true, shown: 0, gen: log.gen + 1 });
+  $("log-sub").textContent = [scanStart(id), id].filter(Boolean).join(" · ");
+  logMessage("Loading log…");
+  if (!sheet.open) sheet.showModal();
+  await fetchLog(log.gen);
+}
+function closeLog() { if (sheet.open) sheet.close(); }
+sheet.addEventListener("close", () => { clearTimeout(log.timer); log.gen++; log.id = null; });
+sheet.addEventListener("click", e => { if (e.target === sheet) closeLog(); });
+$("log-close").addEventListener("click", closeLog);
+lbody.addEventListener("scroll", () => { log.follow = atBottom(); $("log-jump").hidden = log.follow; });
+$("log-jump").addEventListener("click", () => { log.follow = true; lbody.scrollTop = lbody.scrollHeight; $("log-jump").hidden = true; });
 
 function render() {
   renderVerdict(); renderRunning(); renderFindings(); renderTools(); renderFalco(); renderTrivy(); renderPorts(); renderHistory();
