@@ -247,6 +247,8 @@ li.sel .dot{background:var(--press)}
 @keyframes pulse{50%{opacity:.35}}
 .tag{display:inline-flex;align-items:center;gap:.25rem;flex:none;padding:0 var(--sp-2);border-radius:var(--r-full);font:var(--fw-med) var(--f-xs);letter-spacing:var(--ls-xs)}
 .tag.warn{background:var(--warn-tint);color:var(--warn)}
+.tag.arch{background:var(--s2);color:var(--t2)}
+.path .tag.arch .ico{width:.8125rem;height:.8125rem}
 .tag .ico{width:.75rem;height:.75rem}
 
 /* Threads | Scheduled: a segmented control, two views of the same place */
