@@ -7,15 +7,15 @@ import { isoBase64URL } from "@simplewebauthn/server/helpers";
 
 // Passkey step-up for vault writes. Credentials live in vault-passkeys.json (0600); challenges are single-use,
 // server-side and expire in 2 minutes; a successful assertion issues a 5 minute write grant (HttpOnly cookie).
+// Registration accepts only the device's own platform authenticator with user verification (no roaming key, no QR flow).
 const CHALLENGE_TTL = 2 * 60_000;
 const GRANT_TTL = 5 * 60_000;
 const ALERT_EVERY = 10 * 60_000;
 const COOKIE = "vault_grant";
-const MAX_CODE_TRIES = 5;
 
 type Cred = { id: string; publicKey: string; counter: number; transports?: string[]; name: string; createdAt: string; lastUsedAt: string | null };
 type Store = { userID: string; credentials: Cred[] };
-type Challenge = { challenge: string; kind: "reg" | "auth"; expires: number; viaCode: boolean; session: string };
+type Challenge = { challenge: string; kind: "reg" | "auth"; expires: number; first: boolean; session: string };
 type Deps = {
   confDir: () => string;
   rpId: () => string | undefined;
@@ -27,10 +27,9 @@ export class PasskeyError extends Error { status: number; extra: object; constru
 
 export function createPasskeys(d: Deps) {
   const storeFile = () => path.join(d.confDir(), "vault-passkeys.json");
-  const codeFile = () => path.join(d.confDir(), "vault-enroll-code");
   const challenges = new Map<string, Challenge>();
   const grants = new Map<string, { expires: number; session: string }>();
-  let codeTries = 0, lastAlert = 0;
+  let lastAlert = 0;
 
   function load(): Store {
     try {
@@ -42,23 +41,6 @@ export function createPasskeys(d: Deps) {
   const save = (s: Store) => d.atomicWrite(storeFile(), JSON.stringify(s, null, 2) + "\n");
   const publicList = (s: Store) => s.credentials.map((c) => ({ id: c.id, name: c.name, createdAt: c.createdAt, lastUsedAt: c.lastUsedAt }));
 
-  /* one-time enrollment code: printed to the server log and written 0600; never sent to a client */
-  function ensureCode() {
-    try { const c = fs.readFileSync(codeFile(), "utf8").trim(); if (c) return c; } catch {}
-    const code = String(crypto.randomInt(0, 100_000_000)).padStart(8, "0");
-    d.atomicWrite(codeFile(), code + "\n");
-    codeTries = 0;
-    console.log(`vault: passkey enrollment code ${code} (also in ${codeFile()})`);
-    return code;
-  }
-  function checkCode(given: unknown): boolean {
-    if (typeof given !== "string" || codeTries >= MAX_CODE_TRIES) return false;
-    const want = Buffer.from(ensureCode()), got = Buffer.from(given.trim());
-    const ok = got.length === want.length && crypto.timingSafeEqual(got, want);
-    if (!ok && ++codeTries >= MAX_CODE_TRIES) { try { fs.unlinkSync(codeFile()); } catch {} } // next attempt gets a fresh code
-    return ok;
-  }
-
   const cookies = (req: express.Request) => Object.fromEntries(String(req.headers.cookie || "").split(";").map((p) => p.trim().split(/=(.*)/s).slice(0, 2)).filter((p) => p[0]));
   const session = (req: express.Request) => crypto.createHash("sha256").update(cookies(req).ac_session || "").digest("hex");
   const origin = (req: express.Request) => String(req.headers.origin || "");
@@ -69,10 +51,10 @@ export function createPasskeys(d: Deps) {
     for (const [k, v] of challenges) if (v.expires <= now) challenges.delete(k);
     for (const [k, v] of grants) if (v.expires <= now) grants.delete(k);
   }
-  function issue(req: express.Request, kind: Challenge["kind"], challenge: string, viaCode = false) {
+  function issue(req: express.Request, kind: Challenge["kind"], challenge: string, first = false) {
     sweep();
     const cid = crypto.randomBytes(16).toString("base64url");
-    challenges.set(cid, { challenge, kind, expires: Date.now() + CHALLENGE_TTL, viaCode, session: session(req) });
+    challenges.set(cid, { challenge, kind, expires: Date.now() + CHALLENGE_TTL, first, session: session(req) });
     return cid;
   }
   /* single use: removed whether or not the response verifies */
@@ -123,39 +105,42 @@ export function createPasskeys(d: Deps) {
     const P = "/api/vault";
     app.get(`${P}/passkeys`, wrap(() => {
       const s = load();
-      if (!s.credentials.length) ensureCode();
       return { enrolled: s.credentials.length, passkeys: publicList(s), granted: false };
     }));
     app.get(`${P}/grant`, wrap((req) => ({ granted: hasGrant(req, false) })));
 
-    // Enrollment: first passkey needs the one-time code; later ones need a live grant.
+    // Enrollment: the first passkey needs nothing beyond the console login; later ones need a live grant.
     app.post(`${P}/passkeys/register/options`, sameOrigin, json, wrap(async (req) => {
-      const s = load(), viaCode = s.credentials.length === 0;
-      if (viaCode) {
-        if (!checkCode(req.body?.code)) { fail(req, "enrollment code rejected"); throw new PasskeyError(403, "That code is not right. Read it from the server log."); }
-      } else if (!hasGrant(req, false)) throw new PasskeyError(401, "Confirm with your passkey first.", { stepUp: true });
+      const s = load(), first = s.credentials.length === 0;
+      if (!first && !hasGrant(req, false)) throw new PasskeyError(401, "Confirm with your passkey first.", { stepUp: true });
       const options = await generateRegistrationOptions({
         rpName: "Agent Console", rpID: rpID(req), userName: "owner", userDisplayName: "Agent Console owner",
         userID: isoBase64URL.toBuffer(s.userID), attestationType: "none",
         excludeCredentials: s.credentials.map((c) => ({ id: c.id, transports: c.transports as any })),
-        authenticatorSelection: { residentKey: "preferred", userVerification: "required" },
+        authenticatorSelection: { authenticatorAttachment: "platform", residentKey: "preferred", userVerification: "required" },
       });
-      return { cid: issue(req, "reg", options.challenge, viaCode), options };
+      (options as any).hints = ["client-device"];
+      return { cid: issue(req, "reg", options.challenge, first), options };
     }));
     app.post(`${P}/passkeys/register/verify`, sameOrigin, json, wrap(async (req, res) => {
       const c = take(req, req.body?.cid, "reg");
       const s = load();
-      if (c.viaCode !== (s.credentials.length === 0)) throw new PasskeyError(400, "That request expired. Try again.");
+      if (c.first !== (s.credentials.length === 0)) throw new PasskeyError(400, "That request expired. Try again.");
       let v;
       try {
         v = await verifyRegistrationResponse({ response: req.body?.response, expectedChallenge: c.challenge, expectedOrigin: origin(req), expectedRPID: rpID(req), requireUserVerification: true });
       } catch { fail(req, "registration"); throw new PasskeyError(400, "The passkey could not be verified."); }
       if (!v.verified) { fail(req, "registration"); throw new PasskeyError(400, "The passkey could not be verified."); }
+      // this device's own authenticator only: a thief could otherwise enrol their phone through the cross-device QR flow,
+      // which reports "cross-platform". Transports are not checked: synced platform passkeys often list "hybrid" too.
+      if (req.body?.response?.authenticatorAttachment !== "platform" || !v.registrationInfo.userVerified) {
+        fail(req, "registration: not a local platform authenticator");
+        throw new PasskeyError(400, "Use this device's own fingerprint or face unlock, not another device or a security key.");
+      }
       const cr = v.registrationInfo.credential;
       const name = String(req.body?.name || "").replace(/[\r\n\0]+/g, " ").trim().slice(0, 40) || `Passkey ${s.credentials.length + 1}`;
       s.credentials.push({ id: cr.id, publicKey: isoBase64URL.fromBuffer(cr.publicKey), counter: cr.counter, transports: cr.transports as string[] | undefined, name, createdAt: new Date().toISOString(), lastUsedAt: null });
       save(s);
-      if (c.viaCode) try { fs.unlinkSync(codeFile()); } catch {}
       d.audit("passkey-add", "-", name);
       // the passkey just proved presence and verification, so it also opens a write grant
       const t = crypto.randomBytes(24).toString("base64url");
@@ -203,5 +188,5 @@ export function createPasskeys(d: Deps) {
       return { ok: true, expiresIn: GRANT_TTL / 1000 };
     }));
   }
-  return { mount, requireGrant, expireGrants: () => { for (const g of grants.values()) g.expires = 0; }, resetAlertLimit: () => { lastAlert = 0; } };
+  return { mount, requireGrant, granted: (req: express.Request) => hasGrant(req, false), expireGrants: () => { for (const g of grants.values()) g.expires = 0; }, resetAlertLimit: () => { lastAlert = 0; } };
 }
