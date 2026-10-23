@@ -86,6 +86,15 @@ for (const [name, viewport, scheme] of [
     (await page.locator(".readout dd").allInnerTexts()).join(",") === "1,3,1,3,3",
     (await page.locator(".readout dd").allInnerTexts()).join(","),
   );
+  check(
+    `${name}: fixable sub-line`,
+    (await page.locator(".readout .fixable").allInnerTexts()).join(",") === "1 fixable,1 fixable",
+    (await page.locator(".readout .fixable").allInnerTexts()).join(","),
+  );
+  check(
+    `${name}: target fixable chip`,
+    (await page.locator("#trivy .chip.fix").allInnerTexts()).join(",") === "2 fixable",
+  );
   check(`${name}: four tool cards`, (await page.locator(".tool").count()) === 4);
   check(
     `${name}: infected file listed`,

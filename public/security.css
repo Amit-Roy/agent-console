@@ -80,6 +80,12 @@
 .readout .hot dd {
   color: var(--bad);
 }
+.readout .fixable {
+  display: block;
+  margin-top: var(--sp-1);
+  font: var(--fw-reg) var(--f-sm);
+  color: var(--t3);
+}
 @media (max-width: 640px) {
   .readout {
     grid-template-columns: repeat(2, minmax(0, 1fr));
