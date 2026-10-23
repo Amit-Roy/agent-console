@@ -147,9 +147,15 @@ const savedOf = (d) => {
   return { rtk, hr };
 };
 const PLAN_KEY = "ac_subscription_monthly_usd_v1";
-let monthlyFees = {};
-try { monthlyFees = JSON.parse(localStorage.getItem(PLAN_KEY) || "{}"); } catch {}
-if (!monthlyFees || typeof monthlyFees !== "object" || Array.isArray(monthlyFees)) monthlyFees = {};
+const DEFAULT_MONTHLY_FEES = { claude: 40, codex: 20 };
+let monthlyFees = { ...DEFAULT_MONTHLY_FEES };
+try {
+  const savedFees = localStorage.getItem(PLAN_KEY);
+  if (savedFees !== null) {
+    const parsedFees = JSON.parse(savedFees);
+    if (parsedFees && typeof parsedFees === "object" && !Array.isArray(parsedFees)) monthlyFees = parsedFees;
+  }
+} catch {}
 // Include every selected UTC calendar day; each month contributes its own day fraction.
 function allocatedFee(monthly, from, to) {
   let total = 0;
@@ -161,7 +167,7 @@ function allocatedFee(monthly, from, to) {
 }
 const feeKnown = (p) => Number.isFinite(monthlyFees[p]) && monthlyFees[p] >= 0;
 function subscriptionPanel(cur) {
-  const p = panel("API estimate vs your subscriptions", "Compare public API list prices with the fees you enter for this period.");
+  const p = panel("API estimate vs your subscriptions", "Baseline: two Claude Pro plans at $20 each plus Codex at $20 = $60/month. Fees are editable.");
   const result = el("div", "comparison-result");
   const draw = () => {
     const providers = ["claude", "codex"];
@@ -175,7 +181,7 @@ function subscriptionPanel(cur) {
     const complete = !missing.length && comparable.length > 0 && measured.length === comparable.length;
     const values = el("div", "comparison-values");
     values.append(kpi("Estimated API cost", measured.length ? usd(api) : "—", `${measured.length}/${comparable.length} matching turns priced · ${configured.map(p => provMeta(p)[0]).join(" + ") || "no fees configured"}`),
-      kpi("Your allocated subscription cost", configured.length ? usd(fees) : "Not configured", "All configured plans, including days without activity; prorated by UTC calendar day"),
+      kpi("Your allocated subscription cost", configured.length ? usd(fees) : "Not configured", `${usd(configured.reduce((sum, provider) => sum + monthlyFees[provider], 0))}/month · prorated by UTC calendar day`),
       kpi("API estimate minus subscriptions", complete ? `${api < fees ? "−" : ""}${usd(Math.abs(api - fees))}` : "—", complete ? (api >= fees ? "API estimate is higher" : "Subscription allocation is higher") : "Requires fees and full API cost coverage"));
     const note = missing.length ? `Enter your monthly ${missing.map(p => p === "codex" ? "Codex / ChatGPT" : "Claude").join(" and ")} fee to compare.` : "Enter the full monthly fee you pay, including any taxes you want counted. Use 0 for no paid plan.";
     result.replaceChildren(values, el("p", "note", note), el("p", "note", "This compares recorded console activity with allocated plan fees, not a bill or a claim of savings. Pi / pay-as-you-go activity is excluded. Fees apply across this selected range; adjust them if your plan changed."));
@@ -184,7 +190,7 @@ function subscriptionPanel(cur) {
   const settings = el("details", "subscription-settings");
   settings.append(el("summary", "", "Set your monthly subscription fees"));
   const form = el("form", "subscription-form");
-  for (const [provider, name] of [["claude", "Claude monthly fee (USD)"], ["codex", "Codex / ChatGPT monthly fee (USD)"]]) {
+  for (const [provider, name] of [["claude", "Claude combined monthly fee (USD)"], ["codex", "Codex / ChatGPT monthly fee (USD)"]]) {
     const label = el("label", "", name), input = el("input");
     input.type = "number"; input.min = "0"; input.max = "100000"; input.step = "0.01"; input.inputMode = "decimal";
     input.name = provider; input.value = feeKnown(provider) ? String(monthlyFees[provider]) : ""; input.placeholder = "Not configured";
