@@ -261,7 +261,11 @@ function toolFacts(key, t) {
       ["Alerts", String((t.alerts || []).length)],
       ["Since", t.since ? when(t.since) : ""],
     ];
-  if (key === "trivy") return [["Targets", String((t.targets || []).length)]];
+  if (key === "trivy") {
+    const own = (t.targets || []).filter((g) => !g.thirdParty).length,
+      tp = (t.targets || []).length - own;
+    return [["Targets", String(own)], ...(tp ? [["Third-party", `${tp} (not counted)`]] : [])];
+  }
   return [
     ["Target", t.target],
     ["Open", String((t.openPorts || []).filter((p) => p.exposed !== false).length)],

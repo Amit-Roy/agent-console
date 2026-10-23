@@ -105,6 +105,13 @@ for (const [name, viewport, scheme] of [
       (await page.locator("#trivy-count").textContent()) === "3" &&
       (await page.locator("#trivy .hrow.tgt").last().innerText()).includes("third-party repos"),
   );
+  check(
+    `${name}: trivy card counts own targets and notes third-party`,
+    (await page.locator(".tool", { hasText: "Trivy" }).innerText())
+      .replace(/\s+/g, " ")
+      .includes("Targets 3") &&
+      (await page.locator(".tool", { hasText: "Trivy" }).innerText()).includes("1 (not counted)"),
+  );
   check(`${name}: four tool cards`, (await page.locator(".tool").count()) === 4);
   check(
     `${name}: infected file listed`,
