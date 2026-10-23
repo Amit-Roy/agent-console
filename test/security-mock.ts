@@ -66,6 +66,7 @@ export const LATEST = {
           name: "postgres:17",
           type: "image",
           counts: { CRITICAL: 1, HIGH: 2, MEDIUM: 6, LOW: 14 },
+          fixable: { CRITICAL: 1, HIGH: 1 },
           vulns: [
             vuln(
               "CVE-2026-1001",

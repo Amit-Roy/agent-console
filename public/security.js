@@ -71,14 +71,36 @@ const when = (iso) => {
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many || one + "s"}`;
 
 /* ---------- counts across one result ---------- */
+/* Fixable counts per severity for one target: scan-reported, else derived from listed vulns, else null. */
+function fixableOf(g) {
+  if (g.fixable) return { CRITICAL: g.fixable.CRITICAL || 0, HIGH: g.fixable.HIGH || 0 };
+  const vs = g.vulns;
+  if (!Array.isArray(vs) || !vs.some((v) => v.severity)) return null;
+  const f = { CRITICAL: 0, HIGH: 0 };
+  for (const v of vs) if (v.fixed && v.severity in f) f[v.severity]++;
+  return f;
+}
 function totals(r) {
   const t = r.tools || {},
-    c = { infected: 0, runtimeAlerts: 0, critical: 0, high: 0, openPorts: 0 };
+    c = {
+      infected: 0,
+      runtimeAlerts: 0,
+      critical: 0,
+      high: 0,
+      openPorts: 0,
+      fixCritical: null,
+      fixHigh: null,
+    };
   c.infected = t.clamav?.infected?.length || 0;
   c.runtimeAlerts = t.falco?.alerts?.length || 0;
   for (const g of t.trivy?.targets || []) {
     c.critical += g.counts?.CRITICAL || 0;
     c.high += g.counts?.HIGH || 0;
+    const f = fixableOf(g);
+    if (f) {
+      c.fixCritical += f.CRITICAL;
+      c.fixHigh += f.HIGH;
+    }
   }
   c.openPorts = t.nmap?.openPorts?.length || 0;
   return c;
@@ -145,15 +167,16 @@ function renderVerdict() {
   if (r) {
     const c = totals(r);
     const strip = el("dl", "readout");
-    for (const [k, label, n, bad] of [
+    for (const [k, label, n, bad, fix] of [
       ["infected", "Infected files", c.infected, 1],
       ["runtimeAlerts", "Runtime alerts", c.runtimeAlerts, 1],
-      ["critical", "Critical CVEs", c.critical, 1],
-      ["high", "High CVEs", c.high, 1],
+      ["critical", "Critical CVEs", c.critical, 1, c.fixCritical],
+      ["high", "High CVEs", c.high, 1, c.fixHigh],
       ["openPorts", "Open ports", c.openPorts, 0],
     ]) {
       const w = el("div", n && bad ? "hot" : "");
       w.append(el("dt", "", label), el("dd", "", String(n)));
+      if (fix != null) w.append(el("small", "fixable", `${fix} fixable`));
       strip.append(w);
     }
     v.append(strip);
@@ -411,6 +434,9 @@ function renderTrivy() {
         el("span", `chip ${s.toLowerCase()}`, `${c} ${s[0] + s.slice(1).toLowerCase()}`),
       );
     }
+    const fx = fixableOf(g),
+      fxn = fx ? fx.CRITICAL + fx.HIGH : 0;
+    if (fxn) chips.append(el("span", "chip fix", `${fxn} fixable`));
     if (!any) chips.append(el("span", "chip none", "No vulnerabilities"));
     btn.append(n, chips, el("span", "hchev", open ? "−" : "+"));
     btn.addEventListener("click", () => {
