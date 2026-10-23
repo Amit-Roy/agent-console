@@ -13,7 +13,15 @@ export interface UsageWindow {
   unit?: string;
   resetsAt?: number;
 }
+export interface UsageBalance {
+  currency: "USD" | "CNY";
+  total: number;
+  granted: number;
+  toppedUp: number;
+}
 export interface ProviderUsage {
+  balances?: UsageBalance[];
+  available?: boolean;
   windows: UsageWindow[];
   note?: string;
   updatedAt: number;
@@ -82,6 +90,35 @@ export function routerUsage(d: any): Omit<ProviderUsage, "updatedAt"> {
       ? undefined
       : "OpenRouter does not report a request allowance for this key.",
   };
+}
+/** Invalid responses leave the previous account balance intact. */
+export function deepseekUsage(d: unknown): Omit<ProviderUsage, "updatedAt"> | undefined {
+  if (!d || typeof d !== "object") return;
+  const payload = d as Record<string, unknown>;
+  if (
+    typeof payload.is_available !== "boolean" ||
+    !Array.isArray(payload.balance_infos) ||
+    !payload.balance_infos.length
+  )
+    return;
+  const amount = (value: unknown): number | undefined => {
+    if (typeof value !== "number" && (typeof value !== "string" || !/^\d+(?:\.\d+)?$/.test(value)))
+      return;
+    const n = Number(value);
+    return Number.isFinite(n) && n >= 0 ? n : undefined;
+  };
+  const balances: UsageBalance[] = [];
+  for (const item of payload.balance_infos) {
+    if (!item || typeof item !== "object") return;
+    const { currency, total_balance, granted_balance, topped_up_balance } = item;
+    if (currency !== "USD" && currency !== "CNY") return;
+    const total = amount(total_balance),
+      granted = amount(granted_balance),
+      toppedUp = amount(topped_up_balance);
+    if (total === undefined || granted === undefined || toppedUp === undefined) return;
+    balances.push({ currency, total, granted, toppedUp });
+  }
+  return { windows: [], balances, available: payload.is_available };
 }
 /** Rows to append to the usage history: windows whose used%, limit or reset time changed since `prev`. */
 export function historyRows(
@@ -337,6 +374,33 @@ async function readRouterUsage() {
   } catch {} // retain the last successful sample, with its timestamp
 }
 
+let deepseekRefresh: Promise<void> | undefined;
+let deepseekCheckedAt = 0;
+export function refreshDeepSeekUsage(): Promise<void> {
+  if (deepseekRefresh) return deepseekRefresh;
+  if (Date.now() - deepseekCheckedAt < 5 * 60_000) return Promise.resolve();
+  deepseekCheckedAt = Date.now();
+  deepseekRefresh = readDeepSeekUsage().finally(() => {
+    deepseekRefresh = undefined;
+  });
+  return deepseekRefresh;
+}
+async function readDeepSeekUsage() {
+  if (process.env.AGENT_CONSOLE_MOCK === "1") return;
+  const env = childEnv();
+  const key = env.DEEPSEEK_API_KEY || env.DEEPAEEK_API_KEY;
+  if (!key) return;
+  try {
+    const response = await fetch("https://api.deepseek.com/user/balance", {
+      headers: { Authorization: `Bearer ${key}` },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!response.ok) return;
+    const sample = deepseekUsage(await response.json());
+    if (sample) usage.record("pi:deepseek", sample);
+  } catch {} // retain the last successful sample, with its timestamp
+}
+
 // Codex only reports quota while a turn runs; ask a short-lived app-server for the current figures instead.
 export function readCodexUsage(): Promise<void> {
   if (process.env.AGENT_CONSOLE_MOCK === "1") return Promise.resolve();
@@ -400,5 +464,6 @@ export function readCodexUsage(): Promise<void> {
 }
 export async function refreshUsage() {
   routerCheckedAt = 0;
-  await Promise.all([readCodexUsage(), refreshRouterUsage()]);
+  deepseekCheckedAt = 0;
+  await Promise.all([readCodexUsage(), refreshRouterUsage(), refreshDeepSeekUsage()]);
 }
