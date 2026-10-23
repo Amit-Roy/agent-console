@@ -87,7 +87,7 @@ for (const [name, viewport, scheme] of [
   check(`${name}: verdict`, (await page.locator("#verdict h2").innerText()).includes("Findings"));
   check(
     `${name}: readout`,
-    (await page.locator(".readout dd").allInnerTexts()).join(",") === "1,3,1,3,3",
+    (await page.locator(".readout dd").allInnerTexts()).join(",") === "1,3,1,3,1",
     (await page.locator(".readout dd").allInnerTexts()).join(","),
   );
   check(
@@ -111,6 +111,11 @@ for (const [name, viewport, scheme] of [
   await page.locator("#falco-rows .hrow.tgt", { hasText: "Terminal shell" }).click();
   check(`${name}: falco group expands`, (await page.locator("#falco-rows .vuln").count()) === 2);
   check(`${name}: open ports`, (await page.locator("#port-rows .port").count()) === 3);
+  check(
+    `${name}: only exposed ports counted`,
+    (await page.locator("#port-count").textContent())?.startsWith("1") &&
+      (await page.locator("#port-rows .port", { hasText: /internal only/i }).count()) === 2,
+  );
   check(`${name}: history strip`, (await page.locator("#strip .tick").count()) === HISTORY.length);
   const t = page.locator("#trivy .hrow.tgt").first();
   await t.click();
