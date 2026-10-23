@@ -1,4 +1,4 @@
-import { openSync } from "fontkit";
+import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { completeLabel } from "./small-model.ts";
 
@@ -11,10 +11,10 @@ const MAX_WORDS = 3;
 const MAX_TOPIC = 8;
 export const MAX_TITLE = 20;
 const MAX_TITLE_WIDTH = 174; // px: 180px running desktop row, with 6px reserve; Android has 220px
-let titleFont: ReturnType<typeof openSync>;
+let titleFont: ReturnType<typeof import("fontkit").openSync>;
 
 function titleWidth(text: string): number {
-  titleFont ??= openSync(fileURLToPath(new URL("../../public/fonts/inter-latin-wght-normal.woff2", import.meta.url)));
+  titleFont ??= createRequire(import.meta.url)("fontkit").openSync(fileURLToPath(new URL("../../public/fonts/inter-latin-wght-normal.woff2", import.meta.url)));
   // Pad 14px default Inter advances by 5% for the selected medium weight.
   // Reserve two ems for glyphs supplied by a fallback font.
   return Array.from(text).reduce((px, c) => {
