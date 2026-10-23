@@ -38,6 +38,7 @@ import { startDebug } from "./automation/debug.ts";
 import { createEventLog } from "./automation/events.ts";
 import { diagnoseJob, readJobError } from "./automation/job.ts";
 import { route as routeWork } from "./automation/router.ts";
+import { sweepAutoRuntime } from "./automation/runtime-cleanup.ts";
 import { automationApi, scanHooks } from "./automation/snapshot.ts";
 import { createTriageBridge } from "./automation/triage-bridge.ts";
 import { usageEvents } from "./automation/usage-events.ts";
@@ -325,6 +326,14 @@ if (process.env.AGENT_CONSOLE_MOCK !== "1") {
     (automationSweep ??= (async () => {
       if (archive) await archiver.sweep();
       await reviewer.sweep(threads.list().filter((t) => !assignedOwner(t)));
+      // Finished Auto threads keep only transcripts; deleted threads lose their runtime folder.
+      const runtime = await sweepAutoRuntime(DATA_DIR, threads.list());
+      if (runtime.pruned || runtime.removed || runtime.failed)
+        automationLog.record({
+          step: "worktree",
+          kind: runtime.failed ? "fail" : "info",
+          msg: `Auto runtime cleanup: ${runtime.pruned} pruned, ${runtime.removed} removed, ${runtime.failed} failed`,
+        });
     })()
       .catch(() => {})
       .finally(() => {
