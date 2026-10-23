@@ -398,6 +398,21 @@ try {
       /Resolved/.test(await resolved.innerText()) && (await resolved.locator(".bad").count()) === 0,
     );
     ok("unconfirmed failures remain flagged", /Unresolved/.test(await unresolved.innerText()));
+    await unresolved.locator("button").focus();
+    const previousFailure = await unresolved.locator("button").elementHandle();
+    await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+    await page.waitForFunction((b) => !b?.isConnected, previousFailure);
+    ok(
+      "live refresh preserves failure row focus",
+      await unresolved.locator("button").evaluate((b) => b === document.activeElement),
+    );
+    await page.keyboard.press("Enter");
+    await page.waitForSelector("#drawer:not([hidden])");
+    await page.keyboard.press("Escape");
+    ok(
+      "failure log returns keyboard focus to its row",
+      await unresolved.locator("button").evaluate((b) => b === document.activeElement),
+    );
     await page.locator("#failures").scrollIntoViewIfNeeded();
     await page.screenshot({ path: `${OUT}/resolved-failures-${name}.png` });
     ok(

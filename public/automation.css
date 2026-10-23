@@ -340,6 +340,36 @@ body.auto {
   border-top: 1px solid var(--edge);
   font: var(--fw-reg) var(--f-sm);
 }
+#failures li {
+  display: block;
+  padding: 0;
+}
+.failure-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px var(--sp-3);
+  width: 100%;
+  min-height: var(--ctl-h);
+  padding: var(--sp-2) 0;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+.failure-row:hover {
+  background: var(--s3);
+}
+.failure-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.failure-row .a {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
 .rows li:first-child {
   border-top: 0;
 }
