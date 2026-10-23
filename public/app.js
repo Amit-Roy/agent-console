@@ -2460,6 +2460,10 @@ function renderCtx() {
   if (c?.used == null && cur()?.lastCompactedAt) {
     b.hidden = false;
     b.dataset.level = "";
+// Live-only step timing: history events carry no timestamps, so replayed rows show no duration.
+const stepDur = (ms) =>
+  ms < 1000 ? `${Math.round(ms)}ms` : ms < 10000 ? `${(ms / 1000).toFixed(1)}s` : fmtDur(ms);
+const durChip = (ms) => el("span", "dur", stepDur(ms));
     b.style.color = "";
     b.querySelector(".fill").style.strokeDasharray = "0 100";
     b.querySelector(".pct").textContent = "Compacted";
@@ -3217,7 +3221,10 @@ function onEvent(e, live) {
     case "stream_event": {
       const ev = e.event;
       if (!ev) break;
-      if (ev.type === "message_start") state.live = null;
+      if (ev.type === "message_start") {
+        state.live = null;
+        state.thinkAt = null;
+      }
       if (ev.type === "content_block_delta") {
         if (ev.delta?.type === "text_delta") {
           renderLive("text");
@@ -3234,13 +3241,17 @@ function onEvent(e, live) {
         if (b.type === "thinking" || b.type === "redacted_thinking") dropLive("thinking");
         if (b.type === "text" && b.text?.trim()) {
           dropLive("text");
+          state.thinkAt ??= performance.now();
           dropLive("thinking");
           push(asstMsg(b.text, true).root, live);
         } else if (b.type === "thinking" && b.thinking?.trim()) {
           dropLive("thinking");
           const det = el("details", "msg think");
           const sum = el("summary");
-          sum.append(icon("sparkle"), el("span", "", "Reasoning"), icon("chev-right", "chev"));
+          sum.append(icon("sparkle"), el("span", "", "Reasoning"));
+          if (live && state.thinkAt != null) sum.append(durChip(performance.now() - state.thinkAt));
+          state.thinkAt = null;
+          sum.append(icon("chev-right", "chev"));
           det.append(sum, el("div", "think-body", b.thinking));
           push(det, live);
         } else if (b.type === "tool_use") {
@@ -3279,6 +3290,7 @@ function onEvent(e, live) {
             }
             fitOutputs(card);
           });
+          if (live) card.startedAt = performance.now();
           state.cards.set(b.id, card);
           push(card, live);
         }
@@ -3302,6 +3314,7 @@ function onEvent(e, live) {
             : (c.content ?? []).map((x) => x.text ?? "").join("\n");
         // a background subagent's launch receipt is harness bookkeeping; its status chip and activity say the same
         const launched =
+        if (card.startedAt != null) st.before(durChip(performance.now() - card.startedAt));
           card.classList.contains("agent") &&
           (card.querySelector(".task-chip:not([hidden])") || /^Async agent launched/.test(text));
         if (text && !launched) {
