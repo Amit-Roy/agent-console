@@ -70,33 +70,29 @@ function spawnProxy() {
   if (env.ANTHROPIC_BASE_URL?.replace(/\/+$/, "") === URL_) delete env.ANTHROPIC_BASE_URL;
   // Provider clients cannot call Headroom's injected retrieval tool. Keep compression,
   // but never replace tool output with CCR markers that the agent cannot resolve.
-  const p = spawn(
-    "nice",
-    [
-      "-n",
-      "15",
-      "headroom",
-      "proxy",
-      "--host",
-      "127.0.0.1",
-      "--port",
-      String(PORT),
-      "--compression-max-workers",
-      "1",
-      "--no-code-aware",
-      "--no-ccr",
-      "--workers",
-      "1",
-      "--disable-kompress",
-      "--disable-kompress-fallback",
-      "--anthropic-pre-upstream-concurrency",
-      "1",
-    ],
-    {
-      env,
-      stdio: ["ignore", "pipe", "pipe"],
-    },
-  );
+  const headroomCommand = env.AGENT_CONSOLE_HEADROOM_COMMAND || "headroom";
+  const args = [
+    "-n",
+    "15",
+    headroomCommand,
+    "proxy",
+    "--host",
+    "127.0.0.1",
+    "--port",
+    String(PORT),
+    "--compression-max-workers",
+    "1",
+    "--no-code-aware",
+    "--no-ccr",
+    "--workers",
+    "1",
+  ];
+  if (env.AGENT_CONSOLE_HEADROOM_KOMPRESS !== "1") args.push("--disable-kompress");
+  args.push("--disable-kompress-fallback", "--anthropic-pre-upstream-concurrency", "1");
+  const p = spawn("nice", args, {
+    env,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
   child = p;
   // Drain both streams without retaining or serializing any child output.
   p.stdout?.on("data", (chunk: Buffer) => {

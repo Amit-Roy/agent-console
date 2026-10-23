@@ -23,6 +23,14 @@ setTimeout(() => http.createServer((req, res) => res.end('ok')).listen(Number(pr
 `,
   { mode: 0o700 },
 );
+const customCommand = path.join(scratch, "custom-headroom");
+fs.writeFileSync(
+  customCommand,
+  fs
+    .readFileSync(path.join(scratch, "headroom"), "utf8")
+    .replace("JSON.stringify({args:", "JSON.stringify({command: process.argv[1], args:"),
+  { mode: 0o700 },
+);
 process.env.PATH = `${scratch}:${process.env.PATH}`;
 process.env.CAPTURE = path.join(scratch, "capture");
 process.env.AGENT_CONSOLE_RUN = path.join(scratch, "run");
@@ -117,6 +125,20 @@ try {
   ])
     assert.equal(launch.args[launch.args.indexOf(flag) + 1], "1");
   assert.deepEqual(Object.values(launch.env), ["1", "1", "1", "1", "1", "1", "false", "0"]);
+  await headroom.stop();
+  process.env.AGENT_CONSOLE_HEADROOM_COMMAND = customCommand;
+  process.env.AGENT_CONSOLE_HEADROOM_KOMPRESS = "1";
+  await headroom.start();
+  const optInLaunch = fs
+    .readFileSync(process.env.CAPTURE, "utf8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line))[1];
+  assert.equal(optInLaunch.command, customCommand, "Configured executable path is spawned");
+  assert.ok(!optInLaunch.args.includes("--disable-kompress"));
+  assert.ok(optInLaunch.args.includes("--disable-kompress-fallback"));
+  assert.ok(optInLaunch.args.includes("--no-ccr"));
+  await headroom.stop();
   const guard = new ResourceGuard();
   guard.sample({ rssBytes: 100, ticks: 0, time: 1000 });
   for (let sec = 5; sec < 30; sec += 5)
