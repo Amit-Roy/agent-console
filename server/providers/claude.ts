@@ -66,7 +66,7 @@ export function claudeControl(write: (msg: object) => void, emit: (ev: any) => v
       }
       // Session history tools are read-only and authenticated by the Console bridge.
       // Allow only these exact names in Plan/acceptEdits; all other permission prompts retain their policy.
-      if (["mcp__agent_console__session_search", "mcp__agent_console__session_read"].includes(r.tool_name)) {
+      if (["mcp__agent_console__session_search", "mcp__agent_console__session_read", "mcp__agent_console__pi_research"].includes(r.tool_name)) {
         respond(ev.request_id, { behavior: "allow", updatedInput: r.input ?? {} });
         return true;
       }

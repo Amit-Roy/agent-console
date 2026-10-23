@@ -1,178 +1,135 @@
-import { join } from "node:path";
 import fs from "node:fs";
-import { fileURLToPath } from "node:url";
-import { launch as sandboxLaunch } from "./automation/sandbox.ts";
+import path from "node:path";
+import crypto from "node:crypto";
+import { DATA_DIR } from "./auth.ts";
 import { childEnv } from "./providers/env.ts";
 import { piRateEnv } from "./providers/pi-rate-env.ts";
-import { parseJson, spawnLines, type Proc } from "./providers/proc.ts";
-import { piQuestions } from "./providers/pi-questions.ts";
+import { parseJson, spawnLines } from "./providers/proc.ts";
 import { piTranslator } from "./providers/pi.ts";
-import { type AgentCtx } from "./providers/types.ts";
-import { DATA_DIR } from "./auth.ts";
 
-export interface ResearchTaskRequest {
+// Claude and Codex hand research (gathering, notes, indexing) to Pi so a cheaper model spends the tokens. The caller gets the
+// report back as a tool result; notes.md and index.json are kept under DATA_DIR/pi-research/<id>/ and each run's usage is
+// appended to pi-research-usage.jsonl so premium and Pi tokens can be compared. Pi runs read-only and gets no console tools.
+
+export interface ResearchRequest {
+  version?: 1;
   task: string;
-  cwd: string;
+  cwd: string; // folder Pi may read; never written to
   model?: string;
-  mode?: "plan" | "bypassPermissions";
+  timeoutMs?: number;
+  caller?: { thread?: string; provider?: string };
 }
 
-export interface ResearchTaskResult {
+export interface ResearchUsage { input: number; cacheRead: number; output: number; cost?: number }
+
+export interface ResearchResponse {
+  version: 1;
+  id: string;
+  provider: "pi";
+  model: string;
+  phase: "completed" | "failed";
   notesPath: string;
   indexPath: string;
-  provider: string;
-  model: string;
-  phase: "delegated" | "completed" | "failed";
   finalText?: string;
+  usage: ResearchUsage;
+  error?: string;
 }
-
-const QUESTIONS_EXTENSION = fileURLToPath(new URL("./pi-questions-extension.mjs", import.meta.url));
-const TOOLS_EXTENSION = fileURLToPath(new URL("./console-tools.mjs", import.meta.url));
 
 const DEFAULT_MODEL = "nvidia/nvidia/nemotron-3-super-120b-a12b";
+const DEFAULT_TIMEOUT_MS = 10 * 60_000;
+const READ_ONLY_TOOLS = "read,grep,find,ls";
+const ROOT = path.join(DATA_DIR, "pi-research");
+const LEDGER = path.join(DATA_DIR, "pi-research-usage.jsonl");
 
-function validateRequest(req: Partial<ResearchTaskRequest>): ResearchTaskRequest {
-  const task = typeof req.task === "string" && req.task.trim().length > 0 ? req.task.trim() : "";
+const PROMPT = (task: string) =>
+  `You are a research subagent. You have read-only tools. Gather the information, then answer with one self-contained markdown report: findings first, sources (file paths or URLs) after. Do not ask questions.\n\nTask: ${task}`;
+
+function validate(req: ResearchRequest) {
+  const task = typeof req?.task === "string" ? req.task.trim() : "";
   if (!task) throw new Error("research task must not be empty");
-
-  const cwd = typeof req.cwd === "string" ? req.cwd : process.cwd();
+  const cwd = typeof req.cwd === "string" ? path.resolve(req.cwd) : "";
   try {
-    fs.accessSync(cwd, fs.constants.R_OK | fs.constants.W_OK);
+    if (!cwd || !fs.statSync(cwd).isDirectory()) throw new Error();
+    fs.accessSync(cwd, fs.constants.R_OK);
   } catch {
-    throw new Error(`cwd not accessible: ${cwd}`);
+    throw new Error(`cwd not accessible: ${req.cwd}`);
   }
-
-  return { task, cwd, model: req.model ?? DEFAULT_MODEL, mode: req.mode ?? "bypassPermissions" };
+  return { task, cwd, model: req.model || DEFAULT_MODEL, timeoutMs: req.timeoutMs ?? DEFAULT_TIMEOUT_MS };
 }
 
-/**
- * Processes a research task by delegating it to a PI subagent.
- * Spawns a PI agent, sends the research task, and returns structured results including
- * the PI's final text output.
- * @param req The research task request with task description and working directory.
- * @returns A promise that resolves to the structured result with notes, index paths,
- *   provider, model, phase, and PI final text.
- */
-export async function processResearchTask(req: ResearchTaskRequest): Promise<ResearchTaskResult> {
-  const { task, cwd, model = DEFAULT_MODEL, mode = "bypassPermissions" } = validateRequest(req);
+export async function runPiResearch(req: ResearchRequest): Promise<ResearchResponse> {
+  const { task, cwd, model, timeoutMs } = validate(req);
+  const id = `${Date.now().toString(36)}-${crypto.randomBytes(4).toString("hex")}`;
+  const dir = path.join(ROOT, id);
+  fs.mkdirSync(path.join(dir, "session"), { recursive: true, mode: 0o700 });
+  const notesPath = path.join(dir, "research-notes.md");
+  const indexPath = path.join(dir, "index.json");
 
-  const sessionId = `pi-subagent-${Date.now()}-${Math.random().toString(36).substring(2, 10)}`;
-  const sessionDir = join(cwd, "pi-sessions", sessionId);
-  fs.mkdirSync(sessionDir, { recursive: true, mode: 0o700 });
+  const usage: ResearchUsage = { input: 0, cacheRead: 0, output: 0 };
+  let text = "";
+  let error: string | undefined;
+  let settled: (() => void) | undefined;
+  const done = new Promise<void>((resolve) => (settled = resolve));
 
-  const args = ["--mode", "rpc", "--model", model, "--session-dir", sessionDir, "--extension", QUESTIONS_EXTENSION, "--extension", TOOLS_EXTENSION];
-  if (mode === "plan") args.push("--tools", "read,grep,find,ls,ask_user,schedule_list,save_output");
-
-  const notesPath = join(cwd, "research-notes.md");
-  const indexPath = join(cwd, "index.json");
-
-  let resolved = false;
-  let result: ResearchTaskResult | undefined;
-  let notesContent = "";
-  let failureReason = "";
-
-  const ctx: AgentCtx = {
-    event(ev: any) {
-      if (ev.type === "result") {
-        resolved = true;
-        result = {
-          notesPath,
-          indexPath,
-          provider: "pi",
-          model,
-          phase: ev.subtype === "error" ? "failed" : "completed",
-          finalText: notesContent,
-        };
+  const translate = piTranslator((ev) => {
+    if (ev.type === "console_error") error ||= String(ev.text);
+    if (ev.type === "result") {
+      for (const m of ev.usageModels ?? []) {
+        usage.input += (m.fresh ?? 0) + (m.cacheWrite ?? 0) + (m.cacheRead ?? 0);
+        usage.cacheRead += m.cacheRead ?? 0;
+        usage.output += m.output ?? 0;
+        if (typeof m.cost === "number") usage.cost = (usage.cost ?? 0) + m.cost;
       }
-    },
+      if (ev.is_error) error ||= "pi reported an error";
+      settled?.();
+    }
+  });
+
+  const args = ["--mode", "rpc", "--model", model, "--session-dir", path.join(dir, "session"), "--tools", READ_ONLY_TOOLS];
+  const env = piRateEnv({ ...childEnv(), AGENT_CONSOLE_THREAD: id }, "interactive");
+  const proc = spawnLines("pi", "pi", args, { cwd, env }, {
+    event: (ev) => { if (ev.type === "console_error") error ||= String(ev.text); },
     commands() {},
-    exited(info: any) {
-      if (!resolved) {
-        const reason = failureReason || info.stderr || `exit code ${info.code}`;
-        result = {
-          notesPath,
-          indexPath,
-          provider: "pi",
-          model,
-          phase: "failed",
-          finalText: undefined,
-        };
-        failureReason = reason;
-      }
+    exited(info) {
+      if (!info.aborted) error ||= info.stderr.trim() || `pi exited with code ${info.code}`;
+      settled?.();
     },
-  };
-
-  let proc: Proc | undefined;
-  const questions = piQuestions(msg => proc?.write(JSON.stringify(msg)), ctx.event);
-
-  const translate = piTranslator(
-    (ev) => ctx.event(ev),
-    (list) => ctx.commands(list),
-    () => undefined
-  );
-
-  const launch = sandboxLaunch({ id: sessionId, cwd, mode, model }, "pi", args, piRateEnv({ ...childEnv(), AGENT_CONSOLE_THREAD: sessionId }, "interactive"));
-  proc = spawnLines("pi", launch.command, launch.args, { cwd: launch.cwd, env: launch.env }, {
-    ...ctx,
-    exited(info: any) { questions.cancelAll(); ctx.exited(info); },
   }, (line) => {
     const r = parseJson(line);
-    if (!r || questions.handle(r)) return;
-
+    if (!r) return;
     if (r.type === "message_end" && r.message?.role === "assistant") {
-      const text = r.message.content?.[0]?.text;
-      if (text) notesContent = text;
+      const t = (r.message.content ?? []).filter((b: any) => b?.type === "text").map((b: any) => b.text).join("\n");
+      if (t) text = t;
     }
-
-    if (r.type === "auto_retry_end" && r.success === false) {
-      failureReason = String(r.finalError ?? "auto retry failed");
-    }
-
     translate(r);
   });
 
-  // Send the research task using the proper prompt envelope from pi.ts
-  const n = 0;
-  const id = `p${n + 1}`;
-  proc.write(JSON.stringify({ id, type: "prompt", message: task }) + "\n");
+  proc.write(JSON.stringify({ id: "p1", type: "prompt", message: PROMPT(task) }));
+  const timer = setTimeout(() => {
+    error ||= `timed out after ${Math.round(timeoutMs / 1000)}s`;
+    settled?.();
+  }, timeoutMs);
+  await done;
+  clearTimeout(timer);
+  if (proc.alive()) proc.kill();
 
-  // Wait for result with timeout
-  let timedOut = false;
-  const timeout = setTimeout(() => {
-    timedOut = true;
-    if (proc) {
-      failureReason = "timeout after 60s waiting for PI subagent result";
-      proc.abort();
-    }
-  }, 60_000);
-
-  while (!resolved && !timedOut && proc?.alive()) {
-    await new Promise(resolve => setTimeout(resolve, 100));
+  const phase = error || !text ? "failed" : "completed";
+  if (phase === "failed") error ||= "pi returned no report";
+  const res: ResearchResponse = { version: 1, id, provider: "pi", model, phase, notesPath, indexPath, usage, ...(phase === "completed" ? { finalText: text } : { error }) };
+  if (phase === "completed") {
+    fs.writeFileSync(notesPath, text, { mode: 0o600 });
+    fs.writeFileSync(indexPath, JSON.stringify({ version: 1, id, task, cwd, provider: "pi", model, caller: req.caller ?? {}, createdAt: new Date().toISOString(), notes: path.basename(notesPath), usage }, null, 1), { mode: 0o600 });
   }
-  clearTimeout(timeout);
-
-  if (!result) {
-    result = {
-      notesPath,
-      indexPath,
-      provider: "pi",
-      model,
-      phase: timedOut ? "failed" : "failed",
-      finalText: undefined,
-    };
+  try {
+    fs.appendFileSync(LEDGER, JSON.stringify({ ts: Date.now(), id, phase, caller: req.caller ?? {}, pi: { model, ...usage } }) + "\n", { mode: 0o600 });
+  } catch (e: any) {
+    console.error(`pi-research ledger write failed: ${e?.message || e}`);
   }
+  return res;
+}
 
-  // Copy files from sessionDir to cwd if they exist (only on success)
-  if (result.phase === "completed") {
-    const sessionNotesPath = join(sessionDir, "research-notes.md");
-    const sessionIndexPath = join(sessionDir, "index.json");
-    if (fs.existsSync(sessionNotesPath)) {
-      fs.copyFileSync(sessionNotesPath, notesPath);
-    }
-    if (fs.existsSync(sessionIndexPath)) {
-      fs.copyFileSync(sessionIndexPath, indexPath);
-    }
-  }
-
-  return result;
+/** What the calling model sees: the report plus where it is kept, or why the run failed. */
+export function researchToolText(res: ResearchResponse): string {
+  if (res.phase === "failed") return `Error: Pi research failed: ${res.error}`;
+  return `${res.finalText}\n\n---\nPi (${res.model}) used ${res.usage.input} input / ${res.usage.output} output tokens.\nNotes: ${res.notesPath}\nIndex: ${res.indexPath}`;
 }

@@ -2,86 +2,73 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { processResearchTask } from "../server/pi-subagent-worker.ts";
 
-console.log("Running PI Subagent Worker test...");
-
-// Mock PI binary on PATH
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagent-mock-"));
+process.env.AGENT_CONSOLE_DATA = path.join(tmp, "data");
 process.env.PATH = `${tmp}/bin:${process.env.PATH}`;
 fs.mkdirSync(`${tmp}/bin`, { recursive: true });
 
+// Mock pi (RPC): records argv, answers one prompt with assistant text + usage. It writes no files: the worker must.
 fs.writeFileSync(`${tmp}/bin/pi`, `#!/usr/bin/env node
-const rl = require("node:readline").createInterface({ input: process.stdin });
+const readline = require("node:readline");
+const fs = require("node:fs");
+fs.writeFileSync(${JSON.stringify(path.join(tmp, "argv.json"))}, JSON.stringify(process.argv.slice(2)));
 const out = (o) => console.log(JSON.stringify(o));
-const mfs = require("fs");
-const mpath = require("path");
-console.error("MOCK PI READY, cwd:", process.cwd());
-rl.on("line", (l) => {
+readline.createInterface({ input: process.stdin }).on("line", (l) => {
   const r = JSON.parse(l);
   if (r.type !== "prompt") return;
-  console.error("MOCK PI GOT PROMPT:", r.message);
+  if (r.message.includes("CRASH")) { console.error("boom"); process.exit(3); }
+  if (r.message.includes("HANG")) return;
   out({ id: r.id, type: "response", command: "prompt", success: true });
   out({ type: "agent_start" });
-  const notes = "# Research results\\n\\nResearch results for: " + r.message;
-  const index = JSON.stringify([{ id: "1", title: r.message, description: r.message, status: "completed", provider: "pi", model: "nvidia/nvidia/nemotron-3-super-120b-a12b" }]);
-  mfs.writeFileSync(mpath.join(process.cwd(), "research-notes.md"), notes);
-  mfs.writeFileSync(mpath.join(process.cwd(), "index.json"), index);
-  console.error("MOCK PI WROTE FILES to:", mpath.join(process.cwd(), "research-notes.md"));
-  out({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "Research results for: " + r.message }], stopReason: "stop" } });
+  out({ type: "message_end", message: { role: "assistant", model: "nemotron", content: [{ type: "text", text: "# Findings\\nQuantum result with sources" }], stopReason: "stop", usage: { input: 1200, output: 300, cacheRead: 50, cacheWrite: 0, cost: { total: 0 } } } });
   out({ type: "agent_settled" });
-  out({ type: "result", subtype: "success", is_error: false });
 });
 `, { mode: 0o755 });
 
-// Arrange
-const researchTask = "Research the latest advancements in quantum computing.";
-const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagent-test-"));
-console.log("cwd:", cwd);
+const { runPiResearch, researchToolText } = await import("../server/pi-subagent-worker.ts");
+const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagent-cwd-"));
 
-// Check if cwd is writable
-console.log("cwd writable:", fs.accessSync(cwd, fs.constants.R_OK | fs.constants.W_OK) === undefined ? "yes" : "no");
+// success: worker (not pi) writes notes + index; project folder stays untouched; usage is attributed to pi
+const ok = await runPiResearch({ version: 1, task: "Research quantum computing", cwd, caller: { thread: "t1", provider: "claude" } });
+assert.equal(ok.version, 1);
+assert.equal(ok.phase, "completed", ok.error);
+assert.equal(ok.provider, "pi");
+assert.ok(ok.notesPath.startsWith(path.join(tmp, "data")), "outputs live under the console data dir");
+assert.equal(fs.readFileSync(ok.notesPath, "utf8"), ok.finalText);
+assert.match(fs.readFileSync(ok.notesPath, "utf8"), /Quantum result/);
+const index = JSON.parse(fs.readFileSync(ok.indexPath, "utf8"));
+assert.equal(index.task, "Research quantum computing");
+assert.equal(index.provider, "pi");
+assert.equal(index.caller.provider, "claude");
+assert.deepEqual(fs.readdirSync(cwd), [], "project folder not written");
+assert.equal(ok.usage.output, 300);
+assert.equal(ok.usage.input, 1250);
+const argv = JSON.parse(fs.readFileSync(path.join(tmp, "argv.json"), "utf8"));
+assert.equal(argv[argv.indexOf("--tools") + 1], "read,grep,find,ls", "research subagent is read-only");
+assert.ok(!argv.some((a: string) => a.includes("console-tools")), "pi subagent cannot recurse into console tools");
 
-// Act
-let result: { notesPath: string; indexPath: string; provider: string; model: string; phase: string; finalText?: string } | undefined;
-try {
-  result = await processResearchTask({ task: researchTask, cwd });
-} catch (err) {
-  console.error("Error during research task:", err);
-  process.exit(1);
-}
+// telemetry ledger: one row per run, caller vs pi attribution
+const ledgerFile = path.join(tmp, "data", "pi-research-usage.jsonl");
+const ledger = fs.readFileSync(ledgerFile, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+assert.equal(ledger.length, 1);
+assert.equal(ledger[0].caller.provider, "claude");
+assert.equal(ledger[0].pi.output, 300);
 
-console.log("Result:", JSON.stringify(result, null, 2));
+// tool text hands the caller the answer and the paths
+const text = researchToolText(ok);
+assert.match(text, /Quantum result/);
+assert.ok(text.includes(ok.notesPath));
 
-// Check session dirs
-const sessionDir = path.join(cwd, "pi-sessions");
-console.log("sessionDir:", sessionDir, "exists:", fs.existsSync(sessionDir));
-if (fs.existsSync(sessionDir)) {
-  const sessionDirs = fs.readdirSync(sessionDir);
-  console.log("sessionDirs:", sessionDirs);
-  for (const sdir of sessionDirs) {
-    const fullSdir = path.join(sessionDir, sdir);
-    const files = fs.existsSync(fullSdir) ? fs.readdirSync(fullSdir) : [];
-    console.log(`Session ${sdir} files:`, files);
-  }
-}
+// failures: crash, timeout, empty task, bad cwd
+const crashed = await runPiResearch({ task: "CRASH please", cwd });
+assert.equal(crashed.phase, "failed");
+assert.match(crashed.error!, /boom|exit/);
+const hung = await runPiResearch({ task: "HANG", cwd, timeoutMs: 700 });
+assert.equal(hung.phase, "failed");
+assert.match(hung.error!, /timed out/);
+await assert.rejects(runPiResearch({ task: "  ", cwd }), /must not be empty/);
+await assert.rejects(runPiResearch({ task: "x", cwd: path.join(cwd, "missing") }), /cwd not accessible/);
 
-// Assert
-if (!result) {
-  throw new Error("Result is undefined");
-}
-assert.ok(fs.existsSync(result.notesPath), `Notes file not found at ${result.notesPath}`);
-assert.ok(fs.existsSync(result.indexPath), `Index file not found at ${result.indexPath}`);
-assert.strictEqual(result.provider, "pi", "Provider should be 'pi'");
-assert.strictEqual(result.model, "nvidia/nvidia/nemotron-3-super-120b-a12b", "Model should match");
-assert.ok(result.phase === "completed", `Phase should be completed, got ${result.phase}`);
-assert.ok(result.finalText?.includes("Research results"), `finalText should contain research results, got: ${result.finalText}`);
-
-const notes = fs.readFileSync(result.notesPath, "utf8");
-const index = JSON.parse(fs.readFileSync(result.indexPath, "utf8"));
-assert.ok(notes.length > 0, "Notes file should not be empty");
-assert.ok(index.length > 0, "Index file should not be empty");
-assert.ok(index[0].provider === "pi", "Index should contain provider");
-
-console.log("Test passed!");
+console.log("pi-subagent-worker: read-only pi run, worker-written notes/index, usage ledger, failure paths pass");
 process.exit(0);
