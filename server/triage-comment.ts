@@ -6,6 +6,7 @@ import {
   TRIAGE_RULES,
   TRIAGE_SCORECARD_VERSION,
 } from "./providers/triage-scorecard.ts";
+import type { StructureQuote } from "./providers/triage-structure.ts";
 
 export const EFFORT_LABELS = {
   trivial: "Eff: Trivial",
@@ -56,6 +57,20 @@ const investigation: Record<MetricName, string> = {
   frequency: "confirm how often users meet this in the app workflow",
 };
 
+/** Budget, biggest cost driver and the cheapest missing item, so a sparse request shows what it costs. */
+function structureLines(structure?: StructureQuote, typical?: number): string[] {
+  if (!structure || structure.budget === null) return [];
+  return [
+    `Recommended budget **${compact(structure.budget)}** tokens${typical === undefined ? "" : `; typical **${compact(typical)}**`}.`,
+    ...(structure.costDriver ? [`Biggest cost driver: ${structure.costDriver}.`] : []),
+    ...(structure.counterfactual
+      ? [
+          `Add ${structure.counterfactual.label} → estimated budget drops to **${compact(structure.counterfactual.budget)}** tokens.`,
+        ]
+      : []),
+  ];
+}
+
 /** Pi supplies work and evidence; the renderer preserves computed labels and token counts. */
 export function renderTriageComment(decision: TriageDecision, sourceMarker = ""): string {
   const score = decision.scorecard;
@@ -69,6 +84,7 @@ export function renderTriageComment(decision: TriageDecision, sourceMarker = "")
           `Urgency ${score.urgency.score}/3 sets the priority: ${score.urgency.drivers.map(safeTriageText).join("; ")}.`,
         ]
       : []),
+    ...structureLines(score?.structure, score?.pricing.total?.p50),
     "",
     "### Book of work",
     "",
@@ -208,7 +224,7 @@ export function renderTriageComment(decision: TriageDecision, sourceMarker = "")
     "<details><summary>Token accounting and model check</summary>",
     "",
     `Status: ${safeTriageText(price.confidence)}. Target: ${totalTarget ? "Initial request → total session usage" : session ? "initial request → session work → whole-session tokens" : "initial request → delivery-run work → tokens"}.`,
-    `Training: ${safeTriageText(price.training.sampleCount ?? price.training.sampleIds.length)} ${session ? "sessions" : "delivery runs"}; ${safeTriageText(price.training.groupCount ?? "unknown")} thread groups.`,
+    `Training: ${safeTriageText(price.training.sampleCount ?? price.training.sampleIds.length)} ${session ? "sessions" : "delivery runs"}; ${safeTriageText(price.training.groupCount ?? "not recorded")} thread groups.`,
     "",
     "| Scenario | Total tokens | Generated |",
     "| --- | ---: | ---: |",
@@ -248,7 +264,7 @@ export function renderTriageComment(decision: TriageDecision, sourceMarker = "")
   const selectedOutput = metrics.activeOutputTokens ?? metrics.outputTokens;
   if (typeof metrics.sampleCount === "number")
     lines.push(
-      `Held-out check: ${number(metrics.sampleCount)} outcomes; ${safeTriageText(metrics.groupCount ?? "unknown")} thread groups.`,
+      `Held-out check: ${number(metrics.sampleCount)} outcomes; ${safeTriageText(metrics.groupCount ?? "not recorded")} thread groups.`,
     );
   if (typeof selectedWork?.mae === "number")
     lines.push(
@@ -277,7 +293,7 @@ export function renderTriageComment(decision: TriageDecision, sourceMarker = "")
     "",
     ...price.contributions.map(
       (item) =>
-        `- ${safeTriageText(item.feature)}: ${item.value ?? "unknown"}; log-work ${number(item.logWork)}, missingness ${number(item.missingLogWork)}.`,
+        `- ${safeTriageText(item.feature)}: ${item.value ?? "not stated"}; log-work ${number(item.logWork)}, missingness ${number(item.missingLogWork)}.`,
     ),
     "",
     safeTriageText(price.formula),
