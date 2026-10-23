@@ -836,6 +836,7 @@ export class Threads {
     this.persist();
     fs.rmSync(path.join(LOG_DIR, `${id}.jsonl`), { force: true });
     fs.rmSync(path.join(DATA_DIR, "pi-sessions", id), { recursive: true, force: true });
+    fs.rmSync(path.join(DATA_DIR, "auto-runtime", id), { recursive: true, force: true });
     removeUploads(id);
     this.emit({ t: "removed", thread: id });
   }
