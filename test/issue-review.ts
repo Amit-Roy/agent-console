@@ -9,6 +9,7 @@ import { route as realRoute } from "../server/automation/router.ts";
 import { startIssue, ROUTES } from "../server/window-dispatch.ts";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "ac-review-"));
+// Synchronous Git keeps review setup inside one tick; production uses async Git, covered by test/window-dispatch.ts.
 const run = (cwd: string, ...a: string[]) => execFileSync("git", ["-C", cwd, "-c", "user.name=t", "-c", "user.email=t@t", ...a], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 const tick = () => new Promise(r => setTimeout(r, 30));
 let now = 1_800_000_000_000;
@@ -25,30 +26,31 @@ try {
   const dec = (effort: any, repo = "o/webapp", number = 42): any => ({ key: `${repo}#${number}`, issue: { repo, number, title: "Fix totals", labels: [] }, effort, route: ROUTES.trivial[0], reason: "" });
 
   // PR-only: a started worktree refuses a push to the default branch but allows a branch push
-  const started = startIssue(dec("trivial"), runner, dirs);
+  const started = await startIssue(dec("trivial"), runner, dirs);
   fs.writeFileSync(path.join(started.cwd, "b"), "2"); run(started.cwd, "add", "b"); run(started.cwd, "commit", "-qm", "work");
   assert.throws(() => run(started.cwd, "push", "origin", "HEAD:main"), /Blocked/, "default branch is refused");
   run(started.cwd, "push", "-q", "origin", `HEAD:refs/heads/${started.branch}`);
   assert.equal(created[0].issueRun.role, "work");
   run(main, "commit", "-q", "--allow-empty", "-m", "local"); run(main, "push", "-q", "origin", "HEAD:main"); // the main checkout still works
-  const bauStart = startIssue(dec("bau", "o/webapp", 43), runner, dirs);
+  const bauStart = await startIssue(dec("bau", "o/webapp", 43), runner, dirs);
   assert.ok(fs.existsSync(path.join(run(bauStart.cwd, "rev-parse", "--absolute-git-dir"), "ac-hooks", "pre-push")), "non-direct repo BAU is PR-only too");
 
   // --- the reviewer ---------------------------------------------------------------------------------------------
   const ev = createEventLog({ file: path.join(root, "ev.jsonl"), now: () => now });
   const steps = (s: string) => ev.read({ step: s as any }).events.map(e => `${e.kind}:${e.msg ?? ""}`);
-  let prs: any[] = [], files: string[] = ["src/a.ts"], pull: any = { merged: false }, comments: any[] = [];
+  let prs: any[] = [], files: string[] = ["src/a.ts"], pull: any = { merged: false }, comments: any[] = [], headAt = now;
   const gh = async (_m: string, url: string) => {
-    if (/\/issues\/\d+\/comments/.test(url)) return comments;
+    if (/\/issues\/\d+\/comments/.test(url)) return comments.map((c, i) => ({ ...c, id: c.id ?? i + 1 }));
     if (/\/pulls\?state=open&head=/.test(url)) return prs;
-    if (/\/pulls\/\d+\/files/.test(url)) return files.map(filename => ({ filename }));
+    if (/\/pulls\/\d+\/files/.test(url)) return files?.map(filename => ({ filename })) ?? null;
     if (/\/pulls\/\d+$/.test(url)) return pull;
+    if (/\/commits\/\w+$/.test(url)) return { commit: { committer: { date: new Date(headAt).toISOString() } } };
     throw new Error("unexpected " + url);
   };
   let routing: any = (effort: any) => realRoute({ role: "review", effort, usage: {}, active: [], now });
   const logs: string[] = [];
   const applied: any[] = [];
-  const rv = createReviewer({ github: gh as any, runner, dirs, events: ev, log: m => logs.push(m), route: (e: any) => routing(e), applied: (name: string, sha: string) => { applied.push([name, sha]); return sha === "good"; }, now: () => now });
+  const rv = createReviewer({ git: run, github: gh as any, runner, dirs, events: ev, log: m => logs.push(m), route: (e: any) => routing(e), applied: (name: string, sha: string) => { applied.push([name, sha]); return sha === "good"; }, now: () => now });
   const worker = (effort: string, id = "W1", extra = {}) => ({ id, issueRun: { ...created[0].issueRun, effort, ...extra } });
   const count = () => created.length;
 
@@ -79,16 +81,34 @@ try {
   assert.match(sent.at(-1).text, /gh pr merge 7 --repo o\/webapp --squash/); assert.match(sent.at(-1).text, /at most 20 changed lines/);
   assert.ok(steps("review").some(m => m.startsWith("ok:") || m.startsWith("info:")) || ev.read({ step: "review" as any }).events.some(e => e.kind === "start"), "review start recorded");
   assert.ok(marks.some(m => m.id === "W1" && m.patch.pr === 7 && m.patch.reviewedAt));
-  // once per worker, also across the in-memory claim and after the thread is marked
-  rv.turnEnded(worker("bau"), {}); await tick(); assert.equal(count(), 3);
+  // once per worker: two turn ends racing the setup start one review, and a marked worker is not reviewed again
+  rv.turnEnded(worker("bau", "WR"), {}); rv.turnEnded(worker("bau", "WR"), {}); await tick(); assert.equal(count(), 4, "one review, not two"); created.pop();
+  rv.turnEnded(worker("bau", "W1", { reviewedAt: now }), {}); await tick(); assert.equal(count(), 3);
   await rv.sweep([{ id: "W1", status: "idle", issueRun: { ...created[0].issueRun, effort: "bau", finishedAt: now, reviewedAt: now } }] as any); assert.equal(count(), 3);
 
-  // a PR with a Self-review section passes that step; a protected path is never merged by the reviewer
+  // a PR with a Self-review section passes that step; a protected path is not merged by a Pi reviewer
+  const premiumRouting = routing;
+  routing = () => ({ v: 1, decision: "route", route: { provider: "pi", model: "m", effort: "low" }, alternatives: [], why: "" });
   prs = [{ number: 8, body: "x\n\n## Self-review\nchecked; failed first: t" }]; files = ["server/window-dispatch.ts"];
   await rv.sweep([{ id: "W2", status: "idle", issueRun: { ...created[0].issueRun, key: "o/webapp#44", number: 44, effort: "trivial", finishedAt: now } }] as any);
   assert.notEqual(created.at(-1).cwd, r.cwd, "each review receives a fresh private checkout");
   assert.ok(steps("self_review").includes("ok:Self-review section present"));
   assert.match(sent.at(-1).text, /Do not merge it/); assert.doesNotMatch(sent.at(-1).text, /gh pr merge 8/);
+  // a premium reviewer may merge the same protected path
+  routing = premiumRouting;
+  await rv.sweep([{ id: "W2b", status: "idle", issueRun: { ...created[0].issueRun, key: "o/webapp#48", number: 48, effort: "trivial", finishedAt: now } }] as any);
+  assert.match(sent.at(-1).text, /gh pr merge 8 --repo o\/webapp --squash/); assert.doesNotMatch(sent.at(-1).text, /Do not merge it/);
+  // Incomplete file lists still block merging for every reviewer provider.
+  for (const provider of ["claude", "codex", "pi"]) {
+    routing = () => ({ v: 1, decision: "route", route: { provider, model: "m", effort: "low" }, alternatives: [], why: "" });
+    for (const unavailable of [false, true]) {
+      files = unavailable ? null as any : Array.from({ length: 100 }, (_, i) => `src/${i}.ts`);
+      await rv.sweep([{ id: `files-${provider}-${unavailable}`, status: "idle", issueRun: { ...created[0].issueRun, effort: "trivial", finishedAt: now } }] as any);
+      assert.match(sent.at(-1).text, /Do not merge it/);
+      assert.doesNotMatch(sent.at(-1).text, /gh pr merge 8/);
+    }
+  }
+  routing = premiumRouting;
   files = ["src/a.ts"];
 
   // deferral: no review model has room now; the sweep tries again later
@@ -116,11 +136,17 @@ try {
   assert.ok(steps("review").some(m => m.startsWith("fail:")));
 
   // a worker whose turn errored after it opened its PR (a provider limit late in the turn) is still reviewed
-  prs = [{ number: 40, body: "## Self-review\nok" }];
+  prs = [{ number: 40, body: "## Self-review\nok", head: { sha: "h40" } }];
   const errBefore = count();
   rv.turnEnded({ id: "WX", issueRun: { ...created[0].issueRun, key: "o/webapp#15", number: 15, effort: "bau" } } as any, { is_error: true }); await tick();
   assert.equal(count(), errBefore + 1, "errored worker with an open PR gets a reviewer");
   assert.equal(created.at(-1).issueRun.worker, "WX"); assert.equal(created.at(-1).issueRun.reviews, 1);
+  // the same worker, back from a redo that pushed, is reviewed again by this server: the first review's claim is released
+  comments = [{ body: "Review: CHANGES REQUESTED\nx", created_at: new Date(now).toISOString() }]; headAt = now + 1000;
+  rv.turnEnded({ id: "RX", issueRun: { key: "o/webapp#15", repo: "o/webapp", number: 15, effort: "bau", role: "review", pr: 40, branch: created[0].issueRun.branch, worker: "WX", startedAt: now, reviews: 1 } } as any, {}); await tick();
+  rv.turnEnded({ id: "WX", issueRun: { ...created[0].issueRun, key: "o/webapp#15", number: 15, effort: "bau", reviews: 1, redoing: true } } as any, {}); await tick();
+  assert.equal(count(), errBefore + 2, "a redone worker gets a second review"); assert.equal(created.at(-1).issueRun.reviews, 2);
+  created.pop(); comments = [];
   // a worker that died before marking finishedAt (an older build) is picked up by the sweep
   await rv.sweep([{ id: "WY", status: "idle", issueRun: { ...created[0].issueRun, key: "o/webapp#16", number: 16, effort: "bau" } }] as any);
   assert.equal(count(), errBefore + 2, "sweep reviews idle workers without finishedAt");
@@ -137,27 +163,41 @@ try {
   assert.ok(marks.some(m => m.id === "RV" && m.patch.outcome === "changes"), "the reviewer's end is judged once");
   assert.ok(ev.read({ step: "redo" as any }).events.some(e => e.kind === "start"));
   rv.turnEnded(redo({ outcome: "changes" }), {}); await tick(); assert.equal(sent.length, sentBefore + 1, "an already judged reviewer is not judged again");
-  // the worker pushes its fixes; its turn end records the redo and starts review number 2
+  // the worker ends its turn without pushing: no review of the same commit; it is asked to push, then a person decides
+  headAt = now - 1000;
+  const w50 = (extra: any = {}) => ({ id: "W50", issueRun: { ...created[0].issueRun, key: "o/webapp#50", number: 50, effort: "bau", reviews: 1, redoing: true, ...extra } }) as any;
+  const nb = count(), ns = sent.length;
+  rv.turnEnded(w50(), {}); await tick();
+  assert.equal(count(), nb, "an unchanged branch is not reviewed again"); assert.equal(sent.at(-1).id, "W50"); assert.match(sent.at(-1).text, /no new commit since the reviewer requested changes/);
+  assert.ok(marks.some(m => m.id === "W50" && m.patch.nudges === 1)); assert.ok(steps("redo").some(m => /^fail:no commit on PR #40 since the last review: worker asked to push \(1 of 2\)/.test(m)));
+  rv.turnEnded(w50({ nudges: 1 }), {}); await tick(); assert.equal(sent.length, ns + 2);
+  rv.turnEnded(w50({ nudges: 2 }), {}); await tick();
+  assert.equal(sent.length, ns + 2, "no third reminder"); assert.equal(count(), nb);
+  assert.ok(steps("redo").some(m => /still has no commit after the last review: a person decides/.test(m)));
+  assert.ok(marks.some(m => m.id === "W50" && m.patch.reviewedAt), "the worker is parked");
+  // the worker pushes its fixes; the next review records the redo and starts review number 2
+  headAt = now + 1000;
   const rb = count();
   rv.turnEnded({ id: "W50", issueRun: { ...created[0].issueRun, key: "o/webapp#50", number: 50, effort: "bau", reviews: 1, redoing: true } } as any, {}); await tick();
-  assert.ok(ev.read({ step: "redo" as any }).events.some(e => e.kind === "ok"), "redo end recorded");
+  assert.ok(steps("redo").includes("ok:worker pushed new commits to PR #40"), "redo end recorded");
   assert.equal(count(), rb + 1); assert.equal(created.at(-1).issueRun.reviews, 2); assert.match(created.at(-1).title, /review PR#40 #2/);
   // an old verdict (before this reviewer started) does not count: no verdict -> retry, the worker is cleared for a fresh reviewer
   comments = [{ body: "Review: CHANGES REQUESTED\nold", created_at: new Date(now - 3_600_000).toISOString() }];
   rv.turnEnded(redo({ reviews: 2 }), {}); await tick();
   assert.ok(steps("review").some(m => /^fail:reviewer posted no verdict on PR #9/.test(m)));
+  assert.ok(marks.some(m => m.id === "W50" && m.patch.reviews === 1 && m.patch.retryAt === now + 15 * 60_000), "a reviewer without a verdict returns its reserved slot and waits before retrying");
   assert.ok(marks.some(m => m.id === "W50" && "reviewedAt" in m.patch && m.patch.reviewedAt === undefined && !("redoing" in m.patch)));
-  // after MAX_REVIEWS a person decides: no more redo
+  // An unsuccessful premium takeover reports the blocker without another worker redo.
   comments = [{ body: "Review: CHANGES REQUESTED\nstill wrong", created_at: new Date(now).toISOString() }];
   const s3 = sent.length;
   rv.turnEnded(redo({ reviews: 3 }), {}); await tick();
-  assert.equal(sent.length, s3, "no redo after the cap"); assert.ok(ev.read({ step: "redo" as any }).events.some(e => /a person decides/.test(e.msg ?? "")));
-  await rv.sweep([{ id: "W51", status: "idle", issueRun: { ...created[0].issueRun, key: "o/webapp#51", number: 51, effort: "bau", reviews: 3 } }] as any);
-  assert.ok(steps("review").some(m => /3 reviews without a merge/.test(m)), "the worker is not reviewed a fourth time");
-  // approved but not merged (protected path): a person merges; nothing goes back to the worker
+  assert.equal(sent.length, s3, "no redo after takeover"); assert.ok(ev.read({ step: "redo" as any }).events.some(e => /premium takeover ended with unresolved findings/.test(e.msg ?? "")));
+  await rv.sweep([{ id: "W51", status: "idle", issueRun: { ...created[0].issueRun, key: "o/webapp#51", number: 51, effort: "bau", reviews: 3 } }, { id: "done-takeover", status: "idle", issueRun: { ...created[0].issueRun, key: "o/webapp#51", number: 51, role: "review", pr: 40, takeover: true, outcome: "changes" } }] as any);
+  assert.equal(sent.length, s3, "a completed takeover does not restart the capped job");
+  // An approved PR with a failed merge reports the blocker; no worker redo is needed.
   comments = [{ body: "Review: APPROVED", created_at: new Date(now).toISOString() }];
   rv.turnEnded(redo({ reviews: 1 }), {}); await tick();
-  assert.ok(steps("merge").some(m => /approved but not merged/.test(m))); assert.equal(sent.length, s3);
+  assert.ok(steps("merge").some(m => /approved but not merged/.test(m))); assert.ok(steps("merge").every(m => !/a person merges/.test(m))); assert.equal(sent.length, s3);
   // a reviewer whose end was missed (restart) is judged by the sweep
   pull = { merged: true, merge_commit_sha: "x" };
   await rv.sweep([redo({ reviews: 1 })]);
@@ -192,11 +232,12 @@ try {
     },
     send() { if (rejectSend) throw new Error("worker unavailable"); },
   };
-  const loop = createReviewer({ github: gh as any, runner: loopRunner, dirs, events: ev, route: routing, now: () => now });
+  const loop = createReviewer({ git: run, github: gh as any, runner: loopRunner, dirs, events: ev, route: routing, now: () => now });
   prs = [{ number: 40, body: "## Self-review\nok" }];
   pull = { merged: false, state: "open" };
-  comments = [{ body: "Review: CHANGES REQUESTED\nFix totals", created_at: new Date(now).toISOString() }];
+  comments = [];
   await loop.sweep([loopWorker]);
+  comments = [{ id: 1, body: "Review: CHANGES REQUESTED\nFix totals", created_at: new Date(now).toISOString() }];
   assert.equal(loopCreated.length, 1);
   const loopReview: any = { id: "LR1", status: "idle", issueRun: loopCreated[0].issueRun };
   rejectSend = true;
@@ -209,6 +250,7 @@ try {
 
   comments = [];
   await loop.sweep([{ id: "LR2", status: "idle", issueRun: loopCreated[1].issueRun }]);
+  now += 15 * 60_000;
   await loop.sweep([loopWorker]);
   assert.equal(loopCreated.length, 3, "same worker retries a reviewer that posted no verdict");
 
@@ -217,7 +259,7 @@ try {
   const recovering: any = { id: "RECOVER", status: "idle", provider: "pi", issueRun: { ...created[0].issueRun, effort: "bau" } };
   let resumed = 0, allowed = true, issueState = "open";
   let issueRead: (() => Promise<void>) | undefined;
-  const recoveryDeps = {
+  const recoveryDeps = { git: run,
     github: (async (method: string, url: string) => {
       if (/\/issues\/\d+$/.test(url)) { await issueRead?.(); return { state: issueState }; }
       return gh(method, url);
@@ -248,16 +290,86 @@ try {
   await recovery.sweep([recovering]); assert.equal(resumed, 2);
   recovering.status = "idle"; now += 15 * 60_000;
   await createReviewer(recoveryDeps).sweep([recovering]); assert.equal(resumed, 2, "restart preserves recovery cap");
-  recovering.issueRun.recoveries = 0; recovering.issueRun.retryAt = 0;
+  assert.ok(recovering.issueRun.stalled, "an exhausted worker is marked stalled");
+  const stalledLogs = () => ev.read({ step: "worker" as any }).events.filter(e => /a person decides/.test(e.msg ?? "")).length;
+  const stalledOnce = stalledLogs(), noPrLogs = () => steps("pr").filter(m => /no open PR/.test(m)).length, noPrOnce = noPrLogs();
+  assert.ok(recovering.issueRun.missingPr, "the missing PR is logged durably");
+  await createReviewer(recoveryDeps).sweep([recovering]); now += 15 * 60_000;
+  await createReviewer(recoveryDeps).sweep([recovering]);
+  assert.equal(resumed, 2); assert.equal(stalledLogs(), stalledOnce, "a stalled worker is not logged again after a restart");
+  assert.equal(noPrLogs(), noPrOnce, "a restart does not log the missing PR again");
+
+  // A worker whose Pi model was retired upstream spent its recoveries on 404s: it gets one fresh budget.
+  recovering.issueRun.stalled = undefined; recovering.model = "nvidia/nvidia/nemotron-3-super-120b-a12b";
+  await createReviewer(recoveryDeps).sweep([recovering]);
+  assert.equal(resumed, 3, "a retired model resets the recovery budget");
+  assert.equal(recovering.issueRun.recoveries, 1); assert.equal(recovering.issueRun.rerouted, true);
+  recovering.status = "idle"; now += 15 * 60_000; recovering.issueRun.recoveries = 2;
+  await createReviewer(recoveryDeps).sweep([recovering]);
+  assert.equal(resumed, 3, "the budget resets only once per worker"); assert.ok(recovering.issueRun.stalled);
+
+  // A person's turn on a stalled worker clears the stall, so its PR is reviewed and recovery restarts.
+  const personal = createReviewer(recoveryDeps);
+  personal.turnEnded(recovering, {}); await tick();
+  assert.equal(recovering.issueRun.stalled, undefined); assert.equal(recovering.issueRun.recoveries, 0);
+  recovering.issueRun.recoveries = 0; recovering.issueRun.retryAt = 0; recovering.issueRun.stalled = undefined; delete recovering.model;
   recovering.issueRun.redoing = true; recovering.issueRun.pr = 40;
-  await recovery.sweep([recovering]); assert.equal(resumed, 3, "failed redo resumes worker before another review");
+  await recovery.sweep([recovering]); assert.equal(resumed, 4, "failed redo resumes worker before another review");
 
   recovering.status = "idle"; recovering.issueRun.recoveries = 0; recovering.issueRun.retryAt = 0;
   recovering.issueRun.redoing = true; pull = { merged: true, state: "closed" };
-  await recovery.sweep([recovering]); assert.equal(resumed, 3, "merged redo PR never receives more fixes");
+  await recovery.sweep([recovering]); assert.equal(resumed, 4, "merged redo PR never receives more fixes");
+
+  // A premium assignment can claim the issue while PR evidence is still loading.
+  let reviewAllowed = true, releaseFiles!: () => void, filesStarted!: () => void;
+  const waitingFiles = new Promise<void>(resolve => { filesStarted = resolve; });
+  const racing = createReviewer({ git: run,
+    github: async (method, endpoint) => {
+      if (/\/pulls\/\d+\/files/.test(endpoint)) {
+        filesStarted();
+        await new Promise<void>(resolve => { releaseFiles = resolve; });
+      }
+      return gh(method, endpoint);
+    },
+    runner, dirs, route: routing, canReview: () => reviewAllowed,
+  });
+  prs = [{ number: 7, body: "## Self-review\nchecked" }];
+  const beforeAssignment = count();
+  const pendingReview = racing.sweep([{ ...worker("bau", "assignment-race"), status: "idle" }] as any);
+  await waitingFiles;
+  reviewAllowed = false;
+  releaseFiles();
+  await pendingReview;
+  assert.equal(count(), beforeAssignment, "assignment claim during GitHub wait prevents a second agent");
+  await racing.sweep([{ ...worker("bau", "assignment-race"), status: "idle" }] as any);
+  assert.equal(count(), beforeAssignment, "active assignment also prevents a new review at entry");
+
+  // Ownership acquired during verdict reads must also prevent a push nudge.
+  reviewAllowed = true;
+  let releaseCommit!: () => void, commitStarted!: () => void;
+  const waitingCommit = new Promise<void>(resolve => { commitStarted = resolve; });
+  const racingNudge = createReviewer({ git: run,
+    github: async (_method, endpoint) => {
+      if (/\/pulls\?/.test(endpoint)) return [{ number: 7, head: { sha: "abc" } }];
+      if (/\/commits\//.test(endpoint)) {
+        commitStarted();
+        await new Promise<void>(resolve => { releaseCommit = resolve; });
+        return { commit: { committer: { date: new Date(now).toISOString() } } };
+      }
+      if (/\/comments/.test(endpoint)) return [{ body: "Review: CHANGES REQUESTED", created_at: new Date(now + 1000).toISOString() }];
+      throw new Error(`unexpected ${endpoint}`);
+    }, runner, dirs, route: routing, canReview: () => reviewAllowed,
+  });
+  const sendsBeforeAssignment = sent.length;
+  const pendingNudge = racingNudge.sweep([{ ...worker("bau", "nudge-assignment-race", { reviews: 1 }), status: "idle" }] as any);
+  await waitingCommit;
+  reviewAllowed = false;
+  releaseCommit();
+  await pendingNudge;
+  assert.equal(sent.length, sendsBeforeAssignment, "assignment claim during verdict wait prevents worker nudge");
 
   // setup failures are logged, contained and retried
-  const bad = createReviewer({ github: (async () => { throw new Error("gh down"); }) as any, runner, dirs, log: m => logs.push(m), route: routing, events: ev });
+  const bad = createReviewer({ git: run, github: (async () => { throw new Error("gh down"); }) as any, runner, dirs, log: m => logs.push(m), route: routing, events: ev });
   bad.turnEnded(worker("bau", "W9"), {}); await tick(); assert.match(logs.at(-1)!, /could not start: gh down/);
   assert.ok(steps("review").some(m => /^fail:.*gh down/.test(m)));
 } finally { fs.rmSync(root, { recursive: true, force: true }); }

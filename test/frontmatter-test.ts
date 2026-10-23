@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import { stripFrontmatter } from "../public/frontmatter.js";
+import { splitFrontmatter, frontmatterToMarkdown } from "../public/frontmatter.js";
 
 // Test cases covering standard, none, unclosed, ... closer, CRLF, thematic break
 const tests: Array<{ name: string; input: string; expected: string }> = [
@@ -74,7 +73,48 @@ Just content without frontmatter.`
 
 let passed = 0, failed = 0;
 for (const test of tests) {
-  const result = stripFrontmatter(test.input);
+  const result = splitFrontmatter(test.input).body;
+  if (result === test.expected) {
+    console.log(`✓ ${test.name}`);
+    passed++;
+  } else {
+    console.log(`✗ ${test.name}`);
+    console.log(`  Expected: ${JSON.stringify(test.expected)}`);
+    console.log(`  Got:      ${JSON.stringify(result)}`);
+    failed++;
+  }
+}
+
+// Metadata surfaces as a key/value table above the body (issue #38 acceptance: structured, not raw text).
+const table: Array<{ name: string; input: string; expected: string }> = [
+  {
+    name: "table: scalars, quotes, pipes",
+    input: `---\ntitle: "Test | Doc"\nauthor: Ann\n---\n\n# Hi`,
+    expected: `| Field | Value |\n| --- | --- |\n| title | Test \\| Doc |\n| author | Ann |\n\n\n# Hi`,
+  },
+  {
+    name: "table: block list joins values",
+    input: `---\ntags:\n  - a\n  - b\n---\nBody`,
+    expected: `| Field | Value |\n| --- | --- |\n| tags | a, b |\n\nBody`,
+  },
+  {
+    name: "table: no frontmatter unchanged",
+    input: `# Hi\n\n---\n\nText`,
+    expected: `# Hi\n\n---\n\nText`,
+  },
+  {
+    name: "table: empty frontmatter shows no table",
+    input: `---\n---\nBody`,
+    expected: `Body`,
+  },
+  {
+    name: "table: empty input",
+    input: "",
+    expected: "",
+  },
+];
+for (const test of table) {
+  const result = frontmatterToMarkdown(test.input);
   if (result === test.expected) {
     console.log(`✓ ${test.name}`);
     passed++;

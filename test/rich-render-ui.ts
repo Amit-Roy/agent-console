@@ -31,6 +31,7 @@ const clipSize = fs.statSync(clip).size;
 
 const chart = JSON.stringify({type: 'bar', title: 'Cost per run', data: {labels: ['A', 'B', 'C'], datasets: [{label: 'USD', data: [1.5, 3, 2.25]}, {label: 'Cached', data: [1, 2, 1]}]}, options: {scales: {y: {title: {text: 'USD'}, beginAtZero: true}}}});
 const message = [
+  '---\ntitle: Rich render\nstatus: draft\n---',
   '![Compaction versus prompt caching](<./shot.png>)',
   `![Absolute](${path.join(cwd, 'shot.png')})`,
   '![Missing diagram](./nope.png)',
@@ -180,7 +181,11 @@ try {
   pass('URL / path inside inline code become links (http -> new tab, path -> file viewer)');
 
   // ---- table
-  const table = chat.locator('.table-wrap table').first();
+  const meta = chat.locator('.table-wrap table').first();
+  assert.equal(await meta.locator('tbody tr').count(), 2, 'frontmatter shown as a key/value table');
+  assert.equal(await meta.locator('tbody td').first().innerText(), 'title');
+  assert.ok(!(await chat.innerText()).includes('status: draft'), 'raw frontmatter text is not rendered');
+  const table = chat.locator('.table-wrap table').nth(1);
   assert.equal(await table.locator('th.num').count(), 2, 'numeric columns detected (Count, Share)');
   assert.equal(await table.locator('td.num').count(), 6);
   assert.equal(await table.locator('td.num').first().evaluate(e => getComputedStyle(e).textAlign), 'right');

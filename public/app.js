@@ -11,7 +11,9 @@ import { setupNotifications } from "/notifications.js";
 import { createChatSearch } from "/chat-search.js";
 import { createSchedules, REPEAT_ITEMS, DAY_ITEMS } from "/schedules.js";
 import { createAutoLane } from "/automation-lane.js";
+import { openJobDebug } from "/automation-job-debug.js";
 import { autoCandidates, autoPick } from "/auto-pick.js";
+import { showAssignmentProgress } from "/assign-progress.js";
 
 composerField($("input"));
 
@@ -453,6 +455,22 @@ async function finishSignIn() {
   $("d-signin-finish").disabled = false;
 }
 $("d-signin-finish").onclick = finishSignIn;
+// An existing thread whose Claude login expired: open the new-thread dialog on that account so its Sign in button shows.
+const CLAUDE_AUTH_FAILED = /Failed to authenticate|OAuth session expired|Not logged in|Please run \/login/i;
+function signInButton(account) {
+  const btn = el("button", "btn sm", `Sign in to ${claudeAccount(account).label}`);
+  btn.type = "button";
+  btn.onclick = () => {
+    const a = claudeAccounts().find(x => x.id === account);
+    if (a) a.ready = false; // hello-time readiness is stale once the CLI has rejected the login
+    openNewDialog();
+    menus.dProv.setValue("claude");
+    fillDialog("claude");
+    menus.dAccount.setItems(accountItems(), account);
+    syncDialogAccount();
+  };
+  return btn;
+}
 $("d-code").onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); finishSignIn(); } };
 // Auto: Sonnet or Sol at medium effort, on whichever five-hour window would otherwise leave the most allowance unused.
 const autoUsable = (r) => !!prov(r.provider)?.ok && prov(r.provider).models?.includes(r.model) && (!r.account || !!claudeAccount(r.account).ready);
@@ -671,7 +689,7 @@ const schedules = createSchedules({
 
 // ---------- threads UI ----------
 const cur = () => state.threads.get(state.current);
-const autoLane = createAutoLane({ state, openThread: (id) => openThread(id), setNav: (open) => setNav(open), provLabel: (id) => provLabel(id), ago: (ts) => ago(ts) });
+const autoLane = createAutoLane({ state, openThread: (id) => openThread(id), setNav: (open) => setNav(open), provLabel: (id) => provLabel(id), ago: (ts) => ago(ts), assignPremium: openPremiumDialog, debugIssue: (issue) => openJobDebug({ ...issue, openThread: (id) => { setNav(false); openThread(id); } }) });
 function ago(ts) {
   const s = Math.max(0, (Date.now() - ts) / 1000);
   if (s < 60) return "now";
@@ -858,12 +876,12 @@ function openThread(id) {
   const old = cur();
   if (old && (!state.rendering && !state.loading || state.snapshot)) {
     if (state.live?.raf) { cancelAnimationFrame(state.live.raf); state.live.raf = 0; }
-    const snapshot = (!state.deferredRefresh && state.snapshot) || { nodes: [...$("chat").childNodes], cards: state.cards, subs: state.subs, subTools: state.subTools, live: state.live, compact: state.compact, start: state.start, latestStart: state.latestStart, end: state.end, scroll: $("chat").scrollTop, stats: $("diagnostics").textContent };
+    const snapshot = (!state.deferredRefresh && state.snapshot) || { nodes: [...$("chat").childNodes], cards: state.cards, doneTasks: state.doneTasks, subs: state.subs, subTools: state.subTools, live: state.live, compact: state.compact, start: state.start, latestStart: state.latestStart, end: state.end, scroll: $("chat").scrollTop, anchor: viewAnchor(), stats: $("diagnostics").textContent };
     snapshot.stale ||= !!state.revalidating || !!state.loadingEarlier || old.id === id;
     views.delete(old.id);
     views.set(old.id, snapshot);
     if (views.size > 5) views.delete(views.keys().next().value);
-    state.cards = new Map(); state.subs = new Map(); state.subTools = new Map(); state.live = null;
+    state.cards = new Map(); state.subs = new Map(); state.subTools = new Map(); state.doneTasks = null; state.live = null;
   }
   state.revalidating = false;
   state.loadingEarlier = false;
@@ -892,13 +910,11 @@ function openThread(id) {
   if (cached) {
     if (state.features.selectiveEvents) send({ t: "subscribe", thread: id });
     clearTimeout(state.loadTimer); state.loading = null;
-    state.cards = cached.cards; state.subs = cached.subs; state.subTools = cached.subTools; state.start = cached.start; state.latestStart = cached.latestStart; state.end = cached.end; state.live = cached.live; state.compact = cached.compact;
+    state.cards = cached.cards; state.doneTasks = cached.doneTasks; state.subs = cached.subs; state.subTools = cached.subTools; state.start = cached.start; state.latestStart = cached.latestStart; state.end = cached.end; state.live = cached.live; state.compact = cached.compact;
     $("chat").replaceChildren(...cached.nodes);
     questions.ensure(id);
     earlierIdle();
-    $("chat").scrollTop = cached.scroll;
-    state.lastScrollTop = $("chat").scrollTop;
-    state.stick = nearBottom();
+    restoreView(cached);
     const total_ms = Math.round(performance.now() - state.openAt);
     window.agentConsoleMetrics = { thread: id, cached: true, total_ms };
     latency.record({ kind: "cached", thread: id, total_ms, render_ms: total_ms, wait_ms: 0 });
@@ -921,6 +937,28 @@ function openThread(id) {
   send({ t: "open", thread: id, request: state.request, foregroundOnly: !!state.features.selectiveEvents, small: SMALL_PAGES });
 }
 
+// Saved scroll offsets go stale when virtual rows resolve their real height; remember the first visible message (or "at bottom") instead.
+function viewAnchor() {
+  const chat = $("chat");
+  if (nearBottom()) return { bottom: true };
+  const top = chat.getBoundingClientRect().top;
+  for (const node of chat.children) {
+    const rect = node.getBoundingClientRect();
+    if (rect.bottom > top + 1) return { node, offset: rect.top - top };
+  }
+  return null;
+}
+function restoreView(view) {
+  const chat = $("chat"), anchor = view.anchor;
+  if (anchor?.bottom) { scrollDown(true); state.stick = true; }
+  else if (anchor?.node?.isConnected) {
+    const top = chat.getBoundingClientRect().top;
+    chat.scrollTop += anchor.node.getBoundingClientRect().top - top - anchor.offset;
+    holdHistoryAnchor(anchor.node, top + anchor.offset);
+    state.stick = nearBottom();
+  } else { chat.scrollTop = view.scroll; state.stick = nearBottom(); }
+  state.lastScrollTop = chat.scrollTop;
+}
 function refreshConversation() {
   if (state.rendering || state.loadingEarlier) return;
   state.deferredRefresh = false;
@@ -980,7 +1018,7 @@ async function showHistory(m) {
   if (refreshing) {
     if (state.live?.raf) cancelAnimationFrame(state.live.raf);
     state.live = null; state.compact = null;
-    state.cards = new Map(); state.subs = new Map(); state.subTools = new Map();
+    state.cards = new Map(); state.subs = new Map(); state.subTools = new Map(); state.doneTasks = null;
   } else clearChat();
   state.rendering = true;
   $("chat").setAttribute("aria-busy", "true");
@@ -1153,6 +1191,7 @@ function renderHead() {
   const t = cur();
   if (!$("ttl-edit")) $("ttl").textContent = t ? t.title : state.ready ? "No thread" : "";
   $("cwd").hidden = !t;
+  $("ttl-archived").hidden = !t?.archived;
   $("thread-account").hidden = t?.provider !== "claude";
   $("thread-account").textContent = t?.provider === "claude" ? `${claudeAccount(t.claudeAccount).label} ·` : "";
   $("thread-account").title = t?.provider === "claude" ? `Claude account: ${claudeAccount(t.claudeAccount).email || claudeAccount(t.claudeAccount).label}` : "";
@@ -1542,6 +1581,7 @@ function clearChat() {
   if (state.live?.raf) cancelAnimationFrame(state.live.raf);
   state.live = null;
   state.cards.clear();
+  state.doneTasks = null;
   state.compact = null;
   state.subs.clear();
   state.subTools.clear();
@@ -1677,6 +1717,16 @@ function errBlock(text) {
 
 function summarize(name, input) {
   return toolSummary(name, input || {});
+}
+const FILE_TOOLS = new Set(["Read", "Write", "Edit", "MultiEdit", "NotebookEdit"]);
+// File tools get an eye link next to the label that opens the file viewer. It is a sibling of .sum, so relabelling the text never removes it.
+function fileView(name, input) {
+  const path = FILE_TOOLS.has(name) && (input?.file_path || input?.notebook_path);
+  if (!path || typeof path !== "string" || !parseFileRef(path)) return [];
+  const a = el("a", "file-view");
+  a.href = "#"; a.dataset.fileRef = path; a.title = "Open file"; a.setAttribute("aria-label", `Open ${path}`);
+  a.append(icon("eye"));
+  return [a];
 }
 // A shell command is cryptic; when the agent said what it is for, show that and keep the command in the card body and on hover.
 const describedAs = (name, input) => (name === "Bash" && typeof input?.description === "string" && input.description.trim()) || "";
@@ -1925,7 +1975,7 @@ function subEvent(e, live) {
         const st = el("span", "st");
         st.append(el("i", "spin"));
         const why = describedAs(b.name, b.input);
-        li.append(icon(TOOL_ICON[b.name] || "code", "tool"), el("span", "name", isAgent(b.name) ? "Agent" : toolName(b.name, b.input)), el("span", why || isAgent(b.name) ? "sum human" : "sum", why || (isAgent(b.name) ? b.input?.description || "Subagent" : summarize(b.name, b.input))), st);
+        li.append(icon(TOOL_ICON[b.name] || "code", "tool"), el("span", "name", isAgent(b.name) ? "Agent" : toolName(b.name, b.input)), el("span", why || isAgent(b.name) ? "sum human" : "sum", why || (isAgent(b.name) ? b.input?.description || "Subagent" : summarize(b.name, b.input))), ...fileView(b.name, b.input), st);
         li.title = summarize(b.name, b.input);
         state.subTools.set(b.id, li);
         if (isAgent(b.name)) {
@@ -1948,9 +1998,21 @@ function subEvent(e, live) {
   if (live && following()) scrollDown(false);
 }
 // task_started / task_progress / task_notification: live stats on the card, and a status chip for work that outlives the call
+function finishChip(card, chip, e) {
+  const word = { completed: "finished", failed: "failed", stopped: "stopped" }[e.status] || e.status || "finished";
+  chip.className = `task-chip ${e.status === "failed" ? "err" : "done"}`;
+  chip.replaceChildren(icon(e.status === "failed" ? "x" : "check"), el("span", "", word));
+  if (e.summary) chip.title = e.summary;
+  const now = card.querySelector(".now");
+  if (now) now.textContent = "";
+}
 function taskEvent(e) {
   const card = state.cards.get(e.tool_use_id);
-  if (!card) return;
+  if (!card) {
+    // history is paged newest-first: the notification can arrive before the older page that holds its card and task_started
+    if (e.subtype === "task_notification") (state.doneTasks ||= new Map()).set(e.tool_use_id, e);
+    return;
+  }
   if (e.subtype === "task_progress" && card.classList.contains("agent")) {
     const u = e.usage || {};
     card.querySelector(".stats").textContent = [u.tool_uses != null && `${u.tool_uses} tool${u.tool_uses === 1 ? "" : "s"}`, u.total_tokens != null && `${fmtTok(u.total_tokens)} tokens`, u.duration_ms != null && fmtDur(u.duration_ms)].filter(Boolean).join(" · ");
@@ -1967,14 +2029,9 @@ function taskEvent(e) {
     chip.hidden = false;
     chip.className = "task-chip running";
     chip.replaceChildren(el("i", "spin"), el("span", "", "in background"));
-  } else if (e.subtype === "task_notification" && chip && !chip.hidden) {
-    const word = { completed: "finished", failed: "failed", stopped: "stopped" }[e.status] || e.status || "finished";
-    chip.className = `task-chip ${e.status === "failed" ? "err" : "done"}`;
-    chip.replaceChildren(icon(e.status === "failed" ? "x" : "check"), el("span", "", word));
-    if (e.summary) chip.title = e.summary;
-    const now = card.querySelector(".now");
-    if (now) now.textContent = "";
-  }
+    const done = state.doneTasks?.get(e.tool_use_id);
+    if (done) { state.doneTasks.delete(e.tool_use_id); finishChip(card, chip, done); }
+  } else if (e.subtype === "task_notification" && chip && !chip.hidden) finishChip(card, chip, e);
   updateWorking();
 }
 
@@ -2082,7 +2139,7 @@ function onEvent(e, live) {
           const st = el("span", "st");
           st.append(el("i", "spin"), el("span", "sr-only", "running"));
           const why = describedAs(b.name, b.input);
-          sum.append(tool, el("span", "name", toolName(b.name, b.input)), el("span", why ? "sum human" : "sum", why || summarize(b.name, b.input)), st, icon("chev-right", "chev"));
+          sum.append(tool, el("span", "name", toolName(b.name, b.input)), el("span", why ? "sum human" : "sum", why || summarize(b.name, b.input)), ...fileView(b.name, b.input), st, icon("chev-right", "chev"));
           sum.title = summarize(b.name, b.input);
           card.toolInput = { name: b.name, input: b.input };
           card.append(sum, el("div", "body")); // the open row wraps to show the whole label, so it is not repeated below
@@ -2130,11 +2187,15 @@ function onEvent(e, live) {
       bits.push(at.toDateString() === new Date().toDateString() ? clock : `${at.toLocaleDateString([], { month: "short", day: "numeric" })} ${clock}`);
       if (e.duration_ms) bits.push(`${(e.duration_ms / 1000).toFixed(1)}s`);
       if (typeof e.total_cost_usd === "number") bits.push(`$${e.total_cost_usd.toFixed(4)}`);
-      if (e.is_error || (e.subtype && e.subtype !== "success")) bits.push(e.subtype || "error");
+      // Claude CLI reports failed turns (expired login, API errors) as subtype "success" with is_error set.
+      if (e.is_error || (e.subtype && e.subtype !== "success")) bits.push(e.subtype && e.subtype !== "success" ? e.subtype : "error");
       const last = (state.into || $("chat")).lastElementChild;
       const row = last?.matches(".msg.asst") ? last.querySelector(".actions") : null;
-      if (row) row.append(el("span", "foot", bits.join(" · "))); // stats sit on the reply's action row
+      const foot = el("span", "foot", bits.join(" · "));
+      if (row) row.append(foot); // stats sit on the reply's action row
       else push(el("div", "msg foot", bits.join(" · ")), live);
+      const t = cur();
+      if (e.is_error && t?.provider === "claude" && CLAUDE_AUTH_FAILED.test(e.result || "")) (row ? foot : (state.into || $("chat")).lastElementChild).append(" ", signInButton(t.claudeAccount || "sunny"));
       break;
     }
     case "system":
@@ -2144,7 +2205,9 @@ function onEvent(e, live) {
       const card = state.cards.get(e.tool_use_id) ?? state.subTools.get(e.tool_use_id);
       if (!card) break;
       card.querySelector(".name").textContent = toolName(e.name, e.input);
-      card.querySelector(".sum").textContent = summarize(e.name, e.input);
+      const sumEl = card.querySelector(".sum");
+      sumEl.textContent = summarize(e.name, e.input);
+      if (!card.querySelector(".file-view")) sumEl.after(...fileView(e.name, e.input));
       const summary = card.querySelector("summary") || card;
       summary.title = summarize(e.name, e.input);
       const body = card.querySelector(".body");
@@ -2784,7 +2847,13 @@ document.addEventListener("keydown", (e) => {
 // The new-thread dialog doubles as the scheduled-task editor: same agent, folder, model, effort and permission fields, plus the task's
 // name, instructions and schedule.
 let dialogTask = null; // "new" or the task being edited; null for a new thread
+let dialogAssignment = null;
+let assignmentPending = false;
+$("dlg").addEventListener("cancel", (event) => { if (assignmentPending) event.preventDefault(); });
 function setDialogKind(task) {
+  dialogAssignment = null;
+  $("d-assignment-error").hidden = true;
+  menus.dProv.setItems([...state.providers.values()].map(p => ({ value: p.id, label: p.label, disabled: !p.ok })), menus.dProv.value);
   const wasTask = dialogTask !== null;
   dialogTask = task;
   $("d-auto-panel").hidden = true;
@@ -2860,6 +2929,68 @@ function openForkDialog(id) {
   syncDialogAccount();
   $("dlg").showModal();
 }
+function openPremiumDialog(issue) {
+  setNav(false);
+  setDialogKind(null);
+  const providers = [...state.providers.values()].filter(p => ["claude", "codex"].includes(p.id));
+  const chosen = providers.find(p => p.ok);
+  if (!chosen) return void toast("No premium agent is ready. Sign in to Claude or Codex first.");
+  dialogAssignment = issue;
+  menus.dProv.setItems(providers.map(p => ({ value: p.id, label: p.label, disabled: !p.ok })), chosen.id);
+  fillDialog(chosen.id);
+  const related = [...state.threads.values()].filter(t => t.issueRun?.repo?.toLowerCase() === issue.repo.toLowerCase() && t.issueRun.number === issue.number);
+  $("dlg-title").textContent = "Assign to premium";
+  $("dlg-sub").textContent = `${issue.repo}#${issue.number} · ${related.length} related runs. The new session receives remaining work, current state, failed thread IDs and linked PRs.`;
+  $("cwd-field").hidden = true;
+  $("d-ok").textContent = "Start premium session";
+  $("dlg").showModal();
+}
+async function submitPremiumAssignment(settings, account) {
+  if (assignmentPending) return;
+  assignmentPending = true;
+  const issue = dialogAssignment;
+  const cancel = $("dform").querySelector('button[value="cancel"]');
+  cancel.disabled = true;
+  $("d-ok").disabled = true;
+  $("d-ok").textContent = "Starting…";
+  $("d-assignment-error").hidden = true;
+  const reset = () => { assignmentPending = false; cancel.disabled = false; $("d-ok").textContent = "Start premium session"; syncDialogAccount(); };
+  let response;
+  try {
+    const { cwd, ...choice } = settings;
+    response = await apiFetch("/api/automation/assign", { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/x-ndjson" }, body: JSON.stringify({ v: 1, ...issue, ...choice, ...account }) });
+    if (!response.ok || !response.headers.get("content-type")?.includes("ndjson")) {
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "Could not start a premium session.");
+      $("dlg").close();
+      dialogAssignment = null;
+      return void openThread(result.thread);
+    }
+  } catch (error) {
+    $("d-assignment-error").textContent = error.message;
+    $("d-assignment-error").hidden = false;
+    return void reset();
+  }
+  // Checkout preparation takes up to a minute: the settings dialog gives way to a live timeline of its steps.
+  $("dlg").close();
+  reset();
+  const back = (message) => {
+    if (dialogAssignment !== issue) openPremiumDialog(issue);
+    else { setNav(false); $("dlg").showModal(); }
+    $("d-assignment-error").textContent = message;
+    $("d-assignment-error").hidden = false;
+  };
+  try {
+    await showAssignmentProgress(response, {
+      title: `${issue.repo}#${issue.number}`,
+      onBack: () => back($("ap-error").textContent),
+      onOpen: (id) => { if (dialogAssignment === issue) dialogAssignment = null; openThread(id); },
+    });
+    if (!$("ap").open) toast("Premium session started.");
+  } catch (error) {
+    if (!$("ap").open) toast(error.message);
+  }
+}
 function syncWhen() {
   const r = menus.dRepeat.value;
   $("d-day").hidden = r !== "weekly";
@@ -2918,15 +3049,23 @@ createMenu({
     { value: "task", label: "New scheduled task", icon: "clock" },
     { value: "notifications", label: "Notifications", desc: /: on$/.test($("notifications").getAttribute("aria-label") || "") ? "On for this device" : "Off", icon: "bell" },
     { value: "dashboard", label: "Usage dashboard", icon: "chart" },
+    { value: "benchmarks", label: "Model benchmarks", icon: "chart" },
     { value: "automation", label: "Automation dashboard", icon: "play" },
     { value: "host", label: "Host dashboard", icon: "terminal" },
+    { value: "security", label: "Security scans", desc: "Malware, CVEs, open ports", icon: "shield" },
+    { value: "doctor", label: "Doctor", desc: "Check and repair the setup", icon: "alert" },
+    { value: "ideas", label: "App ideas", icon: "sparkle" },
     { value: "reload", label: "Reload page", icon: "refresh" },
     { value: "restart", label: "Restart server…", desc: "Once every thread is idle", icon: "power" },
   ],
   onSelect: (v) => {
     if (v === "dashboard") location.href = $("dash-link").href;
+    else if (v === "benchmarks") location.href = $("benchmarks-link").href;
     else if (v === "automation") location.href = $("auto-link").href;
     else if (v === "host") location.href = $("host-link").href;
+    else if (v === "security") location.href = $("security-link").href;
+    else if (v === "doctor") location.href = "/doctor";
+    else if (v === "ideas") location.href = $("ideas-link").href;
     else if (v === "task") { setLane("tasks"); openTaskDialog(); }
     else (v === "new" ? $("new") : $(v)).click();
   },
@@ -2939,6 +3078,10 @@ $("dform").addEventListener("submit", (e) => {
   if (e.submitter?.value !== "ok") return;
   const settings = { provider: menus.dProv.value, cwd: menus.dCwd.value, model: menus.dModel.value, effort: menus.dEffort.value, mode: menus.dMode.value };
   const account = settings.provider === "claude" ? { claudeAccount: menus.dAccount.value || "sunny" } : {};
+  if (dialogAssignment) {
+    e.preventDefault();
+    return void submitPremiumAssignment(settings, account);
+  }
   if (dialogFork) {
     const { cwd, ...pick } = settings;
     return void send({ t: "fork", thread: dialogFork, ...pick, ...account, context: menus.dContext.value });

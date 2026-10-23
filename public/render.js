@@ -19,6 +19,7 @@ import yaml from "/vendor/hljs/languages/yaml.js";
 import sql from "/vendor/hljs/languages/sql.js";
 import go from "/vendor/hljs/languages/go.js";
 import rust from "/vendor/hljs/languages/rust.js";
+import { frontmatterToMarkdown } from "./frontmatter.js";
 
 for (const [n, l] of Object.entries({ bash, javascript, typescript, json, python, css, xml, markdown, diff, yaml, sql, go, rust })) hljs.registerLanguage(n, l);
 
@@ -551,14 +552,11 @@ export function enhance(root, mounts = []) {
   mountMedia(root, mounts);
 }
 
-/** Strip YAML frontmatter (--- ... ---) from markdown source. Returns content string with frontmatter removed. */
-import { stripFrontmatter } from "./frontmatter.js";
-
 /** Markdown source -> sanitised, highlighted, enhanced DOM inside `target`. Media/chart nodes survive re-renders (streaming) when unchanged. */
 export function renderMarkdown(src, target) {
   const old = new Map();
   for (const n of target.querySelectorAll("[data-keep]")) { if (!old.has(n.dataset.keep)) old.set(n.dataset.keep, []); old.get(n.dataset.keep).push(n); }
-  const content = stripFrontmatter(src || "");
+  const content = frontmatterToMarkdown(src || "");
   const frag = DOMPurify.sanitize(md.parse(content), { RETURN_DOM_FRAGMENT: true, FORBID_ATTR: ["autoplay"] });
   const mounts = [];
   kept = old;

@@ -1,0 +1,46 @@
+{
+  "title": "Thread quota handling after auto-resume",
+  "subtitle": "Premium model threads auto-resume on usage window reset",
+  "direction": "row",
+  "items": [
+    {
+      "group": "Thread lifecycle",
+      "items": [
+        { "id": "user", "label": "User", "tech": "Browser", "desc": "Sends messages", "icon": "user", "color": "blue", "status": "unchanged" },
+        { "id": "thread", "label": "Thread", "tech": "threads.ts", "desc": "Agent conversation", "icon": "message-circle", "color": "indigo", "status": "unchanged" },
+        { "id": "quota-paused", "label": "Quota paused", "tech": "quotaPaused field", "desc": "Thread paused due to exhausted window", "icon": "pause", "color": "purple", "status": "added" },
+        { "id": "resumed", "label": "Resumed", "tech": "threads.ts", "desc": "Thread receives Continue.", "icon": "play", "color": "cyan", "status": "added" }
+      ],
+      "id": "thread-lifecycle",
+      "color": "slate",
+      "border": "solid"
+    },
+    {
+      "group": "Usage tracking",
+      "items": [
+        { "id": "usage", "label": "Usage module", "tech": "usage.ts", "desc": "Tracks provider windows", "icon": "gauge", "color": "orange", "status": "unchanged" },
+        { "id": "window-reset", "label": "Window reset", "tech": "subscribeWindowReset", "desc": "Detects exhausted -> available transition", "icon": "refresh-cw", "color": "teal", "status": "added" }
+      ],
+      "id": "usage-tracking",
+      "color": "orange",
+      "border": "solid"
+    },
+    {
+      "group": "Auto-resume",
+      "items": [
+        { "id": "resume-quota-paused", "label": "Resume quota-paused", "tech": "resumeQuotaPaused()", "desc": "Sends Continue. to non-archived threads", "icon": "send", "color": "teal", "status": "added" }
+      ],
+      "id": "auto-resume",
+      "color": "teal",
+      "border": "solid"
+    }
+  ],
+  "edges": [
+    { "from": "user", "to": "thread", "label": "send message", "status": "unchanged" },
+    { "from": "thread", "to": "quota-paused", "label": "rate limit error", "status": "modified" },
+    { "from": "quota-paused", "to": "usage", "label": "report usage", "status": "unchanged" },
+    { "from": "usage", "to": "window-reset", "label": "detect reset", "status": "added" },
+    { "from": "window-reset", "to": "resume-quota-paused", "label": "trigger resume", "status": "added" },
+    { "from": "resume-quota-paused", "to": "resumed", "label": "send continue", "status": "added" }
+  ]
+}

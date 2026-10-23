@@ -16,9 +16,11 @@ assert.throws(() => piRateEnv({ AGENT_CONSOLE_RATE_URL: "http://example.test/x",
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const preload = pathToFileURL(path.join(root, "server/providers/pi-rate-preload.mjs")).href;
 let sdk: string | undefined;
+let undici: string | undefined;
 try {
   const piRequire = createRequire(path.join(os.homedir(), ".local/lib/node_modules/@earendil-works/pi-coding-agent/package.json"));
   sdk = pathToFileURL(piRequire.resolve("openai")).href;
+  undici = pathToFileURL(piRequire.resolve("undici")).href;
 } catch {}
 const actions: any[] = [];
 const upstream: string[] = [];
@@ -60,6 +62,9 @@ const childScript = `
 import assert from 'node:assert/strict';
 import http from 'node:http';
 const base = ${JSON.stringify(base)};
+// Pi replaces fetch and WebSocket with undici's after preload; both must stay gated.
+${undici ? `const {default: undici} = await import(${JSON.stringify(undici)}); undici.install();` : ""}
+const gated = globalThis.fetch; globalThis.fetch = (input, init) => gated(input, init);
 const paths = ['/v1/responses','/v1/messages','/models/a:streamGenerateContent','/models/a:generateContent','/api/generate','/model/a/converse-stream','/publishers/anthropic/models/claude:streamRawPredict','/publishers/anthropic/models/claude:rawPredict'];
 for (const p of paths) await fetch(base+p,{method:'POST',body:'{}'});
 await fetch(new Request(base+'/vendor-custom',{method:'POST',body:JSON.stringify({model:'fixture',messages:[]})}));
@@ -172,7 +177,7 @@ await assert.rejects(fetch('https://openrouter.ai/v1/responses',{method:'POST'})
     assert.equal(metadataActions.some(action => action.provider === provider && action.action === "cooldown" && action.retryAfter === "2"), true);
   }
   assert.equal(metadataActions.every(action => action.priority === "triage"), true);
-  console.log(`pi-rate-preload: provider paths, custom endpoints, cancellation, fail-closed broker${sdk ? ", installed Pi SDK retries" : " (Pi SDK not installed)"} passed`);
+  console.log(`pi-rate-preload: provider paths, custom endpoints, cancellation, fail-closed broker${undici ? ", Pi undici fetch/WebSocket install" : ""}${sdk ? ", installed Pi SDK retries" : " (Pi SDK not installed)"} passed`);
 } finally {
   for (const client of wss.clients) client.terminate();
   wss.close();

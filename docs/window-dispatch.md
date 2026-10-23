@@ -43,6 +43,10 @@ In live routing, Trivial work and BAU with `routing.bauOnPi` start independently
 
 Each started issue gets its own private clone, `~/worktrees/<repo>-issue-<n>-<attempt>` on branch `issue-<n>-<slug>-<attempt>` from the default branch, and a thread working in it with the route's provider, model and effort. The thread is named `<repo>:<issue#> <short desc>`, at most 30 characters (the width an Android sidebar row shows, issue #11). A long repo name is shortened to its initials: `ac:10 Identify unused reset`. It is created with a chosen title, so the auto-namer never changes it, and neither does a later rename (see below). Runs are unattended, so the thread uses `bypassPermissions`. A failed start (no local checkout under `~/repos`, git error) is logged with its error in `window-dispatch.jsonl` and is not retried.
 
+## Quota-paused threads
+
+A Claude or Codex thread whose turn ends on a rate-limit error while its quota is exhausted is marked quota-paused. Every 5 minutes, with the dispatcher enabled, such threads continue with `Continue.` once their provider (per Claude account) passes the same gate as Deep issues: the 5-hour window is in its last `leadMinutes` (or `lowUsageLeadMinutes` below `lowUsagePct` used), is below `maxUsedPct`, and no window is still exhausted. With the defaults that is the last 180 minutes of a lightly used window. `dryRun` only logs. A manual message or archiving clears the pause.
+
 ## Window opener
 
 A window opens at the first message after the last one ended. The opener sends one tiny message (`Reply with the single word: ok`, Sonnet low or `gpt-6.1-sol` low) to each provider with no live five-hour window. It runs throughout the day and night by default. The window ends five hours later, giving the dispatcher a last-90-minutes slot. Custom hour bounds can restrict openings; equal bounds mean all day.

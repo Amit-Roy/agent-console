@@ -12,7 +12,8 @@ running() { [ -f "$RUN/pid" ] && grep -qa "server/index.ts" "/proc/$(cat "$RUN/p
 supervised() { [ -f "$RUN/supervisor" ] && tr '\0' ' ' <"/proc/$(cat "$RUN/supervisor")/cmdline" 2>/dev/null | grep -q "bin/agent-console supervise"; }
 case "${1:-status}" in
   start) if [ "$RUN" = "$HOME/.cache/agent-console" ] && [ "${AGENT_CONSOLE_MOCK:-0}" != "1" ]; then
-           "$DIR/bin/github-triage" start || echo "GitHub triage could not start; see its private log."
+           # its own Node boot takes seconds even when it is already up; the server only polls its database, so never wait for it
+           ( "$DIR/bin/github-triage" start || echo "[$(date -Is)] GitHub triage could not start; see its private log." ) </dev/null >>"$RUN/log" 2>&1 &
          fi
          running && { echo "already running"; exit 0; }
          supervised && { echo "already running (supervisor $(cat "$RUN/supervisor") is restarting the server; see $RUN/log)"; exit 0; }
@@ -28,9 +29,18 @@ case "${1:-status}" in
          while :; do
            # append, so the reason the last server died survives the restart; rotate at 5 MB
            [ "$(stat -c %s "$RUN/log" 2>/dev/null || echo 0)" -gt 5000000 ] && mv "$RUN/log" "$RUN/log.1"
+           # one bundled module loads in a fraction of the time of ~150 source modules; rebuild it when any source is newer.
+           # While the server keeps crashing on boot (delay > 1), run the sources directly in case the bundle is at fault.
+           entry=server/index.ts bundle=.bundle/server/index.ts.mjs
+           if [ "$delay" -le 1 ] && [ -f "$DIR/scripts/bundle-server.mjs" ]; then
+             if [ ! -f "$DIR/$bundle" ] || [ -n "$(cd "$DIR" && find server scripts/bundle-server.mjs package-lock.json -newer "$bundle" -print -quit)" ]; then
+               (cd "$DIR" && node scripts/bundle-server.mjs) >>"$RUN/log" 2>&1 || echo "[$(date -Is)] supervisor $$: bundle failed; running sources" >>"$RUN/log"
+             fi
+             [ -f "$DIR/$bundle" ] && [ -z "$(cd "$DIR" && find server scripts/bundle-server.mjs package-lock.json -newer "$bundle" -print -quit)" ] && entry=$bundle
+           fi
            # the compile cache keeps Node from re-stripping TypeScript and recompiling every module on each boot
-           echo "[$(date -Is)] supervisor $$: starting server" >>"$RUN/log"; began=$(date +%s)
-           (cd "$DIR" && PORT=$PORT AGENT_CONSOLE_PID_FILE="$RUN/pid" NODE_COMPILE_CACHE="$RUN/compile-cache" exec node server/index.ts 8>&-) >>"$RUN/log" 2>&1; code=$?
+           echo "[$(date -Is)] supervisor $$: starting server ($entry)" >>"$RUN/log"; began=$(date +%s)
+           (cd "$DIR" && PORT=$PORT AGENT_CONSOLE_PID_FILE="$RUN/pid" NODE_COMPILE_CACHE="$RUN/compile-cache" exec node "$entry" 8>&-) >>"$RUN/log" 2>&1; code=$?
            [ $(($(date +%s) - began)) -ge 60 ] && delay=1 # back off only while it keeps crashing on boot
            echo "[$(date -Is)] supervisor $$: server exited with code $code; restarting in ${delay}s" >>"$RUN/log"
            sleep "$delay"; delay=$((delay < 30 ? delay * 2 : 30))
@@ -46,5 +56,5 @@ case "${1:-status}" in
   restart-when-idle) (cd "$DIR" && exec setsid nohup flock --close -n "$RUN/idle-restart.lock" node scripts/idle-restart.mjs) </dev/null >>"$RUN/idle-restart.log" 2>&1 & echo "restart scheduled: it happens when no thread is running (log: $RUN/idle-restart.log)" ;;
   status) running && echo "up (pid $(cat "$RUN/pid"))" || echo down ;;
   password) cat "$HOME/.config/agent-console/password" 2>/dev/null || echo "(created on first start)" ;;
-  url) echo "$(echo "${VSCODE_PROXY_URI:-}" | sed "s/{{port}}/$PORT/")" ;;
+  url) PORT=$PORT node "$DIR/scripts/console-url.ts" ;;
 esac

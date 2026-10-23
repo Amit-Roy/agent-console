@@ -49,6 +49,21 @@ try {
   assert.equal(headroom.state().running, true);
   assert.equal(headroom.url(), `http://127.0.0.1:${port}`);
   await headroom.start(); // idempotent: no second proxy
+  const nativeFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = (async () => { throw new Error("Fixture transient timeout"); }) as typeof fetch;
+    const observation = await headroom.probe();
+    assert.equal(observation.reachable, false);
+    assert.equal(observation.running, true, "Read-only inspection preserves cached routing on transient probe failure");
+    assert.equal(headroom.url(), `http://127.0.0.1:${port}`);
+    const refreshed = await headroom.probe(true);
+    assert.equal(refreshed.reachable, false);
+    assert.equal(refreshed.running, false, "Explicit repair invalidates unavailable proxy routing");
+    assert.equal(headroom.url(), undefined);
+    globalThis.fetch = nativeFetch;
+    assert.equal((await headroom.probe(true)).reachable, true);
+    assert.equal(headroom.url(), undefined, "A successful probe never enables routing or resets a safety latch");
+  } finally { globalThis.fetch = nativeFetch; }
   const launches = fs.readFileSync(process.env.CAPTURE, "utf8").trim().split("\n").map(line => JSON.parse(line));
   assert.equal(launches.length, 1);
   const launch = launches[0];
