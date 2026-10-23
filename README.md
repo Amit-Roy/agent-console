@@ -136,7 +136,7 @@ BASE=http://127.0.0.1:7071 AGENT_CONSOLE_DATA=/tmp/ac-test PORT=7071 npm test
 
 Kill it by pid. `pkill -f server/index.ts` also kills your real server (it runs `node .bundle/server/index.ts.mjs`, a bundle that `bin/agent-console` rebuilds whenever a source is newer).
 
-CI time budget: the "Test time budget" step fails when one test file takes over 10 s or the whole `npm test` pool takes over 25 s on the 4-CPU runner. The run summary lists the slowest files. Keep new tests cheap: add cases to an existing UI file instead of a new file that starts its own server and Chromium, and wait on conditions instead of fixed sleeps.
+CI time budget: the "Test time budget" step fails when one test file takes over 15 s or the whole `npm test` pool takes over 25 s on the 4-CPU runner. The run summary lists the slowest files. Keep new tests cheap: add cases to an existing UI file instead of a new file that starts its own server and Chromium, and wait on conditions instead of fixed sleeps.
 
 Isolated checks: `node test/latency.ts`, `node test/history-wire.ts`, `npm run test:transport`, `npm run test:cache`, `npm run test:queue-ui`, `npm run test:files`.
 
