@@ -41,6 +41,14 @@ self.addEventListener("fetch", (event) => {
   );
 });
 
+// The server may record a proxy-rewritten origin (Caddy maps the console alias to the Coder app host), so keep only
+// the thread hash from the pushed URL and open it on the origin this worker is served from.
+function threadUrl(value) {
+  const given = new URL(value, self.location.origin);
+  if (given.pathname !== "/" || !given.hash.startsWith("#thread=")) return null;
+  return new URL(given.hash, self.location.origin);
+}
+
 self.addEventListener("push", (event) => {
   let payload;
   try {
@@ -51,8 +59,8 @@ self.addEventListener("push", (event) => {
   if (!payload || !["finished", "failed", "needs_input"].includes(payload.kind)) return;
   let url;
   try {
-    url = new URL(payload.url, self.location.origin);
-    if (url.origin !== self.location.origin || url.pathname !== "/") return;
+    url = threadUrl(payload.url);
+    if (!url) return;
   } catch {
     return;
   }
@@ -73,8 +81,8 @@ self.addEventListener("notificationclick", (event) => {
     (async () => {
       let url;
       try {
-        url = new URL(event.notification.data?.url, self.location.origin);
-        if (url.origin !== self.location.origin || url.pathname !== "/") return;
+        url = threadUrl(event.notification.data?.url);
+        if (!url) return;
       } catch {
         return;
       }
