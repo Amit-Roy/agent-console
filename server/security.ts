@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import type express from "express";
+import { createToolWatch, RemoteError, type ToolWatch } from "./tool-watch.ts";
 
 // Security scans run on the VPS host (clamav, falco, trivy, nmap). This workspace only reads their
 // results over SSH with a forced-command key: the remote side accepts latest | history | get <id> | status | run [quick|full].
@@ -82,7 +83,11 @@ export function resetSecurityCache() {
   latestPending = null;
 }
 
-export function mountSecurity(app: express.Express, sameOrigin: express.RequestHandler) {
+export function mountSecurity(
+  app: express.Express,
+  sameOrigin: express.RequestHandler,
+  tools: ToolWatch = createToolWatch(),
+) {
   const guard =
     (fn: (req: express.Request) => Promise<any>): express.RequestHandler =>
     async (req, res) => {
@@ -90,14 +95,22 @@ export function mountSecurity(app: express.Express, sameOrigin: express.RequestH
       try {
         res.json(await fn(req));
       } catch (e: any) {
-        res.status(e instanceof SshError ? 502 : e instanceof NotFound ? 404 : 500).json({
-          error:
-            e instanceof SshError
-              ? e.message
+        res
+          .status(
+            e instanceof SshError || e instanceof RemoteError
+              ? 502
               : e instanceof NotFound
-                ? "No such scan."
-                : "Security scan data is unavailable.",
-        });
+                ? 404
+                : 500,
+          )
+          .json({
+            error:
+              e instanceof SshError || e instanceof RemoteError
+                ? e.message
+                : e instanceof NotFound
+                  ? "No such scan."
+                  : "Security scan data is unavailable.",
+          });
       }
     };
   app.get(
@@ -149,6 +162,20 @@ export function mountSecurity(app: express.Express, sameOrigin: express.RequestH
     guard(async (req) => {
       const out = await remote(`run ${req.res?.locals.mode}`);
       resetSecurityCache();
+      return out;
+    }),
+  );
+  // Tool-watch: fixed tool versions and unsanctioned changes from the VPS. Untrusted advisory text never leaves the server.
+  app.get(
+    "/api/security/tools",
+    guard(() => tools.publicView()),
+  );
+  app.post(
+    "/api/security/tools/run",
+    sameOrigin,
+    guard(async () => {
+      const out = await tools.run();
+      void tools.tick().catch(() => {});
       return out;
     }),
   );

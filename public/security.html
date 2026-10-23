@@ -40,6 +40,14 @@
     <div class="head"><h2>Open ports <span class="hcount" id="port-count"></span></h2></div>
     <div class="rows" id="port-rows"></div>
   </section>
+  <section class="panel" id="toolwatch" aria-label="Tools" hidden>
+    <div class="head"><h2>Tools <span class="hcount" id="tw-count"></span></h2>
+      <button type="button" class="btn sm" id="tw-check">Check now</button></div>
+    <div class="twrap"><table class="twtable">
+      <thead><tr><th scope="col">Tool</th><th scope="col">Installed</th><th scope="col">Fixed</th><th scope="col">Status</th></tr></thead>
+      <tbody id="tw-rows"></tbody>
+    </table></div>
+  </section>
   <section class="panel" id="history" aria-label="Scan history" hidden>
     <div class="head"><h2>History <span class="hcount" id="hist-count"></span></h2></div>
     <!-- biome-ignore lint/a11y/useSemanticElements: role=list on a div styled by .strip; ul would change the layout -->
