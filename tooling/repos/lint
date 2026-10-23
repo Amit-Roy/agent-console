@@ -1,0 +1,64 @@
+#!/bin/sh
+# Check the five owned repositories, or explicitly supplied private checkouts.
+set -u
+
+usage() {
+  echo 'Usage: lint [--fix] [REPOSITORY ...]'
+}
+
+fix=false
+case "${1-}" in
+  --help|-h) usage; exit 0 ;;
+  --fix) fix=true; shift ;;
+esac
+
+config_dir=$(CDPATH= cd -- "$(dirname -- "$(readlink -f -- "$0")")" && pwd) || exit 1
+if [ "$#" -eq 0 ]; then
+  set -- "$HOME/repos/agent-console" "$HOME/repos/brain" "$HOME/repos/portfolio-lab" \
+    "$HOME/repos/quant-harness" "$HOME/repos/dotfiles"
+fi
+
+# Validate every target before --fix can change any files.
+for target do
+  case "$target" in
+    -*) usage >&2; exit 2 ;;
+  esac
+  if [ ! -d "$target" ]; then
+    echo "lint: repository directory does not exist: $target" >&2
+    exit 2
+  fi
+done
+for tool in biome ruff; do
+  if ! command -v "$tool" >/dev/null 2>&1; then
+    echo "lint: required tool is missing: $tool" >&2
+    exit 2
+  fi
+done
+
+biome_check() {
+  if command -v rtk >/dev/null 2>&1; then
+    rtk proxy biome check "$@"
+  else
+    biome check "$@"
+  fi
+}
+
+status=0
+for target do
+  (
+    cd -- "$target" || exit 1
+    echo "lint: $target"
+    result=0
+    if [ "$fix" = true ]; then
+      biome_check --config-path="$config_dir/biome.shared.json" --no-errors-on-unmatched --write . || result=1
+      ruff check --config "$config_dir/ruff.shared.toml" --fix . || result=1
+      ruff format --config "$config_dir/ruff.shared.toml" . || result=1
+    else
+      biome_check --config-path="$config_dir/biome.shared.json" --no-errors-on-unmatched --max-diagnostics=50 . || result=1
+      ruff check --config "$config_dir/ruff.shared.toml" . || result=1
+      ruff format --config "$config_dir/ruff.shared.toml" --check . || result=1
+    fi
+    exit "$result"
+  ) || status=1
+done
+exit "$status"

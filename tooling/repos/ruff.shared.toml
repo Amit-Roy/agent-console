@@ -1,0 +1,12 @@
+line-length = 100
+force-exclude = true
+extend-exclude = [
+  "OpenBB", "openbb-workspace", "camofox-browser", "ac-paste",
+  "node_modules", ".venv", ".git", ".codegraph", "vendor", ".impeccable",
+  ".scratch*", ".issue*", "test/tmp", "arch-evidence", "*.md",
+]
+
+[lint]
+select = ["E", "F", "I", "UP", "B"]
+# The formatter handles code width; URLs and embedded fixtures must remain intact.
+ignore = ["E501"]

@@ -4,7 +4,9 @@
 // Typing and paste keep "\n" inside text nodes; programmatic inserts (and some IMEs) wrap lines in <div>s. Read both.
 const BLOCK = new Set(["DIV", "P"]);
 const text = (root, stop, stopOffset) => {
-  let out = "", seen = false, done = false;
+  let out = "",
+    seen = false,
+    done = false;
   const walk = (n) => {
     if (done) return;
     if (n === stop && n.nodeType === 1) {
@@ -14,11 +16,20 @@ const text = (root, stop, stopOffset) => {
     }
     if (n.nodeType === 3) {
       seen = true;
-      if (n === stop) { out += n.data.slice(0, stopOffset); done = true; } else out += n.data;
+      if (n === stop) {
+        out += n.data.slice(0, stopOffset);
+        done = true;
+      } else out += n.data;
     } else if (n.nodeName === "BR") {
-      if (n.parentNode.childNodes.length > 1) { out += "\n"; seen = true; }
+      if (n.parentNode.childNodes.length > 1) {
+        out += "\n";
+        seen = true;
+      }
     } else if (n.nodeType === 1) {
-      if (BLOCK.has(n.nodeName)) { if (seen) out += "\n"; seen = true; }
+      if (BLOCK.has(n.nodeName)) {
+        if (seen) out += "\n";
+        seen = true;
+      }
       for (const c of n.childNodes) walk(c);
     }
   };
@@ -40,7 +51,9 @@ export function composerField(box) {
   Object.defineProperties(box, {
     value: {
       get: () => text(box),
-      set(v) { box.textContent = v; },
+      set(v) {
+        box.textContent = v;
+      },
     },
     disabled: {
       get: () => box.getAttribute("contenteditable") === "false",
@@ -51,10 +64,22 @@ export function composerField(box) {
     },
     placeholder: {
       get: () => box.dataset.placeholder ?? "",
-      set(v) { box.dataset.placeholder = v; },
+      set(v) {
+        box.dataset.placeholder = v;
+      },
     },
-    selectionStart: { get: () => { const s = getSelection(); return s.rangeCount ? offset(s.anchorNode, s.anchorOffset) : null; } },
-    selectionEnd: { get: () => { const s = getSelection(); return s.rangeCount ? offset(s.focusNode, s.focusOffset) : null; } },
+    selectionStart: {
+      get: () => {
+        const s = getSelection();
+        return s.rangeCount ? offset(s.anchorNode, s.anchorOffset) : null;
+      },
+    },
+    selectionEnd: {
+      get: () => {
+        const s = getSelection();
+        return s.rangeCount ? offset(s.focusNode, s.focusOffset) : null;
+      },
+    },
   });
   box.setSelectionRange = (a, b) => {
     const r = document.createRange();

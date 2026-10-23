@@ -1,22 +1,117 @@
-body.doctor{overflow:auto;height:auto;min-height:100%;background:var(--s0)}
-.doctor-head{display:flex;align-items:center;gap:var(--sp-3);padding:var(--sp-3) max(var(--sp-4),env(safe-area-inset-left));border-bottom:1px solid var(--edge)}
-.doctor-head h1{flex:1;font:var(--fw-semi) var(--f-lg)}
-.doctor-head a{text-decoration:none}
-.doctor-main{display:grid;gap:var(--sp-6);max-width:48rem;margin:0 auto;padding:var(--sp-6) max(var(--sp-4),env(safe-area-inset-left)) var(--sp-8);background:transparent;border:0;box-shadow:none;border-radius:0}
-.doctor-summary h2{font:var(--fw-semi) var(--f-xl);margin-bottom:var(--sp-2)}
-.doctor-summary p{color:var(--t2);line-height:1.6}
-.doctor-actions{display:flex;flex-wrap:wrap;gap:var(--sp-2);margin:var(--sp-4) 0}
-.doctor-actions .btn,.doctor-head .btn{min-height:44px}
-.doctor .doctor-note{font:var(--fw-reg) var(--f-sm);color:var(--t2)}
-.doctor-section h2{font:var(--fw-semi) var(--f-base)}
-.doctor-section-head{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:var(--sp-2)}
-.doctor-checks{list-style:none;padding:0;margin:var(--sp-3) 0 0;border-top:1px solid var(--edge)}
-.doctor-check{display:flex;align-items:flex-start;gap:var(--sp-3);padding:var(--sp-4) 0;border-bottom:1px solid var(--edge)}
-.doctor-check>div{flex:1;min-width:0}
-.doctor-check h3{font:var(--fw-med) var(--f-base);margin:0 0 var(--sp-1)}
-.doctor-check p{font:var(--fw-reg) var(--f-sm);color:var(--t2);line-height:1.6;overflow-wrap:anywhere}
-.doctor-badge{flex-shrink:0;font:var(--fw-med) var(--f-xs);padding:var(--sp-1) var(--sp-2);border:1px solid var(--edge);border-radius:var(--r-full);background:var(--s2);color:var(--t2)}
-.doctor-badge.error{color:var(--bad);border-color:currentColor}
-.doctor-badge.warning,.doctor-badge.manual,.doctor-badge.deferred{color:var(--warn);border-color:currentColor}
-.doctor-checks[aria-busy=true]{opacity:.65}
-@media(max-width:480px){.doctor-main{padding-top:var(--sp-4)}}
+body.doctor {
+  overflow: auto;
+  height: auto;
+  min-height: 100%;
+  background: var(--s0);
+}
+.doctor-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-3) max(var(--sp-4), env(safe-area-inset-left));
+  border-bottom: 1px solid var(--edge);
+}
+.doctor-head h1 {
+  flex: 1;
+  font: var(--fw-semi) var(--f-lg);
+}
+.doctor-head a {
+  text-decoration: none;
+}
+.doctor-main {
+  display: grid;
+  gap: var(--sp-6);
+  max-width: 48rem;
+  margin: 0 auto;
+  padding: var(--sp-6) max(var(--sp-4), env(safe-area-inset-left)) var(--sp-8);
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  border-radius: 0;
+}
+.doctor-summary h2 {
+  font: var(--fw-semi) var(--f-xl);
+  margin-bottom: var(--sp-2);
+}
+.doctor-summary p {
+  color: var(--t2);
+  line-height: 1.6;
+}
+.doctor-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin: var(--sp-4) 0;
+}
+.doctor-actions .btn,
+.doctor-head .btn {
+  min-height: 44px;
+}
+.doctor .doctor-note {
+  font: var(--fw-reg) var(--f-sm);
+  color: var(--t2);
+}
+.doctor-section h2 {
+  font: var(--fw-semi) var(--f-base);
+}
+.doctor-section-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+.doctor-checks {
+  list-style: none;
+  padding: 0;
+  margin: var(--sp-3) 0 0;
+  border-top: 1px solid var(--edge);
+}
+.doctor-check {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-3);
+  padding: var(--sp-4) 0;
+  border-bottom: 1px solid var(--edge);
+}
+.doctor-check > div {
+  flex: 1;
+  min-width: 0;
+}
+.doctor-check h3 {
+  font: var(--fw-med) var(--f-base);
+  margin: 0 0 var(--sp-1);
+}
+.doctor-check p {
+  font: var(--fw-reg) var(--f-sm);
+  color: var(--t2);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.doctor-badge {
+  flex-shrink: 0;
+  font: var(--fw-med) var(--f-xs);
+  padding: var(--sp-1) var(--sp-2);
+  border: 1px solid var(--edge);
+  border-radius: var(--r-full);
+  background: var(--s2);
+  color: var(--t2);
+}
+.doctor-badge.error {
+  color: var(--bad);
+  border-color: currentColor;
+}
+.doctor-badge.warning,
+.doctor-badge.manual,
+.doctor-badge.deferred {
+  color: var(--warn);
+  border-color: currentColor;
+}
+.doctor-checks[aria-busy="true"] {
+  opacity: 0.65;
+}
+@media (max-width: 480px) {
+  .doctor-main {
+    padding-top: var(--sp-4);
+  }
+}

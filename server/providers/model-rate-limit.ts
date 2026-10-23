@@ -5,7 +5,12 @@ import { setTimeout as delay } from "node:timers/promises";
 import PQueue from "p-queue";
 
 export const MODEL_REQUEST_INTERVAL_MS = 1_100;
-export const MODEL_REQUEST_PRIORITIES = { interactive: 20, automation: 10, triage: 5, label: 0 } as const;
+export const MODEL_REQUEST_PRIORITIES = {
+  interactive: 20,
+  automation: 10,
+  triage: 5,
+  label: 0,
+} as const;
 export type ModelRequestProvider = "nvidia" | "openrouter" | "other";
 export type ModelRequestPriority = keyof typeof MODEL_REQUEST_PRIORITIES;
 export type ModelRequestAdmission = {
@@ -28,7 +33,11 @@ export class AdmissionUnavailable extends Error {
   readonly provider: ModelRequestProvider;
   readonly retryAt: number;
   readonly reason: "minute-quota" | "daily-quota";
-  constructor(provider: ModelRequestProvider, retryAt: number, reason: "minute-quota" | "daily-quota") {
+  constructor(
+    provider: ModelRequestProvider,
+    retryAt: number,
+    reason: "minute-quota" | "daily-quota",
+  ) {
     super(`${provider} ${reason} exhausted; retry at ${new Date(retryAt).toISOString()}.`);
     this.name = "AdmissionUnavailable";
     this.provider = provider;
@@ -39,7 +48,10 @@ export class AdmissionUnavailable extends Error {
 
 class DeferredAdmission extends Error {
   readonly until: number;
-  constructor(until: number) { super("Admission deferred."); this.until = until; }
+  constructor(until: number) {
+    super("Admission deferred.");
+    this.until = until;
+  }
 }
 
 /** One central priority queue. SQLite preserves admission clocks across restarts. */
@@ -61,9 +73,16 @@ export class ModelRateLimit {
     this.dayLimit = options.openRouterDayLimit ?? 1_000;
     this.now = options.now ?? Date.now;
     for (const value of [this.intervalMs, this.minuteLimit, this.windowMs, this.dayLimit]) {
-      if (!Number.isSafeInteger(value) || value < 1) throw new Error("Rate limits must be positive integers.");
+      if (!Number.isSafeInteger(value) || value < 1)
+        throw new Error("Rate limits must be positive integers.");
     }
-    this.queue = new PQueue({ concurrency: 1, autoStart: false, intervalCap: 1, interval: this.intervalMs, strict: true });
+    this.queue = new PQueue({
+      concurrency: 1,
+      autoStart: false,
+      intervalCap: 1,
+      interval: this.intervalMs,
+      strict: true,
+    });
     fs.mkdirSync(path.dirname(options.path), { recursive: true, mode: 0o700 });
     this.db = new DatabaseSync(options.path);
     this.db.exec(`PRAGMA busy_timeout = 5000;
@@ -83,18 +102,29 @@ export class ModelRateLimit {
   }
 
   private nextAt(): number {
-    return (this.db.prepare("SELECT next_at FROM admission WHERE id = 1").get() as { next_at: number }).next_at;
+    return (
+      this.db.prepare("SELECT next_at FROM admission WHERE id = 1").get() as { next_at: number }
+    ).next_at;
   }
 
   private cooldown(provider: ModelRequestProvider): number {
-    return (this.db.prepare("SELECT until_at FROM provider_cooldowns WHERE provider = ?").get(provider) as { until_at: number } | undefined)?.until_at ?? 0;
+    return (
+      (
+        this.db
+          .prepare("SELECT until_at FROM provider_cooldowns WHERE provider = ?")
+          .get(provider) as { until_at: number } | undefined
+      )?.until_at ?? 0
+    );
   }
 
   private resumeAt(until: number): void {
     this.queue.pause();
     if (this.timer) clearTimeout(this.timer);
     const wait = until - this.now();
-    if (wait <= 0) { this.queue.start(); return; }
+    if (wait <= 0) {
+      this.queue.start();
+      return;
+    }
     this.timer = setTimeout(() => {
       this.timer = undefined;
       if (!this.closed) this.resumeAt(this.nextAt());
@@ -103,29 +133,49 @@ export class ModelRateLimit {
 
   private checkQuota(now: number): void {
     const day = new Date(now).toISOString().slice(0, 10);
-    const count = (this.db.prepare("SELECT requests FROM openrouter_days WHERE day = ?").get(day) as { requests: number } | undefined)?.requests ?? 0;
-    const reportedLimit = (this.db.prepare("SELECT request_limit FROM openrouter_limits WHERE day = ?").get(day) as { request_limit: number } | undefined)?.request_limit ?? this.dayLimit;
+    const count =
+      (
+        this.db.prepare("SELECT requests FROM openrouter_days WHERE day = ?").get(day) as
+          | { requests: number }
+          | undefined
+      )?.requests ?? 0;
+    const reportedLimit =
+      (
+        this.db.prepare("SELECT request_limit FROM openrouter_limits WHERE day = ?").get(day) as
+          | { request_limit: number }
+          | undefined
+      )?.request_limit ?? this.dayLimit;
     if (count >= Math.min(this.dayLimit, reportedLimit)) {
-      throw new AdmissionUnavailable("openrouter", Date.parse(`${day}T00:00:00Z`) + 86_400_000, "daily-quota");
+      throw new AdmissionUnavailable(
+        "openrouter",
+        Date.parse(`${day}T00:00:00Z`) + 86_400_000,
+        "daily-quota",
+      );
     }
     this.db.prepare("DELETE FROM openrouter_starts WHERE started_at <= ?").run(now - this.windowMs);
-    const starts = this.db.prepare("SELECT started_at FROM openrouter_starts ORDER BY started_at").all() as { started_at: number }[];
+    const starts = this.db
+      .prepare("SELECT started_at FROM openrouter_starts ORDER BY started_at")
+      .all() as { started_at: number }[];
     if (starts.length >= this.minuteLimit) {
       throw new DeferredAdmission(starts[0].started_at + this.windowMs);
     }
   }
 
   async acquire(input?: AbortSignal | ModelRequestAdmission): Promise<void> {
-    const options = input && "aborted" in input ? { signal: input } : input ?? {};
+    const options = input && "aborted" in input ? { signal: input } : (input ?? {});
     const { signal, provider = "other" } = options;
-    const priority = typeof options.priority === "number" ? options.priority : MODEL_REQUEST_PRIORITIES[options.priority ?? "interactive"];
+    const priority =
+      typeof options.priority === "number"
+        ? options.priority
+        : MODEL_REQUEST_PRIORITIES[options.priority ?? "interactive"];
     if (!Number.isFinite(priority)) throw new Error("Invalid model request priority.");
     for (;;) {
       if (this.closed) throw new Error("Model request scheduler is closed.");
       signal?.throwIfAborted();
       if (provider === "openrouter") {
-        try { this.checkQuota(this.now()); }
-        catch (error) {
+        try {
+          this.checkQuota(this.now());
+        } catch (error) {
           if (!(error instanceof DeferredAdmission)) throw error;
           await delay(Math.max(0, error.until - this.now()), undefined, { signal });
           continue;
@@ -134,28 +184,41 @@ export class ModelRateLimit {
       const waiting = this.cooldown(provider) - this.now();
       if (waiting > 0) await delay(waiting, undefined, { signal });
       try {
-        await this.queue.add(() => {
-          signal?.throwIfAborted();
-          const now = this.now();
-          const cooldown = this.cooldown(provider);
-          if (cooldown > now) throw new DeferredAdmission(cooldown);
-          if (provider === "openrouter") this.checkQuota(now);
-          const next = this.nextAt();
-          if (next > now) { this.resumeAt(next); throw new DeferredAdmission(next); }
-          this.db.exec("BEGIN IMMEDIATE");
-          try {
-            this.db.prepare("UPDATE admission SET next_at = ? WHERE id = 1").run(now + this.intervalMs);
-            if (provider === "openrouter") {
-              const day = new Date(now).toISOString().slice(0, 10);
-              this.db.prepare("INSERT INTO openrouter_starts VALUES (?)").run(now);
-              this.db.prepare(`INSERT INTO openrouter_days VALUES (?, 1)
-                ON CONFLICT(day) DO UPDATE SET requests = requests + 1`).run(day);
-              this.db.prepare("DELETE FROM openrouter_days WHERE day < ?").run(day);
+        await this.queue.add(
+          () => {
+            signal?.throwIfAborted();
+            const now = this.now();
+            const cooldown = this.cooldown(provider);
+            if (cooldown > now) throw new DeferredAdmission(cooldown);
+            if (provider === "openrouter") this.checkQuota(now);
+            const next = this.nextAt();
+            if (next > now) {
+              this.resumeAt(next);
+              throw new DeferredAdmission(next);
             }
-            this.db.exec("COMMIT");
-          } catch (error) { this.db.exec("ROLLBACK"); throw error; }
-          // PQueue owns live spacing; persisted next_at restores it after restart.
-        }, { priority, signal });
+            this.db.exec("BEGIN IMMEDIATE");
+            try {
+              this.db
+                .prepare("UPDATE admission SET next_at = ? WHERE id = 1")
+                .run(now + this.intervalMs);
+              if (provider === "openrouter") {
+                const day = new Date(now).toISOString().slice(0, 10);
+                this.db.prepare("INSERT INTO openrouter_starts VALUES (?)").run(now);
+                this.db
+                  .prepare(`INSERT INTO openrouter_days VALUES (?, 1)
+                ON CONFLICT(day) DO UPDATE SET requests = requests + 1`)
+                  .run(day);
+                this.db.prepare("DELETE FROM openrouter_days WHERE day < ?").run(day);
+              }
+              this.db.exec("COMMIT");
+            } catch (error) {
+              this.db.exec("ROLLBACK");
+              throw error;
+            }
+            // PQueue owns live spacing; persisted next_at restores it after restart.
+          },
+          { priority, signal },
+        );
         return;
       } catch (error) {
         if (!(error instanceof DeferredAdmission)) throw error;
@@ -177,25 +240,48 @@ export class ModelRateLimit {
       }
     }
     const until = now + Math.max(0, Math.min(15 * 60_000, milliseconds));
-    this.db.prepare(`INSERT INTO provider_cooldowns VALUES (?, ?)
-      ON CONFLICT(provider) DO UPDATE SET until_at = MAX(until_at, excluded.until_at)`).run(provider, until);
+    this.db
+      .prepare(`INSERT INTO provider_cooldowns VALUES (?, ?)
+      ON CONFLICT(provider) DO UPDATE SET until_at = MAX(until_at, excluded.until_at)`)
+      .run(provider, until);
     return this.cooldown(provider);
   }
 
   /** Reconcile the upstream daily counter without restoring locally consumed quota. */
-  syncOpenRouterQuota({ used, limit, observedAt = this.now() }: { used: number; limit: number; observedAt?: number }): void {
-    if (!Number.isFinite(used) || used < 0 || !Number.isFinite(limit) || limit < 0 || !Number.isFinite(observedAt)) {
+  syncOpenRouterQuota({
+    used,
+    limit,
+    observedAt = this.now(),
+  }: {
+    used: number;
+    limit: number;
+    observedAt?: number;
+  }): void {
+    if (
+      !Number.isFinite(used) ||
+      used < 0 ||
+      !Number.isFinite(limit) ||
+      limit < 0 ||
+      !Number.isFinite(observedAt)
+    ) {
       throw new Error("Invalid OpenRouter quota observation.");
     }
     const day = new Date(observedAt).toISOString().slice(0, 10);
     this.db.exec("BEGIN IMMEDIATE");
     try {
-      this.db.prepare(`INSERT INTO openrouter_days VALUES (?, ?)
-        ON CONFLICT(day) DO UPDATE SET requests = MAX(requests, excluded.requests)`).run(day, Math.ceil(used));
-      this.db.prepare(`INSERT INTO openrouter_limits VALUES (?, ?)
-        ON CONFLICT(day) DO UPDATE SET request_limit = MIN(request_limit, excluded.request_limit)`).run(day, Math.floor(limit));
+      this.db
+        .prepare(`INSERT INTO openrouter_days VALUES (?, ?)
+        ON CONFLICT(day) DO UPDATE SET requests = MAX(requests, excluded.requests)`)
+        .run(day, Math.ceil(used));
+      this.db
+        .prepare(`INSERT INTO openrouter_limits VALUES (?, ?)
+        ON CONFLICT(day) DO UPDATE SET request_limit = MIN(request_limit, excluded.request_limit)`)
+        .run(day, Math.floor(limit));
       this.db.exec("COMMIT");
-    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   close(): void {

@@ -59,7 +59,9 @@
 <div id="app">
   <aside id="side" aria-label="Threads">
     <div class="brand"><img src="/icon.svg" alt="" width="24" height="24"><span>Agent Console</span>
+      <!-- biome-ignore lint/a11y/useSemanticElements: role=group on a div styled by .side-actions; fieldset would change the layout -->
       <div class="side-actions" role="group" aria-label="Console shortcuts">
+        <!-- biome-ignore lint/a11y/useAnchorContent: icon-only link: the accessible name comes from aria-label -->
         <a class="btn sm icon ghost" href="/sessions" title="Search all sessions" aria-label="Search all sessions"><svg class="ico" aria-hidden="true"><use href="#i-search"/></svg></a>
         <button id="files" class="btn sm icon ghost" type="button" title="Browse ~/repos" aria-label="Files" aria-haspopup="dialog"><svg class="ico" aria-hidden="true"><use href="#i-folder"/></svg></button>
         <button id="new" class="btn sm icon ghost" type="button" title="New thread" aria-label="New thread"><svg class="ico" aria-hidden="true"><use href="#i-compose"/></svg></button>
@@ -108,6 +110,7 @@
         <button id="new-task" class="btn ghost new-task" type="button"><svg class="ico" aria-hidden="true"><use href="#i-plus"/></svg><span>New scheduled task</span></button>
       </div>
     </div>
+    <!-- biome-ignore lint/a11y/useSemanticElements: role=group on a div filled by app.js; fieldset would change the layout -->
     <div id="usage" class="usage" title="Subscription usage" role="group" aria-label="Subscription usage"></div>
   </aside>
   <div id="scrim"></div>
@@ -117,6 +120,7 @@
         <svg class="ico" aria-hidden="true"><use href="#i-sidebar"/></svg>
       </button>
       <div class="title">
+        <!-- biome-ignore lint/a11y/useHeadingContent: thread title is filled at runtime by app.js -->
         <h1 id="ttl"></h1>
         <div id="cwd" class="path" hidden><svg class="ico" aria-hidden="true"><use href="#i-folder"/></svg><span id="ttl-archived" class="tag arch" hidden><svg class="ico" aria-hidden="true"><use href="#i-archive"/></svg>Archived</span><span id="thread-account" hidden></span><span id="cwd-t"></span></div>
       </div>
@@ -128,6 +132,7 @@
         <svg class="ico" aria-hidden="true"><use href="#i-more"/></svg>
       </button>
     </header>
+    <!-- biome-ignore lint/a11y/useSemanticElements: role=search on a div styled by #chat-search; search element would change the layout -->
     <div id="chat-search" role="search" aria-label="Search in chat" hidden>
       <div class="chat-search-field">
         <input id="chat-search-input" type="search" aria-label="Search in chat" aria-describedby="chat-search-count" placeholder="Search in chat" autocomplete="off" spellcheck="false" enterkeyhint="search">
@@ -141,10 +146,13 @@
     <section id="chat" role="log" aria-label="Conversation" aria-relevant="additions" tabindex="-1"></section>
     <footer id="composer">
       <div class="cwrap">
+        <!-- biome-ignore lint/a11y/noNoninteractiveElementToInteractiveRole: slash menu list is a listbox of commands managed by app.js (combobox pattern) -->
         <ul id="slash" role="listbox" aria-label="Commands and skills" hidden></ul>
         <div id="cbox">
           <ul id="queued" aria-label="Queued messages" hidden></ul>
           <ul id="thumbs" aria-label="Attachments" hidden></ul>
+          <!-- biome-ignore lint/a11y/useFocusableInteractive: contenteditable already makes the composer focusable -->
+          <!-- biome-ignore lint/a11y/useAriaPropsSupportedByRole: combobox pattern on a contenteditable composer, aria-disabled toggled by app.js -->
           <div id="input" contenteditable="true" spellcheck="true" autocapitalize="sentences" aria-multiline="true" aria-label="Message" role="combobox" aria-expanded="false" aria-controls="slash" aria-autocomplete="list" data-placeholder="Message the agent" enterkeyhint="send" aria-disabled="true"></div>
           <div class="toolbar">
             <input id="file" type="file" multiple hidden>
@@ -180,11 +188,12 @@
   <dl id="run-metrics" class="facts"></dl>
   <section id="turn-timing" class="turn-timing" aria-labelledby="turn-timing-title" hidden><h3 id="turn-timing-title">Last turn</h3><div id="turn-timing-body"></div></section>
   <h3>This thread loaded</h3>
+  <!-- biome-ignore lint/a11y/useAriaPropsSupportedByRole: labelled diagnostics region filled at runtime -->
   <div id="diagnostics" class="diagnostics" aria-label="Load diagnostics">No load measurements yet.</div>
   <h3>Speed on this server</h3>
   <div id="latency-summary"></div>
   <section id="turn-breakdown" class="turn-timing turn-breakdown" aria-labelledby="tb-title" hidden></section>
-  <form method="dialog"><div class="row"><button class="btn" autofocus>Done</button></div></form>
+  <form method="dialog"><div class="row"><button type="submit" class="btn" autofocus>Done</button></div></form>
 </dialog>
 <dialog id="issue-review" aria-labelledby="issue-heading"><form id="issue-form">
   <h2 id="issue-heading">Create GitHub issue</h2>
@@ -226,7 +235,7 @@
   <label class="fld check" id="save-field" hidden><input id="d-save" type="checkbox" checked><span>Save each report to git<span class="hint">~/repos/agent-outputs, one commit per run</span></span></label>
   <p id="d-note" class="hint" hidden></p>
   <p id="d-warn" class="callout" role="alert" hidden><svg class="ico" aria-hidden="true"><use href="#i-alert"/></svg><span>Bypass mode runs every tool without asking. Use only in folders you trust.</span></p>
-  <div class="row"><button value="cancel" class="btn" formnovalidate>Cancel</button><button value="ok" class="btn primary" id="d-ok">Create thread</button></div>
+  <div class="row"><button type="submit" value="cancel" class="btn" formnovalidate>Cancel</button><button type="submit" value="ok" class="btn primary" id="d-ok">Create thread</button></div>
 </form></dialog>
 <dialog id="ap" aria-labelledby="ap-title">
   <h2 id="ap-title">Assigning to premium</h2>
@@ -240,7 +249,7 @@
   <p id="notifications-status" class="sub" role="status" aria-live="polite"></p>
   <label class="fld"><input id="notifications-silent" type="checkbox" aria-describedby="notifications-silent-help"> Silent notifications</label>
   <p id="notifications-silent-help" class="sub">No sound or vibration. Applies to this device.</p>
-  <form method="dialog"><div class="row"><button id="notifications-toggle" class="btn primary" type="button">Enable notifications</button><button class="btn">Done</button></div></form>
+  <form method="dialog"><div class="row"><button id="notifications-toggle" class="btn primary" type="button">Enable notifications</button><button type="submit" class="btn">Done</button></div></form>
 </dialog>
 <script type="module" src="/app.js"></script>
 </body></html>

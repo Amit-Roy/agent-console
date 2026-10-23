@@ -5,18 +5,27 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import { chromium } from "playwright";
 import { makeToken } from "../server/auth.ts";
+
 const base = process.env.BASE || "http://127.0.0.1:7071";
 const OUT = process.env.OUT;
 const browser = await chromium.launch();
 try {
-  const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 }, colorScheme: "dark" });
+  const ctx = await browser.newContext({
+    viewport: { width: 1280, height: 900 },
+    colorScheme: "dark",
+  });
   await ctx.addCookies([{ name: "ac_session", value: makeToken(), url: base }]);
   const page = await ctx.newPage();
-  const errors: string[] = []; page.on("pageerror", (e) => errors.push(e.message));
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(e.message));
   page.on("dialog", (d) => d.accept());
   await page.goto(base);
   await page.waitForSelector("#lanes");
-  assert.equal(await page.locator("#lane-threads").getAttribute("aria-selected"), "true", "Threads is the default lane");
+  assert.equal(
+    await page.locator("#lane-threads").getAttribute("aria-selected"),
+    "true",
+    "Threads is the default lane",
+  );
   await page.click("#lane-tasks");
   assert.equal(await page.locator("#pane-tasks").isVisible(), true);
   assert.equal(await page.locator("#pane-threads").isVisible(), false);
@@ -38,14 +47,22 @@ try {
   await task.waitFor();
   assert.match((await task.locator(".meta").textContent())!, /Daily 07:30.*Mock.*in \d+[mh]/);
   assert.equal(await task.locator(".switch").getAttribute("aria-checked"), "true");
-  await page.locator("#tasks li.empty-run").getByText(/First run/).waitFor();
+  await page
+    .locator("#tasks li.empty-run")
+    .getByText(/First run/)
+    .waitFor();
 
   // pause and resume
   await task.locator(".switch").click();
-  await page.waitForFunction(() => document.querySelector("#tasks li.task .switch")?.getAttribute("aria-checked") === "false");
+  await page.waitForFunction(
+    () =>
+      document.querySelector("#tasks li.task .switch")?.getAttribute("aria-checked") === "false",
+  );
   assert.match((await task.locator(".meta").textContent())!, /Paused/);
   await task.locator(".switch").click();
-  await page.waitForFunction(() => document.querySelector("#tasks li.task .switch")?.getAttribute("aria-checked") === "true");
+  await page.waitForFunction(
+    () => document.querySelector("#tasks li.task .switch")?.getAttribute("aria-checked") === "true",
+  );
 
   // Run now opens the run thread; the run is a child row, not a thread-list row; the report card lands in the transcript
   await task.locator(".row-more").click();
@@ -55,16 +72,31 @@ try {
   assert.match((await page.locator("#ttl").textContent())!, /^Morning digest · /);
   assert.match((await card.locator(".rr-status").textContent())!, /Done/);
   const ref = await card.locator("a.btn", { hasText: "Open report" }).getAttribute("data-file-ref");
-  assert.ok(ref && fs.existsSync(ref) && /morning-digest\/\d{4}-\d\d-\d\d-\d{4}\.md$/.test(ref), "the report was written to the outputs repo");
-  assert.match(fs.readFileSync(ref!, "utf8"), /Summarise what changed overnight/, "the mock agent's final message is the report");
+  assert.ok(
+    ref && fs.existsSync(ref) && /morning-digest\/\d{4}-\d\d-\d\d-\d{4}\.md$/.test(ref),
+    "the report was written to the outputs repo",
+  );
+  assert.match(
+    fs.readFileSync(ref!, "utf8"),
+    /Summarise what changed overnight/,
+    "the mock agent's final message is the report",
+  );
   assert.equal(await card.getByRole("button", { name: "Fork" }).count(), 1);
   assert.equal(await card.getByRole("button", { name: "Run again" }).count(), 1);
   const run = page.locator("#tasks li.run.done");
   await run.waitFor();
-  assert.equal(await run.getAttribute("aria-current"), "true", "the open run is highlighted under its task");
+  assert.equal(
+    await run.getAttribute("aria-current"),
+    "true",
+    "the open run is highlighted under its task",
+  );
   assert.match((await run.locator(".meta").textContent())!, /Done · \d+s · Report saved/);
   await page.click("#lane-threads");
-  assert.equal(await page.locator("#threads li", { hasText: "Morning digest" }).count(), 0, "runs stay out of the thread list");
+  assert.equal(
+    await page.locator("#threads li", { hasText: "Morning digest" }).count(),
+    0,
+    "runs stay out of the thread list",
+  );
   await page.click("#lane-tasks");
 
   // the lane survives a reload
@@ -83,10 +115,18 @@ try {
   await page.click("#d-day");
   await page.getByRole("option", { name: "Fridays" }).click();
   await page.click("#d-ok");
-  await page.waitForFunction(() => /Fridays 07:30/.test(document.querySelector("#tasks li.task .meta")?.textContent || ""));
+  await page.waitForFunction(() =>
+    /Fridays 07:30/.test(document.querySelector("#tasks li.task .meta")?.textContent || ""),
+  );
 
   if (OUT) {
-    const phone = await browser.newContext({ viewport: { width: 412, height: 915 }, deviceScaleFactor: 2.625, isMobile: true, hasTouch: true, colorScheme: "dark" });
+    const phone = await browser.newContext({
+      viewport: { width: 412, height: 915 },
+      deviceScaleFactor: 2.625,
+      isMobile: true,
+      hasTouch: true,
+      colorScheme: "dark",
+    });
     await phone.addCookies([{ name: "ac_session", value: makeToken(), url: base }]);
     const p = await phone.newPage();
     await p.goto(base);
@@ -110,7 +150,9 @@ try {
   await page.click("#lane-threads");
   assert.equal(await page.locator("#threads li", { hasText: "Morning digest" }).count(), 0);
   assert.deepEqual(errors, []);
-  console.log("PASS schedules UI: lanes, create, switch, run now, run rows, report card, reload, edit, delete");
+  console.log(
+    "PASS schedules UI: lanes, create, switch, run now, run rows, report card, reload, edit, delete",
+  );
 } finally {
   await browser.close();
 }

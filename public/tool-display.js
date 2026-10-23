@@ -1,6 +1,12 @@
 // Legacy logs can contain WebSearch {query:""}; no metadata exists to reconstruct its action.
 export const toolName = (name, input) => {
-  if (name === "WebSearch" && !input?.query?.trim() && !input?.queries?.length && !input?.description) return "WebBrowse";
+  if (
+    name === "WebSearch" &&
+    !input?.query?.trim() &&
+    !input?.queries?.length &&
+    !input?.description
+  )
+    return "WebBrowse";
   // MCP tools arrive as `mcp__<server>__<tool>`; show the readable `server/tool` instead.
   if (name.startsWith("mcp__")) {
     const parts = name.slice(5).split("__");
@@ -23,8 +29,19 @@ const shortPath = (p) => {
 
 export function toolSummary(name, input = {}) {
   if (name === "WebSearch" && input.queries?.length) return input.queries.join(" · ");
-  if (name === "WebFind") return [input.pattern || input.description, input.url].filter(Boolean).join(" · ");
-  if (toolName(name, input) === "WebBrowse") return input.description || "Web action details not reported by Codex";
+  if (name === "WebFind")
+    return [input.pattern || input.description, input.url].filter(Boolean).join(" · ");
+  if (toolName(name, input) === "WebBrowse")
+    return input.description || "Web action details not reported by Codex";
   if (name === "Read") return shortPath(input.file_path) || "";
-  return input.command || input.file_path || input.path || input.pattern || input.url || input.query || input.description || JSON.stringify(input).slice(0, 120);
+  return (
+    input.command ||
+    input.file_path ||
+    input.path ||
+    input.pattern ||
+    input.url ||
+    input.query ||
+    input.description ||
+    JSON.stringify(input).slice(0, 120)
+  );
 }
