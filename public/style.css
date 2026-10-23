@@ -2071,6 +2071,18 @@ details[open] > summary .chev {
   flex: none;
   color: var(--t3);
 }
+.dur {
+  flex: none;
+  color: var(--t3);
+  font: var(--fw-reg) var(--fm-xs);
+  font-variant-numeric: tabular-nums;
+}
+.dur + .chev {
+  margin-left: 0;
+}
+.think > summary .dur {
+  margin-left: auto;
+}
 .card.err .st {
   color: var(--bad);
 }

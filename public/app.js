@@ -2450,6 +2450,10 @@ const fmtDur = (ms) => {
   const s = Math.round(ms / 1000);
   return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`;
 };
+// Live-only step timing: history events carry no timestamps, so replayed rows show no duration.
+const stepDur = (ms) =>
+  ms < 1000 ? `${Math.round(ms)}ms` : ms < 10000 ? `${(ms / 1000).toFixed(1)}s` : fmtDur(ms);
+const durChip = (ms) => el("span", "dur", stepDur(ms));
 // A ring that fills with the model's context window, as in other chat UIs. Amber (never red: red means destructive) as it gets full.
 function renderCtx() {
   const b = $("ctx");
@@ -3217,13 +3221,17 @@ function onEvent(e, live) {
     case "stream_event": {
       const ev = e.event;
       if (!ev) break;
-      if (ev.type === "message_start") state.live = null;
+      if (ev.type === "message_start") {
+        state.live = null;
+        state.thinkAt = null;
+      }
       if (ev.type === "content_block_delta") {
         if (ev.delta?.type === "text_delta") {
           renderLive("text");
           state.live.text += ev.delta.text;
         } else if (ev.delta?.type === "thinking_delta") {
           renderLive("thinking");
+          state.thinkAt ??= performance.now();
           state.live.thinking += ev.delta.thinking;
         }
       }
@@ -3240,7 +3248,10 @@ function onEvent(e, live) {
           dropLive("thinking");
           const det = el("details", "msg think");
           const sum = el("summary");
-          sum.append(icon("sparkle"), el("span", "", "Reasoning"), icon("chev-right", "chev"));
+          sum.append(icon("sparkle"), el("span", "", "Reasoning"));
+          if (live && state.thinkAt != null) sum.append(durChip(performance.now() - state.thinkAt));
+          state.thinkAt = null;
+          sum.append(icon("chev-right", "chev"));
           det.append(sum, el("div", "think-body", b.thinking));
           push(det, live);
         } else if (b.type === "tool_use") {
@@ -3269,6 +3280,7 @@ function onEvent(e, live) {
           );
           sum.title = summarize(b.name, b.input);
           card.toolInput = { name: b.name, input: b.input };
+          if (live) card.startedAt = performance.now();
           card.append(sum, el("div", "body")); // the open row wraps to show the whole label, so it is not repeated below
           card.addEventListener("toggle", () => {
             if (!card.open) return;
@@ -3292,6 +3304,7 @@ function onEvent(e, live) {
         card.classList.remove("pending");
         card.classList.add(c.is_error ? "err" : "done");
         const st = card.querySelector(".st");
+        if (card.startedAt != null) st.before(durChip(performance.now() - card.startedAt));
         st.replaceChildren(
           icon(c.is_error ? "x" : "check"),
           el("span", "sr-only", c.is_error ? "error" : "done"),
