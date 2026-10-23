@@ -43,6 +43,7 @@ import { SessionSearch } from "./session-search.ts";
 import { Notifications } from "./notifications.ts";
 import { dashboard, readTurns } from "./analytics.ts";
 import { benchmarkUsage, BenchmarkError, createBenchmarks } from "./benchmarks.ts";
+import { createBenchmarkSubscriptions, validateSubscriptionFees } from "./benchmark-subscriptions.ts";
 import { promptOverhead } from "./prompt-overhead.ts";
 import { pricing, rates } from "./api-pricing.ts";
 import { contextAllocation } from "./context-allocation.ts";
@@ -292,11 +293,12 @@ const sameOrigin: express.RequestHandler = (req, res, next) => {
   res.status(403).json({ error: "Cross-site request refused." });
 };
 const benchmarks = createBenchmarks({ dataDir: DATA_DIR, keyFile: path.join(DATA_DIR, "artificial-analysis.key") });
+const benchmarkSubscriptions = createBenchmarkSubscriptions(DATA_DIR);
 const benchmarkView = () => {
   const to = Date.now(), from = to - 7 * 86_400_000;
   let timings: any[] = [];
   try { timings = turnTiming()?.turns(from - 86_400_000, to) ?? []; } catch {}
-  return { ...benchmarks.view(), usage: benchmarkUsage(readTurns(0, to, Number.MAX_SAFE_INTEGER), from, to, timings) };
+  return { ...benchmarks.view(), subscriptions: benchmarkSubscriptions.view(usage.all(), to), usage: benchmarkUsage(readTurns(0, to, Number.MAX_SAFE_INTEGER), from, to, timings) };
 };
 app.get("/api/benchmarks", (_req, res) => {
   res.set("Cache-Control", "no-store");
@@ -312,6 +314,13 @@ app.post("/api/benchmarks/settings", sameOrigin, express.json({ limit: "1kb" }),
   if (typeof req.body?.weekly !== "boolean") return void res.status(400).json({ error: "weekly must be a boolean." });
   try { benchmarks.settings(req.body.weekly); res.json(benchmarkView()); }
   catch { res.status(503).json({ error: "Benchmark settings could not be saved." }); }
+});
+app.post("/api/benchmarks/subscriptions", sameOrigin, express.json({ limit: "1kb" }), (req, res) => {
+  res.set("Cache-Control", "no-store");
+  try { validateSubscriptionFees(req.body?.fees); }
+  catch { return void res.status(400).json({ error: "Enter nonnegative monthly fees in USD for Claude Sunny, Claude Nefro and Codex." }); }
+  try { benchmarkSubscriptions.save(req.body.fees); res.json(benchmarkView()); }
+  catch { res.status(503).json({ error: "Subscription fees could not be saved." }); }
 });
 const doctor = createDoctor(threads);
 app.get("/doctor", (_req, res) => res.sendFile(path.join(ROOT, "public", "doctor.html")));

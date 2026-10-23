@@ -9,6 +9,7 @@
   const date = value => value && Number.isFinite(new Date(value).getTime()) ? new Date(value).toLocaleString() : 'Unknown';
   let data = null, chart = null, selected = null, pending = false;
   let rows = [];
+  let feesDirty = false;
   const text = (id, value) => { $(id).textContent = value; };
   function error(message) { text('error', message || ''); $('error').hidden = !message; }
   function validValue(id, minimum, maximum) {
@@ -30,6 +31,34 @@
       cost += tokens * price / 1e6;
     }
     return Number.isFinite(cost / activeHours) ? cost / activeHours : null;
+  }
+  function renderSubscriptions() {
+    const s = data?.subscriptions;
+    text('subscription-cost', number(s?.totalMonthly) === null ? 'Monthly fees are not configured.' : `${money(s.totalMonthly)}/month fixed across ${s.plans.length} subscriptions. Included work does not become an API bill.`);
+    $('subscription-plans').replaceChildren();
+    for (const plan of s?.plans || []) {
+      const entry = document.createElement('div');
+      const name = document.createElement('h3'); name.textContent = `${plan.label} · ${money(number(plan.monthly))}/month`; entry.append(name);
+      for (const label of ['5-hour', '7-day']) {
+        const window = plan.windows.find(w => w.label === label), line = document.createElement('p');
+        line.textContent = window ? `${label}: ${format(window.remainingPercent)}% left in last sample${window.stale ? ' · Stale' : ''}. Reset ${date(window.resetsAt)}.` : `${label}: quota unknown.`;
+        entry.append(line);
+      }
+      const sampled = document.createElement('p'); sampled.className = 'note'; sampled.textContent = `Sampled ${date(plan.updatedAt)}`; entry.append(sampled); $('subscription-plans').append(entry);
+      const id = { claude: 'fee-claude', 'claude:nefro': 'fee-nefro', codex: 'fee-codex' }[plan.key];
+      if (id && !feesDirty) $(id).value = number(plan.monthly) === null ? '' : String(plan.monthly);
+    }
+    const hours = validValue('hours', .1, 24), days = validValue('days', 1, 7);
+    text('subscription-capacity', `Coverage for ${hours === null || days === null ? 'your target' : hours * days} productive hours/week is not established. Quota percentages cannot be converted into productive hours or dollar allowances.`);
+    text('subscription-note', s?.note || 'Subscription quota data is unavailable. No paid API overflow is assumed.');
+  }
+  function renderOverflow(recommendation) {
+    const share = validValue('overflow', 0, 100), fixed = number(data?.subscriptions?.totalMonthly);
+    if ($('overflow').value.trim() === '') { text('subscription-overflow', 'Additional API spend and combined monthly cost are unknown until you estimate the workload needing API access. Leave this blank when coverage is unknown.'); return; }
+    if (share === null) { text('subscription-overflow', 'Enter an API workload share from 0 to 100%.'); return; }
+    if (fixed === null || (share > 0 && !recommendation)) { text('subscription-overflow', 'Set subscription fees and choose a priced API alternative to estimate combined monthly cost.'); return; }
+    const extra = share === 0 ? 0 : recommendation.monthly * share / 100;
+    text('subscription-overflow', `Your ${share}% API workload scenario: ${money(fixed)}/month subscriptions + ${money(extra)}/month extra API = ${money(fixed + extra)}/month combined. This assumes the same token mix for the API share; it does not prove subscription coverage or estimate an invoice.`);
   }
   function updateRefresh() {
     const due = data?.refreshAllowedAt ? new Date(data.refreshAllowedAt).getTime() : 0;
@@ -59,7 +88,7 @@
     chart = new Chart($('comparison-chart'), {
       type: 'scatter',
       data: { datasets: [{ label: 'Models', data: points.map(row => ({ x: row.monthly, y: row.score, model: row })), pointStyle: points.map(row => row.frontier ? 'rectRot' : 'circle'), pointRadius: points.map(row => row.frontier ? 6 : 4), pointHoverRadius: 8, backgroundColor: points.map(row => row.qualified ? accent : 'transparent'), borderColor: points.map(row => row.qualified ? accent : neutral), borderWidth: 1.5 }] },
-      options: { responsive: true, maintainAspectRatio: false, animation: false, onClick: (_event, hits) => { if (hits.length) selectModel(points[hits[0].index].id); }, plugins: { legend: { display: false }, tooltip: { callbacks: { label: context => `${context.raw.model.name}: ${money(context.parsed.x)}/month · score ${format(context.parsed.y)}` } } }, scales: { x: { type: 'linear', min: 0, title: { display: true, text: 'Projected API cost / month (USD)', color: neutral }, ticks: { color: neutral, callback: value => money(value) }, grid: { color: edge } }, y: { title: { display: true, text: `${$('score').selectedOptions[0].textContent} score`, color: neutral }, ticks: { color: neutral }, grid: { color: edge } } } }
+      options: { responsive: true, maintainAspectRatio: false, animation: false, onClick: (_event, hits) => { if (hits.length) selectModel(points[hits[0].index].id); }, plugins: { legend: { display: false }, tooltip: { callbacks: { label: context => `${context.raw.model.name}: ${money(context.parsed.x)}/month · score ${format(context.parsed.y)}` } } }, scales: { x: { type: 'linear', min: 0, title: { display: true, text: 'API-only equivalent / month (USD)', color: neutral }, ticks: { color: neutral, callback: value => money(value) }, grid: { color: edge } }, y: { title: { display: true, text: `${$('score').selectedOptions[0].textContent} score`, color: neutral }, ticks: { color: neutral }, grid: { color: edge } } } }
     });
   }
   function renderTable() {
@@ -82,12 +111,13 @@
   }
   function render() {
     if (!data) return;
+    renderSubscriptions();
     const usage = data.usage || {}, snapshot = data.snapshot || {}, scoreKey = $('score').value;
     const hours = validValue('hours', .1, 24), days = validValue('days', 1, 7), quality = validValue('quality', 0, 100);
     const override = $('active-hours').value.trim() !== '', activeHours = override ? validValue('active-hours', .01, Infinity) : number(usage.activeHours);
     const budget = $('budget').value.trim() === '' ? null : validValue('budget', 0, Infinity);
     const valid = hours !== null && days !== null && quality !== null && (!override || activeHours !== null) && ($('budget').value.trim() === '' || budget !== null);
-    if (!valid || !$('controls').checkValidity()) { text('recommendation-title', 'Check your comparison settings'); text('recommendation-detail', 'Enter values within the displayed limits to update this comparison.'); text('recommendation-cost', ''); rows = []; renderTable(); renderChart(); text('leader', ''); text('selection', ''); text('formula', ''); text('usage-note', 'Correct the settings to update usage and cost assumptions.'); return; }
+    if (!valid || !$('controls').checkValidity()) { text('recommendation-title', 'Check your comparison settings'); text('recommendation-detail', 'Enter values within the displayed limits to update this comparison.'); text('recommendation-cost', ''); text('subscription-overflow', 'Correct the comparison settings to estimate an overflow scenario.'); rows = []; renderTable(); renderChart(); text('leader', ''); text('selection', ''); text('formula', ''); text('usage-note', 'Correct the settings to update usage and cost assumptions.'); return; }
     rows = (snapshot.models || []).filter(model => number(model[scoreKey]) !== null).map((model, index) => {
       const hourly = modelCost(model, usage, activeHours, $('cache').value === 'known');
       return { ...model, id: model.id ?? model.slug ?? `model-${index}`, score: model[scoreKey], hourly, weekly: hourly === null ? null : hourly * hours * days, monthly: hourly === null ? null : hourly * hours * days * 52 / 12 };
@@ -97,12 +127,13 @@
     rows.forEach(row => { row.qualified = row.score >= floor; row.frontier = row.monthly !== null && !rows.some(other => other.monthly !== null && other.monthly <= row.monthly && other.score >= row.score && (other.monthly < row.monthly || other.score > row.score)); });
     const eligible = rows.filter(row => row.qualified && row.monthly !== null && (budget === null || row.monthly <= budget)).sort((a, b) => a.monthly - b.monthly || b.score - a.score);
     const recommendation = eligible[0];
+    renderOverflow(recommendation);
     const complete = number(usage.turns) !== null && number(usage.measuredTurns) !== null && usage.turns > 0 && usage.measuredTurns === usage.turns;
     const partial = !complete;
     if (recommendation) {
       text('recommendation-title', recommendation.name);
-      text('recommendation-detail', `Lowest estimated cost at ≥${format(floor)} score (${quality}% of the best ${scoreKey} score)${budget === null ? '' : ` within ${money(budget)}/month`}. ${$('cache').value === 'known' ? 'Assumes your observed cache mix continues.' : 'All input is priced at standard rates.'} ${partial ? 'Partial usage coverage: this estimate may understate your full burn.' : 'Assumes the measured token mix and activity rate continue.'}`);
-      $('recommendation-cost').replaceChildren(document.createTextNode(`${money(recommendation.monthly)}/mo`)); const small = document.createElement('small'); small.textContent = `${money(recommendation.weekly)}/week · ${money(recommendation.hourly)}/active hour`; $('recommendation-cost').append(small);
+      text('recommendation-detail', `Lowest API-only equivalent at ≥${format(floor)} score (${quality}% of the best ${scoreKey} score)${budget === null ? '' : ` within ${money(budget)}/month`}. ${$('cache').value === 'known' ? 'Assumes your observed cache mix continues.' : 'All input is priced at standard rates.'} ${partial ? 'Partial usage coverage: this estimate may understate your full burn.' : 'Assumes the measured token mix and activity rate continue.'}`);
+      $('recommendation-cost').replaceChildren(document.createTextNode(`${money(recommendation.monthly)}/mo`)); const small = document.createElement('small'); small.textContent = `Full-workload API equivalent · ${money(recommendation.weekly)}/week · ${money(recommendation.hourly)}/active hour`; $('recommendation-cost').append(small);
     } else {
       text('recommendation-title', !rows.length ? 'No benchmark snapshot available' : rows.every(row => row.monthly === null) ? 'More usage measurement needed' : 'No priced model meets your settings');
       text('recommendation-detail', !rows.length ? 'Use Refresh benchmarks to fetch a snapshot when the API quota allows.' : rows.every(row => row.monthly === null) ? 'Cost projections need positive active hours and complete token categories. An observed active hours override can supply your own denominator.' : 'Raise the budget or lower the quality floor. Models with unknown costs cannot qualify for a budget recommendation.'); text('recommendation-cost', '');
@@ -139,6 +170,15 @@
     finally { pending = false; updateRefresh(); $('benchmark-main').setAttribute('aria-busy', 'false'); }
   }
   $('controls').addEventListener('submit', event => event.preventDefault());
+  $('subscription-fees').addEventListener('input', () => { feesDirty = true; });
+  $('subscription-fees').addEventListener('submit', async event => {
+    event.preventDefault(); if (pending || !$('subscription-fees').reportValidity()) return;
+    const fees = { claude: validValue('fee-claude', 0, 100000), 'claude:nefro': validValue('fee-nefro', 0, 100000), codex: validValue('fee-codex', 0, 100000) };
+    pending = true; $('save-fees').disabled = true; error('');
+    try { data = await request('/api/benchmarks/subscriptions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ fees }) }); feesDirty = false; render(); }
+    catch (err) { error(`Could not save subscription fees: ${err.message}`); }
+    finally { pending = false; $('save-fees').disabled = false; updateRefresh(); }
+  });
   $('controls').addEventListener('input', render);
   $('scope').addEventListener('change', () => { renderTable(); renderChart(); });
   $('refresh').addEventListener('click', () => load(true));
