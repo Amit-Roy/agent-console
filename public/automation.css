@@ -34,6 +34,12 @@ body.auto {
   display: grid;
   gap: var(--sp-5);
 }
+.wf-picker {
+  display: none;
+}
+.wf-picker[hidden] {
+  display: none;
+}
 .rail-group {
   display: grid;
   gap: 2px;
@@ -235,54 +241,64 @@ body.auto {
     padding: 0 var(--sp-4) var(--sp-4);
   }
   #wf-nav {
-    display: flex;
-    gap: var(--sp-1);
-    overflow-x: auto;
-    padding-bottom: var(--sp-1);
-    scrollbar-width: none;
-  }
-  #wf-nav::-webkit-scrollbar {
     display: none;
   }
-  .rail-group {
-    display: flex;
-    flex: none;
-    gap: var(--sp-1);
+  .wf-picker {
+    position: relative;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
     align-items: center;
-  }
-  .rail-title {
-    display: none;
-  }
-  .rail-item {
-    flex: none;
-    grid-template-columns: auto auto;
+    gap: var(--sp-2);
     min-height: 44px;
     padding: 0 var(--sp-3);
     border: 1px solid var(--edge);
-    border-radius: var(--r-full);
+    border-radius: var(--r-md);
     background: var(--s1);
   }
-  .rail-item .rs {
-    display: none;
+  .wf-picker .pk-ic {
+    display: grid;
+    place-items: center;
+    color: var(--accent);
   }
-  .rail-item[data-tone="bad"]::after,
-  .rail-item[data-tone="warn"]::after {
-    content: "";
-    width: 6px;
-    height: 6px;
-    border-radius: var(--r-full);
-    background: var(--bad);
+  .wf-picker .pk-ic .ico {
+    width: 1.0625rem;
+    height: 1.0625rem;
   }
-  .rail-item[data-tone="warn"]::after {
-    background: var(--warn);
+  .wf-picker .pk-chev {
+    width: 0.875rem;
+    height: 0.875rem;
+    color: var(--t3);
+    pointer-events: none;
   }
-  .rail-item[aria-current="page"] {
-    border-color: transparent;
+  #wf-select {
+    appearance: none;
+    width: 100%;
+    height: 44px;
+    padding: 0 1.25rem 0 0;
+    border: 0;
+    background: transparent;
+    color: var(--t1);
+    font: var(--fw-med) var(--f-sm) var(--font-ui);
+    text-overflow: ellipsis;
+    cursor: pointer;
+  }
+  #wf-select:focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 2px;
+  }
+  .wf-picker[data-tone="bad"] {
+    border-color: color-mix(in srgb, var(--bad) 55%, var(--edge));
+  }
+  .wf-picker[data-tone="warn"] {
+    border-color: color-mix(in srgb, var(--warn) 55%, var(--edge));
   }
   .new-wf {
     width: auto;
     align-self: flex-start;
     min-height: 44px;
+  }
+  .wf-picker + .new-wf {
+    margin-top: var(--sp-2);
   }
   .rail-note {
     display: none;
