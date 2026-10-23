@@ -53,7 +53,8 @@
     "vendor": "node scripts/vendor.mjs",
     "test:effort-fit": "\"${AGENT_CONSOLE_TRIAGE_PYTHON:-$HOME/.local/share/agent-console/triage-venv/bin/python}\" test/triage-effort-fit.py",
     "test:triage": "node test/triage-effort.ts && node test/triage-effort-features.ts && node test/triage-history.ts && node test/triage-history-build.ts && node test/triage-model.ts && node test/triage-comment.ts && node test/triage-calibration.ts && node test/github-triage.ts && node test/github-triage-cli.ts && python3 test/github-triage-caddy.py && node test/triage-console-sessions.ts && node test/triage-native-sessions.ts && node test/triage-session-build.ts",
-    "test:console-url": "node test/console-url.ts && python3 test/console-url-caddy.py"
+    "test:console-url": "node test/console-url.ts && python3 test/console-url-caddy.py",
+    "title-metrics": "node scripts/title-metrics.mjs"
   },
   "keywords": [],
   "author": "",
@@ -79,6 +80,7 @@
     "ws": "^8.22.0"
   },
   "devDependencies": {
+    "fontkit": "^2.0.4",
     "playwright": "^1.64.1",
     "sharp": "^0.35.5"
   }

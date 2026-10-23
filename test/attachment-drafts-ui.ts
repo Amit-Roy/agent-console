@@ -433,30 +433,41 @@ try {
   const blocked = new Promise<void>((resolve) => {
     release = resolve;
   });
+  let intercepted!: () => void;
+  const held = new Promise<void>((resolve) => {
+    intercepted = resolve;
+  });
   let blockUpload = true;
   const blockPattern = `**/uploads/${ids[0]}`;
   const blockHandler = async (route: Route) => {
-    if (route.request().method() === "POST" && blockUpload) await blocked;
-    await route.continue().catch(() => {});
+    if (route.request().method() === "POST" && blockUpload) {
+      blockUpload = false;
+      intercepted();
+      await blocked;
+      await route.abort("aborted").catch(() => {});
+    } else await route.continue();
   };
   await context.route(blockPattern, blockHandler);
-  const requested = page.waitForRequest(
-    (request) => request.method() === "POST" && request.url() === `${base}/uploads/${ids[0]}`,
-    { timeout: 7000 },
-  );
   await page.locator("#file").setInputFiles(file("resume.txt", "persist these interrupted bytes"));
-  await requested;
+  // Request events precede routing; wait until the original upload is actually held.
+  await held;
   await stored(ids[0], 1, true);
   assert.equal(
     await page.locator('#thumbs li[aria-busy="true"]').count(),
     1,
     "interrupted upload is still pending",
   );
-  blockUpload = false;
+  // Abort the held upload once navigation starts, so cancellation cannot delay the reload.
+  const navigating = page.waitForRequest((request) => request.isNavigationRequest(), {
+    timeout: 7000,
+  });
   const reloaded = page.reload(navigation);
-  await ready().catch(() => {});
+  try {
+    await navigating;
+  } finally {
+    release();
+  }
   await reloaded;
-  release();
   await ready();
   await thread(0);
   await settled(1);
