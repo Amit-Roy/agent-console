@@ -84,6 +84,7 @@ import {
 } from "./uploads.ts";
 import {
   readCodexUsage,
+  refreshDeepSeekUsage,
   refreshRouterUsage,
   refreshUsage,
   repairUsageHistory,
@@ -1213,6 +1214,7 @@ const firstDelivery = (cid: string) => {
 wss.on("connection", (ws) => {
   clients.add(ws);
   void refreshRouterUsage(); // quota refresh only on demand; no idle network polling
+  void refreshDeepSeekUsage();
   const reply = (m: unknown) => ws.readyState === ws.OPEN && ws.send(JSON.stringify(m));
   reply({
     t: "hello",
@@ -1481,7 +1483,10 @@ server.listen(PORT, HOST, () => {
       : "auth: password only",
   );
   if (process.env.AGENT_CONSOLE_SHOW_PASSWORD) console.log(`password: ${PASSWORD}`);
-  void refreshPiModels(); // `pi --list-models` takes seconds; spawn it once the port is taken
+  // Connected clients may have received the previous process's cached model list.
+  void refreshPiModels()
+    .then(() => broadcast({ t: "providers", providers: providerInfo() }))
+    .catch(() => console.warn("Pi model refresh failed."));
   // Boot work nothing waits on runs once the first page has had its turn on the event loop.
   setTimeout(() => {
     // Never wait for the proxy: a cold Headroom launch takes up to 10 s, and turns go direct until it is healthy.
