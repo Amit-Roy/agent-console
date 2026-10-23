@@ -12,12 +12,22 @@ import {
   type TriageInput,
   triagePrompt,
 } from "../server/providers/triage-model.ts";
+import { requestStructure } from "../server/providers/triage-structure.ts";
 import { fixtureEffortModel } from "./fixtures/triage-effort.ts";
 
 const parseTriageReply = (raw: string | undefined, value: TriageInput) =>
   parseRealReply(raw, value, fixtureEffortModel);
-const createTriageClassifier = (engines: Parameters<typeof createRealClassifier>[0]) =>
-  createRealClassifier(engines, () => fixtureEffortModel);
+// Never reach a real model from tests: structure extraction falls back to request text alone.
+const shapeOnlyExtract = async ({ text }: { text: string }) => ({
+  flags: requestStructure(text),
+  missing: null,
+  suggestion: null,
+  inferredFromRepo: false,
+});
+const createTriageClassifier = (
+  engines: Parameters<typeof createRealClassifier>[0],
+  extract: Parameters<typeof createRealClassifier>[2] = shapeOnlyExtract,
+) => createRealClassifier(engines, () => fixtureEffortModel, extract);
 
 const input: TriageInput = {
   repo: "example/app",
@@ -413,6 +423,34 @@ assert.deepEqual(calls, ["nvidia", "router-free", "haiku"]);
 calls.length = 0;
 await classify(input);
 assert.deepEqual(calls, ["router-free", "haiku"]);
+
+// One structure call per decision reads the repository description; its result replaces the shape-only quote.
+{
+  const seen: unknown[] = [];
+  const withRepo = createTriageClassifier(
+    [{ id: "small", call: async () => valid }],
+    async (request) => {
+      seen.push(request);
+      return {
+        ...(await shapeOnlyExtract(request)),
+        flags: { hasFilePath: false, hasExpectedOutput: true, hasAcceptanceCheck: true },
+        inferredFromRepo: true,
+      };
+    },
+  );
+  const decision = await withRepo({ ...input, repoContext: "Docs say the build shows a preview." });
+  assert.equal(seen.length, 1);
+  assert.equal(
+    (seen[0] as { repoContext?: string }).repoContext,
+    "Docs say the build shows a preview.",
+  );
+  assert.equal(decision.scorecard!.structure!.inferredFromRepo, true);
+  assert.equal(decision.scorecard!.structure!.flags.hasExpectedOutput, true);
+  const failing = createTriageClassifier([{ id: "small", call: async () => valid }], async () => {
+    throw Error("boom");
+  });
+  assert.equal((await failing(input)).model, "small");
+}
 const luna = createTriageClassifier([
   {
     id: "haiku",
