@@ -1,5 +1,4 @@
-import { createRequire } from "node:module";
-import { fileURLToPath } from "node:url";
+import metrics from "./title-metrics.json" with { type: "json" };
 import { completeLabel } from "./small-model.ts";
 
 // A new thread is titled after its folder. After each prompt with substance, Nemotron (via NVIDIA, a free model; never Haiku or
@@ -11,15 +10,14 @@ const MAX_WORDS = 3;
 const MAX_TOPIC = 8;
 export const MAX_TITLE = 20;
 const MAX_TITLE_WIDTH = 174; // px: 180px running desktop row, with 6px reserve; Android has 220px
-let titleFont: ReturnType<typeof import("fontkit").openSync>;
+const advances: Record<string, number> = metrics.advances;
 
 function titleWidth(text: string): number {
-  titleFont ??= createRequire(import.meta.url)("fontkit").openSync(fileURLToPath(new URL("../../public/fonts/inter-latin-wght-normal.woff2", import.meta.url)));
   // Pad 14px default Inter advances by 5% for the selected medium weight.
   // Reserve two ems for glyphs supplied by a fallback font.
   return Array.from(text).reduce((px, c) => {
     const code = c.codePointAt(0)!;
-    return px + (titleFont.hasGlyphForCodePoint(code) ? titleFont.glyphForCodePoint(code).advanceWidth * 14 * 1.05 / titleFont.unitsPerEm : 28);
+    return px + (advances[code] !== undefined ? advances[code] * 14 * 1.05 / metrics.unitsPerEm : 28);
   }, 0);
 }
 
