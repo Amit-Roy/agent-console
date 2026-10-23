@@ -542,6 +542,43 @@ try {
     await tooLarge.close();
   }
 
+  for (const status of [410, 404, 503]) {
+    for (const deletedDuringClassification of status === 410 ? [false, true] : [false]) {
+      let reads = 0;
+      let classified = 0;
+      const gone = await start(`gone-${status}-${deletedDuringClassification}`, {
+        github: async (method: string, endpoint: string) => {
+          if (method === "GET" && endpoint === `repos/${repo}/issues/1`) {
+            reads++;
+            if (!deletedDuringClassification || reads > 1)
+              throw Object.assign(new Error("Fixture API failure"), { status });
+            return { state: "open", title: "Fixture title", body: "", labels: [] };
+          }
+          if (endpoint === "user") return { login: "fixture-bot" };
+          if (endpoint.includes("/comments?")) return [];
+          if (endpoint.includes("/contents/"))
+            throw Object.assign(new Error("Missing context"), { status: 404 });
+          throw new Error("Unexpected API request for deleted item");
+        },
+        classify: async () => {
+          classified++;
+          return decision;
+        },
+      });
+      try {
+        assert.equal((await gone.post(payload())).status, 202);
+        await gone.service.waitForIdle();
+        assert.equal(gone.service.status().skipped, status === 410 ? 1 : 0);
+        assert.equal(gone.service.status().failed, status === 410 ? 0 : 1);
+        assert.equal(reads, deletedDuringClassification ? 2 : status === 410 ? 1 : 3);
+        assert.equal(classified, deletedDuringClassification ? 1 : 0);
+      } finally {
+        await gone.close();
+      }
+    }
+  }
+  console.log("PASS deleted issues are skipped without retries; other API failures still retry");
+
   let failedAttempts = 0;
   const logs: unknown[] = [];
   const failed = await start("failure", {

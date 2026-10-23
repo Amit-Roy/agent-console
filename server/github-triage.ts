@@ -428,8 +428,14 @@ export function createTriageService(options: Options) {
   async function processJob(job: Job): Promise<{ status: "done" | "skipped"; model?: string }> {
     if (!repos.has(job.repo)) return { status: "skipped" };
     const endpoint = `repos/${job.repo}/issues/${job.number}`;
-    const issue = await github("GET", endpoint);
-    if (issue.state !== "open") return { status: "skipped" };
+    const readIssue = () =>
+      github("GET", endpoint).catch((error) => {
+        // GitHub returns 410 for deleted issues; no retry can restore them.
+        if (error?.status === 410) return null;
+        throw error;
+      });
+    const issue = await readIssue();
+    if (!issue || issue.state !== "open") return { status: "skipped" };
     if ((job.kind === "pull_request") !== Boolean(issue.pull_request)) return { status: "skipped" };
     const files: string[] = [];
     let pr: any;
@@ -489,8 +495,8 @@ export function createTriageService(options: Options) {
       };
       if (assessment.body.length > 65_000) throw new Error("Triage comment exceeds size limit");
     }
-    const current = await github("GET", endpoint);
-    if (current.state !== "open") return { status: "skipped" };
+    const current = await readIssue();
+    if (!current || current.state !== "open") return { status: "skipped" };
     // Do not undo a maintainer's managed-label edits while the model was running.
     if (managedLabels(current) !== managedLabels(issue)) return { status: "skipped" };
     if (current.title !== issue.title || current.body !== issue.body)
