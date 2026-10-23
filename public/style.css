@@ -4780,6 +4780,33 @@ body.login {
 .side-actions .btn:hover:not(:disabled) {
   color: var(--t1);
 }
+#sec-status {
+  position: relative;
+}
+#sec-status .sec-dot {
+  display: none;
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1.5px solid var(--s1);
+  box-sizing: content-box;
+  margin: -1.5px;
+}
+#sec-status[data-tone]:not([data-tone=""]) .sec-dot {
+  display: block;
+}
+#sec-status[data-tone="ok"] .sec-dot {
+  background: var(--ok);
+}
+#sec-status[data-tone="warn"] .sec-dot {
+  background: var(--warn);
+}
+#sec-status[data-tone="bad"] .sec-dot {
+  background: var(--bad);
+}
 #queued .steer {
   flex: none;
   width: 1.75rem;

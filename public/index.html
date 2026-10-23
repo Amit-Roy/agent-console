@@ -63,13 +63,15 @@
       <div class="side-actions" role="group" aria-label="Console shortcuts">
         <!-- biome-ignore lint/a11y/useAnchorContent: icon-only link: the accessible name comes from aria-label -->
         <a class="btn sm icon ghost" href="/sessions" title="Search all sessions" aria-label="Search all sessions"><svg class="ico" aria-hidden="true"><use href="#i-search"/></svg></a>
-        <button id="files" class="btn sm icon ghost" type="button" title="Browse ~/repos" aria-label="Files" aria-haspopup="dialog"><svg class="ico" aria-hidden="true"><use href="#i-folder"/></svg></button>
+        <!-- biome-ignore lint/a11y/useAnchorContent: icon-only link: the accessible name comes from aria-label -->
+        <a id="sec-status" class="btn sm icon ghost" href="/security" data-tone="" title="Security" aria-label="Security"><svg class="ico" aria-hidden="true"><use href="#i-shield"/></svg><span class="sec-dot" aria-hidden="true"></span></a>
         <button id="new" class="btn sm icon ghost" type="button" title="New thread" aria-label="New thread"><svg class="ico" aria-hidden="true"><use href="#i-compose"/></svg></button>
         <button id="side-more" class="btn sm icon ghost" type="button" title="More" aria-label="More"><svg class="ico" aria-hidden="true"><use href="#i-more"/></svg></button>
       </div>
     </div>
     <!-- reached from the More menu; kept as elements so their handlers and live labels stay in one place -->
     <div hidden>
+      <button id="files" type="button" aria-haspopup="dialog">Files</button>
       <a id="dash-link" href="/dashboard">Usage dashboard</a>
       <a id="benchmarks-link" href="/benchmarks">Model benchmarks</a>
       <a id="host-link" href="/host">Host dashboard</a>

@@ -782,4 +782,75 @@ document.addEventListener("visibilitychange", () => {
   if (!document.hidden && state.loaded) void load();
 });
 
+/* ---------- tools (tool-watch) ---------- */
+const TW_PR = "https://github.com/Amit-Roy/dotfiles/pull/";
+function twRows(d) {
+  const rows = new Map();
+  for (const r of d.records || [])
+    rows.set(r.tool, {
+      tool: r.tool,
+      installed: r.installed,
+      fixed: r.fixed,
+      label: r.installed === r.fixed ? "OK" : "Update available",
+      tone: r.installed === r.fixed ? "ok" : "warn",
+      ...(r.failed && { label: "Patch failed", tone: "bad" }),
+      pr: r.pr,
+    });
+  for (const m of d.mismatches || [])
+    rows.set(m.tool, {
+      ...(rows.get(m.tool) || { tool: m.tool, installed: "", fixed: "" }),
+      label: "Unsanctioned change",
+      tone: "bad",
+    });
+  return [...rows.values()].sort((a, b) => a.tool.localeCompare(b.tool));
+}
+function renderToolWatch(d) {
+  const box = $("toolwatch");
+  const rows = d ? twRows(d) : [];
+  box.hidden = !rows.length;
+  if (box.hidden) return;
+  $("tw-count").textContent = String(rows.length);
+  const body = $("tw-rows");
+  body.replaceChildren();
+  for (const r of rows) {
+    const tr = el("tr");
+    const th = el("th", "", r.tool);
+    th.scope = "row";
+    const st = el("td");
+    st.append(el("span", `pill ${r.tone}`, r.label));
+    if (r.pr) {
+      const a = el("a", "", ` PR #${r.pr}`);
+      a.href = TW_PR + r.pr;
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      st.append(a);
+    }
+    tr.append(th, el("td", "", r.installed || "-"), el("td", "", r.fixed || "-"), st);
+    body.append(tr);
+  }
+}
+async function loadTools() {
+  try {
+    renderToolWatch(await getJSON("/api/security/tools"));
+  } catch {
+    renderToolWatch(null);
+  }
+}
+$("tw-check").addEventListener("click", async () => {
+  const b = $("tw-check");
+  b.disabled = true;
+  try {
+    const r = await fetch("/api/security/tools/run", { method: "POST" });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+    toast("Tool check started.", "ok");
+    setTimeout(loadTools, 4000);
+  } catch (e) {
+    toast(`Could not start the tool check: ${e.message}`, "bad");
+  } finally {
+    b.disabled = false;
+  }
+});
+
 await load();
+void loadTools();

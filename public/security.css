@@ -590,3 +590,34 @@
 .scanbar .note {
   margin: 0;
 }
+
+/* Tools (tool-watch) */
+.twrap {
+  overflow-x: auto;
+}
+.twtable {
+  width: 100%;
+  border-collapse: collapse;
+  font: var(--fw-reg) var(--f-sm);
+}
+.twtable th,
+.twtable td {
+  padding: var(--sp-2) var(--sp-3);
+  text-align: left;
+  border-top: 1px solid var(--edge);
+  white-space: nowrap;
+}
+.twtable thead th {
+  border-top: 0;
+  color: var(--t3);
+  font: var(--fw-reg) var(--f-xs);
+}
+.twtable tbody th {
+  font-weight: 600;
+}
+#toolwatch .head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+}
