@@ -29,6 +29,14 @@ export const TOOLS = [
     } },
   },
   {
+    name: "pi_research", label: "Delegate research to Pi",
+    description: "Hand a research task (gathering information, reading many files, building notes) to a cheaper Pi subagent so this model's tokens go to reasoning. Pi is read-only; it returns one markdown report and keeps notes and an index on disk. Takes minutes. Verify claims that matter.",
+    parameters: { type: "object", required: ["task"], properties: {
+      task: { type: "string", description: "Self-contained research question with the context Pi needs, e.g. \"List every caller of acquireModelRequest and what priority each passes.\"" },
+      folder: { type: "string", description: "Absolute folder Pi may read. Default: this thread's folder." },
+    } },
+  },
+  {
     name: "schedule_list", label: "List scheduled tasks",
     description: "List the user's scheduled tasks: id, title, schedule, next run and last run.",
     parameters: { type: "object", properties: {} },
@@ -85,14 +93,15 @@ export async function callTool(name, params, signal) {
       body: JSON.stringify(params ?? {}),
     });
     const body = await r.json().catch(() => ({}));
-    return r.ok ? JSON.stringify(body, null, 1) : `Error: ${body.error || r.status}`;
+    return r.ok ? (typeof body === "string" ? body : JSON.stringify(body, null, 1)) : `Error: ${body.error || r.status}`;
   } catch (e) {
     return `Error: Agent Console did not answer (${e?.message || e}).`;
   }
 }
 
 export default function consoleTools(pi) {
-  for (const tool of TOOLS) pi.registerTool({
+  // pi_research is for Claude and Codex; Pi delegating to Pi would only recurse.
+  for (const tool of TOOLS.filter((t) => t.name !== "pi_research")) pi.registerTool({
     ...tool,
     async execute(_toolCallId, params, signal) {
       return { content: [{ type: "text", text: await callTool(tool.name, params, signal) }] };

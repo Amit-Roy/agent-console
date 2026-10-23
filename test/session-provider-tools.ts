@@ -29,9 +29,10 @@ try {
   for (const mode of ["plan", "acceptEdits", "bypassPermissions"]) {
     const replies: any[] = [];
     const control = claudeControl((reply) => replies.push(reply), () => {}, mode);
-    for (const name of ["mcp__agent_console__session_search", "mcp__agent_console__session_read", "mcp__agent_console__schedule_delete", "mcp__other__session_search"]) {
+    const allowed = ["mcp__agent_console__session_search", "mcp__agent_console__session_read", "mcp__agent_console__pi_research"];
+    for (const name of [...allowed, "mcp__agent_console__schedule_delete", "mcp__other__session_search"]) {
       control.handle({ type: "control_request", request_id: name, request: { subtype: "can_use_tool", tool_name: name, input: { query: "past" } } });
-      assert.equal(replies.at(-1).response.response.behavior, ["mcp__agent_console__session_search", "mcp__agent_console__session_read"].includes(name) ? "allow" : "deny");
+      assert.equal(replies.at(-1).response.response.behavior, allowed.includes(name) ? "allow" : "deny");
     }
   }
   const config = consoleMcpServer()!;
@@ -65,12 +66,18 @@ try {
   assert(init.result.capabilities.tools);
   child.stdin!.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n");
   const list = await request("tools/list");
-  assert.deepEqual(list.result.tools.map((t: any) => t.name), ["session_search", "session_read"]);
+  assert.deepEqual(list.result.tools.map((t: any) => t.name), ["session_search", "session_read", "pi_research"]);
   assert(list.result.tools.every((t: any) => t.annotations.readOnlyHint));
   const search = await request("tools/call", { name: "session_search", arguments: { query: "pr-standards", provider: "codex", limit: 3 } });
   assert(search.result.content[0].text.includes("session:past-thread:L7"));
   await request("tools/call", { name: "session_read", arguments: { thread: "past-thread", start: 7, limit: 5 } });
-  assert.deepEqual(calls.map((c) => c.url), ["/api/agent-tools/session_search", "/api/agent-tools/session_read"]);
+  const research = await request("tools/call", { name: "pi_research", arguments: { task: "map callers" } });
+  assert(!research.result.isError);
+  assert.deepEqual(calls.map((c) => c.url), ["/api/agent-tools/session_search", "/api/agent-tools/session_read", "/api/agent-tools/pi_research"]);
+  assert.deepEqual(calls[2].body, { task: "map callers" });
+  const registered: string[] = [];
+  (await import("../server/providers/console-tools.mjs")).default({ registerTool: (t: any) => registered.push(t.name) });
+  assert(registered.includes("session_search") && !registered.includes("pi_research"), "Pi must not delegate to Pi");
   assert(calls.every((c) => c.token === "isolated-test-token" && c.thread === "calling-thread"));
   assert.deepEqual(calls[0].body, { query: "pr-standards", provider: "codex", limit: 3 });
   const denied = await request("tools/call", { name: "schedule_delete", arguments: { id: "x" } });
