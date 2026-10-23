@@ -168,4 +168,6 @@ export function setupNotifications({
     }
   };
   render();
+  // The sidebar menu reads the launcher's label before the dialog is ever opened.
+  void refresh();
 }
