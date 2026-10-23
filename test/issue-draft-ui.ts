@@ -2,15 +2,16 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { chromium } from "playwright";
 
-
 const work = fs.mkdtempSync(path.join(os.homedir(), ".ac-issue-ui-"));
 process.env.AGENT_CONSOLE_DATA = path.join(work, "data");
 const { makeToken } = await import("../server/auth.ts");
-const port = process.env.PORT || "7075";
+// Ask the OS for a free port: CI runs this file in parallel with other UI suites that own fixed ports.
+const port = String(await new Promise<number>(resolve => { const s = net.createServer().listen(0, "127.0.0.1", () => { const p = (s.address() as net.AddressInfo).port; s.close(() => resolve(p)); }); }));
 const base = `http://127.0.0.1:${port}`;
 
 const repo = path.join(work, "repo");
@@ -25,7 +26,7 @@ fs.writeFileSync(path.join(bin, "pi"), `#!/bin/sh\ncat >/dev/null\nprintf '%s\\n
 
 const server = spawn("node", ["server/index.ts"], {
   stdio: "ignore",
-  env: { ...process.env, PORT: port, AGENT_CONSOLE_MOCK: "1", AGENT_CONSOLE_WARM_MAX: "0", AGENT_CONSOLE_DATA: path.join(work, "data"), PATH: `${bin}:${process.env.PATH}` },
+  env: { ...process.env, PORT: port, AGENT_CONSOLE_MOCK: "1", AGENT_CONSOLE_WARM_MAX: "0", AGENT_CONSOLE_DATA: path.join(work, "data"), AGENT_CONSOLE_RUN: path.join(work, "run"), AGENT_CONSOLE_PID_FILE: "", PATH: `${bin}:${process.env.PATH}` },
 });
 const browser = await chromium.launch();
 try {
