@@ -20,7 +20,7 @@ await new Promise<void>((resolve, reject) =>
 );
 const origin = `http://127.0.0.1:${port}`;
 const password = randomBytes(24).toString("base64url");
-const child = spawn(process.execPath, ["server/index.ts"], {
+const child = spawn(process.execPath, [process.env.TEST_SERVER_ENTRY || "server/index.ts"], {
   cwd: root,
   env: {
     ...process.env,
