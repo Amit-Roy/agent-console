@@ -1,4 +1,4 @@
-import { $, el, icon, iconButton, wireCopy, renderMarkdown, highlightInto, langFromPath, parseFileRef, setFileScope } from "/render.js";
+import { $, el, icon, iconButton, wireCopy, renderMarkdown, highlightInto, langFromPath, parseFileRef, setFileScope, localImage, isImageFile } from "/render.js";
 import { createMenu } from "/menu.js";
 import { composerField } from "/composer-field.js";
 import { attachmentDraftStore } from "/attachment-drafts.js";
@@ -1800,6 +1800,10 @@ function toolBody(name, input) {
     for (const l of String(input.old_string).split("\n")) pre.append(el("div", "del", l));
     for (const l of String(input.new_string).split("\n")) pre.append(el("div", "add", l));
     box.append(pre);
+  } else if (name === "Read" && isImageFile(input.file_path)) {
+    const preview = el("div", "prose tool-preview");
+    preview.append(localImage(input.file_path));
+    box.append(preview, codePre(JSON.stringify(input, null, 2), "json"));
   } else if (name === "Write" && "content" in input) {
     box.append(codePre(String(input.content).slice(0, 4000), langFromPath(input.file_path)));
   } else if (name === "Bash" && input.command) {

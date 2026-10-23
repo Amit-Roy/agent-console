@@ -1,0 +1,46 @@
+{
+  "name": "@agent-console/design-system",
+  "version": "0.1.0",
+  "description": "Design system tokens and base styles for Agent Console",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "files": [
+    "design-system.css",
+    "tokens.json",
+    "index.js",
+    "index.d.ts"
+  ],
+  "scripts": {
+    "test": "node ../../test/design-system.ts"
+  },
+  "keywords": [
+    "design system",
+    "tokens",
+    "ui",
+    "agent-console"
+  ],
+  "author": "Amit-Roy",
+  "license": "MIT",
+  "homepage": "https://github.com/Amit-Roy/agent-console#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Amit-Roy/agent-console.git",
+    "directory": "packages/design-system"
+  },
+  "bugs": {
+    "url": "https://github.com/Amit-Roy/agent-console/issues"
+  },
+  "dependencies": {},
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    },
+    "./css": "./design-system.css",
+    "./tokens.json": "./tokens.json"
+  }
+}

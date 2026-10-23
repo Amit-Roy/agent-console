@@ -38,6 +38,7 @@ import { authed, CODER_HOSTS, cookieFrom, limited, makeToken, passwordOk, PASSWO
 import { providerInfo, refreshPiModels } from "./providers/index.ts";
 import { threadToMarkdown } from "./export.ts";
 import { Threads, turnTiming } from "./threads.ts";
+import { runPiResearch, researchToolText } from "./pi-subagent-worker.ts";
 import { createTelemetryService } from "./token-telemetry.ts";
 import { Schedules, describe } from "./schedules.ts";
 import { SessionSearch } from "./session-search.ts";
@@ -243,6 +244,15 @@ app.post("/api/model-request", express.json({ limit: "4kb" }), async (req, res) 
   } finally { res.removeListener("close", disconnected); }
 });
 
+// Claude/Codex delegate research to a read-only Pi subagent; the report comes back as the tool result.
+async function piResearch(input: any, thread?: string): Promise<string> {
+  const caller = thread ? threads.get(thread) : undefined;
+  const cwd = typeof input.folder === "string" && input.folder ? input.folder : caller?.cwd;
+  const res = await runPiResearch({ version: 1, task: input.task, cwd: cwd as string, caller: { thread, provider: caller?.provider } });
+  if (res.phase === "failed") throw new Error(`Pi research failed: ${res.error}`);
+  return researchToolText(res);
+}
+
 app.post("/api/agent-tools/:name", express.json({ limit: "1mb" }), async (req, res) => {
   const given = Buffer.from(String(req.headers["x-agent-console-tool"] || ""));
   if (given.length !== TOOL_TOKEN.length || !crypto.timingSafeEqual(given, Buffer.from(TOOL_TOKEN))) return void res.status(401).json({ error: "Not an Agent Console tool call." });
@@ -254,6 +264,7 @@ app.post("/api/agent-tools/:name", express.json({ limit: "1mb" }), async (req, r
     const input = req.body ?? {};
     const result = req.params.name === "session_search" ? await sessionSearch.search(input)
       : req.params.name === "session_read" ? await sessionSearch.read(input)
+      : req.params.name === "pi_research" ? await piResearch(input, thread)
       : schedules.tool(req.params.name, thread, input);
     res.setHeader("Cache-Control", "no-store");
     res.json(result);
