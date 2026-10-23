@@ -92,6 +92,7 @@ try {
   const options = {
     viewport: { width: 1280, height: 900 },
     serviceWorkers: "block" as const,
+    reducedMotion: "reduce" as const,
     ...(out ? { recordVideo: { dir: out, size: { width: 1280, height: 900 } } } : {}),
   };
   const profile = path.join(data, "browser-profile");

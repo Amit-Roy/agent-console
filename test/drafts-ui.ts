@@ -63,7 +63,10 @@ try {
     });
   });
   browser = await chromium.launch();
-  let context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  let context = await browser.newContext({
+    viewport: { width: 1280, height: 900 },
+    reducedMotion: "reduce",
+  });
   await context.addCookies([{ name: "ac_session", value: makeToken(), url: base }]);
   let hello: string | undefined, replay: ((raw: string) => void) | undefined;
   await context.routeWebSocket("**/ws", (socket) => {
@@ -110,8 +113,11 @@ try {
     first,
     "return restores exact draft",
   );
+  await page.locator("#ttl").evaluate((title) => {
+    title.textContent = "Waiting for reconnect hello";
+  });
   replay!(hello!);
-  await page.waitForTimeout(150);
+  await page.waitForFunction(() => document.getElementById("ttl")?.textContent === "Draft 1");
   assert.equal(
     await page.locator("#input").evaluate((e: any) => e.value),
     first,
@@ -128,6 +134,7 @@ try {
   await context.close();
   context = await browser.newContext({
     storageState: saved,
+    reducedMotion: "reduce",
     viewport: { width: 1280, height: 900 },
   });
   page = await context.newPage();

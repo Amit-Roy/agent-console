@@ -76,10 +76,18 @@ try {
   await page.evaluate(async (cwd) => {
     const w = new WebSocket(location.origin.replace("http", "ws") + "/ws");
     await new Promise((r) => (w.onopen = r));
+    const created = new Promise<void>((resolve, reject) => {
+      w.onmessage = ({ data }) => {
+        const message = JSON.parse(data);
+        if (message.t === "created") resolve();
+        if (message.t === "error") reject(new Error(message.message));
+      };
+    });
     w.send(
       JSON.stringify({ t: "create", provider: "mock", cwd, mode: "default", title: "Issue demo" }),
     );
-    await new Promise((r) => setTimeout(r, 800));
+    await created;
+    w.close();
   }, repo);
   await page.reload();
   await page.waitForSelector("#threads li .t", { state: "attached" });
