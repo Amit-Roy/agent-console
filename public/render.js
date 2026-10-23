@@ -271,6 +271,10 @@ function buildImage({ alt, title, src, local }) {
   return a;
 }
 
+/** Zoomable preview of a local image file by path, for tool cards (a Read of a screenshot). */
+export const localImage = (file) => buildImage({ alt: basename(file), src: file, local: { path: file, raw: file } });
+export const isImageFile = (file) => typeof file === "string" && /\.(?:png|jpe?g|gif|webp)$/i.test(file);
+
 /** Inline player. preload=metadata keeps phones from downloading whole files; the route supports Range so seeking works. */
 function buildVideo({ alt, title, src, local }) {
   const box = el("span", "md-media");
