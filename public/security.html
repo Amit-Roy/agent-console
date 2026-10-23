@@ -39,6 +39,15 @@
     <p class="note" id="hist-note"></p>
   </section>
 </main>
+<dialog id="logsheet" class="logsheet" aria-labelledby="log-title">
+  <div class="lhead">
+    <div class="ltitle"><h2 id="log-title">Scan log</h2><span class="lsub" id="log-sub"></span></div>
+    <span class="pill" id="log-state" hidden></span>
+    <button type="button" class="btn sm ghost" id="log-close" aria-label="Close log">Close</button>
+  </div>
+  <div class="lbody" id="log-body" role="log" aria-live="off" tabindex="0"></div>
+  <button type="button" class="btn sm primary ljump" id="log-jump" hidden>Jump to latest</button>
+</dialog>
 <div id="toast" role="status" aria-live="polite"></div>
 <script type="module" src="/security.js"></script>
 </body></html>

@@ -22,3 +22,15 @@ export const LATEST = {
 export const CLEAN = { ...LATEST, id: "20261021T231500Z", status: "clean", tools: { ...LATEST.tools, clamav: { ...LATEST.tools.clamav, status: "clean", infected: [] }, falco: { ...LATEST.tools.falco, status: "clean", counts: { Critical: 0, Error: 0, Warning: 0, Notice: 0 }, alerts: [] }, trivy: { ...LATEST.tools.trivy, status: "clean", targets: [] } } };
 const sum = (r: any, status: string) => ({ id: r.id, startedAt: r.startedAt, finishedAt: r.finishedAt, trigger: r.trigger, status, counts: { infected: r.tools.clamav.infected.length, runtimeAlerts: r.tools.falco.alerts.length, critical: r.tools.trivy.targets.reduce((a: number, t: any) => a + t.counts.CRITICAL, 0), high: r.tools.trivy.targets.reduce((a: number, t: any) => a + t.counts.HIGH, 0), openPorts: r.tools.nmap.openPorts.length } });
 export const HISTORY = [sum(LATEST, "findings"), ...Array.from({ length: 11 }, (_, i) => sum({ ...CLEAN, id: `2026101${(9 - i % 9)}T231500Z${i}`, finishedAt: `2026-10-${String(21 - i).padStart(2, "0")}T00:02:41Z` }, i === 4 ? "error" : "clean"))];
+
+// Scan log: LOG_ID has a 6-line log, "running" until the caller has read all of it.
+export const LOG_ID = "20261023T000907Z";
+export const LOG_LINES = [
+  "2026-10-23T00:09:07Z scan: started, trigger manual",
+  "2026-10-23T00:09:07Z clamav: started",
+  "2026-10-23T00:09:08Z clamav: scanning /root /srv",
+  "2026-10-23T00:40:01Z trivy: 2026-10-23T00:40:01Z INFO Detected OS family=debian version=12.8",
+  "2026-10-23T00:41:12Z nmap: Discovered open port 443/tcp on 206.51.227.101",
+  "2026-10-23T00:42:00Z clamav: finished in 1234 s",
+];
+export const logPage = (after: number, running = false) => ({ id: LOG_ID, running, from: Math.min(after, LOG_LINES.length), total: LOG_LINES.length, lines: LOG_LINES.slice(after) });
