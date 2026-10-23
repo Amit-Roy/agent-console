@@ -577,3 +577,16 @@
   flex-wrap: wrap;
   gap: var(--sp-2);
 }
+.scanbar {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.scanbar .scanbtns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+.scanbar .note {
+  margin: 0;
+}

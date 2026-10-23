@@ -12,6 +12,7 @@ export const LATEST = {
   startedAt: "2026-10-22T23:15:00Z",
   finishedAt: "2026-10-23T00:02:41Z",
   trigger: "timer",
+  mode: "full",
   status: "findings",
   tools: {
     clamav: {
@@ -153,6 +154,7 @@ const sum = (r: any, status: string) => ({
   startedAt: r.startedAt,
   finishedAt: r.finishedAt,
   trigger: r.trigger,
+  mode: r.mode,
   status,
   counts: {
     infected: r.tools.clamav.infected.length,
@@ -193,3 +195,19 @@ export const logPage = (after: number, running = false) => ({
   total: LOG_LINES.length,
   lines: LOG_LINES.slice(after),
 });
+
+// A quick-scan result: ClamAV only checked files changed since the previous scan.
+export const QUICK = {
+  ...CLEAN,
+  id: "20261023T010000Z",
+  mode: "quick",
+  tools: {
+    ...CLEAN.tools,
+    clamav: {
+      ...CLEAN.tools.clamav,
+      mode: "quick",
+      since: "2026-10-22T23:15:00Z",
+      scannedFiles: 312,
+    },
+  },
+};
