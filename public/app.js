@@ -341,6 +341,10 @@ function handle(m) {
       state.queues[m.thread] = m.items;
       if (m.thread === state.current) renderQueue();
       break;
+    case "create_issue_done":
+    case "create_issue_error":
+      issueDraftReply(m);
+      break;
     case "queue_edit":
     case "queue_edit_done":
     case "queue_edit_error":
@@ -567,6 +571,7 @@ const threadActions = (id) => {
     { value: "compaction-menu", label: "Compaction", desc: "Reduce context or manage automatic compaction", icon: "sparkle", children: [action("compact"), action("idle-compaction")] },
     action("economy"),
     action("fork"),
+    action("create-issue"),
     action("download"), action("share"), action("details"),
     { value: "archive-menu", label: "Archive", desc: filed ? "Restore or permanently delete this thread" : "Archive or permanently delete this thread", icon: "archive", children: [action(filed ? "unarchive" : "archive"), action("delete")] },
   ];
@@ -578,6 +583,7 @@ const THREAD_ACTIONS = [
   { value: "idle-compaction", label: "Automatic compaction", icon: "sparkle" },
   { value: "economy", label: "Economy settings", desc: "Use medium effort and turn the advisor off; keep the selected model", icon: "sparkle" },
   { value: "fork", label: "Fork…", desc: "Continue in a new thread; pick agent, model and context", icon: "fork" },
+  { value: "create-issue", label: "Create GitHub issue", desc: "Pi drafts an issue from the composer text; review, then open GitHub", icon: "compose" },
   { value: "download", label: "Download", desc: "Save as a Markdown file", icon: "download" },
   { value: "share", label: "Share", desc: "Send the conversation as text", icon: "share" },
   { value: "details", label: "Run details", desc: "Model, effort, tokens and load timings", icon: "code" },
@@ -636,6 +642,8 @@ async function runThreadAction(id, action) {
     document.body.append(a);
     a.click();
     a.remove();
+  } else if (action === "create-issue") {
+    createIssueDraft(id);
   } else if (action === "share") {
     const r = await apiFetch(`/export/${id}`).catch(() => null);
     if (!r?.ok) return toast("Could not read that conversation.");
@@ -1295,6 +1303,47 @@ function renderQueue() {
   );
 }
 document.addEventListener("visibilitychange", () => { if (state.measurement && document.hidden) state.measurement.hidden = true; });
+// Quick issue creator: pi drafts title and body from the composer text; the owner reviews them before GitHub opens.
+const MAX_ISSUE_DRAFT = 2000; // keep in sync with server/issue-draft.ts
+let issueDraft = null, issueRequest = 0;
+function createIssueDraft(thread) {
+  const draft = $("input").value.trim();
+  if (!draft) return toast("Type the issue in the composer first.");
+  if (draft.length > MAX_ISSUE_DRAFT) return toast(`Issue text is over ${MAX_ISSUE_DRAFT} characters. Shorten it.`);
+  if (ws?.readyState !== 1) return toast("Reconnect before creating an issue.");
+  issueDraft = { cid: `issue-${++issueRequest}` };
+  $("issue-note").textContent = "Pi is drafting the title and body…";
+  $("issue-error").textContent = "";
+  $("issue-title").value = ""; $("issue-body").value = "";
+  $("issue-title").disabled = $("issue-body").disabled = $("issue-open").disabled = true;
+  $("issue-review").showModal();
+  send({ t: "create_issue", thread, draft, cid: issueDraft.cid });
+}
+function issueDraftReply(m) {
+  if (!issueDraft || m.cid !== issueDraft.cid) return;
+  if (m.t === "create_issue_error") {
+    $("issue-note").textContent = "";
+    $("issue-error").textContent = m.message;
+    return;
+  }
+  Object.assign(issueDraft, { owner: m.owner, repo: m.repo });
+  $("issue-note").textContent = `Review the draft for ${m.owner}/${m.repo}, then open GitHub.`;
+  $("issue-title").value = m.title; $("issue-body").value = m.body;
+  $("issue-title").disabled = $("issue-body").disabled = $("issue-open").disabled = false;
+  $("issue-title").focus();
+}
+$("issue-form").onsubmit = e => {
+  e.preventDefault();
+  if (!issueDraft?.repo) return;
+  const url = new URL(`https://github.com/${encodeURIComponent(issueDraft.owner)}/${encodeURIComponent(issueDraft.repo)}/issues/new`);
+  url.searchParams.set("title", $("issue-title").value.trim());
+  url.searchParams.set("body", $("issue-body").value);
+  window.open(url, "_blank", "noopener");
+  issueDraft = null; $("issue-review").close();
+};
+$("issue-cancel").onclick = () => { issueDraft = null; $("issue-review").close(); };
+$("issue-review").addEventListener("cancel", () => { issueDraft = null; });
+
 let queueEditor, queueRequest = 0;
 function editQueuedMessage(id) {
   if (ws?.readyState !== 1) return toast("Reconnect before editing a queued message.");

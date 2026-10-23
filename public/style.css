@@ -954,6 +954,9 @@ body.login{display:grid;place-items:center;overflow:auto;padding:var(--sp-4)}
 .speed .dot.fast{background:var(--ok)}
 .speed .dot.slow{background:var(--warn)}
 #latency-summary .note{margin-top:var(--sp-3)}
+#issue-review{max-height:calc(var(--viewport-height,100dvh) - var(--sp-4));overflow-y:auto}
+#issue-body{display:block;width:100%;min-height:8rem;max-height:40dvh;resize:vertical;font:var(--fw-text) var(--f-text)}
+#issue-error{margin-top:var(--sp-2);font:var(--fw-reg) var(--f-sm);color:var(--bad)}
 #queue-editor{max-height:calc(var(--viewport-height,100dvh) - var(--sp-4));overflow-y:auto}
 #queue-draft{display:block;width:100%;min-height:5rem;max-height:30dvh;margin-top:var(--sp-4);padding:var(--sp-3);resize:vertical;font:var(--fw-text) var(--f-text)}
 #queue-edit-error{margin-top:var(--sp-2);font:var(--fw-reg) var(--f-sm);color:var(--bad)}
