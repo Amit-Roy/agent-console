@@ -45,7 +45,7 @@ Findings:
 The current host is three Docker pieces plus Caddy: Coder (`/opt/coder/compose.yaml`, volumes `coder_database_data` and `coder_coder_home`), the workspace container with its home volume `coder-<workspace-id>-home`, and Caddy (`/opt/coder/https/Caddyfile`, DuckDNS module, `/etc/caddy/duckdns.env`). The plan moves those as they are; nothing in agent-console changes.
 
 1. Order the server with Debian 13. Confirm bare metal: `systemd-detect-virt` prints `none`, `free -g` shows the full RAM.
-2. Harden SSH (key `~/.ssh/id_chromebook`, no password login) and install Docker with the same script used today (`/root/install-docker.sh`).
+2. Harden SSH (same key as the old host, no password login) and install Docker with the same script used today (`/root/install-docker.sh`).
 3. Copy the Caddy binary, `caddy.service`, Caddyfile and `duckdns.env` from the old host with `rsync -a` over SSH. Keep `duckdns.env` mode 0600; never print it.
 4. Copy `/opt/coder` (compose file, `.env`, backups) and `/root/coder-update-ws.sh`.
 5. Pre-seed the big data while the old host still runs: `rsync -aHAX` the workspace home volume directory and `docker save` of the rollback image `nefro-dev-snapshot:2026-10-17`. This makes the final copy a small delta.
@@ -68,7 +68,7 @@ Everything that makes a session resumable lives in the workspace home volume: ag
 
 The old VPS stays untouched and paid for until validation passes for 7 days.
 
-1. If the new host fails validation, point the DuckDNS record back to `206.51.227.101`.
+1. If the new host fails validation, point the DuckDNS record back to the old VPS IP (note it before cutover).
 2. On the old host: `cd /opt/coder && docker compose start coder`, then start the workspace from the host with the Session continuity step 2 command, `start` instead of `stop`.
 3. Any work done on the new host since cutover lives in its home volume: `rsync` it back before starting the old workspace, or accept losing it if the window was short.
 4. Cancel the old VPS only after 7 clean days on the new host and a final `rsync` of the home volume to cold storage.
