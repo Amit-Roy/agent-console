@@ -18,6 +18,11 @@
 <div class="am-shell">
   <aside class="am-rail" aria-label="Automation workflows">
     <nav id="wf-nav" aria-label="Workflows"></nav>
+    <div id="wf-picker" class="wf-picker">
+      <span id="wf-picker-ic" class="pk-ic" aria-hidden="true"></span>
+      <select id="wf-select" aria-label="Workflow"></select>
+      <svg class="ico pk-chev" viewBox="0 0 16 16" aria-hidden="true"><path d="m4.5 6.5 3.5 3.5 3.5-3.5"/></svg>
+    </div>
     <button id="new-workflow" class="btn new-wf" type="button"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg><span>New workflow</span></button>
     <p class="rail-note">A new workflow opens a thread on the console with the drawing, step and alert rules already written.</p>
   </aside>

@@ -106,6 +106,10 @@ try {
 
     await page.goto(`${base}/automation#cve`);
     await page.waitForSelector("#sec-rows .sec-row");
+    const openWf = async (id: string) => {
+      if (name.startsWith("phone")) await page.selectOption("#wf-select", id);
+      else await page.click(`[data-wf="${id}"]`);
+    };
     const rows = page.locator("#sec-rows .sec-row");
     check(`${name}: CVE workflow lists its real units`, (await rows.count()) === 6);
     check(
@@ -132,13 +136,13 @@ try {
     );
     check(`${name}: one run button here`, (await page.locator(".run-now").count()) === 1);
     check(`${name}: shared rows list`, (await page.locator("ul.rows#sec-rows").count()) === 1);
-    await page.click('[data-wf="deadman"]');
+    await openWf("deadman");
     await page.waitForSelector('[data-sec="heartbeat"]');
     check(
       `${name}: failure reason visible in the dead-man workflow`,
       (await page.locator('[data-sec="heartbeat"]').innerText()).includes("falco-alert inactive"),
     );
-    await page.click('[data-wf="scans"]');
+    await openWf("scans");
     await page.waitForSelector('[data-sec="secscan"]');
     const first = await page.locator('[data-sec="secscan"]').innerText();
     check(
@@ -161,7 +165,7 @@ try {
     await page.waitForFunction(
       () => !(document.querySelector(".run-now") as HTMLButtonElement | null)?.disabled,
     );
-    await page.click('[data-wf="cve"]');
+    await openWf("cve");
     await page.waitForSelector('[data-sec="tool-watch"]');
     await page.locator(".run-now").first().click();
     await page.waitForFunction(
@@ -172,11 +176,11 @@ try {
       posts.includes("POST quick") && posts.includes("POST tool-watch"),
       posts.join(),
     );
-    await page.click('[data-wf="other"]');
+    await openWf("other");
     check(`${name}: other triggers list`, (await page.locator("ul#triggers").count()) === 1);
 
     current = "green";
-    await page.click('[data-wf="cve"]');
+    await openWf("cve");
     await page.waitForSelector("#sec-rows .sec-row");
     await page.reload();
     await page.waitForSelector("#sec-rows .sec-row");
@@ -190,7 +194,7 @@ try {
     await page.screenshot({ path: `${OUT}/sec-automations-${name}-green.png` });
 
     current = "amber";
-    await page.click('[data-wf="cve"]');
+    await openWf("cve");
     await page.waitForSelector("#sec-rows .sec-row");
     await page.reload();
     await page.waitForSelector("#sec-rows .sec-row");
@@ -201,7 +205,7 @@ try {
     );
 
     current = "down";
-    await page.click('[data-wf="cve"]');
+    await openWf("cve");
     await page.waitForSelector("#sec-rows .sec-row");
     await page.reload();
     await page.waitForSelector("#sec-rows .sec-row");
