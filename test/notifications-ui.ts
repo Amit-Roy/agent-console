@@ -3,7 +3,7 @@ import fs from "node:fs";
 import vm from "node:vm";
 import { setupNotifications } from "../public/notifications.js";
 
-function browser(permission = "default", preferences = new Map<string, string>()) {
+async function browser(permission = "default", preferences = new Map<string, string>()) {
   const elements = new Map<string, any>();
   for (const id of [
     "notifications",
@@ -73,6 +73,7 @@ function browser(permission = "default", preferences = new Map<string, string>()
       };
     },
   });
+  await new Promise((resolve) => setTimeout(resolve)); // let the startup refresh settle
   return {
     elements,
     requests,
@@ -85,7 +86,7 @@ function browser(permission = "default", preferences = new Map<string, string>()
   };
 }
 
-const enabled = browser();
+const enabled = await browser();
 assert.equal(enabled.elements.get("notifications-silent").checked, false);
 await enabled.elements.get("notifications").onclick();
 await enabled.elements.get("notifications-toggle").onclick();
@@ -98,25 +99,25 @@ assert.deepEqual(JSON.parse(enabled.requests.at(-1).options.body), {
 });
 assert.match(enabled.elements.get("notifications-status").textContent, /Off for this device/);
 
-const denied = browser();
+const denied = await browser();
 denied.deny();
 await denied.elements.get("notifications-toggle").onclick();
 assert.equal(denied.requests.length, 0);
 assert.match(denied.elements.get("notifications-status").textContent, /blocked/);
 assert.equal(denied.elements.get("notifications-toggle").disabled, true);
 
-const failed = browser();
+const failed = await browser();
 failed.fail();
 await failed.elements.get("notifications-toggle").onclick();
 assert.match(failed.elements.get("notifications-status").textContent, /503/);
 
 const preferences = new Map<string, string>();
-const silent = browser("default", preferences);
+const silent = await browser("default", preferences);
 silent.elements.get("notifications-silent").checked = true;
 await silent.elements.get("notifications-silent").onchange();
 assert.equal(preferences.get("ac_notifications_silent"), "1");
 assert.equal(silent.requests.length, 0, "Unsubscribed preferences save locally without a request");
-const restored = browser("default", preferences);
+const restored = await browser("default", preferences);
 assert.equal(restored.elements.get("notifications-silent").checked, true);
 await restored.elements.get("notifications-toggle").onclick();
 assert.deepEqual(JSON.parse(restored.requests.at(-1).options.body), {
