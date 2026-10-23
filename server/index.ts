@@ -46,6 +46,7 @@ import {
   validateSubscriptionFees,
 } from "./benchmark-subscriptions.ts";
 import { BenchmarkError, benchmarkUsage, createBenchmarks } from "./benchmarks.ts";
+import { createBootTiming } from "./boot-timing.ts";
 import { cancelClaudeLogin, finishClaudeLogin, startClaudeLogin } from "./claude-login.ts";
 import { contextAllocation } from "./context-allocation.ts";
 import { createDoctor } from "./doctor.ts";
@@ -102,6 +103,18 @@ const HOST = "127.0.0.1"; // never listen publicly; Coder's port proxy is the on
 const HOME = os.homedir();
 const REPOS = path.join(HOME, "repos");
 
+// Phase times in ms since process start, so module loading counts. Saved to boot.jsonl; /api/boot-timing reads it back.
+const boot = createBootTiming({
+  file: path.join(DATA_DIR, "boot.jsonl"),
+  onSlow: (r) => {
+    const slowest = [...r.phases].sort((a, b) => b.ms - a.ms)[0]?.name;
+    const msg = `slow boot: listening after ${r.totalMs} ms (limit 5000 ms); slowest phase ${slowest}`;
+    console.warn(msg);
+    automationLog.record({ step: "boot", kind: "info", msg, data: { phases: r.phases } });
+  },
+});
+boot.mark("modules");
+
 const clients = new Set<WebSocket>();
 const subscriptions = new WeakMap<WebSocket, string>();
 const broadcast = (msg: unknown) => {
@@ -148,6 +161,7 @@ startToolPriority(); // tool commands below agents and this server: busy tests n
 // Every automation stage writes here; the dashboard reads it. A previous process's unfinished runs are closed as abandoned.
 const automationLog = createEventLog({ file: path.join(DATA_DIR, "automation-events.jsonl") });
 automationLog.recoverOpenRuns();
+boot.mark("threads-and-log");
 workspaceMonitor = createWorkspaceMonitor({
   dataDir: DATA_DIR,
   port: PORT,
@@ -786,6 +800,10 @@ const turnLatency = (from: number, to: number, thread?: string) => {
   } catch {} // device samples are per provider, not per thread
   return { available: true, ...store.summary(from, to, { thread, phone }) };
 };
+app.get("/api/boot-timing", (_req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ boots: boot.recent(20) });
+});
 app.get("/api/turn-latency", (req, res) => {
   res.setHeader("Cache-Control", "no-store");
   const to = Number(req.query.to) || Date.now();
@@ -1093,6 +1111,7 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
 });
 app.use(express.static(path.join(ROOT, "public"), { index: "index.html", extensions: ["html"] }));
 
+boot.mark("routes");
 const server = http.createServer(app);
 const wss = new WebSocketServer({
   noServer: true,
@@ -1413,6 +1432,8 @@ server.listen(PORT, HOST, () => {
   startModelRateBroker(PORT); // same rule: a scratch server that lost the port must not repoint the live broker
   startHostSampler(); // 5 s host samples for the Host page's history charts
   workspaceMonitor?.start(); // reads those samples; alerts and escalation (docs/monitoring.md)
+  boot.mark("listening");
+  boot.flush("listen");
   console.log(`agent-console listening on http://${HOST}:${PORT}`);
   console.log(
     CODER_HOSTS.length
@@ -1425,11 +1446,15 @@ server.listen(PORT, HOST, () => {
   setTimeout(() => {
     // Never wait for the proxy: a cold Headroom launch takes up to 10 s, and turns go direct until it is healthy.
     void headroom.start().catch(() => console.warn("Headroom proxy failed to start."));
+    boot.mark("headroom-launched");
     threads.restoreTelemetry();
+    boot.mark("telemetry-restored");
     threads.warmAccounting();
+    boot.mark("accounting-warm");
     void sessionSearch
       .warm()
       .catch(() => console.warn("Session search index will retry on the next query."));
+    boot.flush("deferred");
   }, 1000).unref();
 });
 
