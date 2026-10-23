@@ -50,11 +50,15 @@ try {
   await nvidia;
   assert.ok(nvidiaStarted >= until);
   // A cooldown published after enqueue must also be rechecked at admission.
-  // A slow interval keeps the request queued, so the cooldown lands after enqueue and before admission.
+  // Pause the worker queue to make the enqueue/cooldown/admission order deterministic under CPU load.
   const recheck = make("recheck", { intervalMs: 150 });
   await recheck.acquire();
+  const recheckQueue = (recheck as any).queue;
+  recheckQueue.pause();
   const queued = recheck.acquire({ provider: "nvidia", priority: "interactive" });
+  assert.equal(recheckQueue.size, 1, "request is queued before cooldown publication");
   const recheckUntil = recheck.report429("0.3", "nvidia");
+  recheckQueue.start();
   await queued;
   assert.ok(Date.now() >= recheckUntil);
   assert.ok(providers.report429("invalid", "other") >= Date.now() + 29_900);

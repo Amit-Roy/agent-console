@@ -1,7 +1,7 @@
 import { acquireModelRequest, reportModel429, startModelRateBroker } from "./providers/model-rate-client.ts";
 import { MODEL_REQUEST_PRIORITIES } from "./providers/model-rate-limit.ts";
 import "./privacy.ts";
-import { usage, refreshRouterUsage, refreshUsage, readCodexUsage } from "./usage.ts";
+import { usage, refreshRouterUsage, refreshUsage, readCodexUsage, repairUsageHistory } from "./usage.ts";
 import { hostMetrics, hostProcesses, hostKill, hostPorts, hostProcessDetail } from "./host.ts";
 import { startToolPriority } from "./tool-priority.ts";
 import { startHostSampler, hostHistory, hostDu, hostDuRescan, latestHost } from "./host-history.ts";
@@ -737,6 +737,8 @@ if (acodeSettings) {
 }
 
 server.listen(PORT, HOST, () => {
+  const defaultDataDir = path.join(os.homedir(), ".config", "agent-console");
+  repairUsageHistory({ pidFile: PID_FILE || (DATA_DIR === defaultDataDir ? path.join(RUN_DIR, "pid") : undefined) });
   if (PID_FILE) fs.writeFileSync(PID_FILE, String(process.pid)); // only the process that holds the port may claim it
   startModelRateBroker(PORT); // same rule: a scratch server that lost the port must not repoint the live broker
   startHostSampler(); // 5 s host samples for the Host page's history charts
