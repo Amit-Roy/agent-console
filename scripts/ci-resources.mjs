@@ -3,13 +3,37 @@
 // concurrency can be tuned to the runner instead of guessed.
 //   node scripts/ci-resources.mjs sample <csv>             (runs until killed)
 //   node scripts/ci-resources.mjs summary <csv> [test.log]  (Markdown, for $GITHUB_STEP_SUMMARY)
+//   node scripts/ci-resources.mjs budget <test.log>         (fails when a file or the whole run is over budget)
+// Budgets keep the suite from growing slower unnoticed: TEST_FILE_BUDGET_S per file, TEST_WALL_BUDGET_S overall.
 import fs from "node:fs";
 import os from "node:os";
 
 const [mode, csv, testLog] = process.argv.slice(2);
-if (!csv || !["sample", "summary"].includes(mode)) {
-  console.error("usage: ci-resources.mjs sample|summary <csv> [test.log]");
+if (!csv || !["sample", "summary", "budget"].includes(mode)) {
+  console.error("usage: ci-resources.mjs sample|summary <csv> [test.log] | budget <test.log>");
   process.exit(2);
+}
+
+// node --test spec reporter: "✔ test/file.ts (1234.5ms)" per file, "ℹ duration_ms 1234.5" for the run.
+function testTimes(log) {
+  const text = fs.readFileSync(log, "utf8");
+  const wall = text.match(/^ℹ duration_ms ([\d.]+)/m);
+  return {
+    files: [...text.matchAll(/^[✔✖] (test\/\S+) \(([\d.]+)ms\)/gm)].map(m => [m[1], Number(m[2]) / 1000]),
+    wall: wall ? Number(wall[1]) / 1000 : 0,
+  };
+}
+
+if (mode === "budget") {
+  const fileBudget = Number(process.env.TEST_FILE_BUDGET_S || 10), wallBudget = Number(process.env.TEST_WALL_BUDGET_S || 25);
+  const { files, wall } = testTimes(csv);
+  if (!files.length) { console.error(`No test timings in ${csv}`); process.exit(1); }
+  const over = files.filter(([, s]) => s > fileBudget).sort((a, b) => b[1] - a[1]);
+  for (const [f, s] of over) console.log(`::error file=${f}::${f} took ${s.toFixed(1)} s, over the ${fileBudget} s per-file budget. Share a server or browser, replace fixed sleeps with condition waits, or split the file.`);
+  if (wall > wallBudget) console.log(`::error::Tests took ${wall.toFixed(1)} s, over the ${wallBudget} s budget. See "Slowest files" in the run summary.`);
+  if (over.length || wall > wallBudget) process.exit(1);
+  console.log(`Test budget ok: ${files.length} files, slowest ${Math.max(...files.map(([, s]) => s)).toFixed(1)} s of ${fileBudget} s, run ${wall.toFixed(1)} s of ${wallBudget} s.`);
+  process.exit(0);
 }
 
 // /proc/stat "cpu" line: user nice system idle iowait irq softirq steal ...
@@ -58,13 +82,11 @@ if (mode === "sample") {
       out.push(`| ${b[0][0]}–${b.at(-1)[0]} | ${c(1).toFixed(0)} | ${c(2).toFixed(1)} | ${(Math.max(...b.map(r => r[4])) / 1024).toFixed(2)} | ${Math.max(...b.map(r => r[7]))} |`);
     }
   }
-  // node --test spec reporter: "✔ test/file.ts (1234.5ms)" per file.
   if (testLog && fs.existsSync(testLog)) {
-    const files = [...fs.readFileSync(testLog, "utf8").matchAll(/^[✔✖] (test\/\S+) \(([\d.]+)ms\)/gm)].map(m => [m[1], Number(m[2]) / 1000]);
-    const wall = fs.readFileSync(testLog, "utf8").match(/^ℹ duration_ms ([\d.]+)/m);
+    const { files, wall } = testTimes(testLog);
     if (files.length) {
       const sum = files.reduce((a, [, s]) => a + s, 0);
-      out.push("", `## Test files`, "", `- ${files.length} files, ${sum.toFixed(1)} s summed${wall ? `, ${(Number(wall[1]) / 1000).toFixed(1)} s wall (${(sum / (Number(wall[1]) / 1000)).toFixed(1)} files running on average)` : ""}`);
+      out.push("", `## Test files`, "", `- ${files.length} files, ${sum.toFixed(1)} s summed${wall ? `, ${wall.toFixed(1)} s wall (${(sum / wall).toFixed(1)} files running on average)` : ""}`);
       out.push("", "| Slowest files | Seconds |", "|---|---:|");
       for (const [f, s] of files.sort((a, b) => b[1] - a[1]).slice(0, 10)) out.push(`| \`${f}\` | ${s.toFixed(1)} |`);
     }
