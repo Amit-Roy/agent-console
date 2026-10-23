@@ -215,6 +215,14 @@ function updateFlow(s) {
   }
 }
 
+const until = (ts, now) => {
+  const s = Math.max(0, (ts - now) / 1000);
+  if (s < 90) return "in under a min";
+  if (s < 3600) return `in ${Math.round(s / 60)} min`;
+  if (s < 86400) return `in ${Math.round(s / 3600)} h`;
+  return `${day(ts)} ${time(ts)}`;
+};
+
 // ---------- panels ----------
 function panel(title, sub) {
   const p = el("section", "panel");
@@ -246,6 +254,112 @@ function triggersPanel(s) {
   }
   p.append(ul);
   return p;
+}
+
+// Security automations: VPS timers, OpenCVE and the patch bridge, read from GET /api/security/automations (server/sec-automations.ts).
+const TONE_TEXT = { ok: "OK", warn: "Needs attention", bad: "Failing", idle: "Waiting" };
+let sec = null;
+let secError = null;
+async function runNow(kind, btn) {
+  btn.disabled = true;
+  try {
+    await getJson(
+      kind === "quick-scan" ? "/api/security/run?mode=quick" : "/api/security/tools/run",
+      {
+        method: "POST",
+      },
+    );
+    await refreshSecurity();
+  } catch (e) {
+    alert(`Could not start the run: ${e.message}`);
+  } finally {
+    btn.disabled = false;
+  }
+}
+function securityPanel() {
+  const p = panel(
+    "Security automations",
+    "VPS timers, OpenCVE and the tool patch bridge · Updated every minute",
+  );
+  p.id = "sec-auto";
+  const ul = el("ul", "rows");
+  ul.id = "sec-rows";
+  if (secError && !sec) {
+    p.append(empty(`Security status is unavailable: ${secError}`));
+    return p;
+  }
+  if (!sec) {
+    p.append(empty("Loading security automations…"));
+    return p;
+  }
+  const now = sec.generatedAt;
+  const sum = sec.summary;
+  const head = p.querySelector(".head");
+  const chip = el(
+    "span",
+    `chip-s sec-${sum.tone}`,
+    sum.bad ? `${sum.bad} failing` : sum.warn ? `${sum.warn} overdue` : "All OK",
+  );
+  chip.id = "sec-summary";
+  head.append(chip);
+  for (const r of sec.rows) {
+    const li = el("li", `sec-row ${r.tone}`);
+    li.dataset.sec = r.id;
+    li.dataset.tone = r.tone;
+    const name = el("span", "a");
+    name.append(el("span", `sdot ${r.tone}`));
+    const a = el("a", "", r.name);
+    a.href = r.link;
+    if (/^https:/.test(r.link)) {
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+    }
+    name.append(a);
+    const state = el("span", `b st ${r.tone}`, r.label);
+    const facts = el(
+      "span",
+      "c",
+      [
+        r.schedule,
+        r.lastRun ? `Last run ${when(r.lastRun, now)}` : r.continuous ? "Always on" : "Never run",
+        r.next ? `Next ${until(r.next, now)}` : "",
+      ]
+        .filter(Boolean)
+        .join(" · "),
+    );
+    li.append(name, state, facts);
+    if (r.detail) li.append(el("span", r.tone === "bad" ? "c bad" : "c", r.detail));
+    if (r.runnable) {
+      const b = el(
+        "button",
+        "btn sm run-now",
+        r.runnable === "quick-scan" ? "Run quick scan" : "Run now",
+      );
+      b.type = "button";
+      b.onclick = () => runNow(r.runnable, b);
+      const c = el("span", "c");
+      c.append(b);
+      li.append(c);
+    }
+    ul.append(li);
+  }
+  if (sec.stale) p.append(el("div", "empty-c", "The VPS did not answer; showing the last answer."));
+  p.append(ul);
+  return p;
+}
+function renderSecurity() {
+  const host = $("sec-auto");
+  if (host) host.replaceWith(securityPanel());
+}
+async function refreshSecurity() {
+  try {
+    sec = await getJson("/api/security/automations");
+    secError = null;
+  } catch (e) {
+    secError = e.message;
+    sec = null;
+  }
+  renderSecurity();
 }
 
 function failuresPanel(s) {
@@ -360,6 +474,7 @@ function render(s) {
   if (!main.querySelector(".pipeline")) {
     main.replaceChildren(
       ...s.flow.pipelines.map((p) => buildPipeline(s, p)),
+      securityPanel(),
       el("div", "cols"),
       el("div", "cols"),
     );
@@ -480,6 +595,10 @@ async function refresh() {
   }
 }
 await refresh();
+void refreshSecurity();
+setInterval(() => {
+  if (!document.hidden) void refreshSecurity();
+}, 30000);
 setInterval(() => {
   if (!document.hidden) refresh();
 }, 5000);

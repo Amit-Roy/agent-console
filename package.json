@@ -6,7 +6,7 @@
   "scripts": {
     "test:review-takeover": "node test/review-takeover.ts",
     "test:benchmarks": "node --test test/benchmarks.ts test/benchmark-subscriptions.ts",
-    "test:security": "node test/security.ts && node test/security-ui.ts",
+    "test:security": "node test/security.ts && node test/security-ui.ts && node test/sec-automations.ts && node test/sec-automations-ui.ts",
     "test:vault": "node test/vault.ts && node test/vault-ui.ts",
     "test:ideas-ui": "node test/ideas-ui.ts",
     "test:doctor": "node test/doctor.ts && node test/doctor-ui.ts",
