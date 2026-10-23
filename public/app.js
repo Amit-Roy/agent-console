@@ -1191,6 +1191,7 @@ function renderHead() {
   const t = cur();
   if (!$("ttl-edit")) $("ttl").textContent = t ? t.title : state.ready ? "No thread" : "";
   $("cwd").hidden = !t;
+  $("ttl-archived").hidden = !t?.archived;
   $("thread-account").hidden = t?.provider !== "claude";
   $("thread-account").textContent = t?.provider === "claude" ? `${claudeAccount(t.claudeAccount).label} ·` : "";
   $("thread-account").title = t?.provider === "claude" ? `Claude account: ${claudeAccount(t.claudeAccount).email || claudeAccount(t.claudeAccount).label}` : "";
