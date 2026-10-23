@@ -66,17 +66,65 @@ body.auto {
   letter-spacing: 0.04em;
 }
 .ptrig .tog {
-  padding: 0 var(--sp-2);
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: 1px var(--sp-2) 1px 3px;
   border: 1px solid var(--edge);
   border-radius: var(--r-full);
   background: var(--s3);
   color: var(--t2);
   font: inherit;
   cursor: pointer;
+  transition:
+    background var(--dur-1) var(--ease),
+    color var(--dur-1) var(--ease);
+}
+/* knob: position and label both change, so state never rests on color alone */
+.ptrig .tog::before {
+  content: "";
+  width: 12px;
+  height: 12px;
+  border-radius: var(--r-full);
+  background: var(--t3);
+  transition:
+    transform var(--dur-1) var(--ease),
+    background var(--dur-1) var(--ease);
+}
+/* 44px touch target without growing the chip */
+.ptrig .tog::after {
+  content: "";
+  position: absolute;
+  inset: -12px -4px;
 }
 .ptrig .tog[aria-checked="true"] {
-  background: var(--ok, var(--t1));
-  color: var(--s1, #fff);
+  flex-direction: row-reverse;
+  padding: 1px 3px 1px var(--sp-2);
+  background: var(--ok);
+  border-color: var(--ok);
+  color: var(--s1);
+  font-weight: var(--fw-semi, 600);
+}
+.ptrig .tog[aria-checked="true"]::before {
+  background: var(--s1);
+}
+.ptrig .tog:hover:not(:disabled) {
+  border-color: var(--t2);
+}
+.ptrig .tog:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+.ptrig .tog:disabled {
+  opacity: 0.55;
+  cursor: progress;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ptrig .tog,
+  .ptrig .tog::before {
+    transition: none;
+  }
 }
 .ptrig .w {
   color: var(--t3);
