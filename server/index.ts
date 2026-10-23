@@ -918,6 +918,24 @@ if (process.env.AGENT_CONSOLE_MOCK === "1") {
     }
   });
 }
+app.post("/api/automation/toggle", sameOrigin, express.json({ limit: "1kb" }), (req, res) => {
+  try {
+    const { target, enabled } = req.body ?? {};
+    if (!["dispatcher", "opener"].includes(target) || typeof enabled !== "boolean")
+      throw new Error("Expected target dispatcher or opener and a boolean enabled.");
+    const file = path.join(DATA_DIR, "window-dispatch.json");
+    let raw: any = {};
+    try {
+      raw = JSON.parse(fs.readFileSync(file, "utf8"));
+    } catch {}
+    if (target === "dispatcher") raw.enabled = enabled;
+    else raw.opener = { ...raw.opener, enabled };
+    fs.writeFileSync(file, JSON.stringify(raw, null, 2) + "\n");
+    res.json(automation.snapshot());
+  } catch (e: any) {
+    res.status(400).json({ error: String(e?.message ?? e) });
+  }
+});
 app.get("/api/automation/job", (req, res) => {
   res.setHeader("Cache-Control", "no-store");
   try {
