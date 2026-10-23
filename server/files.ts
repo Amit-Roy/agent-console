@@ -1,20 +1,20 @@
 import fs from "node:fs";
-import { contextDirs } from "./cwd-hints.ts";
+import type { FileHandle } from "node:fs/promises";
 import {
   access,
   lstat,
   open,
-  readdir,
   opendir,
+  readdir,
   readlink,
   realpath,
   stat as statPath,
 } from "node:fs/promises";
-import type { FileHandle } from "node:fs/promises";
-import { performance } from "node:perf_hooks";
 import os from "node:os";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import type { RequestHandler } from "express";
+import { contextDirs } from "./cwd-hints.ts";
 
 export const MAX_VIEW_BYTES = 1 << 20;
 export const MAX_PREVIEW_IMAGE_BYTES = 5 << 20;

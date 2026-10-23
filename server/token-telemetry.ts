@@ -1,10 +1,10 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { execFile } from "node:child_process";
 import { accountingSamples } from "./accounting-log.ts";
-import { safeTriageText } from "./triage-comment.ts";
+import { type GithubRequest, githubRequest } from "./github-triage.ts";
 import { raisedItems } from "./session-prs.ts";
-import { githubRequest, type GithubRequest } from "./github-triage.ts";
+import { safeTriageText } from "./triage-comment.ts";
 
 export const TELEMETRY_MARKER = "<!-- agent-console-telemetry -->";
 export const TELEMETRY_VERSION = 1;

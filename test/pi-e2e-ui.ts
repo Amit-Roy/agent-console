@@ -2,11 +2,11 @@
 // The model is a local OpenAI-compatible stub, so no quota is spent and CI needs no secrets.
 // Needs `pi` on PATH and Playwright Chromium. Starts its own scratch server and stub; no running console required.
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import http from "node:http";
-import { spawn } from "node:child_process";
 import { chromium } from "playwright";
 
 const data = fs.mkdtempSync(path.join(os.tmpdir(), "ac-pi-e2e-"));

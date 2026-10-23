@@ -1,18 +1,18 @@
-import { launch as sandboxLaunch } from "../automation/sandbox.ts";
 import { randomUUID } from "node:crypto";
-import { spawnLines, parseJson } from "./proc.ts";
-import { childEnv } from "./env.ts";
-import { codexRouting } from "./codex-routing.ts";
-import { harnessInstructions } from "./brain.ts";
-import { consoleCodexMcpArgs } from "./console-mcp.mjs";
-import { codexTranslator } from "./codex.ts";
+import { launch as sandboxLaunch } from "../automation/sandbox.ts";
 import { retryEvent } from "../turn-timing.ts";
+import { harnessInstructions } from "./brain.ts";
+import { codexTranslator } from "./codex.ts";
+import { codexRouting } from "./codex-routing.ts";
+import { consoleCodexMcpArgs } from "./console-mcp.mjs";
+import { childEnv } from "./env.ts";
+import { parseJson, spawnLines } from "./proc.ts";
 import {
-  cleanQuestions,
-  IMAGE_ONLY_PROMPT,
   type Agent,
   type AgentCtx,
   type Attachment,
+  cleanQuestions,
+  IMAGE_ONLY_PROMPT,
   type Question,
   type QuestionReply,
   type ThreadSpec,

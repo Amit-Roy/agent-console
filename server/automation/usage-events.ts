@@ -1,5 +1,5 @@
-import type { EventLog } from "./events.ts";
 import type { ProviderUsage } from "../usage.ts";
+import type { EventLog } from "./events.ts";
 
 /** Quota readings arrive with every turn; the usage step records at most one summary per provider every 10 minutes. */
 export function usageEvents(events: EventLog, now: () => number = Date.now, everyMs = 10 * 60_000) {

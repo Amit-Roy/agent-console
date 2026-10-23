@@ -1,5 +1,5 @@
-import { pathToFileURL, fileURLToPath } from "node:url";
-import { modelRateEnv, type ModelPriority } from "./model-rate-client.ts";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { type ModelPriority, modelRateEnv } from "./model-rate-client.ts";
 
 /** Install the request gate before Pi loads its provider SDKs. Every Pi process asks the Console's single queue. */
 export function piRateEnv(

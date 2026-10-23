@@ -6,10 +6,10 @@ import path from "node:path";
 import { startCodexApp } from "./codex-app.ts";
 import { codexWebTool } from "./codex-web.ts";
 import {
-  cleanQuestions,
-  clip,
   type Agent,
   type AgentCtx,
+  cleanQuestions,
+  clip,
   type Mode,
   type Provider,
   type ThreadSpec,

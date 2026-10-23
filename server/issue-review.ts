@@ -1,16 +1,6 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import { githubRequest, type GithubRequest } from "./github-triage.ts";
-import {
-  addWorktree,
-  defaultDirs,
-  defaultGit,
-  installPrOnlyHook,
-  topicOf,
-  type Git,
-  type IssueRun,
-  type IssueRunner,
-} from "./window-dispatch.ts";
+import type { EventLog } from "./automation/events.ts";
 import { DIRECT_REPOS, isProtected, mayMergeProtected } from "./automation/policy.ts";
 import {
   pushPrompt,
@@ -19,8 +9,18 @@ import {
   takeoverPrompt,
 } from "./automation/review-prompts.ts";
 import type { RouteResponse } from "./automation/router.ts";
-import type { EventLog } from "./automation/events.ts";
+import { type GithubRequest, githubRequest } from "./github-triage.ts";
 import { isAutomationPiModel } from "./providers/pi-model.ts";
+import {
+  addWorktree,
+  defaultDirs,
+  defaultGit,
+  type Git,
+  type IssueRun,
+  type IssueRunner,
+  installPrOnlyHook,
+  topicOf,
+} from "./window-dispatch.ts";
 
 // Trivial and BAU work runs on Pi, so a premium model (Sonnet or Sol, chosen by the router) reviews the PR before it merges.
 // When the worker's turn ends and its branch has an open PR, a reviewer thread starts in a detached worktree of the PR head.

@@ -1,24 +1,24 @@
+import { createHash, randomBytes } from "node:crypto";
 import {
   constants,
   fstatSync,
   lstatSync,
-  realpathSync,
   readSync,
+  realpathSync,
   renameSync,
   unlinkSync,
 } from "node:fs";
-import { open, realpath, lstat, opendir, readlink } from "node:fs/promises";
-import { randomBytes, createHash } from "node:crypto";
+import { lstat, open, opendir, readlink, realpath } from "node:fs/promises";
 import path from "node:path";
 import type { RequestHandler } from "express";
 import {
+  type Lookup,
   MAX_VIEW_BYTES,
-  ViewError,
   reachable,
   scopedPath,
-  viewerScope,
   sensitive,
-  type Lookup,
+  ViewError,
+  viewerScope,
 } from "./files.ts";
 
 const TICKET_MS = 60_000;

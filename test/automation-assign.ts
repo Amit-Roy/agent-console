@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
-import { premiumCompletionInstructions } from "../server/automation/review-prompts.ts";
 import { createPremiumAssigner } from "../server/automation/assign.ts";
+import { premiumCompletionInstructions } from "../server/automation/review-prompts.ts";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "ac-assign-"));
 const git = (cwd: string, ...args: string[]) =>

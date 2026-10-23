@@ -1,17 +1,17 @@
 import path from "node:path";
-import { STEP_IDS, VERSION, type DebugRequest, type DebugResponse } from "./contracts.ts";
-import { route as routeFor } from "./router.ts";
-import { skillDir } from "./review-prompts.ts";
+import type { ProviderUsage } from "../usage.ts";
 import {
   addWorktree,
   defaultGit,
-  installPrOnlyHook,
   type Git,
   type IssueRun,
   type IssueRunner,
+  installPrOnlyHook,
 } from "../window-dispatch.ts";
+import { type DebugRequest, type DebugResponse, STEP_IDS, VERSION } from "./contracts.ts";
 import type { EventLog } from "./events.ts";
-import type { ProviderUsage } from "../usage.ts";
+import { skillDir } from "./review-prompts.ts";
+import { route as routeFor } from "./router.ts";
 import type { automationApi } from "./snapshot.ts";
 
 // The Debug button: start a thread that investigates the automation, with its own worktree of agent-console, a model the router

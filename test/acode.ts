@@ -1,21 +1,21 @@
 import assert from "node:assert/strict";
-import express from "express";
+import { realpathSync } from "node:fs";
 import {
+  chmod,
+  link,
   mkdtemp,
-  writeFile,
+  open,
+  readdir,
   readFile,
   rename,
-  symlink,
   rm,
-  chmod,
   stat,
-  link,
-  readdir,
-  open,
+  symlink,
+  writeFile,
 } from "node:fs/promises";
-import { realpathSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import express from "express";
 import { createAcodeBridge } from "../server/acode.ts";
 
 const dir = await mkdtemp(path.join(os.tmpdir(), "acode-test-"));

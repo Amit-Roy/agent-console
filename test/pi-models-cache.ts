@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+
 // A restarted server must offer the Pi models the previous process listed before `pi --list-models` answers again.
 const data = fs.mkdtempSync(path.join(os.tmpdir(), "ac-pi-models-"));
 process.env.AGENT_CONSOLE_DATA = data;

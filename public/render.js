@@ -3,22 +3,23 @@
 // highlight.js only ever produces escaped <span class="hljs-*"> markup and the sanitiser runs over it anyway.
 // Media (images, video, ```chart blocks) is built from the sanitised DOM: local files go through the authenticated, path-scoped
 // /api/file-image and /api/file-media routes, Chart.js is imported lazily on the first chart.
-import { Marked } from "/vendor/marked.js";
-import DOMPurify from "/vendor/purify.js";
+
 import hljs from "/vendor/hljs/core.js";
 import bash from "/vendor/hljs/languages/bash.js";
-import javascript from "/vendor/hljs/languages/javascript.js";
-import typescript from "/vendor/hljs/languages/typescript.js";
-import json from "/vendor/hljs/languages/json.js";
-import python from "/vendor/hljs/languages/python.js";
 import css from "/vendor/hljs/languages/css.js";
-import xml from "/vendor/hljs/languages/xml.js";
-import markdown from "/vendor/hljs/languages/markdown.js";
 import diff from "/vendor/hljs/languages/diff.js";
-import yaml from "/vendor/hljs/languages/yaml.js";
-import sql from "/vendor/hljs/languages/sql.js";
 import go from "/vendor/hljs/languages/go.js";
+import javascript from "/vendor/hljs/languages/javascript.js";
+import json from "/vendor/hljs/languages/json.js";
+import markdown from "/vendor/hljs/languages/markdown.js";
+import python from "/vendor/hljs/languages/python.js";
 import rust from "/vendor/hljs/languages/rust.js";
+import sql from "/vendor/hljs/languages/sql.js";
+import typescript from "/vendor/hljs/languages/typescript.js";
+import xml from "/vendor/hljs/languages/xml.js";
+import yaml from "/vendor/hljs/languages/yaml.js";
+import { Marked } from "/vendor/marked.js";
+import DOMPurify from "/vendor/purify.js";
 import { frontmatterToMarkdown } from "./frontmatter.js";
 
 for (const [n, l] of Object.entries({

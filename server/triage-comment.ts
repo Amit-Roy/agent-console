@@ -1,10 +1,10 @@
-import type { TriageDecision } from "./providers/triage-model.ts";
 import type { EffortQuantiles } from "./providers/triage-effort.ts";
+import type { TriageDecision } from "./providers/triage-model.ts";
 import {
   METRIC_MAX,
+  type MetricName,
   TRIAGE_RULES,
   TRIAGE_SCORECARD_VERSION,
-  type MetricName,
 } from "./providers/triage-scorecard.ts";
 
 export const EFFORT_LABELS = {

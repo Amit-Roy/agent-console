@@ -1,10 +1,11 @@
 // Isolated real-browser cache revalidation with deliberately delayed history; no models.
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawn } from "node:child_process";
 import { chromium } from "playwright";
+
 const data = fs.mkdtempSync(path.join(os.tmpdir(), "ac-cache-ui-")),
   base = "http://127.0.0.1:17779";
 const a = "11111111-1111-4111-8111-111111111111",

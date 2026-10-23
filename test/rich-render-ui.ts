@@ -1,11 +1,11 @@
 // Isolated browser regression: inline images, video (HTTP Range), charts, tables, links and the sanitiser in the real render path.
 // Run: rtk proxy node test/rich-render-ui.ts   (OUT=dir saves screenshots)
 import assert from "node:assert/strict";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawn, spawnSync } from "node:child_process";
-import { chromium, type Browser, type Page } from "playwright";
+import { type Browser, chromium, type Page } from "playwright";
 import sharp from "sharp";
 
 const port = process.env.RICH_RENDER_TEST_PORT || "7075";

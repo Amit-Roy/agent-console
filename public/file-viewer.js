@@ -1,14 +1,14 @@
 // Loaded after the conversation is painted and the browser is idle, or when a file link is first opened.
 import {
   el,
+  highlightInto,
   icon,
   iconButton,
-  wireCopy,
-  highlightInto,
   langFromPath,
   langLabel,
-  renderMarkdown,
   parseFileRef,
+  renderMarkdown,
+  wireCopy,
 } from "/render.js";
 
 let style;

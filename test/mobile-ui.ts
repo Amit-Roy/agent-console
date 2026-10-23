@@ -1,10 +1,11 @@
 // Isolated UI fixture: no real threads, credentials, or model requests.
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawn } from "node:child_process";
 import { chromium } from "playwright";
+
 const data = fs.mkdtempSync(path.join(os.tmpdir(), "ac-mobile-ui-"));
 const base = "http://127.0.0.1:17774",
   id = "mobile-review";

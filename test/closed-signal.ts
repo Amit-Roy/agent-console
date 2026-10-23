@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
+import { createHmac } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { announceClosed, watchClosed } from "../server/automation/closed-signal.ts";
 import { createTriageService } from "../server/github-triage.ts";
-import { createHmac } from "node:crypto";
 
 const dir = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "closed-")), "events");
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));

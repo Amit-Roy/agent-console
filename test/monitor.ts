@@ -2,15 +2,15 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createEventLog } from "../server/automation/events.ts";
 import {
-  createMonitor,
-  createEscalation,
-  loadMonitorConfig,
-  DEFAULTS,
   type Alert,
+  createEscalation,
+  createMonitor,
+  DEFAULTS,
+  loadMonitorConfig,
   type MonitorDeps,
 } from "../server/monitor.ts";
-import { createEventLog } from "../server/automation/events.ts";
 
 const min = 60_000;
 let t = 1_800_000_000_000;
@@ -236,7 +236,7 @@ function chain(mode: "off" | "dry-run" | "live", extra: Partial<typeof DEFAULTS.
     },
   };
 }
-let n = 0;
+const n = 0;
 const alert = (over: Partial<Alert> = {}, state: Alert["state"] = "firing"): Alert => ({
   id: `cpu-${over.id ?? 1}`,
   signal: "cpu",

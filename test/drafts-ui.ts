@@ -1,11 +1,12 @@
 // Unsent prompts survive thread navigation and closing the page; sending clears only that thread.
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawn } from "node:child_process";
-import { once } from "node:events";
 import { chromium } from "playwright";
+
 const data = fs.mkdtempSync(path.join(os.tmpdir(), "ac-drafts-ui-"));
 const port = Number(process.env.DRAFTS_UI_PORT || 7075),
   base = `http://127.0.0.1:${port}`;

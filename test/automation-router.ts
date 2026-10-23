@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { route, type RouteRequest } from "../server/automation/router.ts";
+import { type RouteRequest, route } from "../server/automation/router.ts";
 
 const now = 1_800_000_000_000,
   MIN = 60_000;

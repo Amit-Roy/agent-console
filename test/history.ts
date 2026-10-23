@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { HistoryIndex } from "../server/history.ts";
 import { codexModels, codexTranslator } from "../server/providers/codex.ts";
+
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ac-history-"));
 try {
   const file = path.join(dir, "log.jsonl");

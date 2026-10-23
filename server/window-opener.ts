@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DATA_DIR } from "./auth.ts";
-import { fiveHour } from "./window-dispatch.ts";
-import type { ProviderUsage } from "./usage.ts";
 import type { EventLog } from "./automation/events.ts";
+import type { ProviderUsage } from "./usage.ts";
+import { fiveHour } from "./window-dispatch.ts";
 
 // A five-hour window starts with the first message after the previous window ends.
 // Open idle providers throughout the day so the dispatcher can use expiring quota.

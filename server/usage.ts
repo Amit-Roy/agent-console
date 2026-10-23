@@ -1,6 +1,6 @@
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { spawn } from "node:child_process";
 import { DATA_DIR } from "./auth.ts";
 import { childEnv } from "./providers/env.ts";
 import { syncModelQuota } from "./providers/model-rate-client.ts";

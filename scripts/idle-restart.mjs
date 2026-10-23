@@ -1,12 +1,13 @@
 // Restart the agent-console server once every thread is idle, without the server's help (works on any version):
 // connect as a client, watch thread status and the queues, then stop/start through bin/agent-console and verify.
 // Run detached by `bin/agent-console restart-when-idle`; log goes to $RUN/idle-restart.log.
+
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import { stripTypeScriptTypes } from "node:module";
 import os from "node:os";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { stripTypeScriptTypes } from "node:module";
 import { WebSocket } from "ws";
 import { makeToken } from "../server/auth.ts";
 

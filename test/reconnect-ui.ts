@@ -1,12 +1,13 @@
 // Reconnect robustness, isolated (mock thread, scratch data, no model calls): a half-dead socket is replaced quickly on wake or
 // when a send goes unacknowledged, queued messages are delivered once after reconnecting, and the server drops pong-less sockets.
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawn } from "node:child_process";
 import { chromium } from "playwright";
 import { WebSocket } from "ws";
+
 const data = fs.mkdtempSync(path.join(os.tmpdir(), "ac-reconnect-ui-"));
 const port = 17779,
   base = `http://127.0.0.1:${port}`,

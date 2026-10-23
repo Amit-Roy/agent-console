@@ -1,12 +1,12 @@
 // Security API: forced-command SSH client, caching, validation. A fake ssh binary stands in for the scan host.
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import http from "node:http";
 import express from "express";
 import { mountSecurity } from "../server/security.ts";
-import { LATEST, HISTORY, LOG_ID, LOG_LINES, logPage } from "./security-mock.ts";
+import { HISTORY, LATEST, LOG_ID, LOG_LINES, logPage } from "./security-mock.ts";
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "secscan-"));
 const log = path.join(dir, "calls.log");

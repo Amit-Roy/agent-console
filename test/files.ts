@@ -1,10 +1,10 @@
 // Isolated real HTTP API: no model calls, live threads or production credentials.
 import assert from "node:assert/strict";
+import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawn, execFileSync } from "node:child_process";
-import { MAX_VIEW_BYTES, MAX_PREVIEW_IMAGE_BYTES, TREE_PAGE_SIZE } from "../server/files.ts";
+import { MAX_PREVIEW_IMAGE_BYTES, MAX_VIEW_BYTES, TREE_PAGE_SIZE } from "../server/files.ts";
 import { codexTranslator } from "../server/providers/codex.ts";
 import { piTranslator } from "../server/providers/pi.ts";
 
@@ -487,7 +487,7 @@ try {
 
   fs.mkdirSync(path.join(cwd, "src"));
   put("src/nested.ts", "export {};");
-  let listingResponse = await tree();
+  const listingResponse = await tree();
   assert.equal(listingResponse.status, 200);
   assert.match(listingResponse.headers.get("server-timing")!, /^tree;dur=\d/);
   const listing = await listingResponse.json();

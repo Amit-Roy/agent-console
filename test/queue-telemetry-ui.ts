@@ -1,10 +1,11 @@
 // Real browser + isolated server, deterministic mock provider; never calls a model.
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawn } from "node:child_process";
 import { chromium } from "playwright";
+
 const data = fs.mkdtempSync(path.join(os.tmpdir(), "ac-queue-ui-"));
 const base = "http://127.0.0.1:17776";
 const a = "11111111-1111-4111-8111-111111111111",
@@ -99,54 +100,52 @@ try {
     page.on("pageerror", (e) => errors.push(e.message));
     await page.goto(base);
     await page.waitForFunction(() => !!(window as any).agentConsoleMetrics);
-    {
-      await page.getByRole("button", { name: "Edit queued message", exact: true }).click();
-      await page.waitForFunction(
-        () => !(document.querySelector("#queue-draft") as HTMLTextAreaElement).disabled,
-      );
-      assert.equal(await page.locator("#queue-draft").inputValue(), original);
-      await page.fill("#queue-draft", "");
-      await page.locator("#queue-save").click();
-      await page.waitForFunction(() =>
-        document.querySelector("#queue-edit-error")?.textContent?.includes("Enter a message"),
-      );
-      assert.equal(await page.locator("#queue-editor").isVisible(), true);
-      await page.fill("#queue-draft", "EDITED_PRIVATE_FINAL");
-      // Reconnect with an edit open: server persistence keeps delivery paused and preserves the browser draft.
-      await stop();
-      server = start();
-      await ready();
-      await page.waitForFunction(
-        () => document.querySelector("#banner")?.hidden === true,
-        {},
-        { timeout: 15000 },
-      );
-      assert.equal(await page.locator("#queue-draft").inputValue(), "EDITED_PRIVATE_FINAL");
-      await page.locator("#queue-save").click();
-      await page.waitForFunction(
-        () => !document.querySelector("#queue-editor")?.hasAttribute("open"),
-      );
-      await page.waitForFunction(() =>
-        document
-          .querySelector("#chat")
-          ?.textContent?.includes("mock reply (plan, echo): EDITED_PRIVATE_FINAL"),
-      );
-      assert.ok(!(await page.locator("#chat").textContent())!.includes(original));
-      if (width === 390) await page.locator("#menu").click();
-      await page.locator("#threads li").filter({ hasText: "Queue B" }).click();
-      await page.getByRole("button", { name: "Edit queued message", exact: true }).click();
-      await page.waitForFunction(
-        () => !(document.querySelector("#queue-draft") as HTMLTextAreaElement).disabled,
-      );
-      await page.fill("#queue-draft", "DISCARDED_DRAFT");
-      await page.locator("#queue-cancel").click();
-      await page.waitForFunction(() =>
-        document
-          .querySelector("#chat")
-          ?.textContent?.includes("mock reply (plan, echo): Cancel keeps this original."),
-      );
-      assert.ok(!(await page.locator("#chat").textContent())!.includes("DISCARDED_DRAFT"));
-    }
+    await page.getByRole("button", { name: "Edit queued message", exact: true }).click();
+    await page.waitForFunction(
+      () => !(document.querySelector("#queue-draft") as HTMLTextAreaElement).disabled,
+    );
+    assert.equal(await page.locator("#queue-draft").inputValue(), original);
+    await page.fill("#queue-draft", "");
+    await page.locator("#queue-save").click();
+    await page.waitForFunction(() =>
+      document.querySelector("#queue-edit-error")?.textContent?.includes("Enter a message"),
+    );
+    assert.equal(await page.locator("#queue-editor").isVisible(), true);
+    await page.fill("#queue-draft", "EDITED_PRIVATE_FINAL");
+    // Reconnect with an edit open: server persistence keeps delivery paused and preserves the browser draft.
+    await stop();
+    server = start();
+    await ready();
+    await page.waitForFunction(
+      () => document.querySelector("#banner")?.hidden === true,
+      {},
+      { timeout: 15000 },
+    );
+    assert.equal(await page.locator("#queue-draft").inputValue(), "EDITED_PRIVATE_FINAL");
+    await page.locator("#queue-save").click();
+    await page.waitForFunction(
+      () => !document.querySelector("#queue-editor")?.hasAttribute("open"),
+    );
+    await page.waitForFunction(() =>
+      document
+        .querySelector("#chat")
+        ?.textContent?.includes("mock reply (plan, echo): EDITED_PRIVATE_FINAL"),
+    );
+    assert.ok(!(await page.locator("#chat").textContent())!.includes(original));
+    if (width === 390) await page.locator("#menu").click();
+    await page.locator("#threads li").filter({ hasText: "Queue B" }).click();
+    await page.getByRole("button", { name: "Edit queued message", exact: true }).click();
+    await page.waitForFunction(
+      () => !(document.querySelector("#queue-draft") as HTMLTextAreaElement).disabled,
+    );
+    await page.fill("#queue-draft", "DISCARDED_DRAFT");
+    await page.locator("#queue-cancel").click();
+    await page.waitForFunction(() =>
+      document
+        .querySelector("#chat")
+        ?.textContent?.includes("mock reply (plan, echo): Cancel keeps this original."),
+    );
+    assert.ok(!(await page.locator("#chat").textContent())!.includes("DISCARDED_DRAFT"));
     const pick = async (title: string) => {
       if (width === 390) await page.locator("#menu").click();
       await page.locator("#threads li").filter({ hasText: title }).click();

@@ -1,6 +1,6 @@
 import fs from "node:fs";
-import path from "node:path";
 import os from "node:os";
+import path from "node:path";
 import { headroom } from "./headroom.ts";
 import { claudeAccountReady } from "./providers/claude-accounts.ts";
 import type { Threads } from "./threads.ts";

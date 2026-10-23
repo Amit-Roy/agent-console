@@ -1,9 +1,9 @@
 // Browser checks for the New thread Auto button. Fresh data, fake accounts and usage, CLI guards; no live sessions or prompts.
 import assert from "node:assert/strict";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawn, spawnSync } from "node:child_process";
 import { chromium, type Page } from "playwright";
 
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "ac-auto-pick-ui-"));

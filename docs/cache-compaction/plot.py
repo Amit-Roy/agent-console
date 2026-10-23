@@ -3,14 +3,16 @@ Illustrative API-equivalent marginal costs, NOT observed usage or subscription c
 Official sources verified 2026-10-17; see assumptions.md. No provider calls.
 """
 
-import csv, json
+import csv
+import json
 from pathlib import Path
-import numpy as np
+
 import matplotlib
+import numpy as np
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from matplotlib.ticker import StrMethodFormatter, MaxNLocator
+from matplotlib.ticker import StrMethodFormatter
 
 OUT = Path(__file__).resolve().parent
 C, S, R, W, I, O = 100_000, 20_000, 0.10, 4.0, 2.0, 10.0

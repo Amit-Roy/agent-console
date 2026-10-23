@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { mock } from "node:test";
+
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ac-idle-threads-"));
 Object.assign(process.env, {
   AGENT_CONSOLE_DATA: dir,

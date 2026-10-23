@@ -1,25 +1,25 @@
-import { launch as sandboxLaunch } from "../automation/sandbox.ts";
-import { claudeConfigDir, requireClaudeAccount } from "./claude-accounts.ts";
-import { headroom } from "../headroom.ts";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { launch as sandboxLaunch } from "../automation/sandbox.ts";
+import { headroom } from "../headroom.ts";
+import { toolEnvFile } from "../tool-priority.ts";
 import { threadDir } from "../uploads.ts";
+import { stylePreamble } from "./brain.ts";
+import { claudeConfigDir, requireClaudeAccount } from "./claude-accounts.ts";
+import { consoleMcpServer, SESSION_INSTRUCTIONS } from "./console-mcp.mjs";
+import { parseJson, spawnLines } from "./proc.ts";
 import {
-  cleanQuestions,
-  clip,
   type Agent,
   type AgentCtx,
   type Attachment,
   type Command,
+  cleanQuestions,
+  clip,
   type Provider,
   type QuestionReply,
   type ThreadSpec,
 } from "./types.ts";
-import { parseJson, spawnLines } from "./proc.ts";
-import { stylePreamble } from "./brain.ts";
-import { toolEnvFile } from "../tool-priority.ts";
-import { consoleMcpServer, SESSION_INSTRUCTIONS } from "./console-mcp.mjs";
 
 // never let the subscription login be silently replaced by metered API billing
 const SCRUBBED_ENV = [

@@ -1,15 +1,15 @@
 import assert from "node:assert/strict";
 import {
+  deriveAssessment,
+  METRIC_MAX,
+  type MetricName,
+} from "../server/providers/triage-scorecard.ts";
+import {
   renderTriageComment,
   safeTriageText,
   TRIAGE_COMMENT_MARKER,
   TRIAGE_COMMENT_VERSION_MARKER,
 } from "../server/triage-comment.ts";
-import {
-  deriveAssessment,
-  METRIC_MAX,
-  type MetricName,
-} from "../server/providers/triage-scorecard.ts";
 import { fixtureEffortModel } from "./fixtures/triage-effort.ts";
 
 const metrics = Object.fromEntries(

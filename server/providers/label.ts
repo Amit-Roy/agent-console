@@ -115,7 +115,7 @@ export interface Labeler {
 }
 
 export function createLabeler(onLabel: (job: LabelJob, label: string) => void): Labeler {
-  let queue: LabelJob[] = [];
+  const queue: LabelJob[] = [];
   let timer: NodeJS.Timeout | undefined;
   let busy = false;
 

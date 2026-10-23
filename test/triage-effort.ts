@@ -3,17 +3,17 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
-  EFFORT_FEATURES,
-  LEGACY_EFFORT_FEATURES,
-  SHAPE_FEATURES,
-  requestShape,
-  empiricalQuantile,
-  loadEffortModel,
-  quoteEffort,
-  validateEffortModel,
   type ComplexityInput,
+  EFFORT_FEATURES,
   type EffortModel,
   type EffortQuote,
+  empiricalQuantile,
+  LEGACY_EFFORT_FEATURES,
+  loadEffortModel,
+  quoteEffort,
+  requestShape,
+  SHAPE_FEATURES,
+  validateEffortModel,
 } from "../server/providers/triage-effort.ts";
 
 /** Synthetic fixtures exercise inference; production coefficients come only from measured runs. */

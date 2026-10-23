@@ -4,11 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import { createEventLog } from "../server/automation/events.ts";
 import {
+  createOpener,
   inHours,
+  loadOpenerConfig,
   localMinutes,
   needsOpen,
-  loadOpenerConfig,
-  createOpener,
   OPENER_ROUTES,
 } from "../server/window-opener.ts";
 

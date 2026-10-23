@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
-import { createReviewer } from "../server/issue-review.ts";
 import { createEventLog } from "../server/automation/events.ts";
 import { route as realRoute } from "../server/automation/router.ts";
-import { startIssue, ROUTES } from "../server/window-dispatch.ts";
+import { createReviewer } from "../server/issue-review.ts";
+import { ROUTES, startIssue } from "../server/window-dispatch.ts";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "ac-review-"));
 // Synchronous Git keeps review setup inside one tick; production uses async Git, covered by test/window-dispatch.ts.

@@ -1,7 +1,7 @@
 // Minimal newline-delimited stdio MCP bridge. No network listener or credentials in arguments.
 import { createInterface } from "node:readline";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { TOOLS, callTool } from "./console-tools.mjs";
+import { callTool, TOOLS } from "./console-tools.mjs";
 
 export const SESSION_INSTRUCTIONS = [
   "# Agent Console session history",

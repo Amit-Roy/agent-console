@@ -1,7 +1,7 @@
 // Security page: real browser, phone + desktop, mocked /api/security, no console errors, first-party only.
 import { chromium } from "playwright";
 import { makeToken } from "../server/auth.ts";
-import { LATEST, HISTORY, LOG_ID, LOG_LINES } from "./security-mock.ts";
+import { HISTORY, LATEST, LOG_ID, LOG_LINES } from "./security-mock.ts";
 
 const BASE = process.env.BASE || "http://127.0.0.1:7070";
 const OUT = process.env.OUT || "/tmp";

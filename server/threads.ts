@@ -1,45 +1,57 @@
-import os from "node:os";
-import { headroom } from "./headroom.ts";
-import { isAutomationPiModel, selectAutomationPiModel } from "./providers/pi-model.ts";
-import { assertAutomationSandbox } from "./automation/sandbox.ts";
-import {
-  normalizeClaudeAccount,
-  requireClaudeAccount,
-  claudeUsageKey,
-  type ClaudeAccount,
-} from "./providers/claude-accounts.ts";
-import type { ThreadNotice } from "./notifications.ts";
-import type { IssueRun } from "./window-dispatch.ts";
-import {
-  IdleCompactionTimers,
-  idleCompactionPolicy,
-  idleCompactionDeadline,
-} from "./idle-compaction.ts";
-import { HistoryIndex } from "./history.ts";
-import { historyWireEvent } from "./history-wire.ts";
-import { commandList, CONSOLE_COMMANDS, parseCommand } from "./commands.ts";
-import { usage, claudeWindows, codexWindows } from "./usage.ts";
-import { CodexTelemetry } from "./providers/codex-telemetry.ts";
 import crypto from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
+import {
+  codexAccounting,
+  type ModelUsage,
+  piAccounting,
+  type SessionAccounting,
+} from "./accounting.ts";
+import { repairAccounting } from "./accounting-repair.ts";
+import { backfill, readTurns, recordTurn, restoreAccounting, type Turn } from "./analytics.ts";
 import { DATA_DIR } from "./auth.ts";
-import { Questions, type PendingQuestion } from "./questions.ts";
+import { assertAutomationSandbox } from "./automation/sandbox.ts";
+import { CONSOLE_COMMANDS, commandList, parseCommand } from "./commands.ts";
+import { recentPreamble, replayPreamble } from "./export.ts";
+import { headroom } from "./headroom.ts";
+import { HistoryIndex } from "./history.ts";
+import { historyWireEvent } from "./history-wire.ts";
+import {
+  IdleCompactionTimers,
+  idleCompactionDeadline,
+  idleCompactionPolicy,
+} from "./idle-compaction.ts";
+import type { ThreadNotice } from "./notifications.ts";
 import { brainCommit } from "./providers/brain.ts";
 import {
+  type ClaudeAccount,
+  claudeUsageKey,
+  normalizeClaudeAccount,
+  requireClaudeAccount,
+} from "./providers/claude-accounts.ts";
+import { CodexTelemetry } from "./providers/codex-telemetry.ts";
+import {
+  type Agent,
+  type AgentCtx,
+  type Command,
+  clip,
+  DEFAULT_PROVIDER,
+  type Mode,
+  PROVIDERS,
+} from "./providers/index.ts";
+import {
   createLabeler,
-  needsLabel,
-  mcpSketch,
-  readSketch,
   editSketch,
   type Labeler,
+  mcpSketch,
+  needsLabel,
+  readSketch,
 } from "./providers/label.ts";
+import { isAutomationPiModel, selectAutomationPiModel } from "./providers/pi-model.ts";
 import { suggestTitle, titleText } from "./providers/title.ts";
-import { recentPreamble, replayPreamble } from "./export.ts";
-import { backfill, restoreAccounting, recordTurn, readTurns, type Turn } from "./analytics.ts";
-import { repairAccounting } from "./accounting-repair.ts";
-import { SessionAccounting, codexAccounting, piAccounting, type ModelUsage } from "./accounting.ts";
-import { TurnClock, TurnTimingStore, fromProcess, runFacts } from "./turn-timing.ts";
+import { type PendingQuestion, Questions } from "./questions.ts";
+import { fromProcess, runFacts, TurnClock, TurnTimingStore } from "./turn-timing.ts";
 import {
   MAX_ATTACHMENTS,
   removeUploads,
@@ -47,15 +59,8 @@ import {
   threadDir,
   withFileList,
 } from "./uploads.ts";
-import {
-  clip,
-  DEFAULT_PROVIDER,
-  PROVIDERS,
-  type Agent,
-  type AgentCtx,
-  type Command,
-  type Mode,
-} from "./providers/index.ts";
+import { claudeWindows, codexWindows, usage } from "./usage.ts";
+import type { IssueRun } from "./window-dispatch.ts";
 
 export type { Command, Mode };
 

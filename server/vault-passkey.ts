@@ -1,14 +1,14 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import crypto from "node:crypto";
-import type express from "express";
 import {
-  generateRegistrationOptions,
-  verifyRegistrationResponse,
   generateAuthenticationOptions,
+  generateRegistrationOptions,
   verifyAuthenticationResponse,
+  verifyRegistrationResponse,
 } from "@simplewebauthn/server";
 import { isoBase64URL } from "@simplewebauthn/server/helpers";
+import type express from "express";
 
 // Passkey step-up for vault writes. Credentials live in vault-passkeys.json (0600); challenges are single-use,
 // server-side and expire in 2 minutes; a successful assertion issues a 5 minute write grant (HttpOnly cookie).

@@ -1,5 +1,6 @@
-import http from "node:http";
 import { AsyncLocalStorage } from "node:async_hooks";
+import http from "node:http";
+
 // Node preloads this module before Pi loads its provider SDKs. Every model HTTP
 // attempt, including SDK retries and subsequent tool turns, uses one shared gate.
 const originalFetch = globalThis.fetch.bind(globalThis);

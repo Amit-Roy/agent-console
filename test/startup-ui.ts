@@ -1,10 +1,11 @@
 // Startup: no "No thread selected" flash before the thread list arrives, and a reload reopens the last thread.
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawn } from "node:child_process";
 import { chromium } from "playwright";
+
 const data = fs.mkdtempSync(path.join(os.tmpdir(), "ac-startup-ui-"));
 const base = "http://127.0.0.1:17776";
 const mk = (id: string, title: string, at: number) => ({

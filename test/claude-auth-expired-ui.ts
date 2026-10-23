@@ -2,11 +2,11 @@
 // that opens the new-thread dialog on that thread's account.
 // Run: rtk proxy node test/claude-auth-expired-ui.ts   (OUT=dir saves screenshots)
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawn } from "node:child_process";
-import { chromium, type Browser } from "playwright";
+import { type Browser, chromium } from "playwright";
 
 const port = process.env.AUTH_EXPIRED_TEST_PORT || "7075";
 assert.match(port, /^707[1-5]$/, "use an isolated scratch port, 7071–7075");

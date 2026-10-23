@@ -5,9 +5,9 @@ import copy
 import importlib.util
 import json
 import math
-from pathlib import Path
 import sys
 import unittest
+from pathlib import Path
 from unittest import mock
 
 sys.dont_write_bytecode = True

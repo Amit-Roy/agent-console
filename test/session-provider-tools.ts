@@ -1,17 +1,17 @@
 import assert from "node:assert/strict";
-import { createServer } from "node:http";
 import { spawn } from "node:child_process";
-import { createInterface } from "node:readline";
 import { once } from "node:events";
+import { createServer } from "node:http";
+import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
-import { TOOLS } from "../server/providers/console-tools.mjs";
+import { harnessInstructions } from "../server/providers/brain.ts";
+import { claudeControl, leanMcpArgs } from "../server/providers/claude.ts";
 import {
-  consoleMcpServer,
   consoleCodexMcpArgs,
+  consoleMcpServer,
   SESSION_INSTRUCTIONS,
 } from "../server/providers/console-mcp.mjs";
-import { claudeControl, leanMcpArgs } from "../server/providers/claude.ts";
-import { harnessInstructions } from "../server/providers/brain.ts";
+import { TOOLS } from "../server/providers/console-tools.mjs";
 
 const saved = { ...process.env };
 const calls: any[] = [];

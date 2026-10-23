@@ -4,10 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import { mock } from "node:test";
 import {
-  idleCompactionPolicy,
-  idleCompactionDeadline,
   IdleCompactionTimers,
+  idleCompactionDeadline,
+  idleCompactionPolicy,
 } from "../server/idle-compaction.ts";
+
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "ac-idle-policy-"));
 const cwd = path.join(home, "project");
 fs.mkdirSync(path.join(home, ".claude"), { recursive: true });

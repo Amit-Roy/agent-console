@@ -1,9 +1,9 @@
 // Browser integration uses the real app and dialog with a local HTTP/WebSocket fixture. No providers or user data are accessed.
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
 import { chromium, type Page } from "playwright";
 import { ASSIGNMENT_STEPS } from "../server/automation/assign.ts";
 

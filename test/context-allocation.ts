@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import {
   buildContextAllocation,
-  nativeAllocationCounts,
   contextAllocation,
+  nativeAllocationCounts,
 } from "../server/context-allocation.ts";
 
 const message = (text: string, role = "user") => ({

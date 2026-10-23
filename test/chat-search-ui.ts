@@ -1,11 +1,11 @@
 // In-chat search uses isolated mock history, including messages outside the first page.
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawn } from "node:child_process";
-import { once } from "node:events";
-import { chromium, type Browser, type Page } from "playwright";
+import { type Browser, chromium, type Page } from "playwright";
 
 const data = fs.mkdtempSync(path.join(os.tmpdir(), "ac-chat-search-ui-"));
 const port = process.env.CHAT_SEARCH_UI_PORT || "7074";

@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { STEP_IDS, type AutomationEvent, type EventKind, type StepId } from "./contracts.ts";
+import { type AutomationEvent, type EventKind, STEP_IDS, type StepId } from "./contracts.ts";
 
 // The one log every automation stage writes. This process is its only writer; hooks and agents never append to it.
 // Nothing here may hold a prompt or a secret: messages are short, and every string is redacted before it reaches disk.

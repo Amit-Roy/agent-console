@@ -7,9 +7,9 @@ import { open, readdir, readFile, realpath, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { sensitive } from "./files.ts";
-import { SESSION_INSTRUCTIONS } from "./providers/console-mcp.mjs";
 import { brainInstructions, STYLE_FILE, stylePreamble } from "./providers/brain.ts";
 import { claudeConfigDir } from "./providers/claude-accounts.ts";
+import { SESSION_INSTRUCTIONS } from "./providers/console-mcp.mjs";
 
 type Kind =
   | "instructions"

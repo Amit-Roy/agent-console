@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { LatencyStore } from "../server/latency.ts";
+
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ac-latency-")),
   file = path.join(dir, "latency.sqlite");
 const lookup = (id: string) => (id === "fixture" ? { provider: "mock" } : undefined);

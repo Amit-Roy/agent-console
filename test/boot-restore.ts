@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+
 const data = fs.mkdtempSync(path.join(os.tmpdir(), "ac-boot-restore-"));
 process.env.AGENT_CONSOLE_DATA = data;
 process.env.AGENT_CONSOLE_MOCK = "1";

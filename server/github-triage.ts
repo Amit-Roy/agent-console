@@ -1,21 +1,23 @@
-import { createHash, randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
-import path from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { verify } from "@octokit/webhooks-methods";
 import { childEnv } from "./providers/env.ts";
-import { classifyTriage, type TriageInput, type TriageDecision } from "./providers/triage-model.ts";
+import { classifyTriage, type TriageDecision, type TriageInput } from "./providers/triage-model.ts";
 import { assessmentRevision, calibrationHealth } from "./triage-calibration.ts";
-import { renderTriageComment, EFFORT_LABELS, PRIORITY_LABELS } from "./triage-comment.ts";
+import { EFFORT_LABELS, PRIORITY_LABELS, renderTriageComment } from "./triage-comment.ts";
+
 export {
-  renderTriageComment,
   EFFORT_LABELS,
   PRIORITY_LABELS,
+  renderTriageComment,
   TRIAGE_COMMENT_MARKER,
   TRIAGE_COMMENT_VERSION_MARKER,
 } from "./triage-comment.ts";
+
 import { TRIAGE_COMMENT_MARKER } from "./triage-comment.ts";
 
 const MANAGED = new Set<string>([

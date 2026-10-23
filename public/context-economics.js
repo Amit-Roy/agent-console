@@ -1,6 +1,6 @@
-import { el, iconButton } from "/render.js";
-import { forecastContext, forecastModel, recommendCompaction } from "/context-forecast.js";
 import { createContextAllocation } from "/context-allocation.js";
+import { forecastContext, forecastModel, recommendCompaction } from "/context-forecast.js";
+import { el, iconButton } from "/render.js";
 
 const tokens = (n) =>
   new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 }).format(n);

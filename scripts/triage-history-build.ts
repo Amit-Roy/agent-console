@@ -1,11 +1,11 @@
 #!/usr/bin/env node
+import { execFileSync } from "node:child_process";
 /** Build private empirical examples from completed, commit-backed delivery runs.
  * This does not infer whole-task effort, missing tokens, child-agent usage, or active time.
  */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { normalizeAccountingRows } from "../server/accounting-repair.ts";
 

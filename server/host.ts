@@ -1,8 +1,8 @@
 import fs from "node:fs";
-import path from "node:path";
-import type express from "express";
-import { Worker } from "node:worker_threads";
 import os from "node:os";
+import path from "node:path";
+import { Worker } from "node:worker_threads";
+import type express from "express";
 import { latestRates, mountRoots } from "./host-history.ts";
 
 const PROC = "/proc";
@@ -506,7 +506,7 @@ function processDetail(pid: number): Reply {
       if (m) status[m[1]] = m[2];
     }
   } catch {}
-  let children: { pid: number; name: string; cmd: string }[] = [];
+  const children: { pid: number; name: string; cmd: string }[] = [];
   try {
     for (const entry of fs.readdirSync(PROC, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue;
@@ -537,7 +537,7 @@ function processDetail(pid: number): Reply {
       } catch {}
     }
   } catch {}
-  let ports: number[] = [];
+  const ports: number[] = [];
   try {
     const fds = fs.readdirSync(path.join(PROC, String(pid), "fd"));
     const inodes = new Set<number>();

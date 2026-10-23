@@ -1,10 +1,11 @@
 // App ideas: a private git repo of markdown. index.md lists one idea per line, `- [Name](slug.md) — one line`, and each
 // slug.md holds that app's features. Adding an idea writes both files in one commit, then pushes if the branch tracks a remote.
 // Hand edits stay welcome: only list lines with a link to a root .md file count as ideas; every other line is left alone.
+
+import { execFile, execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { execFile, execFileSync } from "node:child_process";
 
 export type Idea = { slug: string; name: string; line: string };
 export class IdeaError extends Error {

@@ -1,11 +1,11 @@
 // Turn timing in a real browser against an isolated mock backend: Run details shows the last run's timing facts at phone width,
 // the phone's send -> first token sample reaches the latency store, and /dashboard draws the Turn latency panel. Spends nothing.
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawn } from "node:child_process";
-import { once } from "node:events";
 import { chromium } from "playwright";
 
 const data = fs.mkdtempSync(path.join(os.tmpdir(), "ac-turn-timing-ui-"));

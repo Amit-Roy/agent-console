@@ -1,7 +1,8 @@
 // Scheduled tasks in the sidebar: one row per task (schedule, agent, next run, on/off), its latest runs as child rows, and the report
 // card a finished run leaves in its thread. Every run is an ordinary thread, so opening, replying and forking work as usual.
-import { $, el, icon, iconButton } from "/render.js";
+
 import { createMenu } from "/menu.js";
+import { $, el, icon, iconButton } from "/render.js";
 
 const DAY_NAMES = [
   "Sundays",

@@ -1,5 +1,5 @@
-import { cleanQuestions, type QuestionReply } from "./types.ts";
 import { QUESTION_DIALOG } from "./pi-questions-extension.mjs";
+import { cleanQuestions, type QuestionReply } from "./types.ts";
 
 // Pi's extension UI is a separate RPC subprotocol. Dialog ids are owned by Pi;
 // keep their lifetime separate from command acknowledgements and model turns.

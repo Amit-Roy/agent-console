@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
-import { createReviewer } from "../server/issue-review.ts";
 import { createEventLog } from "../server/automation/events.ts";
+import { createReviewer } from "../server/issue-review.ts";
 
 // Every fixture is private. No real GitHub requests, user threads, or model calls are made.
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "ac-review-takeover-"));
@@ -354,7 +354,7 @@ try {
       assert.match(prompt, /\/fixture\/failed-work/);
       assert.match(prompt, /Provider handshake failed/);
       assert.doesNotMatch(prompt, /Unrelated private failure/);
-      assert.match(prompt, /logs[\/]failed-13\.jsonl/);
+      assert.match(prompt, /logs[/]failed-13\.jsonl/);
       assert.match(prompt, /review|inspect/i);
       assert.match(prompt, /fix/i);
       assert.match(prompt, /checks|tests/i);

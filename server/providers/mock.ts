@@ -1,5 +1,5 @@
-import type { Agent, AgentCtx, Provider, ThreadSpec } from "./types.ts";
 import crypto from "node:crypto";
+import type { Agent, AgentCtx, Provider, ThreadSpec } from "./types.ts";
 
 // Deterministic fake agent for tests and UI work: no network, no quota. Enabled with AGENT_CONSOLE_MOCK=1.
 //   "slow ..."   streams for ~10s (to test Stop)      "fail ..."  ends the turn with an error

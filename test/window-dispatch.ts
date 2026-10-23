@@ -1,23 +1,23 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { historyRows } from "../server/usage.ts";
-import { execFileSync } from "node:child_process";
 import {
-  plan,
+  addWorktree,
+  createDispatcher,
   effortOf,
   expiring,
-  loadConfig,
-  createDispatcher,
-  ROUTES,
   FILL,
+  type Issue,
+  issuePrompt,
+  loadConfig,
+  plan,
+  ROUTES,
+  startIssue,
   threadTitle,
   topicOf,
-  issuePrompt,
-  addWorktree,
-  startIssue,
-  type Issue,
 } from "../server/window-dispatch.ts";
 
 const now = 1_800_000_000_000,

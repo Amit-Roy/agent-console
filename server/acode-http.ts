@@ -1,6 +1,6 @@
-import express from "express";
 import path from "node:path";
 import type { RequestHandler } from "express";
+import express from "express";
 import { fileEnv } from "./providers/env.ts";
 
 /** A separate, capability-only port lets Acode connect without a Coder browser session. */

@@ -1,9 +1,9 @@
 // All children are offline fixtures. No Headroom inference or provider requests.
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import net from "node:net";
 
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "ac-headroom-safety-"));
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));

@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
+
 const root = path.join(import.meta.dirname, "..");
 const pkgDir = path.join(root, "packages", "design-system");
 

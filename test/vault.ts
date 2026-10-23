@@ -2,11 +2,11 @@
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import fs from "node:fs";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import http from "node:http";
+import { isoBase64URL, isoCBOR } from "@simplewebauthn/server/helpers";
 import express from "express";
-import { isoCBOR, isoBase64URL } from "@simplewebauthn/server/helpers";
 import { mountVault } from "../server/vault.ts";
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vault-"));
@@ -459,7 +459,7 @@ try {
     400,
     "assertion challenge is single-use",
   );
-  let g = await stepUp();
+  const g = await stepUp();
   assert.equal(g.status, 200);
   let grant = g.cookie;
   assert.equal(
@@ -484,7 +484,7 @@ try {
     "no temp files left",
   );
   r = await api("PUT", `/${envSrc.id}/PLAIN_KEY`, { value: "has space & #hash" }, grant);
-  assert.match(text(envFile), /^PLAIN_KEY="has space & #hash"  # inline note$/m);
+  assert.match(text(envFile), /^PLAIN_KEY="has space & #hash" {2}# inline note$/m);
   r = await api("PUT", `/${envSrc.id}/QUOTED_SECRET`, { value: "x" }, grant);
   assert.match(text(envFile), /^QUOTED_SECRET='x'$/m);
   r = await api("PUT", `/${envSrc.id}/BRAND_NEW`, { value: "abc" }, grant);

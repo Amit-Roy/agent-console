@@ -8,10 +8,9 @@ This installs a root-owned refresh worker, process watchdog, and timer. The Cons
 remains behind Coder authentication; only POST webhooks reach the signed receiver.
 """
 
-from pathlib import Path
 import os
 import subprocess
-
+from pathlib import Path
 
 REFRESH_SOURCE = r'''#!/usr/bin/env python3
 """Refresh the webhook route and supervise triage in an already-running workspace."""

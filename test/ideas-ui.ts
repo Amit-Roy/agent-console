@@ -1,9 +1,10 @@
 // App ideas page in real Chromium: list from index.md, add an idea through the form (committed to git), open its markdown,
 // 44px touch targets, no horizontal overflow on a phone, first-party only. Needs a scratch server whose AGENT_CONSOLE_IDEAS
 // points under the temp dir (refuses to write to a real ideas repo).
-import os from "node:os";
-import fs from "node:fs";
+
 import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
 import { chromium } from "playwright";
 import { makeToken } from "../server/auth.ts";
 

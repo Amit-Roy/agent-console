@@ -6,9 +6,9 @@ import { raisedItems, raisedPrs } from "../server/session-prs.ts";
 import {
   createTelemetryService,
   linkThread,
+  NO_USAGE_TEXT,
   parseRemote,
   renderTelemetry,
-  NO_USAGE_TEXT,
   TELEMETRY_MARKER,
 } from "../server/token-telemetry.ts";
 

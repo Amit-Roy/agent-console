@@ -2,7 +2,7 @@
 """Build the dependency-free Acode plugin with stable archive metadata."""
 
 from pathlib import Path
-from zipfile import ZipFile, ZipInfo, ZIP_DEFLATED
+from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
 root = Path(__file__).resolve().parent.parent
 with ZipFile(root / "public/acode-plugin.zip", "w", compression=ZIP_DEFLATED) as archive:

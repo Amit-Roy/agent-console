@@ -1,22 +1,22 @@
 import "../server/privacy.ts";
+import { execFile, spawn } from "node:child_process";
+import crypto from "node:crypto";
 import fs from "node:fs";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import http from "node:http";
-import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { execFile, spawn } from "node:child_process";
 import { sign } from "@octokit/webhooks-methods";
-import { childEnv } from "../server/providers/env.ts";
-import { createTriageService } from "../server/github-triage.ts";
 import { announceClosed } from "../server/automation/closed-signal.ts";
-import { createTelemetryService } from "../server/token-telemetry.ts";
+import { createTriageService } from "../server/github-triage.ts";
+import { childEnv } from "../server/providers/env.ts";
 import {
   effortModelPath,
   loadEffortModel,
   quoteEffort,
   requestShape,
 } from "../server/providers/triage-effort.ts";
+import { createTelemetryService } from "../server/token-telemetry.ts";
 
 const SCRIPT = fileURLToPath(import.meta.url);
 const ROOT = path.resolve(path.dirname(SCRIPT), "..");

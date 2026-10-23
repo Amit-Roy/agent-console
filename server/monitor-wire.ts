@@ -1,14 +1,14 @@
 import path from "node:path";
 import { monitorEventLoopDelay } from "node:perf_hooks";
-import {
-  createMonitor,
-  createEscalation,
-  loadMonitorConfig,
-  type Alert,
-  type MonitorConfig,
-  type EscalationDeps,
-} from "./monitor.ts";
 import type { EventLog } from "./automation/events.ts";
+import {
+  type Alert,
+  createEscalation,
+  createMonitor,
+  type EscalationDeps,
+  loadMonitorConfig,
+  type MonitorConfig,
+} from "./monitor.ts";
 
 // Connects the monitor to this server: the automation event log, push notifications, the threads API and the host sampler.
 // Everything runs on the monitor's one timer; there is no other loop, subprocess or listener.

@@ -1,21 +1,22 @@
+import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { randomUUID } from "node:crypto";
 import { DATA_DIR } from "./auth.ts";
-import {
-  EFFORT_LABELS,
-  PRIORITY_LABELS,
-  githubRequest,
-  type GithubRequest,
-} from "./github-triage.ts";
-import type { ProviderUsage, UsageWindow } from "./usage.ts";
 import type { EventLog } from "./automation/events.ts";
-import { route as routeWork } from "./automation/router.ts";
 import { DIRECT_REPOS } from "./automation/policy.ts";
 import { selfReviewBlock, skillDir } from "./automation/review-prompts.ts";
+import { route as routeWork } from "./automation/router.ts";
+import {
+  EFFORT_LABELS,
+  type GithubRequest,
+  githubRequest,
+  PRIORITY_LABELS,
+} from "./github-triage.ts";
+import type { ProviderUsage, UsageWindow } from "./usage.ts";
+
 export { DIRECT_REPOS };
 
 // Subscription quota resets every 5 hours whether or not it was used. Near the end of a window, hand open issues to

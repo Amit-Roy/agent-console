@@ -1,11 +1,10 @@
 // Automation in real Chromium: the Auto lane in the sidebar and the /automation page (flow graph, active step, step drawers,
 // triggers, failures, git hooks). Mock server with seeded data; spends nothing.
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
 import { chromium } from "playwright";
 
 const data = fs.mkdtempSync(path.join(os.tmpdir(), "ac-automation-ui-"));

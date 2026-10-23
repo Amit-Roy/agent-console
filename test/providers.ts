@@ -1,17 +1,18 @@
 // Offline unit checks for the provider adapters: recorded/documented harness events in, canonical events out. No network, no quota.
-import { brainContext } from "../server/providers/brain.ts";
-import { codexTranslator, unwrapShell } from "../server/providers/codex.ts";
-import { parseEnv } from "../server/providers/env.ts";
+
 import { replayPreamble, threadToMarkdown, turnsOf } from "../server/export.ts";
-import { excerpt, needsLabel, parseLabels, mcpName, mcpSketch } from "../server/providers/label.ts";
+import { brainContext } from "../server/providers/brain.ts";
 import {
   claudeAdvisorArgs,
   claudeConsoleSettingsArgs,
   claudeRoutingEnv,
   leanMcpArgs,
 } from "../server/providers/claude.ts";
-import { cleanTitle, titleText, titleInput } from "../server/providers/title.ts";
+import { codexTranslator, unwrapShell } from "../server/providers/codex.ts";
+import { parseEnv } from "../server/providers/env.ts";
+import { excerpt, mcpName, mcpSketch, needsLabel, parseLabels } from "../server/providers/label.ts";
 import { normTool, parsePiModels, piTranslator } from "../server/providers/pi.ts";
+import { cleanTitle, titleInput, titleText } from "../server/providers/title.ts";
 
 let failed = 0;
 const check = (name: string, ok: boolean, extra = "") => {

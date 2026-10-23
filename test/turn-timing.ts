@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ac-turn-timing-"));
 process.env.AGENT_CONSOLE_DATA = dir;
 process.env.AGENT_CONSOLE_BRAIN = path.join(dir, "no-brain");
@@ -274,7 +275,7 @@ try {
     signal: "SIGTERM",
     reason: "idle",
   });
-  let s = store.summary(now - 86400_000, now + 60_000, {
+  const s = store.summary(now - 86400_000, now + 60_000, {
     phone: [
       { provider: "claude", total_ms: 700 },
       { provider: "claude", total_ms: 900 },

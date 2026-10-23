@@ -1,14 +1,14 @@
 #!/usr/bin/env node
 /** Private prework feature extraction. Never sends outcome, commit, or activity data. */
 import "../server/privacy.ts";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { childEnv } from "../server/providers/env.ts";
-import { defaultTriageEngines } from "../server/providers/triage-model.ts";
 import { createLabelCompletion, type LabelEngine } from "../server/providers/small-model.ts";
 import { requestShape } from "../server/providers/triage-effort.ts";
+import { defaultTriageEngines } from "../server/providers/triage-model.ts";
 
 export const EFFORT_FEATURE_VERSION = "effort-session-initial-v1";
 export const FEATURE_NAMES = ["breadth", "complexity", "uncertainty", "risk"] as const;
@@ -47,7 +47,7 @@ export function safePreworkRequest(
     /-----BEGIN [^-]*PRIVATE KEY-----|\b(?:sk-|gh[pousr]_|github_pat_|xox[baprs]-|AKIA)[A-Za-z0-9_-]{12,}|\bBearer\s+\S{4,}|\b(?:password|passwd|api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|authorization)\s*[=:]\s*["']?[^\s"']+|https?:\/\/[^\s/]+:[^\s/]+@|[?&](?:token|key|secret|password|signature)=[^&\s]+/i;
   if (suspect.test(request)) return;
   // Includes opaque unlabelled credential material; false-positive skips are safer than disclosure.
-  if (/[A-Za-z0-9_+\/-]{48,}={0,2}/.test(request)) return;
+  if (/[A-Za-z0-9_+/-]{48,}={0,2}/.test(request)) return;
   for (const [key, value] of Object.entries(env)) {
     if (
       /key|token|secret|password|credential/i.test(key) &&

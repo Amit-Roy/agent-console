@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ac-queue-edit-"));
 process.env.AGENT_CONSOLE_DATA = dir;
 process.env.AGENT_CONSOLE_BRAIN = path.join(dir, "no-brain");

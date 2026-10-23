@@ -1,13 +1,12 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
+import { once } from "node:events";
 import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { once } from "node:events";
-import { execFileSync } from "node:child_process";
 
 // The dashboard's entrypoint over HTTP: auth gate, snapshot shape, paged step log, versioned contract, redaction on disk.
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");

@@ -1,4 +1,4 @@
-import { splitFrontmatter, frontmatterToMarkdown } from "../public/frontmatter.js";
+import { frontmatterToMarkdown, splitFrontmatter } from "../public/frontmatter.js";
 
 // Test cases covering standard, none, unclosed, ... closer, CRLF, thematic break
 const tests: Array<{ name: string; input: string; expected: string }> = [

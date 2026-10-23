@@ -1,9 +1,9 @@
 // Offline account setup/login checks. All account data and CLI calls are fixtures.
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
 
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "ac-account-cli-"));
 const sunny = path.join(home, ".claude"),

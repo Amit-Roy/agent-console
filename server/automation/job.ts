@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
-import { FLOW, type AutomationEvent } from "./contracts.ts";
-import { redact } from "./events.ts";
 import { MAX_NUDGES, MAX_RECOVERIES, MAX_REVIEWS } from "../issue-review.ts";
 import type { IssueRun } from "../window-dispatch.ts";
+import { type AutomationEvent, FLOW } from "./contracts.ts";
+import { redact } from "./events.ts";
 
 interface JobThread {
   id: string;

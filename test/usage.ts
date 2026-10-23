@@ -2,17 +2,18 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { codexTranslator } from "../server/providers/codex.ts";
 import { CodexTelemetry, codexTokenEvent } from "../server/providers/codex-telemetry.ts";
-import {
-  createLabelCompletion,
-  askRouter,
-  askNvidia,
-  NVIDIA_LABEL_MODELS,
-} from "../server/providers/small-model.ts";
+import { parseLabels } from "../server/providers/label.ts";
 import { setLocalModelRateLimit } from "../server/providers/model-rate-client.ts";
 import { ModelRateLimit } from "../server/providers/model-rate-limit.ts";
-import { parseLabels } from "../server/providers/label.ts";
-import { codexTranslator } from "../server/providers/codex.ts";
+import {
+  askNvidia,
+  askRouter,
+  createLabelCompletion,
+  NVIDIA_LABEL_MODELS,
+} from "../server/providers/small-model.ts";
+
 const usageData = fs.mkdtempSync(path.join(os.tmpdir(), "usage-data-"));
 process.on("exit", () => fs.rmSync(usageData, { recursive: true, force: true }));
 process.env.AGENT_CONSOLE_DATA = usageData;

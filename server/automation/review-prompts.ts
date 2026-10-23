@@ -1,9 +1,9 @@
 import os from "node:os";
 import path from "node:path";
-import { DIRECT_REPOS, PROTECTED, isProtected } from "./policy.ts";
 import type { IssueRun } from "../window-dispatch.ts";
+import { DIRECT_REPOS, isProtected, PROTECTED } from "./policy.ts";
 
-export { PROTECTED, isProtected };
+export { isProtected, PROTECTED };
 
 /** Skills are read from the main checkout (the merged, deployed state), never from the worktree under review: a PR cannot edit its own rules. */
 export const skillDir = (home = os.homedir()) =>

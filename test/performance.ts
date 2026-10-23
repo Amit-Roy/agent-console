@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { chromium } from "playwright";
 import { WebSocket } from "ws";
 import { makeToken } from "../server/auth.ts";
+
 const base = process.env.BASE || "http://127.0.0.1:7071";
 const token = makeToken();
 const ws = new WebSocket(base.replace("http", "ws") + "/ws", {

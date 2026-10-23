@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import {
   closeSync,
-  mkdtempSync,
   mkdirSync,
+  mkdtempSync,
   openSync,
   readFileSync,
   rmSync,

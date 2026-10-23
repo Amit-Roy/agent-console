@@ -1,5 +1,5 @@
-import { acquireModelRequest, reportModel429 } from "./model-rate-client.ts";
 import { childEnv } from "./env.ts";
+import { acquireModelRequest, reportModel429 } from "./model-rate-client.ts";
 
 export interface LabelEngine {
   id: string;

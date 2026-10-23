@@ -1,12 +1,12 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
+  type ClaudeAccount,
   claudeAccounts,
   claudeConfigDir,
   normalizeClaudeAccount,
-  type ClaudeAccount,
 } from "./providers/claude-accounts.ts";
 
 // In-app Claude sign-in. `claude auth login` prints Anthropic's authorize URL and reads the code the callback page shows from stdin.

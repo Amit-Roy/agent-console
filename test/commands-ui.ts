@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { chromium } from "playwright";
 import { WebSocket } from "ws";
 import { makeToken } from "../server/auth.ts";
+
 const base = process.env.BASE || "http://127.0.0.1:7071";
 const ws = new WebSocket(base.replace("http", "ws") + "/ws", {
   headers: { origin: base, cookie: `ac_session=${makeToken()}` },

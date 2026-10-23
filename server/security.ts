@@ -1,6 +1,6 @@
+import { execFile } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
-import { execFile } from "node:child_process";
 import type express from "express";
 
 // Security scans run on the VPS host (clamav, falco, trivy, nmap). This workspace only reads their

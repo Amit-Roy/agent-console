@@ -15,7 +15,7 @@ export const MAX_SEGMENTS = 300;
 const MAX_TIMED_TOOLS = 400;
 
 const toolName = (s: unknown) =>
-  (typeof s === "string" && s.replace(/[^\w.:\-]/g, "").slice(0, 64)) || "tool";
+  (typeof s === "string" && s.replace(/[^\w.:-]/g, "").slice(0, 64)) || "tool";
 const shortWord = (s: unknown) =>
   typeof s === "string" && /^[a-z][a-z0-9_]{0,39}$/.test(s) ? s : undefined;
 

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+
 fs.mkdirSync(path.join(os.homedir(), ".cache"), { recursive: true });
 const dir = fs.mkdtempSync(path.join(os.homedir(), ".cache", "ac-titles-"));
 process.env.AGENT_CONSOLE_DATA = dir;

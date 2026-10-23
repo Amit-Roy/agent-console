@@ -1,11 +1,11 @@
 // Isolated browser regression: a background subagent whose task_notification is on a newer history page than its task_started
 // must end up "finished" (not "in background") once the older page is loaded. Run: rtk proxy node test/bg-chip-paging-ui.ts (OUT=dir saves screenshots)
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawn } from "node:child_process";
-import { chromium, type Browser } from "playwright";
+import { type Browser, chromium } from "playwright";
 
 const port = "7072",
   base = `http://127.0.0.1:${port}`;

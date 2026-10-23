@@ -1,11 +1,11 @@
 // Isolated browser regression for Acode launch and the public capability boundary.
 // Run: rtk test node test/acode-ui.ts
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawn } from "node:child_process";
-import { chromium, type Browser } from "playwright";
+import { type Browser, chromium } from "playwright";
 
 const base = "http://127.0.0.1:7075";
 const bridge = "http://127.0.0.1:7086";

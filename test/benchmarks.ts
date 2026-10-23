@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { benchmarkUsage, createBenchmarks, normalizeModel } from "../server/benchmarks.ts";
+import { test } from "node:test";
 import type { Turn } from "../server/analytics.ts";
+import { benchmarkUsage, createBenchmarks, normalizeModel } from "../server/benchmarks.ts";
 
 const HOUR = 3_600_000;
 const model = (id = "one") => ({

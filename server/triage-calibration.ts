@@ -2,9 +2,9 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import {
   effortModelPath,
+  type LoadedEffortModel,
   loadEffortModel,
   validateEffortModel,
-  type LoadedEffortModel,
 } from "./providers/triage-effort.ts";
 import { TRIAGE_SCORECARD_VERSION } from "./providers/triage-scorecard.ts";
 

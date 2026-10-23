@@ -2,15 +2,15 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { observedActivity, preworkContext } from "../scripts/triage-history-build.ts";
 import {
-  safePreworkRequest,
-  parseFeatureBatch,
-  extractEffortFeatures,
   effortDataset,
+  extractEffortFeatures,
+  parseFeatureBatch,
   requestHash,
+  safePreworkRequest,
   writePrivateJson,
 } from "../scripts/triage-effort-features.ts";
+import { observedActivity, preworkContext } from "../scripts/triage-history-build.ts";
 
 const request = "Update only one component with reversible functional changes.";
 const unknown = () => ({ value: null, evidence: null });

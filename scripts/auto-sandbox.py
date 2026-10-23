@@ -19,10 +19,10 @@ import ctypes
 import errno
 import json
 import os
-from pathlib import Path
 import platform
 import resource
 import sys
+from pathlib import Path
 
 
 class SandboxError(RuntimeError):

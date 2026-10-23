@@ -1,11 +1,12 @@
 // The composer must be richly editable (Chrome on Android only hands pasted images to such hosts, never to a
 // <textarea> or plaintext-only) yet stay text-only. Real Ctrl+V through the browser clipboard, headless.
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawn } from "node:child_process";
 import { chromium } from "playwright";
+
 const data = fs.mkdtempSync(path.join(os.tmpdir(), "ac-paste-ui-"));
 const port = Number(process.env.PASTE_UI_PORT || 7076),
   base = `http://127.0.0.1:${port}`;

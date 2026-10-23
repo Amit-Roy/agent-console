@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { repairAccounting, normalizeAccountingRows } from "../server/accounting-repair.ts";
 import { accountingSamples } from "../server/accounting-log.ts";
+import { normalizeAccountingRows, repairAccounting } from "../server/accounting-repair.ts";
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ac-ledger-repair-"));
 const result = (uuid: string, amount: number) => ({

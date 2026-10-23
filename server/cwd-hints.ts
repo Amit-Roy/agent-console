@@ -53,7 +53,7 @@ export function contextDirs(threadId: string, cwd: string): string[] {
     for (const block of event?.message?.content || []) {
       if (block?.type === "text" && event.type === "assistant" && typeof block.text === "string") {
         for (const m of block.text.matchAll(
-          /(?<![\w.~\/-])(?:~|\/(?:home|tmp)\b)[^\s"'`;|&()<>\[\]*]*\.\w+/g,
+          /(?<![\w.~/-])(?:~|\/(?:home|tmp)\b)[^\s"'`;|&()<>[\]*]*\.\w+/g,
         ))
           add(expand(m[0]));
         continue;

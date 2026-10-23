@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { chromium } from "playwright";
 import { makeToken } from "../server/auth.ts";
+
 const base = process.env.BASE || "http://127.0.0.1:7071";
 const browser = await chromium.launch();
 try {

@@ -7,15 +7,15 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
   createTriageService,
+  type GithubRequest,
   renderTriageComment,
   TRIAGE_COMMENT_MARKER,
   TRIAGE_COMMENT_VERSION_MARKER,
   triageSourceMarker,
-  type GithubRequest,
 } from "../server/github-triage.ts";
-
-import { fixtureEffortModel } from "./fixtures/triage-effort.ts";
 import { quoteEffort } from "../server/providers/triage-effort.ts";
+import { fixtureEffortModel } from "./fixtures/triage-effort.ts";
+
 const fixtureQuote = quoteEffort(
   {
     breadth: { value: 1 },

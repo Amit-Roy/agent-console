@@ -1,32 +1,32 @@
+import { showAssignmentProgress } from "/assign-progress.js";
+import { attachmentDraftStore } from "/attachment-drafts.js";
+import { autoCandidates, autoPick } from "/auto-pick.js";
+import { openJobDebug } from "/automation-job-debug.js";
+import { createAutoLane } from "/automation-lane.js";
+import { createChatSearch } from "/chat-search.js";
+import { composerField } from "/composer-field.js";
+import { openContextEconomics } from "/context-economics.js";
+import { createMenu } from "/menu.js";
+import { setupNotifications } from "/notifications.js";
+import { createQuestions } from "/questions.js";
 import {
   $,
   el,
+  highlightInto,
   icon,
   iconButton,
-  wireCopy,
-  renderMarkdown,
-  highlightInto,
-  langFromPath,
-  parseFileRef,
-  setFileScope,
-  localImage,
   isImageFile,
+  langFromPath,
+  localImage,
+  parseFileRef,
+  renderMarkdown,
+  setFileScope,
+  wireCopy,
 } from "/render.js";
-import { createMenu } from "/menu.js";
-import { composerField } from "/composer-field.js";
-import { attachmentDraftStore } from "/attachment-drafts.js";
-import { toolName, toolSummary } from "/tool-display.js";
+import { createSchedules, DAY_ITEMS, REPEAT_ITEMS } from "/schedules.js";
 import { createLatencyReporter } from "/telemetry.js";
-import { createQuestions } from "/questions.js";
-import { openContextEconomics } from "/context-economics.js";
-import { openBreakdown, closeBreakdown } from "/turn-breakdown.js";
-import { setupNotifications } from "/notifications.js";
-import { createChatSearch } from "/chat-search.js";
-import { createSchedules, REPEAT_ITEMS, DAY_ITEMS } from "/schedules.js";
-import { createAutoLane } from "/automation-lane.js";
-import { openJobDebug } from "/automation-job-debug.js";
-import { autoCandidates, autoPick } from "/auto-pick.js";
-import { showAssignmentProgress } from "/assign-progress.js";
+import { toolName, toolSummary } from "/tool-display.js";
+import { closeBreakdown, openBreakdown } from "/turn-breakdown.js";
 
 composerField($("input"));
 
@@ -390,7 +390,7 @@ function handle(m) {
       state.commands[m.provider] = m.commands;
       updateSlash();
       break;
-    case "hello":
+    case "hello": {
       // the server was swapped for a new build (restart-when-idle): reload to match, unless that would lose a draft
       if (state.build && m.build && m.build !== state.build) {
         if (!$("input").value && !queueEditor && !outbox.length) return void location.reload();
@@ -452,6 +452,7 @@ function handle(m) {
         warmFileViewer();
       }
       break;
+    }
     case "thread":
       state.threads.set(m.thread.id, m.thread);
       renderThreads();

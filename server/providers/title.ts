@@ -49,7 +49,7 @@ export function cleanTitle(raw: unknown): string | undefined {
     .replace(/\s+/g, " ");
   const words = t.split(" ");
   if (!t || words.length > MAX_WORDS + 4) return undefined; // a sentence, not a title
-  let kept = words.slice(0, MAX_WORDS);
+  const kept = words.slice(0, MAX_WORDS);
   while (kept.length > 1 && kept.join(" ").length > MAX_TITLE) kept.pop(); // drop whole words rather than cut one
   return kept.join(" ").slice(0, MAX_TITLE).trimEnd();
 }

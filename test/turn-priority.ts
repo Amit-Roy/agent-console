@@ -1,11 +1,11 @@
 // Warm agents outlive short breaks (idle keepalive, count cap, memory guard), and tool processes run below agent priority.
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawn } from "node:child_process";
 import { mock } from "node:test";
-import { pathToFileURL, fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const data = fs.mkdtempSync(path.join(os.tmpdir(), "ac-priority-"));

@@ -1,8 +1,8 @@
+import { spawn } from "node:child_process";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import crypto from "node:crypto";
-import { spawn } from "node:child_process";
 import express from "express";
 import { createPasskeys } from "./vault-passkey.ts";
 
@@ -157,7 +157,7 @@ function parseValue(raw: string): Parsed {
   const body = m ? s.slice(0, m.index) : s;
   return { value: body.replace(/\s+$/, ""), quote: "", rest: m ? m[0] : "" };
 }
-const SAFE = /^[A-Za-z0-9_@%+=:,.\/-]*$/;
+const SAFE = /^[A-Za-z0-9_@%+=:,./-]*$/;
 function formatValue(value: string, quote: string): string {
   if (quote === "'" && !value.includes("'")) return `'${value}'`;
   if (quote === '"' || !SAFE.test(value) || quote === "'")

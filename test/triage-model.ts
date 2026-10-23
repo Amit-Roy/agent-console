@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import os from "node:os";
+import { quoteEffort } from "../server/providers/triage-effort.ts";
 import {
   createPiEventCollector,
   createTriageClassifier as createRealClassifier,
@@ -8,12 +9,10 @@ import {
   piTriageArgs,
   piTriageModelConfig,
   runTriageCommand,
-  triagePrompt,
   type TriageInput,
+  triagePrompt,
 } from "../server/providers/triage-model.ts";
-
 import { fixtureEffortModel } from "./fixtures/triage-effort.ts";
-import { quoteEffort } from "../server/providers/triage-effort.ts";
 
 const parseTriageReply = (raw: string | undefined, value: TriageInput) =>
   parseRealReply(raw, value, fixtureEffortModel);

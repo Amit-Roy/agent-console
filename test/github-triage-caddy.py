@@ -1,9 +1,9 @@
 """Exercise host supervision and Caddy routing without touching Docker or the host."""
 
-from pathlib import Path
-from tempfile import TemporaryDirectory
 import runpy
 import subprocess
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 root = Path(__file__).resolve().parent.parent
 installer = runpy.run_path(str(root / "scripts/github-triage-caddy.py"))

@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { randomBytes, createECDH } from "node:crypto";
+import { createECDH, randomBytes } from "node:crypto";
+import { once } from "node:events";
 import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { once } from "node:events";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const directory = fs.mkdtempSync(path.join(os.tmpdir(), "agent-console-notifications-http-"));

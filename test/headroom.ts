@@ -1,9 +1,9 @@
 // Offline startup regression: delay proxy health and verify no session can inherit the initial unhealthy state.
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import net from "node:net";
 import { diagnostic, ResourceGuard } from "../server/headroom-diagnostics.ts";
 
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "ac-headroom-"));

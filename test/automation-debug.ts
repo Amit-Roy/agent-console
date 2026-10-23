@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
 import { startDebug } from "../server/automation/debug.ts";
 import { createEventLog } from "../server/automation/events.ts";
-import { automationApi } from "../server/automation/snapshot.ts";
 import { skillDir } from "../server/automation/review-prompts.ts";
+import { automationApi } from "../server/automation/snapshot.ts";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "ac-debug-"));
 const g = (cwd: string, ...a: string[]) =>

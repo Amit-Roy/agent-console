@@ -1,11 +1,11 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import crypto from "node:crypto";
 import { DATA_DIR } from "./auth.ts";
 import { childEnv } from "./providers/env.ts";
+import { piTranslator } from "./providers/pi.ts";
 import { piRateEnv } from "./providers/pi-rate-env.ts";
 import { parseJson, spawnLines } from "./providers/proc.ts";
-import { piTranslator } from "./providers/pi.ts";
 
 // Claude and Codex hand research (gathering, notes, indexing) to Pi so a cheaper model spends the tokens. The caller gets the
 // report back as a tool result; notes.md and index.json are kept under DATA_DIR/pi-research/<id>/ and each run's usage is

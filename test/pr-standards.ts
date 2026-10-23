@@ -4,13 +4,13 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { mayMergeProtected } from "../server/automation/policy.ts";
 import {
-  PROTECTED,
   isProtected,
-  skillDir,
-  selfReviewBlock,
-  reviewPrompt,
-  takeoverPrompt,
+  PROTECTED,
   premiumCompletionInstructions,
+  reviewPrompt,
+  selfReviewBlock,
+  skillDir,
+  takeoverPrompt,
 } from "../server/automation/review-prompts.ts";
 import { issuePrompt } from "../server/window-dispatch.ts";
 

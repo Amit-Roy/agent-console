@@ -1,6 +1,6 @@
-import { VERSION } from "./contracts.ts";
-import type { Route } from "../window-dispatch.ts";
 import type { ProviderUsage } from "../usage.ts";
+import type { Route } from "../window-dispatch.ts";
+import { VERSION } from "./contracts.ts";
 
 // Pure routing: which provider takes a piece of work, from quota headroom and what is already running. Same request, same answer.
 

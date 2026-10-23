@@ -1,26 +1,26 @@
-import { launch as sandboxLaunch } from "../automation/sandbox.ts";
 import { execFile } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DATA_DIR } from "../auth.ts";
+import { launch as sandboxLaunch } from "../automation/sandbox.ts";
+import { retryEvent } from "../turn-timing.ts";
 import { harnessInstructions } from "./brain.ts";
 import { childEnv } from "./env.ts";
-import { parseJson, spawnLines, type Proc } from "./proc.ts";
-import { piQuestions } from "./pi-questions.ts";
-import { piRateEnv } from "./pi-rate-env.ts";
+import { acquireModelRequest } from "./model-rate-client.ts";
 import { CODING_ROUTE, DIRECT_CODING_MODELS } from "./pi-coding-route.mjs";
 import { defaultPiModel } from "./pi-model.ts";
-import { retryEvent } from "../turn-timing.ts";
-import { acquireModelRequest } from "./model-rate-client.ts";
+import { piQuestions } from "./pi-questions.ts";
+import { piRateEnv } from "./pi-rate-env.ts";
+import { type Proc, parseJson, spawnLines } from "./proc.ts";
 import {
-  clip,
-  IMAGE_ONLY_PROMPT,
   type Agent,
   type AgentCtx,
   type Attachment,
   type Command,
+  clip,
+  IMAGE_ONLY_PROMPT,
   type Provider,
   type ThreadSpec,
 } from "./types.ts";

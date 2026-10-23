@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+
 const { run } = await import("../scripts/check-design-system-sources.js");
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ac-ds-sources-"));

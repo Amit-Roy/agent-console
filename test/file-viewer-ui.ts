@@ -1,11 +1,11 @@
 // Isolated browser regression: rendered file references, safe modal, and deferred assets.
 // Run: rtk proxy node test/file-viewer-ui.ts
 import assert from "node:assert/strict";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawn, spawnSync } from "node:child_process";
-import { chromium, type Browser, type Page } from "playwright";
+import { type Browser, chromium, type Page } from "playwright";
 import sharp from "sharp";
 
 const port = process.env.FILE_VIEWER_TEST_PORT || "7074";

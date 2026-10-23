@@ -148,7 +148,7 @@ for (const [name, viewport, scheme] of [
   await ctx.close();
 }
 // API contracts
-CK: {
+{
   const r = await fetch(`${BASE}/api/host/metrics`, {
     headers: { cookie: `ac_session=${makeToken()}` },
   });

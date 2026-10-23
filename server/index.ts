@@ -5,83 +5,71 @@ import {
 } from "./providers/model-rate-client.ts";
 import { MODEL_REQUEST_PRIORITIES } from "./providers/model-rate-limit.ts";
 import "./privacy.ts";
-import {
-  usage,
-  refreshRouterUsage,
-  refreshUsage,
-  readCodexUsage,
-  repairUsageHistory,
-} from "./usage.ts";
-import { hostMetrics, hostProcesses, hostKill, hostPorts, hostProcessDetail } from "./host.ts";
-import { startToolPriority } from "./tool-priority.ts";
-import { startHostSampler, hostHistory, hostDu, hostDuRescan, latestHost } from "./host-history.ts";
-import { createWorkspaceMonitor } from "./monitor-wire.ts";
-import { Ideas, IdeaError } from "./ideas.ts";
-import { createDispatcher, startIssue, defaultDirs, resumeDue } from "./window-dispatch.ts";
-import { route as routeWork } from "./automation/router.ts";
-import { createOpener } from "./window-opener.ts";
-import { claudeAccounts } from "./providers/claude-accounts.ts";
-import { cancelClaudeLogin, finishClaudeLogin, startClaudeLogin } from "./claude-login.ts";
-import { createReviewer } from "./issue-review.ts";
-import { createAutomationArchiver } from "./automation/archive.ts";
-import { watchClosed } from "./automation/closed-signal.ts";
-import { createEventLog } from "./automation/events.ts";
-import { createTriageBridge } from "./automation/triage-bridge.ts";
-import { usageEvents } from "./automation/usage-events.ts";
-import { automationApi, scanHooks } from "./automation/snapshot.ts";
-import { canonicalIssue, createPremiumAssigner } from "./automation/assign.ts";
-import { startDebug } from "./automation/debug.ts";
-import { diagnoseJob, readJobError } from "./automation/job.ts";
-import { loadConfig as loadDispatchConfig } from "./window-dispatch.ts";
-import { loadOpenerConfig } from "./window-opener.ts";
-import express from "express";
-import fs from "node:fs";
-import crypto from "node:crypto";
-import http from "node:http";
 import { execFileSync, spawn } from "node:child_process";
-import { createIssueDraft } from "./issue-draft.ts";
+import crypto from "node:crypto";
+import fs from "node:fs";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { WebSocketServer, type WebSocket } from "ws";
+import express from "express";
+import { type WebSocket, WebSocketServer } from "ws";
+import { createAcodeBridge } from "./acode.ts";
+import { acodeConfig, acodePublicApp } from "./acode-http.ts";
+import { dashboard, readTurns } from "./analytics.ts";
+import { pricing, rates } from "./api-pricing.ts";
 import {
   authed,
   CODER_HOSTS,
   cookieFrom,
+  DATA_DIR,
   limited,
   makeToken,
-  passwordOk,
   PASSWORD,
+  passwordOk,
   recordFail,
   setCookie,
   tokenValid,
 } from "./auth.ts";
-import { providerInfo, refreshPiModels } from "./providers/index.ts";
-import { threadToMarkdown } from "./export.ts";
-import { Threads, turnTiming } from "./threads.ts";
-import { runPiResearch, researchToolText } from "./pi-subagent-worker.ts";
-import { createTelemetryService } from "./token-telemetry.ts";
-import { Schedules, describe } from "./schedules.ts";
-import { SessionSearch } from "./session-search.ts";
-import { Notifications } from "./notifications.ts";
-import { dashboard, readTurns } from "./analytics.ts";
-import { benchmarkUsage, BenchmarkError, createBenchmarks } from "./benchmarks.ts";
+import { createAutomationArchiver } from "./automation/archive.ts";
+import { canonicalIssue, createPremiumAssigner } from "./automation/assign.ts";
+import { watchClosed } from "./automation/closed-signal.ts";
+import { startDebug } from "./automation/debug.ts";
+import { createEventLog } from "./automation/events.ts";
+import { diagnoseJob, readJobError } from "./automation/job.ts";
+import { route as routeWork } from "./automation/router.ts";
+import { automationApi, scanHooks } from "./automation/snapshot.ts";
+import { createTriageBridge } from "./automation/triage-bridge.ts";
+import { usageEvents } from "./automation/usage-events.ts";
 import {
   createBenchmarkSubscriptions,
   validateSubscriptionFees,
 } from "./benchmark-subscriptions.ts";
-import { promptOverhead } from "./prompt-overhead.ts";
-import { pricing, rates } from "./api-pricing.ts";
+import { BenchmarkError, benchmarkUsage, createBenchmarks } from "./benchmarks.ts";
+import { cancelClaudeLogin, finishClaudeLogin, startClaudeLogin } from "./claude-login.ts";
 import { contextAllocation } from "./context-allocation.ts";
-import { headroom } from "./headroom.ts";
 import { createDoctor } from "./doctor.ts";
-import { mountSecurity } from "./security.ts";
-import { mountVault } from "./vault.ts";
-import { LatencyStore } from "./latency.ts";
+import { threadToMarkdown } from "./export.ts";
 import { fileMedia, fileTree, fileViewer } from "./files.ts";
-import { createAcodeBridge } from "./acode.ts";
-import { acodeConfig, acodePublicApp } from "./acode-http.ts";
-import { DATA_DIR } from "./auth.ts";
+import { headroom } from "./headroom.ts";
+import { hostKill, hostMetrics, hostPorts, hostProcessDetail, hostProcesses } from "./host.ts";
+import { hostDu, hostDuRescan, hostHistory, latestHost, startHostSampler } from "./host-history.ts";
+import { IdeaError, Ideas } from "./ideas.ts";
+import { createIssueDraft } from "./issue-draft.ts";
+import { createReviewer } from "./issue-review.ts";
+import { LatencyStore } from "./latency.ts";
+import { createWorkspaceMonitor } from "./monitor-wire.ts";
+import { Notifications } from "./notifications.ts";
+import { researchToolText, runPiResearch } from "./pi-subagent-worker.ts";
+import { promptOverhead } from "./prompt-overhead.ts";
+import { claudeAccounts } from "./providers/claude-accounts.ts";
+import { providerInfo, refreshPiModels } from "./providers/index.ts";
+import { describe, Schedules } from "./schedules.ts";
+import { mountSecurity } from "./security.ts";
+import { SessionSearch } from "./session-search.ts";
+import { Threads, turnTiming } from "./threads.ts";
+import { createTelemetryService } from "./token-telemetry.ts";
+import { startToolPriority } from "./tool-priority.ts";
 import {
   isId,
   MAX_FILE_BYTES,
@@ -91,6 +79,22 @@ import {
   sniffImageFile,
   UPLOAD_DIR,
 } from "./uploads.ts";
+import {
+  readCodexUsage,
+  refreshRouterUsage,
+  refreshUsage,
+  repairUsageHistory,
+  usage,
+} from "./usage.ts";
+import { mountVault } from "./vault.ts";
+import {
+  createDispatcher,
+  defaultDirs,
+  loadConfig as loadDispatchConfig,
+  resumeDue,
+  startIssue,
+} from "./window-dispatch.ts";
+import { createOpener, loadOpenerConfig } from "./window-opener.ts";
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PORT = Number(process.env.PORT || 7070);

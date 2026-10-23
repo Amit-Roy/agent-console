@@ -1,16 +1,16 @@
-import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { githubRequest, type GithubRequest } from "../github-triage.ts";
+import path from "node:path";
+import { type GithubRequest, githubRequest } from "../github-triage.ts";
+import type { Mode } from "../providers/index.ts";
 import {
   addWorktree,
   defaultGit,
-  installPrOnlyHook,
-  topicOf,
   type Git,
   type IssueRun,
+  installPrOnlyHook,
+  topicOf,
 } from "../window-dispatch.ts";
 import { premiumCompletionInstructions } from "./review-prompts.ts";
-import type { Mode } from "../providers/index.ts";
 
 type AutoThread = {
   id: string;

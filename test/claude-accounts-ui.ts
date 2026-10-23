@@ -1,10 +1,10 @@
 // Browser checks use fresh data, fake accounts, and CLI guards. No live sessions or prompts.
 import assert from "node:assert/strict";
+import { spawn, spawnSync } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawn, spawnSync } from "node:child_process";
-import { once } from "node:events";
 import { chromium, type Page } from "playwright";
 
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "ac-accounts-ui-"));

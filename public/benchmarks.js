@@ -1,6 +1,5 @@
 /* Cached benchmark exploration. Upstream refreshes happen only through the server. */
 (() => {
-  "use strict";
   const $ = (id) => document.getElementById(id);
   const number = (value) => (typeof value === "number" && Number.isFinite(value) ? value : null);
   const money = (value) =>

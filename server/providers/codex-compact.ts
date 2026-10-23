@@ -1,6 +1,6 @@
-import { spawnLines, parseJson } from "./proc.ts";
-import { childEnv } from "./env.ts";
 import { codexRouting } from "./codex-routing.ts";
+import { childEnv } from "./env.ts";
+import { parseJson, spawnLines } from "./proc.ts";
 import type { AgentCtx, ThreadSpec } from "./types.ts";
 
 // exec treats /compact as a prompt. Use the native app-server operation against the same persisted thread instead.

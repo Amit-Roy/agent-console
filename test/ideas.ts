@@ -1,9 +1,10 @@
 // App ideas repo: index.md lists ideas, each links to <slug>.md; adding an idea writes both files and commits them (and pushes when tracked).
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
+
 const { Ideas, parseIndex, slugify, addBullet } = await import("../server/ideas.ts");
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "ac-ideas-"));
 const git = (cwd: string, ...a: string[]) =>

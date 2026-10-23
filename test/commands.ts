@@ -6,6 +6,7 @@ import { commandList, parseCommand } from "../server/commands.ts";
 import { normalizeCommands } from "../server/providers/claude.ts";
 import { compactCodex } from "../server/providers/codex-compact.ts";
 import { piTranslator } from "../server/providers/pi.ts";
+
 assert.deepEqual(parseCommand(" /compact \n"), { name: "compact", args: "" });
 assert.deepEqual(parseCommand("/compact preserve the plan"), {
   name: "compact",

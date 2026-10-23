@@ -1,6 +1,8 @@
 // Regenerates PNG app icons from public/icon.svg (run: npm run icons). Needed for Android/ChromeOS install.
-import sharp from "sharp";
+
 import fs from "node:fs";
+import sharp from "sharp";
+
 const svg = fs.readFileSync(new URL("../public/icon.svg", import.meta.url));
 const out = (n) => new URL(`../public/${n}`, import.meta.url).pathname;
 for (const size of [192, 512])

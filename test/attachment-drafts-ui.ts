@@ -1,10 +1,10 @@
 // Binary drafts must survive navigation and interrupted uploads without sending partial messages.
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawn } from "node:child_process";
-import { once } from "node:events";
 import zlib from "node:zlib";
 import type { Browser, BrowserContext, Page, Route } from "playwright";
 

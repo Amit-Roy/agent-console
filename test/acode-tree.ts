@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
-import express from "express";
-import { mkdtemp, mkdir, writeFile, readFile, symlink, rename, rm, lstat } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import express from "express";
 import { createAcodeBridge } from "../server/acode.ts";
+
 const dir = await mkdtemp(path.join(os.tmpdir(), "acode-tree-"));
 let now = Date.now();
 const bridge = createAcodeBridge(

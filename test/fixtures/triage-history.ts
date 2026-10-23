@@ -1,7 +1,7 @@
 import {
+  type HistoricalTask,
   predictHistory,
   trainHistory,
-  type HistoricalTask,
 } from "../../server/providers/triage-history.ts";
 
 // Synthetic measurements for isolated tests; these are never production calibration data.

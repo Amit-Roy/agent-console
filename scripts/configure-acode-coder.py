@@ -3,10 +3,10 @@
 
 import argparse
 import json
-from pathlib import Path
 import re
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--coder-url", required=True)

@@ -1,12 +1,12 @@
 // Search canonical transcripts across providers without using live accounts or session data.
 import assert from "node:assert/strict";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import net from "node:net";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { chromium, type Browser } from "playwright";
+import fs from "node:fs";
+import net from "node:net";
+import os from "node:os";
+import path from "node:path";
+import { type Browser, chromium } from "playwright";
 
 const data = fs.mkdtempSync(path.join(os.tmpdir(), "ac-session-search-ui-"));
 const providers = ["claude", "codex", "pi"];

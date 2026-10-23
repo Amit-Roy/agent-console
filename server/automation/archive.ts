@@ -1,4 +1,4 @@
-import { githubRequest, type GithubRequest } from "../github-triage.ts";
+import { type GithubRequest, githubRequest } from "../github-triage.ts";
 import type { IssueRun } from "../window-dispatch.ts";
 
 type AutoThread = {

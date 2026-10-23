@@ -1,7 +1,7 @@
-import { claudeConfigDir, type ClaudeAccount } from "./providers/claude-accounts.ts";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { type ClaudeAccount, claudeConfigDir } from "./providers/claude-accounts.ts";
 
 /** Estimated cache timing only; provider OAuth backends do not report expiry timestamps.
  * AGENT_CONSOLE_IDLE_COMPACT=0 disables automatic compaction.

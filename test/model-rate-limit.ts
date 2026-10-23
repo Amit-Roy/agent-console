@@ -2,12 +2,12 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import { DatabaseSync } from "node:sqlite";
+import { setTimeout as delay } from "node:timers/promises";
 import {
   AdmissionUnavailable,
-  ModelRateLimit,
   MODEL_REQUEST_INTERVAL_MS,
+  ModelRateLimit,
 } from "../server/providers/model-rate-limit.ts";
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ac-model-rate-limit-"));
