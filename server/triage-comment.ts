@@ -60,12 +60,13 @@ const investigation: Record<MetricName, string> = {
 /** Budget, biggest cost driver and the cheapest missing item, so a sparse request shows what it costs. */
 function structureLines(structure?: StructureQuote, typical?: number): string[] {
   if (!structure || structure.budget === null) return [];
+  const inferred = structure.flags.inferredFromRepo ? " (inferred from repo context)" : "";
   return [
     `Recommended budget **${compact(structure.budget)}** tokens${typical === undefined ? "" : `; typical **${compact(typical)}**`}.`,
     ...(structure.costDriver ? [`Biggest cost driver: ${structure.costDriver}.`] : []),
     ...(structure.counterfactual
       ? [
-          `Add ${structure.counterfactual.label} → estimated budget drops to **${compact(structure.counterfactual.budget)}** tokens.`,
+          `Add ${structure.counterfactual.label} → estimated budget drops to **${compact(structure.counterfactual.budget)}** tokens.${inferred}`,
         ]
       : []),
   ];

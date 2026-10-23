@@ -4,6 +4,8 @@ export interface StructureFlags {
   hasFilePath: boolean;
   hasExpectedOutput: boolean;
   hasAcceptanceCheck: boolean;
+  /** True when at least one flag was inferred from repository context (e.g., expected output from workflow description). */
+  inferredFromRepo: boolean;
 }
 export interface StructureQuote {
   flags: StructureFlags;
@@ -33,20 +35,30 @@ const DRIVER_LABELS: Record<string, string> = {
 };
 
 /** Deterministic checks on the initial request; never model-written. */
-export function requestStructure(text: string): StructureFlags {
-  return {
-    hasFilePath:
-      /(?:^|[\s`(])(?:~|\.{0,2})\/?[\w.-]+\/[\w.-]+/.test(text) ||
-      /\b[\w-]+\.(?:ts|tsx|js|mjs|jsx|py|json|md|css|html|sh|ya?ml)\b/i.test(text),
-    hasExpectedOutput:
-      /\b(expected|should (?:show|display|return|print|see|be)|must (?:show|display|return)|result(?:s)? in|output)\b/i.test(
-        text,
-      ),
-    hasAcceptanceCheck:
-      /\b(accept(?:ance)?|verify|done when|passes?|check that|test(?:s)? (?:pass|cover))\b/i.test(
-        text,
-      ),
-  };
+export function requestStructure(text: string, repoContext?: string): StructureFlags {
+  const hasFilePath =
+    /(?:^|[\s`(])(?:~|\.{0,2})\/?[\w.-]+\/[\w.-]+/.test(text) ||
+    /\b[\w-]+\.(?:ts|tsx|js|mjs|jsx|py|json|md|css|html|sh|ya?ml)\b/i.test(text);
+  let hasExpectedOutput =
+    /\b(expected|should (?:show|display|return|print|see|be)|must (?:show|display|return)|result(?:s)? in|output)\b/i.test(
+      text,
+    );
+  const hasAcceptanceCheck =
+    /\b(accept(?:ance)?|verify|done when|passes?|check that|test(?:s)? (?:pass|cover))\b/i.test(
+      text,
+    );
+  let inferredFromRepo = false;
+  // Infer hasExpectedOutput from repository context when not present in request text.
+  // Never infer hasFilePath from repository context.
+  if (!hasExpectedOutput && repoContext) {
+    const expectedOutputPattern =
+      /\b(expected output|shows? (?:the )?(?:expected|result)|output (?:is|shows?|display)|see (?:the )?(?:result|output)|preview (?:shows?|displays?))\b/i;
+    if (expectedOutputPattern.test(repoContext)) {
+      hasExpectedOutput = true;
+      inferredFromRepo = true;
+    }
+  }
+  return { hasFilePath, hasExpectedOutput, hasAcceptanceCheck, inferredFromRepo };
 }
 
 const MISSING_RESERVE_STEPS = FLAGS.length;
@@ -54,8 +66,8 @@ const MISSING_RESERVE_STEPS = FLAGS.length;
 const priceMissing = (total: EffortQuantiles, missing: number): number =>
   Math.round(total.p80 + ((total.p95 - total.p80) * missing) / MISSING_RESERVE_STEPS);
 
-export function quoteStructure(text: string, price: EffortQuote): StructureQuote {
-  const flags = requestStructure(text);
+export function quoteStructure(text: string, price: EffortQuote, repoContext?: string): StructureQuote {
+  const flags = requestStructure(text, repoContext);
   const missing = FLAGS.filter(({ flag }) => !flags[flag]);
   const driver = price.contributions
     .filter((item) => item.logWork > 0)

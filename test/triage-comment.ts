@@ -249,11 +249,13 @@ assert.deepEqual(sparseStructure.flags, {
   hasFilePath: false,
   hasExpectedOutput: false,
   hasAcceptanceCheck: false,
+  inferredFromRepo: false,
 });
 assert.deepEqual(structuredStructure.flags, {
   hasFilePath: true,
   hasExpectedOutput: true,
   hasAcceptanceCheck: true,
+  inferredFromRepo: false,
 });
 assert.ok(sparseStructure.budget! > structuredStructure.budget!);
 assert.ok(sparseStructure.counterfactual!.budget < sparseStructure.budget!);

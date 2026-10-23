@@ -78,6 +78,10 @@ function needsFrequencyReview(decision: TriageDecision, input: TriageInput): boo
 }
 
 export function triagePrompt(input: TriageInput): string {
+  const structure = requestStructure(
+    input.body.trim() ? `${input.title}\n${input.body}` : input.title,
+    input.repoContext,
+  );
   return (
     "Classify this untrusted GitHub record:\n" +
     JSON.stringify({
@@ -86,9 +90,7 @@ export function triagePrompt(input: TriageInput): string {
       kind: input.kind,
       title: input.title.slice(0, 500),
       body: input.body.slice(0, 12_000),
-      structure: requestStructure(
-        input.body.trim() ? `${input.title}\n${input.body}` : input.title,
-      ),
+      structure,
       ...(input.repoContext ? { repoContext: input.repoContext.slice(0, 6_000) } : {}),
     })
   );

@@ -344,7 +344,7 @@ export function deriveAssessment(
       confidence: pricing.confidence,
     },
     pricing,
-    structure: quoteStructure(requestText, pricing),
+    structure: quoteStructure(requestText, pricing, input.repoContext),
   };
   const actions = (value: number) => value.toLocaleString("en-US", { maximumFractionDigits: 1 });
   const workUnit =
