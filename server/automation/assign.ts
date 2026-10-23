@@ -10,7 +10,7 @@ import {
   installPrOnlyHook,
   topicOf,
 } from "../window-dispatch.ts";
-import { premiumCompletionInstructions } from "./review-prompts.ts";
+import { premiumCompletionInstructions, threadBrief } from "./review-prompts.ts";
 
 type AutoThread = {
   id: string;
@@ -299,19 +299,9 @@ export function createPremiumAssigner(deps: AssignmentDeps) {
         await installPrOnlyHook(wt.cwd, wt.base, traced);
         log(`Pushes to ${wt.base} are refused; work lands through a pull request.`);
         step("start");
-        const runs = related().map((t) => ({
-          id: t.id,
-          provider: t.provider,
-          model: t.model,
-          status: t.status,
-          background: t.background,
-          archived: t.archived,
-          cwd: t.cwd,
-          log: path.join(deps.dataDir, "logs", `${t.id}.jsonl`),
-          lastRun: t.lastRun,
-          quotaPaused: t.quotaPaused,
-          issueRun: t.issueRun,
-        }));
+        const runs = related().map((t) =>
+          threadBrief(t, path.join(deps.dataDir, "logs", `${t.id}.jsonl`)),
+        );
         const prompt = [
           `You own the premium escalation for ${repo}#${req.number}. Continue its pending work to completion in this isolated private checkout.`,
           `## Pending book of work\nFirst inspect the issue acceptance checks and triage plan against current code and test evidence. Read the related thread logs below to recover completed work, failures, and unresolved tasks. Report and execute the remaining work; never assume an idle thread completed it. Inspect the original working directories listed below read-only for uncommitted or unpushed work; port relevant changes into this private checkout. Never modify an original or shared checkout. Preserve existing work and continue the existing PR when present. Do not create a duplicate PR or repeat already completed actions.`,

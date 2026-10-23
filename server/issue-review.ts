@@ -7,6 +7,7 @@ import {
   redoPrompt,
   reviewPrompt,
   takeoverPrompt,
+  threadBrief,
 } from "./automation/review-prompts.ts";
 import type { RouteResponse } from "./automation/router.ts";
 import { type GithubRequest, githubRequest } from "./github-triage.ts";
@@ -373,16 +374,9 @@ export function createReviewer(deps: ReviewDeps) {
         s.issueRun.number === run.number,
     );
     const context = JSON.stringify({
-      threads: related.map((s) => ({
-        id: s.id,
-        provider: s.provider,
-        model: s.model,
-        status: s.status,
-        cwd: s.cwd,
-        quotaPaused: s.quotaPaused,
-        issueRun: s.issueRun,
-        ...(deps.dataDir ? { log: path.join(deps.dataDir, "logs", `${s.id}.jsonl`) } : {}),
-      })),
+      threads: related.map((s) =>
+        threadBrief(s, deps.dataDir ? path.join(deps.dataDir, "logs", `${s.id}.jsonl`) : undefined),
+      ),
       events: ev
         ?.all()
         .filter((e) => e.ref?.toLowerCase() === run.key.toLowerCase())

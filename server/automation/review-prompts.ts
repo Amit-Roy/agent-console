@@ -9,6 +9,36 @@ export { isProtected, PROTECTED };
 export const skillDir = (home = os.homedir()) =>
   path.join(home, "repos", "agent-console", "skills", "pr-standards");
 
+/** What a premium owner needs to find a related thread's work: identity, state, folder, log. Timing, retry and routing counters are noise. */
+export function threadBrief(
+  t: {
+    id: string;
+    provider?: string;
+    model?: string;
+    status?: string;
+    cwd?: string;
+    quotaPaused?: unknown;
+    archived?: boolean;
+    background?: boolean;
+    issueRun?: { role?: string; branch?: string; base?: string; effort?: string };
+  },
+  log?: string,
+) {
+  const { role, branch, base, effort } = t.issueRun ?? {};
+  return {
+    id: t.id,
+    provider: t.provider,
+    model: t.model,
+    status: t.status,
+    cwd: t.cwd,
+    ...(t.quotaPaused ? { quotaPaused: t.quotaPaused } : {}),
+    ...(t.archived ? { archived: true } : {}),
+    ...(t.background ? { background: true } : {}),
+    ...(t.issueRun ? { role, branch, base, effort } : {}),
+    ...(log ? { log } : {}),
+  };
+}
+
 export function selfReviewBlock(dir: string, base = "main"): string {
   return [
     `Before you open the PR, review your own diff:`,
