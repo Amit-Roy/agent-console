@@ -213,7 +213,7 @@ function triggersPanel(s) {
 }
 
 function failuresPanel(s) {
-  const p = panel("Failures", "Most recent first");
+  const p = panel("Failures", "Most recent first · Resolved entries remain in history");
   const ul = el("ul", "rows");
   ul.id = "failures";
   if (!s.failures.length) p.append(empty("No failures recorded."));
@@ -223,7 +223,12 @@ function failuresPanel(s) {
     li.append(
       el("span", "a", `${label}${f.ref ? ` · ${f.ref}` : ""}`),
       el("span", "b", when(f.ts, s.now)),
-      el("span", "c bad", f.msg || "No message"),
+      el("span", f.resolvedAt != null ? "c" : "c bad", f.msg || "No message"),
+      el(
+        "span",
+        f.resolvedAt != null ? "c" : "c bad",
+        f.resolvedAt != null ? `Resolved · ${when(f.resolvedAt, s.now)}` : "Unresolved",
+      ),
     );
     li.style.cursor = "pointer";
     li.onclick = () => openDrawer(f.step);
