@@ -37,11 +37,11 @@ check("env: alias OPEN_ROUTER_TOKEN -> OPENROUTER_API_KEY", env.OPENROUTER_API_K
 check("env: quotes + export handled", env.FOO === "bar baz" && env.Q === "x");
 
 // ---- thread titles
-check("title: plain title passes through", cleanTitle("Fix flaky login test") === "Fix flaky login test");
-check("title: quotes, markdown and trailing punctuation stripped", cleanTitle('**"Image paste support".**') === "Image paste support");
-check("title: 'Title:' prefix and extra lines dropped", cleanTitle("Title: Dark mode toggle\n\nThis title captures...") === "Dark mode toggle");
-check("title: long titles are cut to 5 words", cleanTitle("one two three four five six seven eight") === "one two three four five");
-check("title: capped at 30 chars on a word boundary", cleanTitle("Refresh thread names every prompt") === "Refresh thread names every" && cleanTitle("Refresh thread names every prompt").length <= 30);
+check("title: structured title keeps the word budget", cleanTitle("Login:fix flaky test") === "Login:fix flaky");
+check("title: quotes, markdown and trailing punctuation stripped", cleanTitle('**"Chat:image paste".**') === "Chat:image paste");
+check("title: 'Title:' prefix and extra lines dropped", cleanTitle("Title: UI:dark mode\n\nThis title captures...") === "UI:dark mode");
+check("title: long features are cut to two words", cleanTitle("Count:one two three four five six seven") === "Count:one two");
+check("title: capped at 20 chars on a word boundary", cleanTitle("Mobile:keyboard focus") === "Mobile:keyboard" && cleanTitle("Mobile:keyboard focus")!.length <= 20);
 check("title: a whole sentence is not a title", cleanTitle("I'm sorry, but I cannot determine a title for this particular message because it is empty.") === undefined);
 check("title: empty / junk is rejected", cleanTitle("") === undefined && cleanTitle(undefined) === undefined && cleanTitle('""') === undefined);
 check("title input: media references dropped", titleText("look ![a](/x/y.png) at [Image #2] this data:image/png;base64,AAAA bug") === "look at this bug");
