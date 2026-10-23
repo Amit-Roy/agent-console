@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { createServer } from "node:http";
-import { launchBrowser } from "./browser.mjs";
+import { chromium } from "playwright";
 
 const server = createServer(async (req, res) => {
   const file = req.url === "/benchmarks" ? "/benchmarks.html" : req.url!.split("?")[0];
@@ -21,7 +21,7 @@ const server = createServer(async (req, res) => {
 });
 await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
 const base = `http://127.0.0.1:${(server.address() as any).port}`;
-const browser = await launchBrowser();
+const browser = await chromium.launch();
 try {
   for (const width of [1280, 390]) {
     const context = await browser.newContext({ viewport: { width, height: 900 } }),
