@@ -92,8 +92,8 @@ function fileMeta(stat: { mode: number; uid: number; mtimeMs: number; size: numb
 }
 
 async function openScoped(root: string, target: string, directory = false): Promise<FileHandle> {
-  // no-follow prevents a swapped final symlink.
-  const handle = await open(target, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | (directory ? fs.constants.O_DIRECTORY : 0));
+  // Nonblocking avoids waiting on pipes; no-follow prevents a swapped final symlink.
+  const handle = await open(target, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK | (directory ? fs.constants.O_DIRECTORY : 0));
   try {
     // Verify the opened inode too, closing parent-directory symlink races on Linux.
     if (process.platform === "linux") {
