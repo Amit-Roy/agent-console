@@ -233,6 +233,11 @@ await dispatch("push", {
   data: { json: () => ({ kind: "finished", url: "https://evil.example/" }) },
 });
 assert.equal(shown.length, 5);
+await dispatch("push", {
+  data: { json: () => ({ kind: "finished", url: "https://proxy.example/#thread=t2" }) },
+});
+assert.equal(shown.length, 6, "Proxy-rewritten origins still show");
+assert.equal(shown.at(-1).options.data.url, "https://console.example/#thread=t2");
 await dispatch("notificationclick", { notification: { close() {}, data: shown[0].options.data } });
 assert.equal(messages[0].url, "https://console.example/#thread=target");
 assert.equal(focused, 1);
