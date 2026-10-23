@@ -386,6 +386,26 @@ function handle(m) {
       state.usage[m.provider] = m.usage;
       renderUsage();
       break;
+    case "providers": {
+      state.providers = new Map(m.providers.map((p) => [p.id, p]));
+      menus.model.provider = null;
+      menus.dProv.setItems(
+        m.providers.map((p) => ({
+          value: p.id,
+          label: p.label,
+          desc: p.ok ? undefined : p.hint,
+          disabled: !p.ok,
+        })),
+        menus.dProv.value,
+      );
+      const p = prov(menus.dProv.value);
+      if (p) {
+        menus.dModel.setItems(modelItems(p.models, p), menus.dModel.value || p.defaultModel);
+        fillEffort(menus.dEffort, p, menus.dModel.value, menus.dEffort.value);
+      }
+      renderHead();
+      break;
+    }
     case "commands":
       state.commands[m.provider] = m.commands;
       updateSlash();
@@ -625,7 +645,9 @@ const claudeAccounts = () =>
 const threadUsageKey = (t) =>
   t?.provider === "claude" && t.claudeAccount === "nefro"
     ? "claude:nefro"
-    : t?.provider || "claude";
+    : t?.provider === "pi" && t.model?.startsWith("deepseek/")
+      ? "pi:deepseek"
+      : t?.provider || "claude";
 const claudeAccount = (id = "sunny") =>
   claudeAccounts().find((a) => a.id === id) || { id, label: cap(id) };
 function syncDialogAccount() {
@@ -3435,7 +3457,13 @@ function usageMeter(label, used, limit, unit = "%", resetsAt) {
   return row;
 }
 const usageName = (p) =>
-  p?.id === "claude" ? "Claude" : p?.id === "pi" ? "OpenRouter" : p?.label || "";
+  p?.id === "claude"
+    ? "Claude"
+    : p?.id === "pi"
+      ? "OpenRouter"
+      : p?.id === "pi:deepseek"
+        ? "DeepSeek"
+        : p?.label || "";
 let usagePicker;
 function renderUsage() {
   const providers = [...state.providers.values()]
@@ -3449,8 +3477,18 @@ function renderUsage() {
             claude: true,
             ready: a.ready,
           }))
-        : [p],
+        : p.id === "pi" &&
+            (p.models?.some((model) => model.startsWith("deepseek/")) || state.usage["pi:deepseek"])
+          ? [p, { id: "pi:deepseek", label: "DeepSeek" }]
+          : [p],
     );
+  if (state.usage["pi:deepseek"] && !providers.some((p) => p.id === "pi:deepseek")) {
+    const codex = providers.findIndex((p) => p.id === "codex");
+    providers.splice(codex < 0 ? providers.length : codex, 0, {
+      id: "pi:deepseek",
+      label: "DeepSeek",
+    });
+  }
   if (!providers.length) return;
   if (!providers.some((p) => p.id === state.usageTab)) state.usageTab = providers[0].id;
   const root = $("usage");
@@ -3510,9 +3548,28 @@ function renderUsage() {
     refresh.setAttribute("aria-label", `Refresh usage (updated ${stamp.textContent})`);
   }
   const selectedAccount = providers.find((p) => p.id === state.usageTab);
-  head.append(el("span", "usage-label", "Allowance"), ...(stamp ? [stamp] : []), refresh);
+  const deepseek = state.usageTab === "pi:deepseek";
+  head.append(
+    el("span", "usage-label", deepseek ? "Balance" : "Allowance"),
+    ...(stamp ? [stamp] : []),
+    refresh,
+  );
   pane.append(head);
-  if (sample?.windows?.length) {
+  if (deepseek && sample?.balances?.length) {
+    for (const balance of sample.balances) {
+      const money = (amount) => `${balance.currency} ${amount.toFixed(2)}`;
+      pane.append(
+        el("div", "usage-label", `${money(balance.total)} total balance`),
+        el(
+          "div",
+          "usage-note",
+          `${money(balance.granted)} granted · ${money(balance.toppedUp)} topped up`,
+        ),
+      );
+    }
+    if (sample.available === false)
+      pane.append(el("div", "usage-note", "Insufficient balance for API requests."));
+  } else if (sample?.windows?.length) {
     for (const w of sample.windows)
       pane.append(usageMeter(w.label, w.used, w.limit, w.unit || "requests", w.resetsAt));
   } else
@@ -3521,11 +3578,13 @@ function renderUsage() {
         "div",
         "usage-note",
         sample?.note ||
-          (selectedAccount?.claude
-            ? selectedAccount.ready
-              ? "Claude reports this account’s allowance after each turn."
-              : "Sign in to this account on the server to see its allowance."
-            : "No allowance telemetry yet. Tap refresh."),
+          (deepseek
+            ? "DeepSeek balance not loaded yet. Tap refresh."
+            : selectedAccount?.claude
+              ? selectedAccount.ready
+                ? "Claude reports this account’s allowance after each turn."
+                : "Sign in to this account on the server to see its allowance."
+              : "No allowance telemetry yet. Tap refresh."),
       ),
     );
   if (sample?.windows?.some((w) => w.resetsAt && w.resetsAt < Date.now()))

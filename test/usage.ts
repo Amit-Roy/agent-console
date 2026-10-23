@@ -17,9 +17,15 @@ import {
 const usageData = fs.mkdtempSync(path.join(os.tmpdir(), "usage-data-"));
 process.on("exit", () => fs.rmSync(usageData, { recursive: true, force: true }));
 process.env.AGENT_CONSOLE_DATA = usageData;
-const { claudeWindows, codexWindows, routerUsage, historyRows } = await import(
-  "../server/usage.ts"
-);
+const {
+  claudeWindows,
+  codexWindows,
+  routerUsage,
+  deepseekUsage,
+  refreshDeepSeekUsage,
+  usage,
+  historyRows,
+} = await import("../server/usage.ts");
 setLocalModelRateLimit(
   new ModelRateLimit({
     path: path.join(fs.mkdtempSync(path.join(os.tmpdir(), "usage-rate-")), "gate.sqlite"),
@@ -59,6 +65,116 @@ assert.equal(
   50,
 );
 assert.equal(routerUsage({ usage_daily: 0 }).windows.length, 0); // no invented allowance
+const deepseekPayload = {
+  is_available: true,
+  balance_infos: [
+    {
+      currency: "USD",
+      total_balance: "12.30",
+      granted_balance: "0.30",
+      topped_up_balance: "12.00",
+    },
+    { currency: "CNY", total_balance: "0", granted_balance: "0", topped_up_balance: "0" },
+  ],
+};
+assert.deepEqual(deepseekUsage(deepseekPayload), {
+  windows: [],
+  available: true,
+  balances: [
+    { currency: "USD", total: 12.3, granted: 0.3, toppedUp: 12 },
+    { currency: "CNY", total: 0, granted: 0, toppedUp: 0 },
+  ],
+});
+assert.equal(deepseekUsage({ ...deepseekPayload, is_available: false })?.available, false);
+for (const value of [
+  undefined,
+  null,
+  "",
+  " ",
+  "NaN",
+  "Infinity",
+  "0x10",
+  "-1",
+  -1,
+  Infinity,
+  NaN,
+  true,
+  {},
+]) {
+  assert.equal(
+    deepseekUsage({
+      ...deepseekPayload,
+      balance_infos: [{ ...deepseekPayload.balance_infos[0], total_balance: value }],
+    }),
+    undefined,
+    `invalid balance ${String(value)} cannot replace a successful sample`,
+  );
+}
+for (const payload of [
+  null,
+  {},
+  { ...deepseekPayload, is_available: "true" },
+  { ...deepseekPayload, balance_infos: [] },
+  { ...deepseekPayload, balance_infos: [null] },
+  { ...deepseekPayload, balance_infos: [{ ...deepseekPayload.balance_infos[0], currency: "EUR" }] },
+  { ...deepseekPayload, balance_infos: [{ currency: "USD", total_balance: "1" }] },
+]) {
+  assert.equal(deepseekUsage(payload), undefined);
+}
+
+const balanceFetch = globalThis.fetch;
+const balanceClock = Date.now;
+const balanceKey = process.env.DEEPSEEK_API_KEY;
+const balanceMock = process.env.AGENT_CONSOLE_MOCK;
+let balanceNow = 2_000_000_000_000;
+let balanceCalls = 0;
+let balanceResult: "success" | "invalid" | "http" | "network" = "success";
+let releaseBalance: (() => void) | undefined;
+try {
+  process.env.DEEPSEEK_API_KEY = "fixture";
+  delete process.env.AGENT_CONSOLE_MOCK;
+  Date.now = () => balanceNow;
+  globalThis.fetch = (async (url, options) => {
+    assert.equal(url, "https://api.deepseek.com/user/balance");
+    assert.ok(options?.signal instanceof AbortSignal);
+    balanceCalls++;
+    await new Promise<void>((resolve) => {
+      releaseBalance = resolve;
+    });
+    if (balanceResult === "network") throw Error("fixture network failure");
+    return new Response(JSON.stringify(balanceResult === "invalid" ? {} : deepseekPayload), {
+      status: balanceResult === "http" ? 503 : 200,
+    });
+  }) as typeof fetch;
+  const firstBalance = refreshDeepSeekUsage();
+  assert.equal(refreshDeepSeekUsage(), firstBalance, "concurrent requests share the same refresh");
+  releaseBalance!();
+  await firstBalance;
+  const successfulBalance = usage.get("pi:deepseek");
+  assert.equal(successfulBalance.balances?.[0].total, 12.3);
+  await refreshDeepSeekUsage();
+  assert.equal(balanceCalls, 1, "balance refresh remains cached for five minutes");
+  for (const outcome of ["invalid", "http", "network"] as const) {
+    balanceResult = outcome;
+    balanceNow += 5 * 60_000;
+    const refresh = refreshDeepSeekUsage();
+    releaseBalance!();
+    await refresh;
+    assert.deepEqual(
+      usage.get("pi:deepseek"),
+      successfulBalance,
+      `${outcome} preserves the successful sample and timestamp`,
+    );
+  }
+  assert.equal(balanceCalls, 4);
+} finally {
+  globalThis.fetch = balanceFetch;
+  Date.now = balanceClock;
+  if (balanceKey === undefined) delete process.env.DEEPSEEK_API_KEY;
+  else process.env.DEEPSEEK_API_KEY = balanceKey;
+  if (balanceMock === undefined) delete process.env.AGENT_CONSOLE_MOCK;
+  else process.env.AGENT_CONSOLE_MOCK = balanceMock;
+}
 assert.equal(
   historyRows("claude", undefined, {
     windows: [{ label: "5-hour", used: 1, limit: 100 }],
