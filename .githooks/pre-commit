@@ -1,0 +1,9 @@
+#!/bin/sh
+# agent-console: run the unit suite before a commit so a broken test is rejected locally, not in CI.
+# Enable once per clone: git config core.hooksPath .githooks   (see docs/ci.md)
+# Skip in an emergency with: git commit --no-verify
+cmd="${AGENT_CONSOLE_PRECOMMIT_CMD:-TEST_CONCURRENCY=8 npm test}"
+if ! sh -c "$cmd"; then
+  echo "pre-commit: unit suite failed; commit rejected." >&2
+  exit 1
+fi
