@@ -2450,6 +2450,10 @@ const fmtDur = (ms) => {
   const s = Math.round(ms / 1000);
   return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`;
 };
+// Live-only step timing: history events carry no timestamps, so replayed rows show no duration.
+const stepDur = (ms) =>
+  ms < 1000 ? `${Math.round(ms)}ms` : ms < 10000 ? `${(ms / 1000).toFixed(1)}s` : fmtDur(ms);
+const durChip = (ms) => el("span", "dur", stepDur(ms));
 // A ring that fills with the model's context window, as in other chat UIs. Amber (never red: red means destructive) as it gets full.
 function renderCtx() {
   const b = $("ctx");
@@ -2460,10 +2464,6 @@ function renderCtx() {
   if (c?.used == null && cur()?.lastCompactedAt) {
     b.hidden = false;
     b.dataset.level = "";
-// Live-only step timing: history events carry no timestamps, so replayed rows show no duration.
-const stepDur = (ms) =>
-  ms < 1000 ? `${Math.round(ms)}ms` : ms < 10000 ? `${(ms / 1000).toFixed(1)}s` : fmtDur(ms);
-const durChip = (ms) => el("span", "dur", stepDur(ms));
     b.style.color = "";
     b.querySelector(".fill").style.strokeDasharray = "0 100";
     b.querySelector(".pct").textContent = "Compacted";
@@ -3231,6 +3231,7 @@ function onEvent(e, live) {
           state.live.text += ev.delta.text;
         } else if (ev.delta?.type === "thinking_delta") {
           renderLive("thinking");
+          state.thinkAt ??= performance.now();
           state.live.thinking += ev.delta.thinking;
         }
       }
@@ -3241,7 +3242,6 @@ function onEvent(e, live) {
         if (b.type === "thinking" || b.type === "redacted_thinking") dropLive("thinking");
         if (b.type === "text" && b.text?.trim()) {
           dropLive("text");
-          state.thinkAt ??= performance.now();
           dropLive("thinking");
           push(asstMsg(b.text, true).root, live);
         } else if (b.type === "thinking" && b.thinking?.trim()) {
@@ -3280,6 +3280,7 @@ function onEvent(e, live) {
           );
           sum.title = summarize(b.name, b.input);
           card.toolInput = { name: b.name, input: b.input };
+          if (live) card.startedAt = performance.now();
           card.append(sum, el("div", "body")); // the open row wraps to show the whole label, so it is not repeated below
           card.addEventListener("toggle", () => {
             if (!card.open) return;
@@ -3290,7 +3291,6 @@ function onEvent(e, live) {
             }
             fitOutputs(card);
           });
-          if (live) card.startedAt = performance.now();
           state.cards.set(b.id, card);
           push(card, live);
         }
@@ -3304,6 +3304,7 @@ function onEvent(e, live) {
         card.classList.remove("pending");
         card.classList.add(c.is_error ? "err" : "done");
         const st = card.querySelector(".st");
+        if (card.startedAt != null) st.before(durChip(performance.now() - card.startedAt));
         st.replaceChildren(
           icon(c.is_error ? "x" : "check"),
           el("span", "sr-only", c.is_error ? "error" : "done"),
@@ -3314,7 +3315,6 @@ function onEvent(e, live) {
             : (c.content ?? []).map((x) => x.text ?? "").join("\n");
         // a background subagent's launch receipt is harness bookkeeping; its status chip and activity say the same
         const launched =
-        if (card.startedAt != null) st.before(durChip(performance.now() - card.startedAt));
           card.classList.contains("agent") &&
           (card.querySelector(".task-chip:not([hidden])") || /^Async agent launched/.test(text));
         if (text && !launched) {
