@@ -40,7 +40,7 @@ try {
   const steps = (s: string) => ev.read({ step: s as any }).events.map(e => `${e.kind}:${e.msg ?? ""}`);
   let prs: any[] = [], files: string[] = ["src/a.ts"], pull: any = { merged: false }, comments: any[] = [], headAt = now;
   const gh = async (_m: string, url: string) => {
-    if (/\/issues\/\d+\/comments/.test(url)) return comments;
+    if (/\/issues\/\d+\/comments/.test(url)) return comments.map((c, i) => ({ ...c, id: c.id ?? i + 1 }));
     if (/\/pulls\?state=open&head=/.test(url)) return prs;
     if (/\/pulls\/\d+\/files/.test(url)) return files?.map(filename => ({ filename })) ?? null;
     if (/\/pulls\/\d+$/.test(url)) return pull;
@@ -185,14 +185,15 @@ try {
   comments = [{ body: "Review: CHANGES REQUESTED\nold", created_at: new Date(now - 3_600_000).toISOString() }];
   rv.turnEnded(redo({ reviews: 2 }), {}); await tick();
   assert.ok(steps("review").some(m => /^fail:reviewer posted no verdict on PR #9/.test(m)));
+  assert.ok(marks.some(m => m.id === "W50" && m.patch.reviews === 1 && m.patch.retryAt === now + 15 * 60_000), "a reviewer without a verdict returns its reserved slot and waits before retrying");
   assert.ok(marks.some(m => m.id === "W50" && "reviewedAt" in m.patch && m.patch.reviewedAt === undefined && !("redoing" in m.patch)));
-  // after MAX_REVIEWS a person decides: no more redo
+  // An unsuccessful premium takeover reports the blocker without another worker redo.
   comments = [{ body: "Review: CHANGES REQUESTED\nstill wrong", created_at: new Date(now).toISOString() }];
   const s3 = sent.length;
   rv.turnEnded(redo({ reviews: 3 }), {}); await tick();
-  assert.equal(sent.length, s3, "no redo after the cap"); assert.ok(ev.read({ step: "redo" as any }).events.some(e => /a person decides/.test(e.msg ?? "")));
-  await rv.sweep([{ id: "W51", status: "idle", issueRun: { ...created[0].issueRun, key: "o/webapp#51", number: 51, effort: "bau", reviews: 3 } }] as any);
-  assert.ok(steps("review").some(m => /3 reviews without a merge/.test(m)), "the worker is not reviewed a fourth time");
+  assert.equal(sent.length, s3, "no redo after takeover"); assert.ok(ev.read({ step: "redo" as any }).events.some(e => /premium takeover ended with unresolved findings/.test(e.msg ?? "")));
+  await rv.sweep([{ id: "W51", status: "idle", issueRun: { ...created[0].issueRun, key: "o/webapp#51", number: 51, effort: "bau", reviews: 3 } }, { id: "done-takeover", status: "idle", issueRun: { ...created[0].issueRun, key: "o/webapp#51", number: 51, role: "review", pr: 40, takeover: true, outcome: "changes" } }] as any);
+  assert.equal(sent.length, s3, "a completed takeover does not restart the capped job");
   // An approved PR with a failed merge reports the blocker; no worker redo is needed.
   comments = [{ body: "Review: APPROVED", created_at: new Date(now).toISOString() }];
   rv.turnEnded(redo({ reviews: 1 }), {}); await tick();
@@ -234,8 +235,9 @@ try {
   const loop = createReviewer({ git: run, github: gh as any, runner: loopRunner, dirs, events: ev, route: routing, now: () => now });
   prs = [{ number: 40, body: "## Self-review\nok" }];
   pull = { merged: false, state: "open" };
-  comments = [{ body: "Review: CHANGES REQUESTED\nFix totals", created_at: new Date(now).toISOString() }];
+  comments = [];
   await loop.sweep([loopWorker]);
+  comments = [{ id: 1, body: "Review: CHANGES REQUESTED\nFix totals", created_at: new Date(now).toISOString() }];
   assert.equal(loopCreated.length, 1);
   const loopReview: any = { id: "LR1", status: "idle", issueRun: loopCreated[0].issueRun };
   rejectSend = true;
@@ -248,6 +250,7 @@ try {
 
   comments = [];
   await loop.sweep([{ id: "LR2", status: "idle", issueRun: loopCreated[1].issueRun }]);
+  now += 15 * 60_000;
   await loop.sweep([loopWorker]);
   assert.equal(loopCreated.length, 3, "same worker retries a reviewer that posted no verdict");
 
