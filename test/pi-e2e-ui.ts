@@ -7,7 +7,8 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { type Browser, chromium } from "playwright";
+import type { Browser } from "playwright";
+import { launchBrowser } from "./browser.mjs";
 
 const data = fs.mkdtempSync(path.join(os.tmpdir(), "ac-pi-e2e-"));
 const port = Number(process.env.PI_E2E_PORT || 7076),
@@ -108,7 +109,7 @@ try {
       reject(new Error(`Scratch server exited: ${code}`));
     });
   });
-  browser = await chromium.launch();
+  browser = await launchBrowser();
   const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
   await context.addCookies([{ name: "ac_session", value: makeToken(), url: base }]);
   const page = await context.newPage();

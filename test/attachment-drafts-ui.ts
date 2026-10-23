@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import zlib from "node:zlib";
 import type { Browser, BrowserContext, Page, Route } from "playwright";
+import { launchBrowser } from "./browser.mjs";
 
 const data = fs.mkdtempSync(path.join(os.tmpdir(), "ac-attachment-drafts-"));
 const port = Number(process.env.ATTACHMENT_DRAFTS_UI_PORT || 7074),
@@ -78,7 +79,7 @@ try {
     import("../server/auth.ts"),
     import("playwright"),
   ]);
-  launching = chromium.launch();
+  launching = launchBrowser();
   launching.catch(() => {});
   let holdSend = false;
   const configureSocket = (current: BrowserContext) =>

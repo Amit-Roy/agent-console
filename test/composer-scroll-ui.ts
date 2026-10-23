@@ -5,7 +5,8 @@ import { once } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { type Browser, chromium } from "playwright";
+import type { Browser } from "playwright";
+import { launchBrowser } from "./browser.mjs";
 
 const data = fs.mkdtempSync(path.join(os.tmpdir(), "ac-composer-scroll-ui-"));
 const port = Number(process.env.COMPOSER_SCROLL_UI_PORT || 17775),
@@ -62,7 +63,7 @@ try {
       reject(new Error(`Scratch server exited: ${code}`));
     });
   });
-  browser = await chromium.launch();
+  browser = await launchBrowser();
   for (const mobile of [true, false]) {
     const label = mobile ? "mobile" : "desktop";
     const context = await browser.newContext({

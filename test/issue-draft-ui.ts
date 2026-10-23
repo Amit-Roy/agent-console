@@ -5,7 +5,7 @@ import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { chromium } from "playwright";
+import { launchBrowser } from "./browser.mjs";
 
 const work = fs.mkdtempSync(path.join(os.homedir(), ".ac-issue-ui-"));
 process.env.AGENT_CONSOLE_DATA = path.join(work, "data");
@@ -59,7 +59,7 @@ const server = spawn("node", [process.env.TEST_SERVER_ENTRY || "server/index.ts"
     PATH: `${bin}:${process.env.PATH}`,
   },
 });
-const browser = await chromium.launch();
+const browser = await launchBrowser();
 try {
   for (let i = 0; i < 50; i++) {
     try {
