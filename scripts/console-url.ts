@@ -5,11 +5,20 @@ if (configured) {
   let url: URL;
   try {
     url = new URL(configured);
-    if (url.protocol !== "https:" || url.username || url.password || url.pathname !== "/" || url.search || url.hash) {
+    if (
+      url.protocol !== "https:" ||
+      url.username ||
+      url.password ||
+      url.pathname !== "/" ||
+      url.search ||
+      url.hash
+    ) {
       throw new Error("Invalid public origin");
     }
   } catch {
-    console.error("AGENT_CONSOLE_URL must be an HTTPS origin without credentials, path, query, or fragment.");
+    console.error(
+      "AGENT_CONSOLE_URL must be an HTTPS origin without credentials, path, query, or fragment.",
+    );
     process.exit(1);
   }
   console.log(url.href);

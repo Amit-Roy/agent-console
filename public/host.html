@@ -20,6 +20,7 @@
   <section class="dials" id="dials" aria-label="Current usage"></section>
   <section class="panel" id="history" aria-label="Usage over time">
     <div class="head"><h2>History</h2>
+      <!-- biome-ignore lint/a11y/useSemanticElements: role=group on a div styled by .range; fieldset would change the layout -->
       <div class="range" id="range" role="group" aria-label="Time range">
         <button type="button" data-range="300" aria-pressed="true">5m</button><button type="button" data-range="3600" aria-pressed="false">1h</button><button type="button" data-range="43200" aria-pressed="false">12h</button><button type="button" data-range="86400" aria-pressed="false">24h</button>
       </div>
@@ -34,6 +35,7 @@
     <div class="head"><h2>Processes <span class="hcount" id="proc-count"></span></h2>
       <div class="htools">
         <input type="search" id="proc-filter" placeholder="Filter" aria-label="Filter processes" autocomplete="off">
+        <!-- biome-ignore lint/a11y/useSemanticElements: role=group on a div styled by .range; fieldset would change the layout -->
         <div class="range" id="proc-sort" role="group" aria-label="Sort processes">
           <button type="button" data-sort="cpu" aria-pressed="true">CPU</button><button type="button" data-sort="mem" aria-pressed="false">Memory</button><button type="button" data-sort="label" aria-pressed="false">Name</button>
         </div>

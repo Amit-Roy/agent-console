@@ -12,7 +12,9 @@
   const accepts = (uri) => typeof uri === "string" && uri.startsWith("agentconsole://project/");
 
   function projectUri(project, path = "") {
-    return `agentconsole://project/${project.id}/` + path.split("/").map(encodeURIComponent).join("/");
+    return (
+      `agentconsole://project/${project.id}/` + path.split("/").map(encodeURIComponent).join("/")
+    );
   }
 
   function resolveUri(uri) {
@@ -37,7 +39,11 @@
         if (error.status !== 404) showError(error);
         throw error;
       }
-      if (typeof remote.token !== "string" || typeof remote.content !== "string" || typeof remote.revision !== "string") {
+      if (
+        typeof remote.token !== "string" ||
+        typeof remote.content !== "string" ||
+        typeof remote.revision !== "string"
+      ) {
         throw new Error("Agent Console returned an invalid file response.");
       }
       project.loaded.set(path, remote);
@@ -47,23 +53,38 @@
 
   function provider(uri) {
     const locate = () => resolveUri(uri);
-    const unsupported = async () => { throw new Error("Use Agent Console to create, rename, move, or delete files."); };
+    const unsupported = async () => {
+      throw new Error("Use Agent Console to create, rename, move, or delete files.");
+    };
     return {
       async lsDir() {
         const { project, path } = locate();
         const entries = [];
         let cursor;
         do {
-          const page = await request(project.endpoint, "/api/acode/tree?path=" + encodeURIComponent(path)
-            + (cursor ? "&cursor=" + encodeURIComponent(cursor) : ""), {
-            headers: { Authorization: "Bearer " + project.token },
-          });
+          const page = await request(
+            project.endpoint,
+            "/api/acode/tree?path=" +
+              encodeURIComponent(path) +
+              (cursor ? "&cursor=" + encodeURIComponent(cursor) : ""),
+            {
+              headers: { Authorization: "Bearer " + project.token },
+            },
+          );
           for (const entry of page.entries) {
             project.entries.set(entry.path, entry);
             const url = projectUri(project, entry.path);
-            entries.push({ name: entry.name, url, uri: url, isFile: entry.type === "file", isDirectory: entry.type === "directory", isLink: false });
+            entries.push({
+              name: entry.name,
+              url,
+              uri: url,
+              isFile: entry.type === "file",
+              isDirectory: entry.type === "directory",
+              isLink: false,
+            });
           }
-          if (page.next && page.next === cursor) throw new Error("Invalid directory page. Tap Edit again.");
+          if (page.next && page.next === cursor)
+            throw new Error("Invalid directory page. Tap Edit again.");
           cursor = page.next;
         } while (cursor);
         return entries;
@@ -72,32 +93,63 @@
         const { project, path } = locate();
         const directory = !path || project.entries.get(path)?.type === "directory";
         const remote = directory ? null : await projectFile(project, path);
-        return { name: directory ? (project.entries.get(path)?.name || project.name) : remote.name,
-          url: uri, uri, isDirectory: directory, isFile: !directory, isLink: false,
-          canRead: true, canWrite: !directory, size: remote ? new TextEncoder().encode(remote.content).length : 0 };
+        return {
+          name: directory ? project.entries.get(path)?.name || project.name : remote.name,
+          url: uri,
+          uri,
+          isDirectory: directory,
+          isFile: !directory,
+          isLink: false,
+          canRead: true,
+          canWrite: !directory,
+          size: remote ? new TextEncoder().encode(remote.content).length : 0,
+        };
       },
       async exists() {
-        try { await this.stat(); return true; }
-        catch (error) { if (error.status === 404) return false; throw error; }
+        try {
+          await this.stat();
+          return true;
+        } catch (error) {
+          if (error.status === 404) return false;
+          throw error;
+        }
       },
       async readFile(encoding) {
         const { project, path } = locate();
         const remote = await projectFile(project, path);
         return encoding ? remote.content : new TextEncoder().encode(remote.content).buffer;
       },
-      writeFile: unsupported, delete: unsupported, createFile: unsupported, createDirectory: unsupported,
-      copyTo: unsupported, moveTo: unsupported, renameTo: unsupported,
+      writeFile: unsupported,
+      delete: unsupported,
+      createFile: unsupported,
+      createDirectory: unsupported,
+      copyTo: unsupported,
+      moveTo: unsupported,
+      renameTo: unsupported,
     };
   }
 
   function mountProject(endpoint, grant) {
     const access = grant.project;
-    if (!access || typeof access.token !== "string" || typeof access.root !== "string" || typeof access.name !== "string") return null;
+    if (
+      !access ||
+      typeof access.token !== "string" ||
+      typeof access.root !== "string" ||
+      typeof access.name !== "string"
+    )
+      return null;
     const key = endpoint + "\n" + access.root;
     let project = projectKeys.get(key);
     if (!project) {
-      project = { id: String(++nextProject), endpoint, root: access.root, name: access.name,
-        token: access.token, loaded: new Map(), entries: new Map() };
+      project = {
+        id: String(++nextProject),
+        endpoint,
+        root: access.root,
+        name: access.name,
+        token: access.token,
+        loaded: new Map(),
+        entries: new Map(),
+      };
       projectKeys.set(key, project);
       projects.set(project.id, project);
     } else {
@@ -134,11 +186,13 @@
     });
     const result = await response.json().catch(() => ({}));
     if (!response.ok) {
-      const error = new Error(response.status === 409
-        ? "This file changed on the server. Your edits remain open. Reopen the file from Agent Console to compare changes."
-        : response.status === 401 || response.status === 410
-          ? "Editing access expired. Tap Edit in Agent Console again. Your edits remain open."
-          : result.error || result.message || `Request failed (${response.status}).`);
+      const error = new Error(
+        response.status === 409
+          ? "This file changed on the server. Your edits remain open. Reopen the file from Agent Console to compare changes."
+          : response.status === 401 || response.status === 410
+            ? "Editing access expired. Tap Edit in Agent Console again. Your edits remain open."
+            : result.error || result.message || `Request failed (${response.status}).`,
+      );
       error.status = response.status;
       throw error;
     }
@@ -170,7 +224,11 @@
       body: JSON.stringify({ ticket: payload.ticket }),
     });
     const remote = grant.file || grant;
-    if (typeof grant.token !== "string" || typeof remote.content !== "string" || typeof remote.revision !== "string") {
+    if (
+      typeof grant.token !== "string" ||
+      typeof remote.content !== "string" ||
+      typeof remote.revision !== "string"
+    ) {
       throw new Error("Agent Console returned an invalid file response.");
     }
     const project = mountProject(endpoint, grant);
@@ -208,26 +266,43 @@
     const EditorFile = acode.require("editorFile");
     const id = "agent-console:" + key;
     // Acode's constructor returns a partial object when this tab already exists.
-    const retained = openedFile || editorManager.files?.find((file) =>
-      file[baselineKey]?.key === key || file.id === id || (remote.uri && file.uri === remote.uri));
+    const retained =
+      openedFile ||
+      editorManager.files?.find(
+        (file) =>
+          file[baselineKey]?.key === key ||
+          file.id === id ||
+          (remote.uri && file.uri === remote.uri),
+      );
     constructingFile = true;
-    const file = retained || new EditorFile(remote.name || path.split("/").pop(), {
-      id,
-      uri: remote.uri,
-      text: remote.content,
-      render: true,
-      isUnsaved: false,
-      persistInSession: false,
-    });
+    const file =
+      retained ||
+      new EditorFile(remote.name || path.split("/").pop(), {
+        id,
+        uri: remote.uri,
+        text: remote.content,
+        render: true,
+        isUnsaved: false,
+        persistInSession: false,
+      });
     constructingFile = false;
     // Do not persist short-lived access credentials in Acode's restored sessions.
     file.persistInSession = false;
     const prior = file[baselineKey];
     const unknownDirty = retained && file.isUnsaved && !prior && textOf(file) !== remote.content;
-    const state = { file, token,
-      revision: unknownDirty ? null : (file.isUnsaved && prior && prior.content !== remote.content ? prior.revision : remote.revision),
-      baseline: unknownDirty ? undefined : (file.isUnsaved && prior ? prior.content : remote.content), saving: null };
-    if (!unknownDirty) file[baselineKey] = { key, content: state.baseline, revision: state.revision };
+    const state = {
+      file,
+      token,
+      revision: unknownDirty
+        ? null
+        : file.isUnsaved && prior && prior.content !== remote.content
+          ? prior.revision
+          : remote.revision,
+      baseline: unknownDirty ? undefined : file.isUnsaved && prior ? prior.content : remote.content,
+      saving: null,
+    };
+    if (!unknownDirty)
+      file[baselineKey] = { key, content: state.baseline, revision: state.revision };
     files.set(key, state);
     if (retained) {
       if (remote.uri && file.uri !== remote.uri) file.uri = remote.uri;
@@ -240,7 +315,10 @@
     }
 
     const save = async () => {
-      if (!state.revision) throw new Error("This open tab has unsaved edits from an older plugin session. Copy your edits before closing it, then tap Edit again to compare changes.");
+      if (!state.revision)
+        throw new Error(
+          "This open tab has unsaved edits from an older plugin session. Copy your edits before closing it, then tap Edit again to compare changes.",
+        );
       const content = textOf(file);
       const savedVersion = file.docVersion;
       const savedDoc = file.session.doc;
@@ -264,10 +342,14 @@
     state.onSave = (event) => {
       event.preventDefault();
       if (!state.saving) {
-        state.saving = save().catch((error) => {
-          showError(error);
-          return false;
-        }).finally(() => { state.saving = null; });
+        state.saving = save()
+          .catch((error) => {
+            showError(error);
+            return false;
+          })
+          .finally(() => {
+            state.saving = null;
+          });
       }
       if (typeof event.respondWith === "function") event.respondWith(state.saving);
     };

@@ -8,13 +8,15 @@ import { chromium } from "playwright";
 const sw = fs.readFileSync(new URL("../public/sw.js", import.meta.url), "utf8");
 let mode: "up" | "502" | "refuse" = "up";
 const server = http.createServer((req, res) => {
-  if (req.url === "/sw.js") return res.writeHead(200, { "content-type": "text/javascript" }).end(sw);
+  if (req.url === "/sw.js")
+    return res.writeHead(200, { "content-type": "text/javascript" }).end(sw);
   if (mode === "refuse") return req.socket.destroy();
-  if (mode === "502") return res.writeHead(502, { "content-type": "text/plain" }).end("Bad Gateway");
+  if (mode === "502")
+    return res.writeHead(502, { "content-type": "text/plain" }).end("Bad Gateway");
   res.writeHead(200, { "content-type": "text/html" }).end(`<title>app</title><p id="app">live</p>
 <script>navigator.serviceWorker.register("/sw.js")</script>`);
 });
-await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
 const url = `http://localhost:${(server.address() as any).port}/`;
 
 const browser = await chromium.launch();
@@ -23,7 +25,11 @@ try {
   await page.goto(url);
   await page.evaluate(() => navigator.serviceWorker.ready);
   await page.reload();
-  assert.equal(await page.evaluate(() => !!navigator.serviceWorker.controller), true, "Service worker controls the page");
+  assert.equal(
+    await page.evaluate(() => !!navigator.serviceWorker.controller),
+    true,
+    "Service worker controls the page",
+  );
   assert.equal(await page.textContent("#app"), "live", "Healthy loads pass through");
 
   for (const down of ["502", "refuse"] as const) {

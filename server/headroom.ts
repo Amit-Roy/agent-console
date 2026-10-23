@@ -1,6 +1,6 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { type ChildProcess, spawn } from "node:child_process";
+import { diagnostic, ResourceGuard, resource } from "./headroom-diagnostics.ts";
 import { privacyEnv } from "./privacy.ts";
-import { diagnostic, resource, ResourceGuard } from "./headroom-diagnostics.ts";
 
 // Headroom defaults on: its CPU/RSS guard is a circuit breaker, not an OS quota.
 const PORT = Number(process.env.AGENT_CONSOLE_HEADROOM_PORT) || 8790;
@@ -23,8 +23,11 @@ let stderrBytes = 0;
 const current = (epoch: number) => active && enabled() && !latched && generation === epoch;
 
 async function live(): Promise<boolean> {
-  try { return (await fetch(`${URL_}/livez`, { signal: AbortSignal.timeout(1000) })).ok; }
-  catch { return false; }
+  try {
+    return (await fetch(`${URL_}/livez`, { signal: AbortSignal.timeout(1000) })).ok;
+  } catch {
+    return false;
+  }
 }
 
 function terminate(p: ChildProcess) {
@@ -32,9 +35,14 @@ function terminate(p: ChildProcess) {
   if (existing) return existing;
   if (p.exitCode !== null || p.signalCode !== null) return Promise.resolve();
   const pending = new Promise<void>((resolve) => {
-    const escalation = setTimeout(() => { if (p.exitCode === null && p.signalCode === null) p.kill("SIGKILL"); }, 5000);
+    const escalation = setTimeout(() => {
+      if (p.exitCode === null && p.signalCode === null) p.kill("SIGKILL");
+    }, 5000);
     escalation.unref();
-    const done = () => { clearTimeout(escalation); resolve(); };
+    const done = () => {
+      clearTimeout(escalation);
+      resolve();
+    };
     p.once("exit", done);
     p.once("error", done);
     p.kill("SIGTERM");
@@ -47,26 +55,78 @@ function spawnProxy() {
   attempts++;
   guard = new ResourceGuard();
   stdoutBytes = stderrBytes = 0;
-  const env = { ...process.env, ...privacyEnv, HEADROOM_WORKERS: "1", HEADROOM_COMPRESS_WORKERS: "1", HEADROOM_LOG_MESSAGES: "0",
-    OMP_NUM_THREADS: "1", MKL_NUM_THREADS: "1", OPENBLAS_NUM_THREADS: "1", NUMEXPR_NUM_THREADS: "1", TOKENIZERS_PARALLELISM: "false" };
+  const env = {
+    ...process.env,
+    ...privacyEnv,
+    HEADROOM_WORKERS: "1",
+    HEADROOM_COMPRESS_WORKERS: "1",
+    HEADROOM_LOG_MESSAGES: "0",
+    OMP_NUM_THREADS: "1",
+    MKL_NUM_THREADS: "1",
+    OPENBLAS_NUM_THREADS: "1",
+    NUMEXPR_NUM_THREADS: "1",
+    TOKENIZERS_PARALLELISM: "false",
+  };
   if (env.ANTHROPIC_BASE_URL?.replace(/\/+$/, "") === URL_) delete env.ANTHROPIC_BASE_URL;
   // Provider clients cannot call Headroom's injected retrieval tool. Keep compression,
   // but never replace tool output with CCR markers that the agent cannot resolve.
-  const p = spawn("nice", ["-n", "15", "headroom", "proxy", "--host", "127.0.0.1", "--port", String(PORT),
-    "--compression-max-workers", "1", "--no-code-aware", "--no-ccr", "--workers", "1",
-    "--disable-kompress", "--disable-kompress-fallback", "--anthropic-pre-upstream-concurrency", "1"], {
-    env,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+  const p = spawn(
+    "nice",
+    [
+      "-n",
+      "15",
+      "headroom",
+      "proxy",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      String(PORT),
+      "--compression-max-workers",
+      "1",
+      "--no-code-aware",
+      "--no-ccr",
+      "--workers",
+      "1",
+      "--disable-kompress",
+      "--disable-kompress-fallback",
+      "--anthropic-pre-upstream-concurrency",
+      "1",
+    ],
+    {
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
   child = p;
   // Drain both streams without retaining or serializing any child output.
-  p.stdout?.on("data", (chunk: Buffer) => { stdoutBytes += chunk.length; });
-  p.stderr?.on("data", (chunk: Buffer) => { stderrBytes += chunk.length; });
+  p.stdout?.on("data", (chunk: Buffer) => {
+    stdoutBytes += chunk.length;
+  });
+  p.stderr?.on("data", (chunk: Buffer) => {
+    stderrBytes += chunk.length;
+  });
   diagnostic("start", { pid: p.pid ?? 0, attempt: attempts });
-  p.on("error", () => { diagnostic("spawn-error"); if (child === p) { child = undefined; healthy = false; lastError = "Headroom launch failed"; } });
+  p.on("error", () => {
+    diagnostic("spawn-error");
+    if (child === p) {
+      child = undefined;
+      healthy = false;
+      lastError = "Headroom launch failed";
+    }
+  });
   p.on("exit", (code, signal) => {
-    diagnostic("exit", { pid: p.pid ?? 0, code: code ?? -1, signal: signal === "SIGKILL" ? 9 : signal === "SIGTERM" ? 15 : 0, stdoutBytes, stderrBytes });
-    if (child === p) { child = undefined; healthy = false; if (!latched) lastError = "Headroom proxy exited"; }
+    diagnostic("exit", {
+      pid: p.pid ?? 0,
+      code: code ?? -1,
+      signal: signal === "SIGKILL" ? 9 : signal === "SIGTERM" ? 15 : 0,
+      stdoutBytes,
+      stderrBytes,
+    });
+    if (child === p) {
+      child = undefined;
+      healthy = false;
+      if (!latched) lastError = "Headroom proxy exited";
+    }
   });
 }
 
@@ -81,8 +141,12 @@ async function check(epoch: number) {
       diagnostic("resource", { pid: p.pid, rssBytes: sample.rssBytes, cpuPercent });
       diagnostic("output", { stdoutBytes, stderrBytes });
       if (reason) {
-        latched = true; healthy = false;
-        lastError = reason === 1 ? "Headroom disabled: RSS exceeded 1024 MiB" : "Headroom disabled: CPU exceeded 80% for 30 seconds";
+        latched = true;
+        healthy = false;
+        lastError =
+          reason === 1
+            ? "Headroom disabled: RSS exceeded 1024 MiB"
+            : "Headroom disabled: CPU exceeded 80% for 30 seconds";
         diagnostic("breaker", { reason });
         terminate(p);
         return;
@@ -92,9 +156,17 @@ async function check(epoch: number) {
   const responding = await live();
   if (!current(epoch)) return;
   healthy = responding;
-  if (healthy) { lastError = undefined; return; }
+  if (healthy) {
+    lastError = undefined;
+    return;
+  }
   if (child) return;
-  if (attempts >= 3) { latched = true; lastError = "Headroom disabled: three launch attempts exhausted"; diagnostic("breaker", { reason: 3 }); return; }
+  if (attempts >= 3) {
+    latched = true;
+    lastError = "Headroom disabled: three launch attempts exhausted";
+    diagnostic("breaker", { reason: 3 });
+    return;
+  }
   spawnProxy();
 }
 
@@ -111,7 +183,8 @@ function schedule(epoch: number) {
 export const headroom = {
   async start() {
     if (!enabled()) {
-      if (process.env.ANTHROPIC_BASE_URL?.replace(/\/+$/, "") === URL_) delete process.env.ANTHROPIC_BASE_URL;
+      if (process.env.ANTHROPIC_BASE_URL?.replace(/\/+$/, "") === URL_)
+        delete process.env.ANTHROPIC_BASE_URL;
       return;
     }
     if (latched) return;
@@ -133,10 +206,16 @@ export const headroom = {
       schedule(epoch);
     })();
     starting = pending;
-    try { await pending; } finally { if (starting === pending) starting = undefined; }
+    try {
+      await pending;
+    } finally {
+      if (starting === pending) starting = undefined;
+    }
   },
   stop() {
-    active = false; generation++; starting = undefined;
+    active = false;
+    generation++;
+    starting = undefined;
     if (timer) clearTimeout(timer);
     timer = undefined;
     if (child) stopping = terminate(child); // Never terminate an external proxy.
@@ -148,15 +227,27 @@ export const headroom = {
   async probe(refreshRouting = false) {
     const responding = await live();
     // Inspection is observational. Repair can invalidate routing, never clear a breaker or enable it.
-    if (refreshRouting && !responding && healthy) { healthy = false; lastError ??= "Headroom proxy is unreachable"; }
+    if (refreshRouting && !responding && healthy) {
+      healthy = false;
+      lastError ??= "Headroom proxy is unreachable";
+    }
     return { ...headroom.state(), reachable: responding };
   },
-  state: () => ({ latched, enabled: enabled(), running: enabled() && active && !latched && healthy, url: URL_, owned: !!child, error: healthy ? undefined : lastError }),
+  state: () => ({
+    latched,
+    enabled: enabled(),
+    running: enabled() && active && !latched && healthy,
+    url: URL_,
+    owned: !!child,
+    error: healthy ? undefined : lastError,
+  }),
   async stats(): Promise<any | null> {
     if (!headroom.url()) return null;
     try {
       const r = await fetch(`${URL_}/stats-history`, { signal: AbortSignal.timeout(3000) });
       return r.ok ? await r.json() : null;
-    } catch { return null; }
+    } catch {
+      return null;
+    }
   },
 };

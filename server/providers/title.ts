@@ -1,5 +1,5 @@
-import metrics from "./title-metrics.json" with { type: "json" };
 import { completeLabel } from "./small-model.ts";
+import metrics from "./title-metrics.json" with { type: "json" };
 
 // A new thread is titled after its folder. After each prompt with substance, Nemotron (via NVIDIA, a free model; never Haiku or
 // Luna) names it after what is being discussed: all user messages, text only, oldest first within a character budget.
@@ -17,7 +17,9 @@ function titleWidth(text: string): number {
   // Reserve two ems for glyphs supplied by a fallback font.
   return Array.from(text).reduce((px, c) => {
     const code = c.codePointAt(0)!;
-    return px + (advances[code] !== undefined ? advances[code] * 14 * 1.05 / metrics.unitsPerEm : 28);
+    return (
+      px + (advances[code] !== undefined ? (advances[code] * 14 * 1.05) / metrics.unitsPerEm : 28)
+    );
   }, 0);
 }
 
@@ -27,7 +29,10 @@ export function fitTitle(input: { prefix: string; text: string }): { title: stri
   const kept = input.text.trim().split(" ");
   while (kept.length > 1 && !fits(input.prefix + kept.join(" "))) kept.pop();
   let feature = "";
-  for (const c of kept.join(" ")) { if (!fits(input.prefix + feature + c)) break; feature += c; }
+  for (const c of kept.join(" ")) {
+    if (!fits(input.prefix + feature + c)) break;
+    feature += c;
+  }
   return { title: input.prefix + feature.trimEnd() };
 }
 
@@ -40,14 +45,19 @@ export function titleText(message: unknown): string {
     .replace(/!\[[^\]]*\]\([^)]*\)/g, " ") // markdown images
     .replace(/\[(?:Image|Video|Audio|File)\s*#?\d*\]/gi, " ") // attachment placeholders
     .replace(/data:[a-z]+\/[^\s)]+/gi, " ") // inline data URLs
-    .replace(/\s+/g, " ").trim();
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 /** Non-empty user messages, cleaned for naming, oldest first. The newest fill the budget; the one that overflows is cut short. */
 export function titleInput(messages: unknown[], budget = MAX_INPUT): string[] {
   const kept: string[] = [];
   for (const m of messages.map(titleText).filter(Boolean).reverse()) {
-    if (m.length <= budget) { kept.push(m); budget -= m.length; continue; }
+    if (m.length <= budget) {
+      kept.push(m);
+      budget -= m.length;
+      continue;
+    }
     if (budget >= 200) kept.push(m.slice(0, budget).trim()); // enough left to say something; otherwise stop
     break;
   }
@@ -56,14 +66,22 @@ export function titleInput(messages: unknown[], budget = MAX_INPUT): string[] {
 
 /** Model output -> a tidy thread title, or undefined when it does not look like one. */
 export function cleanTitle(raw: unknown): string | undefined {
-  let t = String(raw ?? "").split("\n").map((l) => l.trim()).find(Boolean) ?? "";
-  t = t.replace(/^(?:title|name)\s*:\s*(?=[^:]*:)/i, "").replace(/^[#>*\-\s"'“”‘’`]+|[\s"'“”‘’`*.!:;,]+$/g, "").replace(/\s+/g, " ");
+  let t =
+    String(raw ?? "")
+      .split("\n")
+      .map((l) => l.trim())
+      .find(Boolean) ?? "";
+  t = t
+    .replace(/^(?:title|name)\s*:\s*(?=[^:]*:)/i, "")
+    .replace(/^[#>*\-\s"'“”‘’`]+|[\s"'“”‘’`*.!:;,]+$/g, "")
+    .replace(/\s+/g, " ");
   const match = /^([^\s:]+)\s*:\s*([^:]+)$/.exec(t);
   if (!match) return undefined;
   const words = match[2].trim().split(" ");
   if (words.length > MAX_WORDS + 4) return undefined; // a sentence, not a title
   let topic = Array.from(match[1]).slice(0, MAX_TOPIC).join("");
-  while (Array.from(topic).length > 1 && titleWidth(`${topic}:`) > MAX_TITLE_WIDTH / 2) topic = Array.from(topic).slice(0, -1).join("");
+  while (Array.from(topic).length > 1 && titleWidth(`${topic}:`) > MAX_TITLE_WIDTH / 2)
+    topic = Array.from(topic).slice(0, -1).join("");
   const kept = words.slice(0, MAX_WORDS - 1);
   const prefix = `${topic}:`;
   const { title } = fitTitle({ prefix, text: kept.join(" ") });
