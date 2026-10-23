@@ -252,7 +252,7 @@ async function piResearch(input: any, thread?: string): Promise<string> {
   return researchToolText(res);
 }
 
-app.post("/api/agent-tools/:name",express.json({ limit: "1mb" }), async (req, res) => {
+app.post("/api/agent-tools/:name", express.json({ limit: "1mb" }), async (req, res) => {
   const given = Buffer.from(String(req.headers["x-agent-console-tool"] || ""));
   if (given.length !== TOOL_TOKEN.length || !crypto.timingSafeEqual(given, Buffer.from(TOOL_TOKEN))) return void res.status(401).json({ error: "Not an Agent Console tool call." });
   const thread = typeof req.headers["x-agent-console-thread"] === "string" ? req.headers["x-agent-console-thread"] : undefined;
