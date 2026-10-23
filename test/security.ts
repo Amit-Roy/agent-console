@@ -6,7 +6,7 @@ import path from "node:path";
 import http from "node:http";
 import express from "express";
 import { mountSecurity } from "../server/security.ts";
-import { LATEST, HISTORY } from "./security-mock.ts";
+import { LATEST, HISTORY, LOG_ID, LOG_LINES, logPage } from "./security-mock.ts";
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "secscan-"));
 const log = path.join(dir, "calls.log");
@@ -28,6 +28,8 @@ ${JSON.stringify(LATEST)}
 J
   ;;
   "get "*) echo '{}' ;;
+  "log ${LOG_ID} "*) after="\${last##* }"; echo '${JSON.stringify(logPage(0))}' | node -e 'const d=JSON.parse(require("fs").readFileSync(0,"utf8")),a=Number(process.argv[1]);d.from=Math.min(a,d.total);d.lines=d.lines.slice(a);console.log(JSON.stringify(d))' "$after" ;;
+  "log "*) echo '{"error":"not found"}'; exit 1 ;;
   status) echo '{"running":true,"startedAt":"2026-10-23T01:00:00Z","currentTool":"trivy"}' ;;
   run) echo '{"started":true}' ;;
   *) echo boom >&2; exit 255 ;;
@@ -61,6 +63,18 @@ try {
   const before = calls().length;
   assert.equal((await fetch(`${base}/api/security/scans/${encodeURIComponent("1; rm -rf /")}`)).status, 400, "bad id never reaches ssh");
   assert.equal(calls().length, before);
+
+  j = await (await fetch(`${base}/api/security/scans/${LOG_ID}/log`)).json();
+  assert.deepEqual([j.from, j.total, j.lines.length], [0, LOG_LINES.length, LOG_LINES.length]);
+  r = await fetch(`${base}/api/security/scans/${LOG_ID}/log?after=4`);
+  j = await r.json();
+  assert.deepEqual([r.headers.get("cache-control"), j.from, j.lines], ["no-store", 4, LOG_LINES.slice(4)], "log honours after");
+  assert.equal((await fetch(`${base}/api/security/scans/20260101T000000Z/log`)).status, 404, "unknown log is 404");
+  const beforeLog = calls().length;
+  for (const bad of [`${encodeURIComponent("1; rm -rf /")}/log`, "abc/log", `${LOG_ID}/log?after=x`, `${LOG_ID}/log?after=-1`, `${LOG_ID}/log?after=1;id`]) {
+    assert.equal((await fetch(`${base}/api/security/scans/${bad}`)).status, 400, `bad log request ${bad}`);
+  }
+  assert.equal(calls().length, beforeLog, "bad log requests never reach ssh");
 
   assert.equal((await fetch(`${base}/api/security/run`, { method: "POST", headers: { origin: "https://evil.example" } })).status, 403, "run refuses cross-site");
   r = await fetch(`${base}/api/security/run`, { method: "POST" });
