@@ -1,0 +1,34 @@
+{
+  "title": "Thread quota handling before auto-resume",
+  "subtitle": "Premium model threads stuck on quota exhaustion",
+  "direction": "row",
+  "items": [
+    {
+      "group": "Thread lifecycle",
+      "items": [
+        { "id": "user", "label": "User", "tech": "Browser", "desc": "Sends messages", "icon": "user", "color": "blue", "status": "unchanged" },
+        { "id": "thread", "label": "Thread", "tech": "threads.ts", "desc": "Agent conversation", "icon": "message-circle", "color": "indigo", "status": "unchanged" },
+        { "id": "idle", "label": "Idle", "tech": "No quota tracking", "desc": "User must manually continue", "icon": "pause", "color": "slate", "status": "unchanged" }
+      ],
+      "id": "thread-lifecycle",
+      "color": "slate",
+      "border": "solid"
+    },
+    {
+      "group": "Usage tracking",
+      "items": [
+        { "id": "usage", "label": "Usage module", "tech": "usage.ts", "desc": "Tracks provider windows", "icon": "gauge", "color": "orange", "status": "unchanged" },
+        { "id": "exhausted-check", "label": "Usage exhausted?", "tech": "usage.exhausted()", "desc": "No pause state recorded", "icon": "alert-circle", "color": "purple", "status": "unchanged" }
+      ],
+      "id": "usage-tracking",
+      "color": "orange",
+      "border": "dashed"
+    }
+  ],
+  "edges": [
+    { "from": "user", "to": "thread", "label": "send message", "status": "unchanged" },
+    { "from": "thread", "to": "idle", "label": "rate limit error", "status": "unchanged" },
+    { "from": "thread", "to": "usage", "label": "report usage", "status": "unchanged" },
+    { "from": "usage", "to": "exhausted-check", "label": "check window", "status": "unchanged" }
+  ]
+}

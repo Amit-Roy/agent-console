@@ -165,9 +165,11 @@ export function createAcodeBridge(lookup: Lookup, now: () => number = Date.now) 
   });
   const openFile = handler(async (req, res) => {
     const projectGrant = await project(req);
-    const target = await projectPath(projectGrant, req.body?.path);
+    // Acode probes project files such as index.html and tsconfig.json; a missing file is not an edit conflict.
+    const missing = (error: NodeJS.ErrnoException) => { throw ["ENOENT", "ENOTDIR"].includes(error.code || "") ? new ViewError(404, "File not found.") : error; };
+    const target = await projectPath(projectGrant, req.body?.path).catch(missing);
     const candidate = path.resolve(projectGrant.root, req.body.path);
-    const info = await lstat(target);
+    const info = await lstat(target).catch(missing);
     if (!info.isFile()) throw new ViewError(415, "Only regular text files can be edited.");
     const grant: Grant = { project: projectGrant, cwd: projectGrant.root, requested: candidate, target, candidate, dev: info.dev, ino: info.ino, expiresAt: SESSION_EXPIRES_AT };
     const file = await checked(grant);

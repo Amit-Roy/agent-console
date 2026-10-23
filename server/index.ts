@@ -1,19 +1,27 @@
 import { acquireModelRequest, reportModel429, startModelRateBroker } from "./providers/model-rate-client.ts";
 import { MODEL_REQUEST_PRIORITIES } from "./providers/model-rate-limit.ts";
 import "./privacy.ts";
-import { usage, refreshRouterUsage, refreshUsage, readCodexUsage } from "./usage.ts";
+import { usage, refreshRouterUsage, refreshUsage, readCodexUsage, repairUsageHistory } from "./usage.ts";
 import { hostMetrics, hostProcesses, hostKill, hostPorts, hostProcessDetail } from "./host.ts";
-import { createDispatcher, startIssue, defaultDirs } from "./window-dispatch.ts";
+import { startToolPriority } from "./tool-priority.ts";
+import { startHostSampler, hostHistory, hostDu, hostDuRescan, latestHost } from "./host-history.ts";
+import { createWorkspaceMonitor } from "./monitor-wire.ts";
+import { Ideas, IdeaError } from "./ideas.ts";
+import { createDispatcher, startIssue, defaultDirs, resumeDue } from "./window-dispatch.ts";
 import { route as routeWork } from "./automation/router.ts";
 import { createOpener } from "./window-opener.ts";
 import { claudeAccounts } from "./providers/claude-accounts.ts";
 import { cancelClaudeLogin, finishClaudeLogin, startClaudeLogin } from "./claude-login.ts";
 import { createReviewer } from "./issue-review.ts";
+import { createAutomationArchiver } from "./automation/archive.ts";
+import { watchClosed } from "./automation/closed-signal.ts";
 import { createEventLog } from "./automation/events.ts";
 import { createTriageBridge } from "./automation/triage-bridge.ts";
 import { usageEvents } from "./automation/usage-events.ts";
 import { automationApi, scanHooks } from "./automation/snapshot.ts";
+import { canonicalIssue, createPremiumAssigner } from "./automation/assign.ts";
 import { startDebug } from "./automation/debug.ts";
+import { diagnoseJob, readJobError } from "./automation/job.ts";
 import { loadConfig as loadDispatchConfig } from "./window-dispatch.ts";
 import { loadOpenerConfig } from "./window-opener.ts";
 import express from "express";
@@ -34,10 +42,15 @@ import { createTelemetryService } from "./token-telemetry.ts";
 import { Schedules, describe } from "./schedules.ts";
 import { SessionSearch } from "./session-search.ts";
 import { Notifications } from "./notifications.ts";
-import { dashboard } from "./analytics.ts";
+import { dashboard, readTurns } from "./analytics.ts";
+import { benchmarkUsage, BenchmarkError, createBenchmarks } from "./benchmarks.ts";
+import { createBenchmarkSubscriptions, validateSubscriptionFees } from "./benchmark-subscriptions.ts";
+import { promptOverhead } from "./prompt-overhead.ts";
 import { pricing, rates } from "./api-pricing.ts";
 import { contextAllocation } from "./context-allocation.ts";
 import { headroom } from "./headroom.ts";
+import { createDoctor } from "./doctor.ts";
+import { mountSecurity } from "./security.ts";
 import { LatencyStore } from "./latency.ts";
 import { fileMedia, fileTree, fileViewer } from "./files.ts";
 import { createAcodeBridge } from "./acode.ts";
@@ -65,12 +78,14 @@ const broadcast = (msg: unknown) => {
 let notifications: Notifications | undefined;
 try { notifications = new Notifications(DATA_DIR); }
 catch { console.warn("Browser notification storage is unavailable."); }
+let workspaceMonitor: ReturnType<typeof createWorkspaceMonitor> | undefined;
 const threads = new Threads(broadcast, notice => {
+  if (notice.kind === "failed") workspaceMonitor?.noteFailure();
   void notifications?.notify(notice).catch(() => console.warn("Browser notification delivery failed."));
 });
 const schedules = new Schedules(threads, broadcast);
+const ideas = new Ideas();
 const sessionSearch = new SessionSearch(DATA_DIR);
-void sessionSearch.warm().catch(() => console.warn("Session search index will retry on the next query."));
 // Agent tools (Pi extension providers/console-tools.mjs) call back over loopback with a per-process secret, never the session cookie
 const TOOL_TOKEN = crypto.randomBytes(24).toString("base64url");
 process.env.AGENT_CONSOLE_TOOL_URL = `http://${HOST}:${PORT}/api/agent-tools`;
@@ -81,9 +96,15 @@ let latency: LatencyStore | undefined;
 try { latency = new LatencyStore(path.join(DATA_DIR, "latency.sqlite")); }
 catch { console.warn("Local latency storage is unavailable."); }
 setInterval(() => threads.sweep(), 60_000).unref();
+startToolPriority(); // tool commands below agents and this server: busy tests never delay a turn
 // Every automation stage writes here; the dashboard reads it. A previous process's unfinished runs are closed as abandoned.
 const automationLog = createEventLog({ file: path.join(DATA_DIR, "automation-events.jsonl") });
 automationLog.recoverOpenRuns();
+workspaceMonitor = createWorkspaceMonitor({
+  dataDir: DATA_DIR, port: PORT, cwd: ROOT, events: automationLog, host: latestHost, headroom: () => headroom.state(),
+  threads: { create: o => threads.create(o), send: (id, text) => threads.send(id, text) },
+  notify: n => notifications?.notify({ kind: "failed", thread: n.thread, title: n.title }),
+});
 const recordUsage = usageEvents(automationLog);
 usage.subscribe((provider, u) => { broadcast({ t: "usage", provider, usage: u }); recordUsage(provider, u); });
 const triageBridge = createTriageBridge({ dbPath: path.join(DATA_DIR, "github-triage.sqlite"), events: automationLog });
@@ -95,6 +116,11 @@ const automation = automationApi({
   runs: () => threads.list().filter(t => t.issueRun && !t.archived).map(t => ({ thread: t.id, key: t.issueRun!.key, role: t.issueRun!.role, effort: t.issueRun!.effort, state: t.status, title: t.title })),
   schedules: () => schedules.list().map(t => ({ id: t.id, title: t.title, schedule: describe(t), enabled: t.enabled })),
 });
+const assignPremium = createPremiumAssigner({
+  threads: () => threads.list(), providers: providerInfo, dataDir: DATA_DIR, dirs: defaultDirs(),
+  runner: { create: o => threads.create(o), send: (id, text) => threads.send(id, text), remove: id => threads.remove(id) },
+});
+const assignedOwner = (t: { issueRun?: { repo: string; number: number } }) => !!t.issueRun && assignPremium.active(canonicalIssue(t.issueRun));
 // One upserted token-usage comment per GitHub issue/PR the finished thread links to (repos = the triage allowlist).
 if (process.env.AGENT_CONSOLE_MOCK !== "1") {
   const triageRepos = (): string[] => {
@@ -113,12 +139,46 @@ if (process.env.AGENT_CONSOLE_MOCK !== "1") {
     start: d => startIssue(d, { create: o => threads.create(o), send: (id, text) => threads.send(id, text) }),
   });
   const reviewer = createReviewer({
+    threads: () => threads.list(), dataDir: DATA_DIR,
+    canReview: t => !assignedOwner(t),
+    canResume: t => {
+      const live = threads.get(t.id);
+      if (!live || live.archived || live.status === "running" || assignedOwner(live)) return false;
+      const cfg = loadDispatchConfig();
+      if (!cfg.enabled || cfg.dryRun || cfg.routing.mode !== "live") return false;
+      const answer = routeWork({ role: "work", effort: t.issueRun!.effort as any, usage: usage.all(), active: activeRuns(), now: Date.now(), flags: { bauOnPi: cfg.routing.bauOnPi } });
+      return answer.decision === "route" && answer.route?.provider === t.provider;
+    },
     runner: { create: o => threads.create(o), send: (id, text) => threads.send(id, text), mark: (id, patch) => threads.setIssueRun(id, patch) },
     route: effort => routeWork({ role: "review", effort: effort as any, usage: usage.all(), active: activeRuns(), now: Date.now() }),
     events: automationLog,
   });
-  threads.onIssueTurnEnd = (t, ev) => reviewer.turnEnded(t, ev);
-  setInterval(() => { dispatcher.tick().catch(() => {}); reviewer.sweep(threads.list()).catch(() => {}); }, 5 * 60_000).unref();
+  threads.onIssueTurnEnd = (t, ev) => { if (!assignedOwner(t)) return reviewer.turnEnded(t, ev); };
+  // Threads stopped by an exhausted premium quota continue late in a later window, when Deep issues would also start.
+  const resumeQuotaPaused = () => {
+    const cfg = loadDispatchConfig();
+    if (!cfg.enabled) return;
+    for (const provider of resumeDue(usage.all(), Date.now(), cfg)) {
+      const waiting = threads.list().filter(t => t.quotaPaused?.provider === provider && !t.archived).length;
+      if (!waiting) continue;
+      const resumed = cfg.dryRun ? 0 : threads.resumeQuotaPaused(provider, undefined, t => !!t.issueRun?.premiumAssignment || !assignedOwner(t));
+      automationLog.record({ step: "dispatcher", kind: "ok", msg: `${cfg.dryRun ? "dry run: would resume" : "resumed"} ${cfg.dryRun ? waiting : resumed} quota-paused ${provider} thread(s)` });
+    }
+  };
+  const archiver = createAutomationArchiver({ threads });
+  let automationSweep: Promise<void> | undefined;
+  const sweepAutomation = (archive = false) => automationSweep ??= (async () => {
+    if (archive) await archiver.sweep();
+    await reviewer.sweep(threads.list().filter(t => !assignedOwner(t)));
+  })().catch(() => {}).finally(() => { automationSweep = undefined; });
+  void sweepAutomation(true); // catches up on closures missed while the Console was down
+  // Closed issues and merged PRs arrive as GitHub webhooks (the triage worker drops a marker here), so archiving is event-driven.
+  watchClosed(path.join(DATA_DIR, "github-events"), () => archiver.sweep(), () => automationLog.record({ step: "triage", kind: "fail", msg: "archive sweep after GitHub closure failed" }));
+  setInterval(() => {
+    void sweepAutomation();
+    void dispatcher.tick().catch(() => {});
+    resumeQuotaPaused();
+  }, 5 * 60_000).unref();
   const opener = createOpener({
     usage: () => usage.all(), events: automationLog,
     refresh: readCodexUsage,
@@ -244,6 +304,48 @@ const sameOrigin: express.RequestHandler = (req, res, next) => {
   } catch {}
   res.status(403).json({ error: "Cross-site request refused." });
 };
+const benchmarks = createBenchmarks({ dataDir: DATA_DIR, keyFile: path.join(DATA_DIR, "artificial-analysis.key") });
+const benchmarkSubscriptions = createBenchmarkSubscriptions(DATA_DIR);
+const benchmarkView = () => {
+  const to = Date.now(), from = to - 7 * 86_400_000;
+  let timings: any[] = [];
+  try { timings = turnTiming()?.turns(from - 86_400_000, to) ?? []; } catch {}
+  return { ...benchmarks.view(), subscriptions: benchmarkSubscriptions.view(usage.all(), to), usage: benchmarkUsage(readTurns(0, to, Number.MAX_SAFE_INTEGER), from, to, timings) };
+};
+app.get("/api/benchmarks", (_req, res) => {
+  res.set("Cache-Control", "no-store");
+  try { res.json(benchmarkView()); } catch { res.status(503).json({ error: "Benchmark usage is unavailable." }); }
+});
+app.post("/api/benchmarks/refresh", sameOrigin, async (_req, res) => {
+  res.set("Cache-Control", "no-store");
+  try { await benchmarks.refresh(); res.json(benchmarkView()); }
+  catch (e) { res.status(e instanceof BenchmarkError ? e.status : 503).json({ error: e instanceof BenchmarkError ? e.message : "Benchmark refresh is unavailable." }); }
+});
+app.post("/api/benchmarks/settings", sameOrigin, express.json({ limit: "1kb" }), (req, res) => {
+  res.set("Cache-Control", "no-store");
+  if (typeof req.body?.weekly !== "boolean") return void res.status(400).json({ error: "weekly must be a boolean." });
+  try { benchmarks.settings(req.body.weekly); res.json(benchmarkView()); }
+  catch { res.status(503).json({ error: "Benchmark settings could not be saved." }); }
+});
+app.post("/api/benchmarks/subscriptions", sameOrigin, express.json({ limit: "1kb" }), (req, res) => {
+  res.set("Cache-Control", "no-store");
+  try { validateSubscriptionFees(req.body?.fees); }
+  catch { return void res.status(400).json({ error: "Enter nonnegative monthly fees in USD for Claude Sunny, Claude Nefro and Codex." }); }
+  try { benchmarkSubscriptions.save(req.body.fees); res.json(benchmarkView()); }
+  catch { res.status(503).json({ error: "Subscription fees could not be saved." }); }
+});
+const doctor = createDoctor(threads);
+app.get("/doctor", (_req, res) => res.sendFile(path.join(ROOT, "public", "doctor.html")));
+app.get("/api/doctor", async (_req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  try { res.json(await doctor.inspect()); }
+  catch { res.status(503).json({ error: "Setup checks are temporarily unavailable." }); }
+});
+app.post("/api/doctor", sameOrigin, async (_req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  try { res.json(await doctor.repair()); }
+  catch { res.status(503).json({ error: "Setup repair could not finish. Check again for current status." }); }
+});
 // Browser push is opt-in per device. Both writes require a same-origin session.
 app.get("/api/notifications", (_req, res) => {
   res.setHeader("Cache-Control", "no-store");
@@ -270,6 +372,7 @@ const RUN_DIR = process.env.AGENT_CONSOLE_RUN || path.join(os.homedir(), ".cache
 // (which inherit everything else) can never overwrite the live server's pid file.
 const PID_FILE = process.env.AGENT_CONSOLE_PID_FILE;
 delete process.env.AGENT_CONSOLE_PID_FILE;
+delete process.env.NODE_COMPILE_CACHE; // the launcher caches compiled server code; agents this server spawns must not share it
 // In-app Claude sign-in: start returns Anthropic's link, finish takes the code its page shows.
 app.post("/api/claude-login/:account", sameOrigin, express.json({ limit: "4kb" }), async (req, res) => {
   try {
@@ -347,7 +450,7 @@ app.post("/api/acode/edit", sameOrigin, (req, res, next) => {
 app.get("/acode-setup", (_req, res) => res.sendFile(path.join(ROOT, "public", "acode-setup.html")));
 app.get("/api/acode/setup", (_req, res) => {
   res.setHeader("Cache-Control", "no-store");
-  res.json({ available: !!acodeSettings, version: "1.1.1", plugin: acodeSettings ? `${acodeSettings.endpoint}/acode-plugin.zip` : null });
+  res.json({ available: !!acodeSettings, version: "1.1.2", plugin: acodeSettings ? `${acodeSettings.endpoint}/acode-plugin.zip` : null });
 });
 app.get("/api/file-image", fileViewer(id => threads.get(id), true));
 app.get("/api/file-media", fileMedia(id => threads.get(id)));
@@ -370,10 +473,30 @@ app.get("/api/automation", (req, res) => {
 if (process.env.AGENT_CONSOLE_MOCK === "1") { // UI tests add events after start-up; never exists on a real server
   app.post("/api/automation/_mock/event", express.json(), (req, res) => { try { res.json(automationLog.record(req.body)); } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); } });
 }
-app.post("/api/automation/debug", sameOrigin, express.json({ limit: "4kb" }), (req, res) => {
+app.get("/api/automation/job", (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  try { res.json(diagnoseJob({ v: req.query.v === undefined ? undefined : Number(req.query.v), repo: req.query.repo as string, number: Number(req.query.number) }, { threads: () => threads.list(), events: () => automationLog.all(), lastError: id => readJobError(DATA_DIR, id) })); }
+  catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+app.post("/api/automation/assign", sameOrigin, express.json({ limit: "4kb" }), async (req, res) => {
+  const { v, repo, number, provider, model, effort, mode, claudeAccount } = req.body ?? {};
+  const choice = { v, repo, number, provider, model, effort, mode, claudeAccount };
+  // The dialog asks for NDJSON to draw each step live; the last line is the thread or the error.
+  if (!String(req.headers.accept).includes("application/x-ndjson")) {
+    try { return void res.json(await assignPremium(choice)); } catch (e: any) { return void res.status(400).json({ error: String(e?.message ?? e) }); }
+  }
+  res.setHeader("Content-Type", "application/x-ndjson");
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("X-Accel-Buffering", "no");
+  res.flushHeaders();
+  const line = (msg: unknown) => { if (!res.writableEnded) res.write(JSON.stringify({ ...msg as object, at: Date.now() }) + "\n"); };
+  try { line({ t: "done", thread: (await assignPremium(choice, line)).thread }); } catch (e: any) { line({ t: "error", error: String(e?.message ?? e) }); }
+  res.end();
+});
+app.post("/api/automation/debug", sameOrigin, express.json({ limit: "4kb" }), async (req, res) => {
   try {
     const mock = process.env.AGENT_CONSOLE_MOCK === "1"; // the mock server has no real agents: debug runs on the mock provider
-    const out = startDebug({ v: req.body?.v, focus: req.body?.focus, note: req.body?.note }, {
+    const out = await startDebug({ v: req.body?.v, focus: req.body?.focus, note: req.body?.note }, {
       api: automation, log: automationLog, usage: () => usage.all(), dirs: defaultDirs(),
       active: () => threads.list().filter(t => t.issueRun && t.status === "running").map(t => ({ provider: t.provider, role: t.issueRun!.role })),
       runner: { create: o => threads.create(mock ? { ...o, provider: "mock", model: "echo", effort: "default" } : o), send: (id, text) => threads.send(id, text) },
@@ -394,18 +517,47 @@ app.get("/api/dashboard", async (req, res) => {
   try {
     const d = await dashboard(from, to);
     const titles: Record<string, string> = {};
-    for (const t of d.turns) titles[t.thread] ??= threads.get(t.thread)?.title ?? "Deleted thread";
+    const cwds: Record<string, string | null> = {};
+    for (const t of d.turns) {
+      titles[t.thread] ??= threads.get(t.thread)?.title ?? "Deleted thread";
+      cwds[t.thread] ??= threads.get(t.thread)?.cwd ?? null;
+    }
     let turnLatencyStats: any = { available: false };
     try { turnLatencyStats = turnLatency(from, to); } catch {}
-    res.json({ ...d, titles, latency: turnLatencyStats });
+    res.json({ ...d, titles, cwds, latency: turnLatencyStats });
   }
   catch { res.status(503).json({ error: "Dashboard data is unavailable." }); }
+});
+app.get("/api/dashboard/overhead", async (_req, res) => {
+  res.set("Cache-Control", "no-store");
+  try { res.json(await promptOverhead()); } catch { res.status(503).json({ error: "Prompt overhead is unavailable." }); }
 });
 app.get("/api/host/metrics", hostMetrics);
 app.get("/api/host/processes", hostProcesses);
 app.get("/api/host/processes/:pid/detail", hostProcessDetail);
 app.get("/api/host/ports", hostPorts);
+app.get("/api/host/history", hostHistory);
+app.get("/api/host/du", hostDu);
+app.post("/api/host/du/rescan", sameOrigin, hostDuRescan);
 app.post("/api/host/processes/:pid/kill", express.json({ limit: "1kb" }), sameOrigin, hostKill);
+// Security scan results from the VPS host (read over SSH; "Run scan" is same-origin only).
+mountSecurity(app, sameOrigin);
+// App ideas: index.md + one markdown file per idea in a private git repo (server/ideas.ts). Adding commits, so same-origin only.
+const ideaError = (res: express.Response, e: any) => res.status(e instanceof IdeaError ? e.status : 500).json({ error: e instanceof IdeaError ? e.message : "App ideas are unavailable." });
+app.get("/api/ideas", (_req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  try { res.json(ideas.list()); } catch (e) { ideaError(res, e); }
+});
+app.get("/api/ideas/:slug", (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  try { res.json(ideas.read(req.params.slug)); } catch (e) { ideaError(res, e); }
+});
+app.post("/api/ideas/:slug/bullets", sameOrigin, express.json({ limit: "4kb" }), async (req, res) => {
+  try { res.status(201).json(await ideas.addBullet(req.params.slug, { section: req.body?.section, text: req.body?.text })); } catch (e) { ideaError(res, e); }
+});
+app.post("/api/ideas", sameOrigin, express.json({ limit: "4kb" }), async (req, res) => {
+  try { res.status(201).json(await ideas.add({ name: req.body?.name, line: req.body?.line })); } catch (e) { ideaError(res, e); }
+});
 app.get("/uploads/:thread/:id/:name", (req, res) => {
   const { thread, id, name } = req.params;
   if (!isId(thread) || !isId(id) || !SAFE_NAME.test(name)) return void res.status(404).end();
@@ -590,9 +742,6 @@ wss.on("connection", (ws) => {
   });
 });
 
-void refreshPiModels();
-await headroom.start();
-
 if (acodeSettings) {
   const bridgeServer = acodePublicApp(acode, ROOT).listen(acodeSettings.port, HOST);
   // a scratch server reads the same env file as the live one: exiting here made agents hunt down the port's owner, the live server
@@ -600,11 +749,24 @@ if (acodeSettings) {
 }
 
 server.listen(PORT, HOST, () => {
+  const defaultDataDir = path.join(os.homedir(), ".config", "agent-console");
+  repairUsageHistory({ pidFile: PID_FILE || (DATA_DIR === defaultDataDir ? path.join(RUN_DIR, "pid") : undefined) });
   if (PID_FILE) fs.writeFileSync(PID_FILE, String(process.pid)); // only the process that holds the port may claim it
   startModelRateBroker(PORT); // same rule: a scratch server that lost the port must not repoint the live broker
+  startHostSampler(); // 5 s host samples for the Host page's history charts
+  workspaceMonitor?.start(); // reads those samples; alerts and escalation (docs/monitoring.md)
   console.log(`agent-console listening on http://${HOST}:${PORT}`);
   console.log(CODER_HOSTS.length ? `auth: Coder SSO for ${CODER_HOSTS.join(", ")} (password cookie still works elsewhere)` : "auth: password only");
   if (process.env.AGENT_CONSOLE_SHOW_PASSWORD) console.log(`password: ${PASSWORD}`);
+  void refreshPiModels(); // `pi --list-models` takes seconds; spawn it once the port is taken
+  // Boot work nothing waits on runs once the first page has had its turn on the event loop.
+  setTimeout(() => {
+    // Never wait for the proxy: a cold Headroom launch takes up to 10 s, and turns go direct until it is healthy.
+    void headroom.start().catch(() => console.warn("Headroom proxy failed to start."));
+    threads.restoreTelemetry();
+    threads.warmAccounting();
+    void sessionSearch.warm().catch(() => console.warn("Session search index will retry on the next query."));
+  }, 1000).unref();
 });
 
 // A hash of the code this process loaded. Open tabs compare it on reconnect and reload themselves when the server was replaced
@@ -627,7 +789,9 @@ for (const sig of ["SIGINT", "SIGTERM"] as const) {
     try { newest = execFileSync("ps", ["-eo", "pid,ppid,etime,args", "--sort=-start_time"], { encoding: "utf8" }).split("\n").slice(0, 16).map(l => l.slice(0, 240)).join("\n"); } catch {}
     console.log(`[${new Date().toISOString()}] stopping on ${sig}; newest processes:\n${newest}`);
     schedules.shutdown();
+    benchmarks.close();
     threads.shutdown();
+    workspaceMonitor?.stop();
     await headroom.stop();
     latency?.close();
     process.exit(0);

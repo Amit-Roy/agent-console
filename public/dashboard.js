@@ -55,18 +55,77 @@ async function fetchRange(from, to) {
   if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `HTTP ${r.status}`);
   return r.json();
 }
+// ---------- tabs ----------
+let tab = new URLSearchParams(location.search).get("tab") === "tokens" ? "tokens" : "usage";
+let overhead = { loading: true }, ohSeq = 0, lastCur = null, tokensMod = null;
+function applyTab(focus) {
+  for (const b of document.querySelectorAll(".tabs [role=tab]")) {
+    const on = b.dataset.tab === tab;
+    b.setAttribute("aria-selected", String(on)); b.tabIndex = on ? 0 : -1;
+    if (on && focus) b.focus();
+  }
+  $("dm").hidden = tab !== "usage"; $("dt").hidden = tab !== "tokens";
+  hideTip();
+}
+function setTab(next, focus) {
+  if (next === tab) { if (focus) applyTab(true); return; }
+  tab = next;
+  const u = new URL(location.href);
+  if (tab === "tokens") u.searchParams.set("tab", "tokens"); else u.searchParams.delete("tab");
+  history.replaceState(null, "", u);
+  applyTab(focus);
+  void load();
+}
+for (const b of document.querySelectorAll(".tabs [role=tab]")) {
+  b.onclick = () => setTab(b.dataset.tab);
+  b.onkeydown = (e) => {
+    const order = ["usage", "tokens"], i = order.indexOf(b.dataset.tab);
+    const next = e.key === "ArrowRight" ? order[(i + 1) % 2] : e.key === "ArrowLeft" ? order[(i + 1) % 2] : e.key === "Home" ? order[0] : e.key === "End" ? order[1] : null;
+    if (next) { e.preventDefault(); setTab(next, true); }
+  };
+}
+
+// ---------- tokens tab ----------
+async function fetchOverhead() {
+  const mine = ++ohSeq;
+  try {
+    const r = await fetch("/api/dashboard/overhead", { credentials: "same-origin" });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `HTTP ${r.status}`);
+    const data = await r.json();
+    if (mine === ohSeq) overhead = data;
+  } catch (e) {
+    if (mine === ohSeq) overhead = { error: e.message };
+  }
+  if (mine === ohSeq && tab === "tokens") renderTokensTab();
+}
+function retryOverhead() { overhead = { loading: true }; renderTokensTab(); void fetchOverhead(); }
+function renderTokensTab() {
+  if (!lastCur || !tokensMod) return;
+  tokensMod.renderTokens($("dt"), lastCur, overhead, { el, panel, kpi, hbars, legend, fmt, usd, pct, provMeta, showTip, hideTip, retryOverhead });
+}
+
 let seq = 0;
 async function load() {
   const mine = ++seq;
-  $("dm").setAttribute("aria-busy", "true");
+  const root = $(tab === "tokens" ? "dt" : "dm");
+  root.setAttribute("aria-busy", "true");
   try {
-    const span = range.to - range.from;
-    const [cur, prev] = await Promise.all([fetchRange(range.from, range.to), fetchRange(range.from - span, range.from - 1).catch(() => null)]);
-    if (mine === seq) { render(cur, prev); }
+    if (tab === "tokens") {
+      const [cur, mod] = await Promise.all([fetchRange(range.from, range.to), tokensMod || import("/dashboard-tokens.js")]);
+      if (mine !== seq) return;
+      tokensMod = mod; lastCur = cur;
+      if (!overhead || overhead.error) overhead = { loading: true };
+      renderTokensTab();
+      void fetchOverhead();
+    } else {
+      const span = range.to - range.from;
+      const [cur, prev] = await Promise.all([fetchRange(range.from, range.to), fetchRange(range.from - span, range.from - 1).catch(() => null)]);
+      if (mine === seq) { render(cur, prev); }
+    }
   } catch (e) {
-    if (mine === seq) $("dm").replaceChildren(el("p", "muted", `Could not load usage: ${e.message}`));
+    if (mine === seq) root.replaceChildren(el("p", "muted", `Could not load ${tab === "tokens" ? "tokens" : "usage"}: ${e.message}`));
   }
-  if (mine === seq) $("dm").setAttribute("aria-busy", "false");
+  if (mine === seq) root.setAttribute("aria-busy", "false");
 }
 
 const hasTokens = (t) => Number.isFinite(t.in) && t.in >= 0 && Number.isFinite(t.out) && t.out >= 0;
@@ -76,6 +135,8 @@ const sumTurns = (turns) => ({
   knownCost: turns.filter(t => t.cost != null && t.accounting === 2).length,
   turns: turns.length,
   tokens: turns.reduce((s, t) => s + tokensOf(t), 0),
+  in: turns.reduce((s, t) => s + (hasTokens(t) ? t.in : 0), 0),
+  out: turns.reduce((s, t) => s + (hasTokens(t) ? t.out : 0), 0),
   cache: turns.reduce((s, t) => s + (t.accounting === 2 ? t.cache || 0 : 0), 0),
   cost: turns.reduce((s, t) => s + (t.accounting === 2 ? t.cost || 0 : 0), 0),
   ms: turns.reduce((s, t) => s + (t.ms || 0), 0),
@@ -86,9 +147,15 @@ const savedOf = (d) => {
   return { rtk, hr };
 };
 const PLAN_KEY = "ac_subscription_monthly_usd_v1";
-let monthlyFees = {};
-try { monthlyFees = JSON.parse(localStorage.getItem(PLAN_KEY) || "{}"); } catch {}
-if (!monthlyFees || typeof monthlyFees !== "object" || Array.isArray(monthlyFees)) monthlyFees = {};
+const DEFAULT_MONTHLY_FEES = { claude: 40, codex: 20 };
+let monthlyFees = { ...DEFAULT_MONTHLY_FEES };
+try {
+  const savedFees = localStorage.getItem(PLAN_KEY);
+  if (savedFees !== null) {
+    const parsedFees = JSON.parse(savedFees);
+    if (parsedFees && typeof parsedFees === "object" && !Array.isArray(parsedFees)) monthlyFees = parsedFees;
+  }
+} catch {}
 // Include every selected UTC calendar day; each month contributes its own day fraction.
 function allocatedFee(monthly, from, to) {
   let total = 0;
@@ -100,13 +167,14 @@ function allocatedFee(monthly, from, to) {
 }
 const feeKnown = (p) => Number.isFinite(monthlyFees[p]) && monthlyFees[p] >= 0;
 function subscriptionPanel(cur) {
-  const p = panel("API estimate vs your subscriptions", "Compare public API list prices with the fees you enter for this period.");
+  const p = panel("API estimate vs your subscriptions", "Your configured monthly subscription fees.");
   const result = el("div", "comparison-result");
   const draw = () => {
     const providers = ["claude", "codex"];
     const active = providers.filter(provider => cur.turns.some(t => t.provider === provider));
     const missing = active.filter(provider => !feeKnown(provider));
     const configured = providers.filter(feeKnown);
+    p.querySelector(".head .sub").textContent = configured.length ? `${configured.map(provider => `${provMeta(provider)[0]}: ${usd(monthlyFees[provider])}/month`).join(" · ")}. Fees are editable.` : "Set your monthly subscription fees to compare.";
     const comparable = cur.turns.filter(t => configured.includes(t.provider));
     const measured = comparable.filter(t => t.accounting === 2 && t.cost != null);
     const api = measured.reduce((sum, t) => sum + t.cost, 0);
@@ -114,7 +182,7 @@ function subscriptionPanel(cur) {
     const complete = !missing.length && comparable.length > 0 && measured.length === comparable.length;
     const values = el("div", "comparison-values");
     values.append(kpi("Estimated API cost", measured.length ? usd(api) : "—", `${measured.length}/${comparable.length} matching turns priced · ${configured.map(p => provMeta(p)[0]).join(" + ") || "no fees configured"}`),
-      kpi("Your allocated subscription cost", configured.length ? usd(fees) : "Not configured", "All configured plans, including days without activity; prorated by UTC calendar day"),
+      kpi("Your allocated subscription cost", configured.length ? usd(fees) : "Not configured", `${usd(configured.reduce((sum, provider) => sum + monthlyFees[provider], 0))}/month · prorated by UTC calendar day`),
       kpi("API estimate minus subscriptions", complete ? `${api < fees ? "−" : ""}${usd(Math.abs(api - fees))}` : "—", complete ? (api >= fees ? "API estimate is higher" : "Subscription allocation is higher") : "Requires fees and full API cost coverage"));
     const note = missing.length ? `Enter your monthly ${missing.map(p => p === "codex" ? "Codex / ChatGPT" : "Claude").join(" and ")} fee to compare.` : "Enter the full monthly fee you pay, including any taxes you want counted. Use 0 for no paid plan.";
     result.replaceChildren(values, el("p", "note", note), el("p", "note", "This compares recorded console activity with allocated plan fees, not a bill or a claim of savings. Pi / pay-as-you-go activity is excluded. Fees apply across this selected range; adjust them if your plan changed."));
@@ -123,7 +191,7 @@ function subscriptionPanel(cur) {
   const settings = el("details", "subscription-settings");
   settings.append(el("summary", "", "Set your monthly subscription fees"));
   const form = el("form", "subscription-form");
-  for (const [provider, name] of [["claude", "Claude monthly fee (USD)"], ["codex", "Codex / ChatGPT monthly fee (USD)"]]) {
+  for (const [provider, name] of [["claude", "Claude combined monthly fee (USD)"], ["codex", "Codex / ChatGPT monthly fee (USD)"]]) {
     const label = el("label", "", name), input = el("input");
     input.type = "number"; input.min = "0"; input.max = "100000"; input.step = "0.01"; input.inputMode = "decimal";
     input.name = provider; input.value = feeKnown(provider) ? String(monthlyFees[provider]) : ""; input.placeholder = "Not configured";
@@ -332,7 +400,8 @@ function render(cur, prev) {
   const kpis = el("div", "kpis");
   kpis.append(
     kpi("Turns", fmt(cs.turns), ps ? delta(cs.turns, ps.turns) : "", false),
-    kpi("Tokens processed", cs.knownTokens ? fmt(cs.tokens) : "—", `${cs.knownTokens}/${cs.turns} turns with token counts · ${fmt(cs.cache)} verified cache reads included`, false),
+    kpi("Input tokens", cs.knownTokens ? fmt(cs.in) : "—", `${fmt(cs.cache)} cache reads included`, false),
+    kpi("Output tokens", cs.knownTokens ? fmt(cs.out) : "—", `${cs.knownTokens}/${cs.turns} turns counted`, false),
     kpi("Estimated API cost", cs.knownCost ? usd(cs.cost) : "—", `${cs.knownCost}/${cs.turns} turns priced${cs.knownCost < cs.turns ? " · partial coverage" : ""} · public list prices`, false),
     kpi("RTK output reduction", fmt(sv.rtk), "Command output; all local CLI activity", true),
     kpi("Headroom input reduction", fmt(sv.hr), "Claude + Codex proxy activity; separate scope", true),
@@ -373,28 +442,28 @@ function render(cur, prev) {
   savePanel.append(sv.rtk || sv.hr ? barChart(srows, hrSeries, fmt) : el("div", "empty-c", "No savings recorded in this range."), legend(hrSeries.map((s) => [s.name, s.color])));
 
   // breakdowns
-  const byModel = new Map(), byTool = new Map(), byThread = new Map();
+  const byTool = new Map(), byThread = new Map();
   for (const t of cur.turns) {
-    const m = `${provMeta(t.provider)[0]} · ${t.model || "default"}`;
-    byModel.set(m, (byModel.get(m) || 0) + 1);
     for (const [n, c] of Object.entries(t.tools || {})) byTool.set(n, (byTool.get(n) || 0) + c);
     const th = byThread.get(t.thread) || { turns: 0, tokens: 0, cost: 0, p: t.provider };
     th.turns++; th.tokens += tokensOf(t); th.cost += t.accounting === 2 ? t.cost || 0 : 0; byThread.set(t.thread, th);
   }
   const top = (m, n = 8) => [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, n);
-  const modelPanel = panel("Models", "Turns by configured model; Claude may use additional unattributed models");
-  modelPanel.append(hbars(top(byModel).map(([name, value]) => ({ name, value, color: css(provMeta(name.split(" · ")[0].toLowerCase())[1]) })), (v) => `${v} turns`));
-  const measuredModels = new Map();
-  for (const turn of cur.turns.filter(t => t.accounting === 2)) for (const model of turn.models || []) {
-    const row = measuredModels.get(model.model) || { cost: 0, known: false };
-    if (model.cost != null) { row.cost += model.cost; row.known = true; }
-    measuredModels.set(model.model, row);
+  const modelPanel = panel("Models", "Tokens and estimated API cost by actual model");
+  const byModel = new Map();
+  for (const turn of cur.turns.filter(t => t.accounting === 2)) for (const m of turn.models || []) {
+    const row = byModel.get(m.model) || { in: 0, out: 0, cost: 0, known: false };
+    row.in += (m.fresh || 0) + (m.cacheWrite || 0) + (m.cacheRead || 0); row.out += m.output || 0;
+    if (m.cost != null) { row.cost += m.cost; row.known = true; }
+    byModel.set(m.model, row);
   }
-  if (measuredModels.size) {
-    const list = el("dl");
-    for (const [name, row] of [...measuredModels].sort((a, b) => b[1].cost - a[1].cost)) list.append(el("dt", "", name), el("dd", "", row.known ? usd(row.cost) : "Cost unknown"));
-    modelPanel.append(list, el("p", "note", "Estimated API costs by actual model. Claude does not separately identify advisor and subagent cost."));
+  const table = el("div", "mtab");
+  table.append(...["Model", "In", "Out", "Cost"].map((h) => el("div", "h", h)));
+  for (const [name, r] of [...byModel].filter(([, r]) => r.in || r.out || r.cost).sort((a, b) => b[1].cost - a[1].cost || b[1].in - a[1].in)) {
+    const n = el("div", "n", name); n.title = name;
+    table.append(n, el("div", "", fmt(r.in)), el("div", "", fmt(r.out)), el("div", "", r.known ? usd(r.cost) : "—"));
   }
+  modelPanel.append(byModel.size ? table : el("div", "empty-c", "No model usage in this range."));
   const toolPanel = panel("Tools", "What the agents reached for");
   toolPanel.append(hbars(top(byTool, 10).map(([name, value]) => ({ name, value, color: css("--c-used") })), (v) => `${fmt(v)} calls`));
   const threadPanel = panel("Busiest threads", "By turns");
@@ -458,6 +527,7 @@ function render(cur, prev) {
 }
 
 // ---------- boot ----------
+applyTab(false);
 const m = /^#(\d{4}-\d{2}-\d{2})\.\.(\d{4}-\d{2}-\d{2})$/.exec(location.hash);
 if (m) setRange("custom", new Date(`${m[1]}T00:00:00Z`).getTime(), Math.min(Date.now(), new Date(`${m[2]}T23:59:59Z`).getTime()));
 else setRange(["1", "7", "30", "90"].includes(location.hash.slice(1)) ? location.hash.slice(1) : "7");

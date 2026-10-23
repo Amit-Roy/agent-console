@@ -26,11 +26,13 @@ try {
   await Promise.all([low, medium, high]);
   assert.deepEqual(order, ["interactive", "triage", "label"]);
 
-  const inspect = new DatabaseSync(path.join(dir, "priority"));
-  await gate.acquire(); // a fresh start guarantees the next request is still queued when it is cancelled
+  // A long interval keeps the next request queued when it is cancelled, however late a loaded host resolves the first.
+  const slow = make("cancel", { intervalMs: 5000 });
+  const inspect = new DatabaseSync(path.join(dir, "cancel"));
+  await slow.acquire();
   const before = inspect.prepare("SELECT next_at FROM admission").get();
   const cancel = new AbortController();
-  const pending = gate.acquire({ signal: cancel.signal, priority: "interactive" });
+  const pending = slow.acquire({ signal: cancel.signal, priority: "interactive" });
   cancel.abort();
   await assert.rejects(pending, { name: "AbortError" });
   assert.deepEqual(inspect.prepare("SELECT next_at FROM admission").get(), before);
@@ -40,7 +42,7 @@ try {
   inspect.close();
 
   const providers = make("providers", { intervalMs: 10 });
-  const until = providers.report429("0.12", "nvidia");
+  const until = providers.report429("1", "nvidia");
   let nvidiaStarted = 0;
   const nvidia = providers.acquire({ provider: "nvidia" }).then(() => { nvidiaStarted = Date.now(); });
   await providers.acquire({ provider: "openrouter" });
@@ -48,11 +50,15 @@ try {
   await nvidia;
   assert.ok(nvidiaStarted >= until);
   // A cooldown published after enqueue must also be rechecked at admission.
-  // A slow interval keeps the request queued, so the cooldown lands after enqueue and before admission.
+  // Pause the worker queue to make the enqueue/cooldown/admission order deterministic under CPU load.
   const recheck = make("recheck", { intervalMs: 150 });
   await recheck.acquire();
+  const recheckQueue = (recheck as any).queue;
+  recheckQueue.pause();
   const queued = recheck.acquire({ provider: "nvidia", priority: "interactive" });
+  assert.equal(recheckQueue.size, 1, "request is queued before cooldown publication");
   const recheckUntil = recheck.report429("0.3", "nvidia");
+  recheckQueue.start();
   await queued;
   assert.ok(Date.now() >= recheckUntil);
   assert.ok(providers.report429("invalid", "other") >= Date.now() + 29_900);

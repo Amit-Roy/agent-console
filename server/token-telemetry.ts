@@ -3,7 +3,7 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { accountingSamples } from "./accounting-log.ts";
 import { safeTriageText } from "./triage-comment.ts";
-import { raisedPrs } from "./session-prs.ts";
+import { raisedItems } from "./session-prs.ts";
 import { githubRequest, type GithubRequest } from "./github-triage.ts";
 
 export const TELEMETRY_MARKER = "<!-- agent-console-telemetry -->";
@@ -20,7 +20,7 @@ export type ThreadFacts = {
   branch?: string;       // git branch checked out in the thread's cwd (manual threads)
   defaultRepo?: string;  // owner/name of the cwd's origin; resolves bare #n
   texts?: string[];      // user messages
-  raised?: { repo: string; number: number }[]; // PRs the thread opened with `gh pr create`, from its log
+  raised?: { repo: string; number: number }[]; // PRs and issues the thread opened with `gh pr create` / `gh issue create`, from its log
 };
 export type LinkItem = { repo: string; number: number; head?: string };
 export type LinkRequest = { version?: number; thread: ThreadFacts; repos: string[]; item?: LinkItem };
@@ -31,7 +31,7 @@ const NOT_A_FEATURE_BRANCH = new Set(["main", "master", "HEAD", "develop"]);
 /**
  * Rules, in order: (1) automation IssueRun gives its issue and PR; (2) `#n` (default repo) or a github.com issue/pull URL in
  * user messages, at most five, allowlisted repos only; (3) with `item` given, a thread branch equal to the PR head ref (never
- * main/master); (4) PRs the thread itself opened with `gh pr create`, whatever directory or worktree it ran in. Tolerant: unknown request fields and malformed facts are ignored.
+ * main/master); (4) PRs and issues the thread itself opened with `gh pr create` or `gh issue create`, whatever directory or worktree it ran in. Tolerant: unknown request fields and malformed facts are ignored.
  */
 export function linkThread(req: LinkRequest): LinkResponse {
   const allowed = new Set((Array.isArray(req?.repos) ? req.repos : []).filter(r => typeof r === "string" && REPO.test(r)));
@@ -71,6 +71,9 @@ export type RenderResponse = { version: 1; body: string; measured: boolean };
 
 const fmt = (n: number) => n.toLocaleString("en-US");
 type Sum = { input: number; cached: number; output: number; turns: number; measuredTurns: number };
+type Sample = ReturnType<typeof accountingSamples>[number];
+const counter = (value: unknown) => typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+const hasTokens = (sample: Sample | undefined) => counter(sample?.in) != null && counter(sample?.out) != null;
 function summarize(samples: TelemetryRun["samples"]): Sum {
   const s: Sum = { input: 0, cached: 0, output: 0, turns: 0, measuredTurns: 0 };
   for (const sample of samples ?? []) {
@@ -133,7 +136,44 @@ export function createTelemetryService(options: TelemetryOptions) {
   const log = (event: string, fields: Record<string, unknown> = {}) => { try { options.log?.(event, fields); } catch {} };
   const threadsFile = path.join(options.dataDir, "threads.json");
   const threads = options.threads ?? (() => JSON.parse(fs.readFileSync(threadsFile, "utf8")));
-  const readLog = (id: string) => { try { return fs.readFileSync(path.join(options.dataDir, "logs", `${id}.jsonl`), "utf8"); } catch { return null; } };
+  const logFile = (id: string) => path.join(options.dataDir, "logs", `${id}.jsonl`);
+  const readLog = (id: string) => { try { return fs.readFileSync(logFile(id), "utf8"); } catch { return null; } };
+  // App-server usage reaches the turn ledger without being written to the conversation log.
+  function codexLedger() {
+    const ledger = new Map<string, Map<number, Sample>>();
+    let raw: string;
+    try { raw = fs.readFileSync(path.join(options.dataDir, "turns.jsonl"), "utf8"); } catch { return ledger; }
+    for (const line of raw.split("\n")) {
+      try {
+        const row = JSON.parse(line);
+        if (row.accounting !== 2 || row.provider !== "codex" || typeof row.thread !== "string" || !Number.isFinite(row.ts)) continue;
+        const sample: Sample = { ts: row.ts, accounting: 2, in: counter(row.in), out: counter(row.out), cache: counter(row.cache) };
+        const turns = ledger.get(row.thread) ?? new Map<number, Sample>();
+        if (hasTokens(sample) || !hasTokens(turns.get(row.ts))) turns.set(row.ts, sample);
+        ledger.set(row.thread, turns);
+      } catch {} // An incomplete append must not hide earlier completed turns.
+    }
+    return ledger;
+  }
+  // Logs are append-only: a log whose size and mtime are unchanged yields the same facts and samples, so scan it once.
+  type LogScan = { size: number; mtimeMs: number; texts: string[]; raised: ThreadFacts["raised"]; samples?: ReturnType<typeof accountingSamples> };
+  const scans = new Map<string, LogScan>();
+  function scanLog(id: string): LogScan | null {
+    let st: fs.Stats;
+    try { st = fs.statSync(logFile(id)); } catch { scans.delete(id); return null; }
+    const hit = scans.get(id);
+    if (hit && hit.size === st.size && hit.mtimeMs === st.mtimeMs) return hit;
+    const raw = readLog(id);
+    if (raw == null) { scans.delete(id); return null; }
+    const texts: string[] = [];
+    for (const line of raw.split("\n")) {
+      if (!line.includes('"user_input"')) continue;
+      try { const ev = JSON.parse(line); if (ev.type === "user_input" && typeof ev.text === "string") texts.push(ev.text.slice(0, 4000)); } catch {}
+    }
+    const scan = { size: st.size, mtimeMs: st.mtimeMs, texts, raised: raisedItems(raw) };
+    scans.set(id, scan);
+    return scan;
+  }
   let actor: Promise<string> | undefined;
   const login = () => actor ??= github("GET", "user").then(u => {
     if (typeof u?.login !== "string" || !u.login) throw new Error("Missing GitHub actor");
@@ -153,33 +193,28 @@ export function createTelemetryService(options: TelemetryOptions) {
   }
 
   function factsOf(t: ReturnType<NonNullable<typeof options.threads>>[number]): ThreadFacts {
-    const raw = readLog(t.id);
-    const texts: string[] = [];
-    for (const line of raw?.split("\n") ?? []) {
-      if (!line.includes('"user_input"')) continue;
-      try { const ev = JSON.parse(line); if (ev.type === "user_input" && typeof ev.text === "string") texts.push(ev.text.slice(0, 4000)); } catch {}
-    }
-    return { id: t.id, issueRun: t.issueRun, branch: t.branch, defaultRepo: t.defaultRepo, texts, raised: raw ? raisedPrs(raw) : [] };
+    const scan = scanLog(t.id);
+    return { id: t.id, issueRun: t.issueRun, branch: t.branch, defaultRepo: t.defaultRepo, texts: scan?.texts ?? [], raised: scan?.raised ?? [] };
   }
 
   // Branch and origin repo come from git in the thread's cwd; both are best effort.
-  async function enrich(t: ReturnType<NonNullable<typeof options.threads>>[number]) {
+  // Many threads share a cwd, and forking git from this process is costly: cache per cwd, refresh when a turn ends there.
+  const gitInfo = new Map<string, { at: number; info: Promise<{ branch: string; defaultRepo?: string } | undefined> }>();
+  async function enrich(t: ReturnType<NonNullable<typeof options.threads>>[number], fresh = false) {
     if (!t.cwd || t.issueRun) return t;
-    try {
-      const [branch, remote] = await Promise.all([git(t.cwd, "rev-parse", "--abbrev-ref", "HEAD"), git(t.cwd, "remote", "get-url", "origin")]);
-      return { ...t, branch, defaultRepo: parseRemote(remote) };
-    } catch { return t; }
+    let hit = gitInfo.get(t.cwd);
+    if (fresh || !hit || Date.now() - hit.at >= 10 * 60_000) {
+      hit = { at: Date.now(), info: Promise.all([git(t.cwd, "rev-parse", "--abbrev-ref", "HEAD"), git(t.cwd, "remote", "get-url", "origin")])
+        .then(([branch, remote]) => ({ branch, defaultRepo: parseRemote(remote) }), () => undefined) };
+      gitInfo.set(t.cwd, hit);
+    }
+    const info = await hit.info;
+    return info ? { ...t, ...info } : t;
   }
 
-  // Thread facts need git and a log scan: reuse them for a minute, and drop them when the thread finishes a turn.
-  const prep = new Map<string, { at: number; t: ReturnType<NonNullable<typeof options.threads>>[number]; facts: ThreadFacts }>();
   async function prepared(raw: ReturnType<NonNullable<typeof options.threads>>[number], fresh = false) {
-    const hit = prep.get(raw.id);
-    if (!fresh && hit && Date.now() - hit.at < 60_000) return hit;
-    const t = await enrich(raw);
-    const entry = { at: Date.now(), t, facts: factsOf(t) };
-    prep.set(raw.id, entry);
-    return entry;
+    const t = await enrich(raw, fresh);
+    return { t, facts: factsOf(t) };
   }
 
   /** Render and upsert the one telemetry comment for an issue or PR. Threads are matched by linkThread. */
@@ -189,12 +224,23 @@ export function createTelemetryService(options: TelemetryOptions) {
     const existing = await findComment(req.repo, req.number);
     if (existing && req.createOnly) return { status: "unchanged" as const };
     const runs: TelemetryRun[] = [];
+    const ledger = codexLedger();
     for (const raw of threads()) {
       const { t, facts } = await prepared(raw);
       if (!linkThread({ thread: facts, repos, item: req }).linked) continue;
-      const log = readLog(t.id);
-      runs.push({ thread: t.id, title: t.title, provider: t.provider, model: t.model, createdAt: t.createdAt,
-        samples: log == null ? null : accountingSamples(log, { id: t.id, provider: t.provider, model: t.model, createdAt: t.createdAt }) });
+      const scan = scanLog(t.id);
+      if (scan && !scan.samples) { const log = readLog(t.id); if (log != null) scan.samples = accountingSamples(log, { id: t.id, provider: t.provider, model: t.model, createdAt: t.createdAt }); }
+      let samples = scan?.samples ?? null;
+      const stored = t.provider === "codex" ? ledger.get(t.id) : undefined;
+      if (stored) {
+        const turns = new Map(samples?.map(sample => [sample.ts, sample]));
+        for (const [ts, sample] of stored) {
+          if (ts < (t.createdAt ?? 0)) continue;
+          if (hasTokens(sample) || !hasTokens(turns.get(ts))) turns.set(ts, sample);
+        }
+        samples = [...turns.values()];
+      }
+      runs.push({ thread: t.id, title: t.title, provider: t.provider, model: t.model, createdAt: t.createdAt, samples });
     }
     const { body } = renderTelemetry({ repo: req.repo, number: req.number, runs });
     if (body.length > 60_000) throw new Error("Telemetry comment exceeds size limit");
@@ -273,6 +319,6 @@ export function createTelemetryService(options: TelemetryOptions) {
   }
 
   async function flush() { for (const [k, t] of timers) { clearTimeout(t); timers.delete(k); const [repo, n] = [k.slice(0, k.indexOf("#")), Number(k.slice(k.indexOf("#") + 1))]; await syncByNumber(repo, n).catch(e => log("telemetry_failed", { repo, number: n, error: why(e) })); } await Promise.all(pending); }
-  function close() { prep.clear(); for (const t of timers.values()) clearTimeout(t); timers.clear(); }
+  function close() { scans.clear(); gitInfo.clear(); for (const t of timers.values()) clearTimeout(t); timers.clear(); }
   return { syncItem, syncByNumber, threadTurnEnded, ensureComment, backfill, flush, close };
 }

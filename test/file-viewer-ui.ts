@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {spawn} from 'node:child_process';
+import {spawn, spawnSync} from 'node:child_process';
 import {chromium, type Browser, type Page} from 'playwright';
 import sharp from 'sharp';
 
@@ -26,6 +26,14 @@ fs.writeFileSync(path.join(cwd, 'codex-code-mode-host'), '#!/usr/bin/env bash\ns
 const png = await sharp({create: {width: 320, height: 200, channels: 4, background: '#7e8bd6'}}).png().toBuffer();
 fs.writeFileSync(path.join(cwd, 'preview.png'), png);
 fs.writeFileSync(path.join(fixture, 'workspace.png'), png);
+// Playable media over the 1 MB text preview limit: a 6 s stereo 16-bit WAV, and a VP8 WebM when ffmpeg exists.
+const wavRate = 48000, wavFrames = wavRate * 6, wav = Buffer.alloc(44 + wavFrames * 4);
+wav.write('RIFF', 0); wav.writeUInt32LE(36 + wavFrames * 4, 4); wav.write('WAVEfmt ', 8); wav.writeUInt32LE(16, 16);
+wav.writeUInt16LE(1, 20); wav.writeUInt16LE(2, 22); wav.writeUInt32LE(wavRate, 24); wav.writeUInt32LE(wavRate * 4, 28); wav.writeUInt16LE(4, 32); wav.writeUInt16LE(16, 34);
+wav.write('data', 36); wav.writeUInt32LE(wavFrames * 4, 40);
+for (let i = 0; i < wavFrames; i++) { const v = Math.round(Math.sin(2 * Math.PI * 440 * i / wavRate) * 8000); wav.writeInt16LE(v, 44 + i * 4); wav.writeInt16LE(v, 46 + i * 4); }
+fs.writeFileSync(path.join(cwd, 'music.wav'), wav);
+const hasClip = spawnSync('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=blue:s=160x90:d=2:r=10', '-c:v', 'libvpx', '-b:v', '200k', path.join(cwd, 'clip.webm')]).status === 0;
 const sample = path.join(cwd, 'sample.ts');
 fs.writeFileSync(sample, Array.from({length: 100}, (_, n) => `export const line${n + 1} = ${n + 1};`).join('\n'));
 fs.writeFileSync(path.join(cwd, 'unsafe.html'), '<script>window.__fileViewerExecuted = true</script>\n<img src=x onerror="window.__fileViewerExecuted = true">');
@@ -40,6 +48,8 @@ const links = [
   '[Bash helper](./codex-code-mode-host)',
   '[Nested reference](./scripts/nested.ts)',
   '[Project image](./preview.png)',
+  '[Project audio](./music.wav)',
+  '[Project video](./clip.webm)',
   '[Markdown report](./scripts/report.md)',
   '[Markdown line](./scripts/report.md:5)',
   '[Missing file](./missing.ts:2)',
@@ -237,7 +247,25 @@ try {
   await open(page, 'Project image');
   assert.equal(await page.locator('#file-viewer-code .file-viewer-image').count(), 1, await page.locator('#file-viewer-status').textContent() || 'image missing');
   await close(page);
-  console.log('PASS file viewer: extensionless Bash, image pills/thumbnails, project images, lazy tree navigation and pagination');
+  await open(page, 'Project audio');
+  const audio = page.locator('#file-viewer-code audio.file-viewer-media');
+  assert.equal(await audio.count(), 1, await page.locator('#file-viewer-status').textContent() || 'audio missing');
+  assert.equal(await page.locator('#file-viewer-status').textContent(), '0:06 · Audio');
+  assert.ok(await audio.evaluate((a: HTMLAudioElement) => a.controls && a.readyState >= 1), 'audio player loaded metadata');
+  await audio.evaluate((a: HTMLAudioElement) => { a.muted = true; return a.play(); });
+  await page.waitForFunction(() => (document.querySelector('#file-viewer-code audio') as HTMLAudioElement).currentTime > 0.2);
+  await screenshot(page, 'file-viewer-audio.png');
+  await close(page);
+  await page.waitForFunction(() => (document.querySelector('#file-viewer-code audio') as HTMLAudioElement | null)?.paused ?? true, null, {timeout: 2000}).catch(() => assert.fail('closing the viewer stops playback'));
+  if (hasClip) {
+    await open(page, 'Project video');
+    const video = page.locator('#file-viewer-code video.file-viewer-media');
+    assert.equal(await video.count(), 1, await page.locator('#file-viewer-status').textContent() || 'video missing');
+    assert.equal(await page.locator('#file-viewer-status').textContent(), '160 × 90 · 0:02 · Video');
+    await screenshot(page, 'file-viewer-video.png');
+    await close(page);
+  }
+  console.log('PASS file viewer: extensionless Bash, image pills/thumbnails, project images, audio and video players, lazy tree navigation and pagination');
 
   await open(page, 'Markdown report');
   assert.equal(await page.locator('#file-viewer-code h1').textContent(), 'Usage audit');

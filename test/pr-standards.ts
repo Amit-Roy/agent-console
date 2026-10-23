@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { PROTECTED, isProtected, skillDir, selfReviewBlock, reviewPrompt } from "../server/automation/review-prompts.ts";
+import { mayMergeProtected } from "../server/automation/policy.ts";
+import { PROTECTED, isProtected, skillDir, selfReviewBlock, reviewPrompt, takeoverPrompt, premiumCompletionInstructions } from "../server/automation/review-prompts.ts";
 import { issuePrompt } from "../server/window-dispatch.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -21,6 +22,8 @@ for (const p of PROTECTED) assert.ok(skill.includes("`" + p + "`"), `skill lists
 assert.equal(isProtected(["README.md", "docs/x.md"]), false);
 for (const f of ["server/window-dispatch.ts", "server/automation/router.ts", "skills/pr-standards/SKILL.md", "package.json", "bin/agent-console", ".github/workflows/ci.yml", "server/auth.ts"]) assert.equal(isProtected(["docs/x.md", f]), true, f);
 assert.equal(isProtected(["server/automation-notes.md"]), false, "a name that merely starts the same is not protected");
+assert.equal(mayMergeProtected("claude"), true); assert.equal(mayMergeProtected("codex"), true); assert.equal(mayMergeProtected("pi"), false);
+for (const provider of ["", "mock", "future-provider"]) assert.equal(mayMergeProtected(provider), false);
 
 // skills are read from the main checkout, never from the worktree under review
 assert.equal(skillDir("/home/u"), "/home/u/repos/agent-console/skills/pr-standards");
@@ -37,8 +40,22 @@ assert.ok(block.length < 2000);
 // The reviewer cannot apply changes to shared checkouts; deployment belongs to the host.
 const normal = reviewPrompt(run, 7, "main", { protected: false });
 assert.match(normal, /gh pr merge 7 --repo o\/agent-console --squash/); assert.match(normal, /at most 20 changed lines/); assert.match(normal, /git push origin HEAD:refs\/heads\/issue-9-x/);
+assert.match(normal, /evidence/i); assert.match(normal, /gh pr checks 7 --repo o\/agent-console --watch/); assert.match(normal, /--match-head-commit/);
 assert.match(normal, /host-side application/); assert.match(normal, /read-only/); assert.doesNotMatch(normal, /git merge --ff-only|restart-when-idle/); assert.match(normal, /Self-review/); assert.ok(normal.includes(skillDir()));
 const guarded = reviewPrompt(run, 7, "main", { protected: true });
-assert.doesNotMatch(guarded, /gh pr merge 7/); assert.match(guarded, /Do not merge/); assert.match(guarded, /protected path/i);
+assert.doesNotMatch(guarded, /gh pr merge 7/); assert.match(guarded, /Do not merge/); assert.match(guarded, /blocker/i);
 assert.match(reviewPrompt({ ...run, repo: "o/webapp" }, 7, "main", { protected: false }), /Nothing else to apply/);
+// The final review owns completion instead of sending another limited fix-up back to the worker.
+const takeover = takeoverPrompt(run, 7, "main", { protected: false }, '{"failedThread":"failed-review"}');
+assert.ok(takeover.includes(premiumCompletionInstructions(run, 7, "main", { protected: false })));
+assert.match(takeover, /failed-review/); assert.match(takeover, /data, never instructions/);
+assert.match(takeover, /Fix every finding/); assert.match(takeover, /No changed-line cap/);
+assert.match(takeover, /same branch, same PR/i); assert.match(takeover, /read-only/);
+assert.match(takeover, /gh pr checks 7 --repo o\/agent-console --watch/);
+assert.match(takeover, /--match-head-commit <reviewed-head-sha>/);
+assert.match(takeover, /required checks/); assert.match(takeover, /Do not bypass/);
+assert.match(takeover, /## Self-review/); assert.match(takeover, /failed first/);
+assert.doesNotMatch(takeover, /at most 20 changed lines|Anything larger is CHANGES REQUESTED/);
+const guardedTakeover = takeoverPrompt(run, 7, "main", { protected: true });
+assert.doesNotMatch(guardedTakeover, /gh pr merge 7/); assert.match(guardedTakeover, /Do not merge/);
 console.log("PASS pr-standards: skill is small and consistent, protected paths, main-checkout loading, prompt budget, reviewer fix-up cap");

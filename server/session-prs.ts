@@ -5,18 +5,26 @@ export type RaisedPr = { repo: string; number: number; url: string };
 const CREATE = /(?:^|[;&|(]|\n)\s*(?:\w+=\S+\s+)*gh\s+pr\s+create\b/;
 const PR_URL = /https:\/\/github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\/pull\/(\d{1,9})(?!\d)/g;
 
+const CREATE_ITEM = /(?:^|[;&|(]|\n)\s*(?:\w+=\S+\s+)*gh\s+(?:pr|issue)\s+create\b/;
+const ITEM_URL = /https:\/\/github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\/(?:pull|issues)\/(\d{1,9})(?!\d)/g;
+
 export const isPrCreate = (command: unknown) => typeof command === "string" && CREATE.test(command);
 
 /** PR URLs printed by a `gh pr create` result. gh prints the new PR URL last; earlier URLs are existing PRs it mentions. */
-export function prsFromResult(content: unknown): RaisedPr[] {
+export function prsFromResult(content: unknown, url = PR_URL): RaisedPr[] {
   const text = typeof content === "string" ? content : Array.isArray(content) ? content.map(c => typeof c?.text === "string" ? c.text : "").join("\n") : "";
-  const all = [...text.matchAll(PR_URL)];
+  const all = [...text.matchAll(url)];
   const last = all.at(-1);
   return last ? [{ repo: last[1], number: Number(last[2]), url: last[0] }] : [];
 }
 
 /** Whole-log scan for callers without an incremental index. Returns each PR once, in creation order. */
-export function raisedPrs(log: string): RaisedPr[] {
+export function raisedPrs(log: string): RaisedPr[] { return scan(log, CREATE, PR_URL); }
+
+/** Like raisedPrs, but also counts issues made with `gh issue create`, so their telemetry finds the thread that filed them. */
+export function raisedItems(log: string): RaisedPr[] { return scan(log, CREATE_ITEM, ITEM_URL); }
+
+function scan(log: string, create: RegExp, url: RegExp): RaisedPr[] {
   const calls = new Set<string>();
   const out: RaisedPr[] = [];
   for (const line of log.split("\n")) {
@@ -26,9 +34,9 @@ export function raisedPrs(log: string): RaisedPr[] {
     const content = ev?.message?.content;
     if (!Array.isArray(content)) continue;
     for (const block of content) {
-      if (block?.type === "tool_use" && typeof block.id === "string" && isPrCreate(block.input?.command)) calls.add(block.id);
+      if (block?.type === "tool_use" && typeof block.id === "string" && typeof block.input?.command === "string" && create.test(block.input.command)) calls.add(block.id);
       else if (block?.type === "tool_result" && calls.has(block.tool_use_id))
-        for (const pr of prsFromResult(block.content)) if (!out.some(o => o.repo === pr.repo && o.number === pr.number)) out.push(pr);
+        for (const pr of prsFromResult(block.content, url)) if (!out.some(o => o.repo === pr.repo && o.number === pr.number)) out.push(pr);
     }
   }
   return out;

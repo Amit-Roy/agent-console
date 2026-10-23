@@ -36,6 +36,7 @@
   <symbol id="i-trash" viewBox="0 0 16 16"><path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8a1 1 0 0 0 1 .9h3.8a1 1 0 0 0 1-.9l.6-8M6.75 7v4M9.25 7v4"/></symbol>
   <symbol id="i-pencil" viewBox="0 0 16 16"><path d="M10.5 3 13 5.5 6 12.5l-3.25.75L3.5 10z"/></symbol>
   <symbol id="i-eye" viewBox="0 0 16 16"><path d="M1.75 8s2.25-4.5 6.25-4.5S14.25 8 14.25 8s-2.25 4.5-6.25 4.5S1.75 8 1.75 8z"/><circle cx="8" cy="8" r="1.75"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 16 16"><path d="M8 2.5 13 4.25V8c0 3-2 5-5 6.5C5 13 3 11 3 8V4.25L8 2.5Z"/></symbol>
   <symbol id="i-shield-off" viewBox="0 0 16 16"><path d="M5.2 4 8 3l5 1.75V8c0 .9-.2 1.7-.55 2.4M11.2 12.2C10.3 12.9 9.2 13.5 8 14c-3-1.5-5-3.5-5-6.5V4.75L4 4.4"/><path d="m2.5 2.5 11 11"/></symbol>
   <symbol id="i-sparkle" viewBox="0 0 16 16"><path d="M8 2.5 9.4 6.6 13.5 8 9.4 9.4 8 13.5 6.6 9.4 2.5 8 6.6 6.6z"/></symbol>
   <symbol id="i-terminal" viewBox="0 0 16 16"><path d="m3.25 4.75 3.5 3.25-3.5 3.25M8.5 11.5h4.25"/></symbol>
@@ -67,7 +68,10 @@
     <!-- reached from the More menu; kept as elements so their handlers and live labels stay in one place -->
     <div hidden>
       <a id="dash-link" href="/dashboard">Usage dashboard</a>
+      <a id="benchmarks-link" href="/benchmarks">Model benchmarks</a>
       <a id="host-link" href="/host">Host dashboard</a>
+      <a id="security-link" href="/security">Security</a>
+      <a id="ideas-link" href="/ideas">App ideas</a>
       <button id="notifications" type="button" aria-haspopup="dialog">Notifications</button>
       <button id="reload" type="button">Reload page</button>
       <button id="restart" type="button">Restart server</button>
@@ -90,6 +94,12 @@
       <div id="pane-auto" role="tabpanel" aria-labelledby="lane-auto" hidden>
         <a id="auto-link" class="btn ghost new-task" href="/automation"><svg class="ico" aria-hidden="true"><use href="#i-chart"/></svg><span>Automation dashboard</span></a>
         <ul id="autos" class="thread-list auto-list" aria-label="Automated runs"></ul>
+        <div id="auto-archive" hidden>
+          <button id="auto-archive-toggle" class="side-label side-toggle" type="button" aria-expanded="false" aria-controls="auto-archived">
+            <svg class="ico" aria-hidden="true"><use href="#i-chev-right"/></svg><span>Archived</span><span id="auto-archive-count" class="count"></span>
+          </button>
+          <ul id="auto-archived" class="thread-list auto-list" aria-label="Archived automated runs" hidden></ul>
+        </div>
       </div>
       <div id="pane-tasks" role="tabpanel" aria-labelledby="lane-tasks" hidden>
         <ul id="tasks" class="thread-list task-list" aria-label="Scheduled tasks"></ul>
@@ -106,7 +116,7 @@
       </button>
       <div class="title">
         <h1 id="ttl"></h1>
-        <div id="cwd" class="path" hidden><svg class="ico" aria-hidden="true"><use href="#i-folder"/></svg><span id="thread-account" hidden></span><span id="cwd-t"></span></div>
+        <div id="cwd" class="path" hidden><svg class="ico" aria-hidden="true"><use href="#i-folder"/></svg><span id="ttl-archived" class="tag arch" hidden><svg class="ico" aria-hidden="true"><use href="#i-archive"/></svg>Archived</span><span id="thread-account" hidden></span><span id="cwd-t"></span></div>
       </div>
       <span id="state" class="state" role="status" hidden><i class="dot running"></i><span id="state-t">Working</span></span>
       <button id="chat-search-toggle" class="btn icon ghost" type="button" title="Search in chat (Ctrl+F)" aria-label="Search in chat" aria-expanded="false" aria-controls="chat-search" disabled>
@@ -133,7 +143,7 @@
         <div id="cbox">
           <ul id="queued" aria-label="Queued messages" hidden></ul>
           <ul id="thumbs" aria-label="Attachments" hidden></ul>
-          <div id="input" contenteditable="true" spellcheck="true" autocapitalize="sentences" aria-multiline="true" aria-label="Message" aria-describedby="hint" role="combobox" aria-expanded="false" aria-controls="slash" aria-autocomplete="list" data-placeholder="Message the agent" enterkeyhint="send" aria-disabled="true"></div>
+          <div id="input" contenteditable="true" spellcheck="true" autocapitalize="sentences" aria-multiline="true" aria-label="Message" role="combobox" aria-expanded="false" aria-controls="slash" aria-autocomplete="list" data-placeholder="Message the agent" enterkeyhint="send" aria-disabled="true"></div>
           <div class="toolbar">
             <input id="file" type="file" multiple hidden>
             <button id="attach" class="btn icon ghost round" type="button" title="Attach files (or paste / drop them)" aria-label="Attach files" disabled>
@@ -156,7 +166,6 @@
           </div>
         </div>
       </div>
-      <p id="hint" class="hint">Enter sends (while the agent works it queues; press Steer on the queued message, or Alt+Enter, to give it to the agent now). Shift+Enter adds a line. Type / for commands and skills.</p>
     </footer>
   </main>
 </div>
@@ -186,6 +195,9 @@
 <dialog id="dlg" aria-labelledby="dlg-title"><form method="dialog" id="dform">
   <h2 id="dlg-title">New thread</h2>
   <p class="sub" id="dlg-sub">Run a coding agent in one of your folders.</p>
+  <p id="d-assignment-error" class="sub" role="alert" hidden></p>
+  <div class="auto-pick"><button type="button" id="d-auto" class="btn" aria-describedby="d-auto-note"><svg class="ico" aria-hidden="true"><use href="#i-sparkle"/></svg>Auto</button><button type="button" id="d-auto-info" class="btn sm icon ghost" aria-label="Five-hour allowance" aria-expanded="false" aria-controls="d-auto-panel"><svg class="ico" aria-hidden="true"><use href="#i-info"/></svg></button><p id="d-auto-note" class="auto-note">Sonnet or Sol medium, on the allowance closest to going unused.</p></div>
+  <div id="d-auto-panel" class="auto-panel" hidden></div>
   <div id="task-fields" hidden>
     <label class="fld"><span class="lbl">Name</span><input id="d-title" class="input" maxlength="80" autocomplete="off" placeholder="Morning AI news digest"></label>
     <label class="fld"><span class="lbl">Instructions</span><textarea id="d-prompt" class="input" rows="4" maxlength="20000" placeholder="Find the notable AI releases since yesterday. Link sources and say why each matters."></textarea></label>
@@ -206,6 +218,13 @@
   <p id="d-warn" class="callout" role="alert" hidden><svg class="ico" aria-hidden="true"><use href="#i-alert"/></svg><span>Bypass mode runs every tool without asking. Use only in folders you trust.</span></p>
   <div class="row"><button value="cancel" class="btn" formnovalidate>Cancel</button><button value="ok" class="btn primary" id="d-ok">Create thread</button></div>
 </form></dialog>
+<dialog id="ap" aria-labelledby="ap-title">
+  <h2 id="ap-title">Assigning to premium</h2>
+  <p class="sub" id="ap-sub"></p>
+  <ol id="ap-steps" class="ap-steps" aria-live="polite"></ol>
+  <p id="ap-error" role="alert" hidden></p>
+  <div class="row"><button id="ap-close" class="btn" type="button">Close</button><button id="ap-open" class="btn primary" type="button" disabled>See thread</button></div>
+</dialog>
 <dialog id="notifications-dialog" aria-labelledby="notifications-title">
   <h2 id="notifications-title">Notifications</h2>
   <p id="notifications-status" class="sub" role="status" aria-live="polite"></p>

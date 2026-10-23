@@ -8,6 +8,7 @@ import { threadDir } from "../uploads.ts";
 import { cleanQuestions, clip, type Agent, type AgentCtx, type Attachment, type Command, type Provider, type QuestionReply, type ThreadSpec } from "./types.ts";
 import { parseJson, spawnLines } from "./proc.ts";
 import { stylePreamble } from "./brain.ts";
+import { toolEnvFile } from "../tool-priority.ts";
 import { consoleMcpServer, SESSION_INSTRUCTIONS } from "./console-mcp.mjs";
 
 // never let the subscription login be silently replaced by metered API billing
@@ -166,6 +167,8 @@ export const claude: Provider = {
     else if (t.forkFrom) args.push("--resume", t.forkFrom, "--fork-session"); // a forked thread: continue a copy of the parent session
     const env = claudeRoutingEnv(process.env);
     env.AGENT_CONSOLE_THREAD = t.id;
+    const toolEnv = toolEnvFile();
+    if (toolEnv && !env.CLAUDE_ENV_FILE) env.CLAUDE_ENV_FILE = toolEnv; // Bash commands start at the lower tool priority
     if (account === "nefro") env.CLAUDE_CONFIG_DIR = claudeConfigDir(account);
     for (const k of SCRUBBED_ENV) delete env[k];
     const control = claudeControl((msg) => p.write(JSON.stringify(msg)), ctx.event, t.mode);
