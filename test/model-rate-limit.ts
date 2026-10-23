@@ -67,8 +67,10 @@ try {
   recheckQueue.start();
   await queued;
   assert.ok(Date.now() >= recheckUntil);
-  assert.ok(providers.report429("invalid", "other") >= Date.now() + 29_900);
-  assert.ok(providers.report429("9999999", "other") <= Date.now() + 900_000);
+  const cooldownNow = Date.now();
+  const bounds = make("cooldown-bounds", { now: () => cooldownNow });
+  assert.equal(bounds.report429("invalid", "other"), cooldownNow + 30_000);
+  assert.equal(bounds.report429("9999999", "other"), cooldownNow + 900_000);
 
   const minute = make("minute", {
     intervalMs: 5,

@@ -30,7 +30,7 @@ const port = await new Promise<number>((resolve) => {
 });
 assert.notEqual(port, 7070);
 
-const child = spawn(process.execPath, ["server/index.ts"], {
+const child = spawn(process.execPath, [process.env.TEST_SERVER_ENTRY || "server/index.ts"], {
   cwd: root,
   stdio: ["ignore", "pipe", "pipe"],
   env: {

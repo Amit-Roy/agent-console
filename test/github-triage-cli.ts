@@ -14,37 +14,50 @@ const fixtureBin = path.join(scratch, "bin");
 fs.mkdirSync(fixtureBin);
 const githubState = path.join(scratch, "github.json");
 fs.writeFileSync(githubState, JSON.stringify({ calls: [], hooks: {}, pages: [[]], failPage: 0 }));
+// Each GitHub API request launches this fixture, so use a minimal Python process.
 fs.writeFileSync(
   path.join(fixtureBin, "gh"),
-  `#!/usr/bin/env node
-const fs = require("node:fs");
-const statePath = process.env.TRIAGE_TEST_GITHUB;
-const state = JSON.parse(fs.readFileSync(statePath, "utf8"));
-const args = process.argv.slice(2);
-const method = args[args.indexOf("--method") + 1];
-const endpoint = args.find(arg => /^(?:user|repos\\/)/.test(arg));
-state.calls.push({ method, endpoint });
-const save = () => fs.writeFileSync(statePath, JSON.stringify(state));
-let result = [];
-if (endpoint === "user") result = { login: "fixture" };
-else if (endpoint?.startsWith("user/repos?")) {
-  const page = Number(new URL("https://example.invalid/" + endpoint).searchParams.get("page"));
-  if (page === state.failPage) { save(); process.exit(1); }
-  result = state.pages[page - 1] || [];
-} else if (/\\/hooks(?:\\?|\\/\\d+|$)/.test(endpoint || "")) {
-  const repo = endpoint.split("/").slice(1, 3).join("/");
-  const hooks = state.hooks[repo] ||= [];
-  if (method === "GET") result = hooks;
-  else {
-    const body = JSON.parse(fs.readFileSync(0, "utf8"));
-    const id = method === "PATCH" ? Number(endpoint.split("/").at(-1)) : 100 + hooks.length;
-    result = { ...body, id };
-    const existing = hooks.findIndex(hook => hook.id === id);
-    if (existing < 0) hooks.push(result); else hooks[existing] = result;
-  }
-}
-save();
-process.stdout.write(JSON.stringify(result));
+  `#!/usr/bin/env -S python3 -S
+import json
+import os
+import re
+import sys
+
+state_path = os.environ["TRIAGE_TEST_GITHUB"]
+with open(state_path) as source:
+    state = json.load(source)
+args = sys.argv[1:]
+method = args[args.index("--method") + 1]
+endpoint = next((arg for arg in args if re.match(r"^(?:user|repos/)", arg)), "")
+state["calls"].append({"method": method, "endpoint": endpoint})
+def save():
+    with open(state_path, "w") as target:
+        json.dump(state, target)
+result = []
+if endpoint == "user":
+    result = {"login": "fixture"}
+elif endpoint.startswith("user/repos?"):
+    page = int(re.search(r"(?:[?&])page=(\\d+)", endpoint).group(1))
+    if page == state["failPage"]:
+        save()
+        sys.exit(1)
+    result = state["pages"][page - 1] if page <= len(state["pages"]) else []
+elif re.search(r"/hooks(?:\\?|/\\d+|$)", endpoint):
+    repo = "/".join(endpoint.split("/")[1:3])
+    hooks = state["hooks"].setdefault(repo, [])
+    if method == "GET":
+        result = hooks
+    else:
+        body = json.load(sys.stdin)
+        hook_id = int(endpoint.split("/")[-1]) if method == "PATCH" else 100 + len(hooks)
+        result = {**body, "id": hook_id}
+        existing = next((i for i, hook in enumerate(hooks) if hook["id"] == hook_id), None)
+        if existing is None:
+            hooks.append(result)
+        else:
+            hooks[existing] = result
+save()
+json.dump(result, sys.stdout)
 `,
   { mode: 0o700 },
 );
@@ -70,8 +83,8 @@ const env = {
   AGENT_CONSOLE_ENV_FILES: "/dev/null",
   AGENT_CONSOLE_TRIAGE_CONFIG: configuration,
   AGENT_CONSOLE_TRIAGE_RUN: runtime,
-  // Each CLI call and the detached worker re-load the same TypeScript graph; a shared V8 code cache cuts that startup roughly 3x.
-  NODE_COMPILE_CACHE: path.join(scratch, "compile-cache"),
+  // Reuse the runner cache across CLI processes, with a scratch cache for direct runs.
+  NODE_COMPILE_CACHE: process.env.NODE_COMPILE_CACHE || path.join(scratch, "compile-cache"),
 };
 delete env.AGENT_CONSOLE_MOCK;
 const cli = (...args: string[]) =>

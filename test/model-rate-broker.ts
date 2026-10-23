@@ -18,7 +18,7 @@ const port = (listener.address() as net.AddressInfo).port;
 await new Promise<void>((resolve, reject) =>
   listener.close((error) => (error ? reject(error) : resolve())),
 );
-const child = spawn(process.execPath, ["server/index.ts"], {
+const child = spawn(process.execPath, [process.env.TEST_SERVER_ENTRY || "server/index.ts"], {
   cwd: root,
   env: {
     ...process.env,

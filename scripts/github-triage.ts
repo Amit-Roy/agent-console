@@ -8,7 +8,6 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { sign } from "@octokit/webhooks-methods";
 import { announceClosed } from "../server/automation/closed-signal.ts";
-import { createTriageService } from "../server/github-triage.ts";
 import { childEnv } from "../server/providers/env.ts";
 import {
   effortModelPath,
@@ -16,7 +15,6 @@ import {
   quoteEffort,
   requestShape,
 } from "../server/providers/triage-effort.ts";
-import { createTelemetryService } from "../server/token-telemetry.ts";
 
 const SCRIPT = fileURLToPath(import.meta.url);
 const ROOT = path.resolve(path.dirname(SCRIPT), "..");
@@ -546,6 +544,10 @@ async function main() {
   }
   const c = config();
   if (command === "serve") {
+    const [{ createTriageService }, { createTelemetryService }] = await Promise.all([
+      import("../server/github-triage.ts"),
+      import("../server/token-telemetry.ts"),
+    ]);
     fs.mkdirSync(RUN, { recursive: true, mode: 0o700 });
     let service: ReturnType<typeof createTriageService> | undefined;
     const telemetry = createTelemetryService({

@@ -39,7 +39,7 @@ for (const id of ids)
     JSON.stringify({ type: "user_input", text: "fixture" }) + "\n",
   );
 process.env.AGENT_CONSOLE_DATA = data;
-const server = spawn(process.execPath, ["server/index.ts"], {
+const server = spawn(process.execPath, [process.env.TEST_SERVER_ENTRY || "server/index.ts"], {
   env: {
     ...process.env,
     PORT: String(port),
@@ -92,6 +92,7 @@ try {
   const options = {
     viewport: { width: 1280, height: 900 },
     serviceWorkers: "block" as const,
+    reducedMotion: "reduce" as const,
     ...(out ? { recordVideo: { dir: out, size: { width: 1280, height: 900 } } } : {}),
   };
   const profile = path.join(data, "browser-profile");
@@ -457,17 +458,12 @@ try {
     1,
     "interrupted upload is still pending",
   );
-  // Abort the held upload once navigation starts, so cancellation cannot delay the reload.
-  const navigating = page.waitForRequest((request) => request.isNavigationRequest(), {
-    timeout: 7000,
-  });
-  const reloaded = page.reload(navigation);
+  // Keep the interrupted request held until the old document has unloaded.
   try {
-    await navigating;
+    await page.reload(navigation);
   } finally {
     release();
   }
-  await reloaded;
   await ready();
   await thread(0);
   await settled(1);

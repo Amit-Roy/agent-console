@@ -37,7 +37,7 @@ for (const id of ids)
   );
 process.env.AGENT_CONSOLE_DATA = data;
 const { makeToken } = await import("../server/auth.ts");
-const server = spawn(process.execPath, ["server/index.ts"], {
+const server = spawn(process.execPath, [process.env.TEST_SERVER_ENTRY || "server/index.ts"], {
   env: {
     ...process.env,
     PORT: String(port),
@@ -45,7 +45,11 @@ const server = spawn(process.execPath, ["server/index.ts"], {
     AGENT_CONSOLE_RUN: path.join(data, "run"),
     AGENT_CONSOLE_BRAIN: path.join(data, "no-brain"),
   },
-  stdio: ["ignore", "pipe", "ignore"],
+  stdio: ["ignore", "pipe", "pipe"],
+});
+let serverErrors = "";
+server.stderr.on("data", (chunk) => {
+  serverErrors = (serverErrors + chunk.toString()).slice(-8192);
 });
 let browser: Browser;
 try {
@@ -59,11 +63,14 @@ try {
     });
     server.once("exit", (code) => {
       clearTimeout(timer);
-      reject(new Error(`Scratch server exited: ${code}`));
+      reject(new Error(`Scratch server exited: ${code} ${serverErrors}`));
     });
   });
   browser = await chromium.launch();
-  let context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  let context = await browser.newContext({
+    viewport: { width: 1280, height: 900 },
+    reducedMotion: "reduce",
+  });
   await context.addCookies([{ name: "ac_session", value: makeToken(), url: base }]);
   let hello: string | undefined, replay: ((raw: string) => void) | undefined;
   await context.routeWebSocket("**/ws", (socket) => {
@@ -110,8 +117,11 @@ try {
     first,
     "return restores exact draft",
   );
+  await page.locator("#ttl").evaluate((title) => {
+    title.textContent = "Waiting for reconnect hello";
+  });
   replay!(hello!);
-  await page.waitForTimeout(150);
+  await page.waitForFunction(() => document.getElementById("ttl")?.textContent === "Draft 1");
   assert.equal(
     await page.locator("#input").evaluate((e: any) => e.value),
     first,
@@ -128,6 +138,7 @@ try {
   await context.close();
   context = await browser.newContext({
     storageState: saved,
+    reducedMotion: "reduce",
     viewport: { width: 1280, height: 900 },
   });
   page = await context.newPage();
@@ -264,8 +275,10 @@ try {
   );
 } finally {
   await browser?.close();
-  const exited = once(server, "exit");
-  server.kill();
-  await exited;
+  if (server.exitCode === null && server.signalCode === null) {
+    const exited = once(server, "exit");
+    server.kill();
+    await exited;
+  }
   fs.rmSync(data, { recursive: true, force: true });
 }

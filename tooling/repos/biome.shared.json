@@ -9,6 +9,7 @@
       "!!**/.venv",
       "!!**/.git",
       "!!**/.codegraph",
+      "!!**/.bundle",
       "!!**/vendor",
       "!!**/.impeccable",
       "!!**/test/tmp",

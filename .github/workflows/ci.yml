@@ -15,6 +15,7 @@ concurrency:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   # Required check: every PR carries the one token-telemetry comment (the server posts it, even if only
@@ -40,6 +41,32 @@ jobs:
           done
           echo "::error::No agent-console telemetry comment on this PR."; exit 1
   test:
+    if: always()
+    needs: test-shard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: test-log-*
+          path: ${{ runner.temp }}/test-logs
+      - name: Require every test shard
+        env:
+          RESULT: ${{ needs.test-shard.result }}
+        run: test "$RESULT" = success
+      - name: Whole-suite coverage and time budget
+        env:
+          TEST_FILE_BUDGET_S: "15"
+          TEST_WALL_BUDGET_S: "25"
+        run: node test/shard-budget.mjs "$RUNNER_TEMP/test-logs"
+  test-shard:
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["1/2", "2/2"]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -94,12 +121,27 @@ jobs:
             PORT=7070 nohup node .bundle/server/index.ts.mjs >"$RUNNER_TEMP/server.log" 2>&1 &
           for _ in $(seq 60); do curl -s -o /dev/null http://127.0.0.1:7070/login && exit 0; sleep 0.5; done
           cat "$RUNNER_TEMP/server.log"; exit 1
-      # One parallel pool: unit suites plus the UI and Pi smoke suites, each on its own port.
+      # Align the measured test windows after independently provisioned runners finish setup.
+      - run: echo ready > "$RUNNER_TEMP/shard-ready"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: test-ready-${{ github.run_attempt }}-${{ strategy.job-index }}
+          path: ${{ runner.temp }}/shard-ready
+          retention-days: 1
+      - name: Wait for both runners to be ready
+        env:
+          GH_TOKEN: ${{ github.token }}
+          READY_PREFIX: test-ready-${{ github.run_attempt }}-
+        run: node test/wait-ci-shards.mjs
+      # One parallel pool per shard, with independent UI servers and browsers.
       # TEST_CONCURRENCY above the CPU count pays off because most files wait on servers and browsers.
       - name: Tests
         shell: bash
         env:
           TEST_CONCURRENCY: "8"
+          TEST_SHARD: ${{ matrix.shard }}
+          # Scratch servers exercise the same production bundle built above.
+          TEST_SERVER_ENTRY: .bundle/server/index.ts.mjs
         run: npm test -- test/composer-scroll-ui.ts test/drafts-ui.ts test/attachment-drafts-ui.ts test/pi-e2e-ui.ts 2>&1 | tee "$RUNNER_TEMP/test.log"
       # Fails the run when one file or the whole pool gets slower than the budget, so test time cannot creep up.
       - name: Test time budget
@@ -107,6 +149,11 @@ jobs:
           TEST_FILE_BUDGET_S: "15"
           TEST_WALL_BUDGET_S: "25"
         run: node scripts/ci-resources.mjs budget "$RUNNER_TEMP/test.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-log-${{ strategy.job-index }}
+          path: ${{ runner.temp }}/test.log
       - name: Runner usage
         if: always()
         run: node scripts/ci-resources.mjs summary "$RUNNER_TEMP/resources.csv" "$RUNNER_TEMP/test.log" | tee -a "$GITHUB_STEP_SUMMARY"
