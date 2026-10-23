@@ -166,7 +166,7 @@ bin/agent-console process control
 
 ## Lean context
 
-Claude threads start at ~19k tokens of fixed context: MCP servers ~3.5k, skills + slash-command lists ~6.6k, core prompt ~8k. Only `codegraph` MCP loads by default (`AGENT_CONSOLE_MCP=name,name` or `all`).
+Claude threads start at ~19k tokens of fixed context: MCP servers ~3.5k, skills + slash-command lists ~6.6k, core prompt ~8k. Only the built-in `agent_console` MCP server loads by default; agents use the `codegraph` CLI (`AGENT_CONSOLE_MCP=name,name` or `all` adds servers from `~/.claude.json`). Idle agent processes exit after 30 min (`AGENT_CONSOLE_IDLE_MS`).
 
 ## Type and assets
 

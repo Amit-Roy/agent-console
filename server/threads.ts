@@ -128,7 +128,7 @@ fs.mkdirSync(LOG_DIR, { recursive: true, mode: 0o700 });
 
 // An idle agent keeps its process (warm next turn: ~0.3 s to start instead of ~20 s) for up to IDLE_KILL_MS. Idle processes are
 // capped at IDLE_MAX, oldest killed first, and all but the newest two go early when available memory drops under IDLE_MEM_FLOOR.
-const IDLE_KILL_MS = Number(process.env.AGENT_CONSOLE_IDLE_MS ?? 2 * 60 * 60 * 1000);
+const IDLE_KILL_MS = Number(process.env.AGENT_CONSOLE_IDLE_MS ?? 30 * 60 * 1000);
 const IDLE_MAX = Number(process.env.AGENT_CONSOLE_IDLE_MAX ?? 8);
 const IDLE_MEM_FLOOR = 0.2;
 // Pre-warm: opening/focusing a thread spawns its idle agent so the first send skips the harness cold start. Spawning sends no

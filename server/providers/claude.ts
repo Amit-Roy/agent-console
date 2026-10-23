@@ -30,10 +30,10 @@ const SCRUBBED_ENV = [
 ];
 
 // Lean context: every connected MCP server adds its tool names and usage instructions to every turn (about 4k tokens for the claude.ai
-// connectors plus project servers). Threads load only the servers named in AGENT_CONSOLE_MCP (default "codegraph", from ~/.claude.json);
-// AGENT_CONSOLE_MCP=all restores everything.
+// connectors plus project servers). Threads load only the servers named in AGENT_CONSOLE_MCP (comma list from ~/.claude.json, default none:
+// agents use the codegraph CLI, so no per-thread MCP server stays alive); AGENT_CONSOLE_MCP=all restores everything.
 export function leanMcpArgs(): string[] {
-  const keep = (process.env.AGENT_CONSOLE_MCP ?? "codegraph")
+  const keep = (process.env.AGENT_CONSOLE_MCP ?? "")
     .split(",")
     .map((x) => x.trim())
     .filter(Boolean);
