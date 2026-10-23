@@ -134,6 +134,8 @@ try {
   const readTs = chat.locator('details.card', {hasText: 'sample.ts'}).first();
   await readTs.locator('summary').click();
   assert.equal(await readTs.locator('.body img').count(), 0, 'a text file read gets no preview');
+  await readPng.scrollIntoViewIfNeeded();
+  await shot(page, 'read-card-preview.png');
   pass('Read card of a PNG shows an inline preview; text file does not');
 
   // ---- video
