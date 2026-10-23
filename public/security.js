@@ -94,6 +94,7 @@ function totals(r) {
   c.infected = t.clamav?.infected?.length || 0;
   c.runtimeAlerts = t.falco?.alerts?.length || 0;
   for (const g of t.trivy?.targets || []) {
+    if (g.thirdParty) continue; // third-party clones are listed separately and never counted
     c.critical += g.counts?.CRITICAL || 0;
     c.high += g.counts?.HIGH || 0;
     const f = fixableOf(g);
@@ -423,73 +424,80 @@ function renderTrivy() {
   box.hidden = !targets.length;
   if (box.hidden) return;
   $("fixed-only").checked = state.fixedOnly;
-  $("trivy-count").textContent = String(targets.length);
+  $("trivy-count").textContent = String(targets.filter((g) => !g.thirdParty).length);
   const rows = $("trivy-rows");
   rows.replaceChildren();
-  targets.forEach((g, i) => {
-    const all = g.vulns || [];
-    const vulns = state.fixedOnly ? all.filter((v) => v.fixed) : all;
-    const id = `tg-${i}`,
-      open = state.open.has(g.name);
-    const item = el("div", "target");
-    const btn = el("button", "hrow tgt");
-    btn.type = "button";
-    btn.setAttribute("aria-expanded", String(open));
-    btn.setAttribute("aria-controls", id);
-    const n = el("div", "hname");
-    n.append(el("b", "", g.name), el("span", "hctx", g.type));
-    const chips = el("div", "chips");
-    let any = false;
-    for (const s of SEV) {
-      const c = g.counts?.[s] || 0;
-      if (!c) continue;
-      any = true;
-      chips.append(
-        el("span", `chip ${s.toLowerCase()}`, `${c} ${s[0] + s.slice(1).toLowerCase()}`),
-      );
-    }
-    const fx = fixableOf(g),
-      fxn = fx ? fx.CRITICAL + fx.HIGH : 0;
-    if (fxn) chips.append(el("span", "chip fix", `${fxn} fixable`));
-    if (!any) chips.append(el("span", "chip none", "No vulnerabilities"));
-    btn.append(n, chips, el("span", "hchev", open ? "−" : "+"));
-    btn.addEventListener("click", () => {
-      state.open.has(g.name) ? state.open.delete(g.name) : state.open.add(g.name);
-      renderTrivy();
+  let sepDone = false;
+  [...targets.entries()]
+    .sort((a, b) => !!a[1].thirdParty - !!b[1].thirdParty || a[0] - b[0])
+    .forEach(([i, g]) => {
+      if (g.thirdParty && !sepDone) {
+        sepDone = true;
+        rows.append(el("h3", "tpsep", "Third-party clones (not counted)"));
+      }
+      const all = g.vulns || [];
+      const vulns = state.fixedOnly ? all.filter((v) => v.fixed) : all;
+      const id = `tg-${i}`,
+        open = state.open.has(g.name);
+      const item = el("div", "target");
+      const btn = el("button", "hrow tgt");
+      btn.type = "button";
+      btn.setAttribute("aria-expanded", String(open));
+      btn.setAttribute("aria-controls", id);
+      const n = el("div", "hname");
+      n.append(el("b", "", g.name), el("span", "hctx", g.type));
+      const chips = el("div", "chips");
+      let any = false;
+      for (const s of SEV) {
+        const c = g.counts?.[s] || 0;
+        if (!c) continue;
+        any = true;
+        chips.append(
+          el("span", `chip ${s.toLowerCase()}`, `${c} ${s[0] + s.slice(1).toLowerCase()}`),
+        );
+      }
+      const fx = fixableOf(g),
+        fxn = fx ? fx.CRITICAL + fx.HIGH : 0;
+      if (fxn) chips.append(el("span", "chip fix", `${fxn} fixable`));
+      if (!any) chips.append(el("span", "chip none", "No vulnerabilities"));
+      btn.append(n, chips, el("span", "hchev", open ? "−" : "+"));
+      btn.addEventListener("click", () => {
+        state.open.has(g.name) ? state.open.delete(g.name) : state.open.add(g.name);
+        renderTrivy();
+      });
+      item.append(btn);
+      if (open) {
+        const body = el("div", "tbody");
+        body.id = id;
+        if (vulns.length) {
+          const list = el("ul", "vulns");
+          vulns.forEach((v) => {
+            list.append(vulnRow(v));
+          });
+          body.append(list);
+        } else
+          body.append(
+            el(
+              "p",
+              "note",
+              all.length
+                ? "No vulnerabilities with a fix available in this target."
+                : "Nothing critical or high found.",
+            ),
+          );
+        const lows = (g.counts?.MEDIUM || 0) + (g.counts?.LOW || 0);
+        if (all.length)
+          body.append(
+            el(
+              "p",
+              "note",
+              `Only critical and high are listed${lows ? `; ${lows} medium and low are counted but hidden` : ""}.${all.length >= 50 ? " Capped at 50 per target." : ""}`,
+            ),
+          );
+        item.append(body);
+      }
+      rows.append(item);
     });
-    item.append(btn);
-    if (open) {
-      const body = el("div", "tbody");
-      body.id = id;
-      if (vulns.length) {
-        const list = el("ul", "vulns");
-        vulns.forEach((v) => {
-          list.append(vulnRow(v));
-        });
-        body.append(list);
-      } else
-        body.append(
-          el(
-            "p",
-            "note",
-            all.length
-              ? "No vulnerabilities with a fix available in this target."
-              : "Nothing critical or high found.",
-          ),
-        );
-      const lows = (g.counts?.MEDIUM || 0) + (g.counts?.LOW || 0);
-      if (all.length)
-        body.append(
-          el(
-            "p",
-            "note",
-            `Only critical and high are listed${lows ? `; ${lows} medium and low are counted but hidden` : ""}.${all.length >= 50 ? " Capped at 50 per target." : ""}`,
-          ),
-        );
-      item.append(body);
-    }
-    rows.append(item);
-  });
 }
 $("fixed-only").addEventListener("change", (e) => {
   state.fixedOnly = e.target.checked;

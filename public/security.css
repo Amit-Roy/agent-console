@@ -267,6 +267,14 @@
   height: 1.1rem;
   accent-color: var(--accent);
 }
+.tpsep {
+  margin: 14px 0 6px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--t2);
+}
 .target {
   border-top: 1px solid var(--edge);
 }
