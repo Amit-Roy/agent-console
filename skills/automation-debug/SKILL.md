@@ -30,7 +30,7 @@ Other evidence: `git worktree list` in `~/repos/agent-console`; each dispatched 
 | opener, usage | `server/window-opener.ts`, `server/usage.ts` | `test/window-opener.ts`, `test/usage.ts` |
 | dispatcher, worktree, worker | `server/window-dispatch.ts` | `test/window-dispatch.ts` |
 | router | `server/automation/router.ts` | `test/automation-router.ts` |
-| self-review, PR, review, merge, apply | `server/issue-review.ts`, `server/automation/review-prompts.ts`, `skills/pr-standards/` | `test/issue-review.ts`, `test/pr-standards.ts` |
+| self-review, PR, review, redo, merge, apply | `server/issue-review.ts`, `server/automation/review-prompts.ts`, `skills/pr-standards/` | `test/issue-review.ts`, `test/pr-standards.ts` |
 | dashboard and API | `server/automation/`, `public/automation.js` | `test/automation*.ts` |
 
 ## Procedure
@@ -39,7 +39,7 @@ Other evidence: `git worktree list` in `~/repos/agent-console`; each dispatched 
 2. Reproduce it. Write a failing test first, in the matching test file, from the caller's side (the request that should have worked). Show it failing.
 3. Fix the smallest thing that makes it pass. Follow `skills/pr-standards/SKILL.md`: top down, request and response models, no unrelated changes.
 4. Run `node test/<file>.ts` for every file you touched, then `AGENT_CONSOLE_PAGE=12 npm test` if you changed shared code.
-5. Push your branch and open a PR. Almost everything you will touch is a protected path (`server/automation/`, `server/window-dispatch.ts`, `server/window-opener.ts`, `server/issue-review.ts`, `skills/`), so a person merges it. Do not merge it yourself and never push to the default branch.
+5. Push your branch and open a PR for premium review. A premium reviewer may merge approved changes, including protected paths, with acceptance evidence and passing required checks. Do not merge your own debug PR and never push to the default branch.
 
 ## Rules
 

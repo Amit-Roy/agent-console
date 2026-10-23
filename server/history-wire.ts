@@ -32,7 +32,12 @@ export function historyWireEvent(event: any) {
       };
       return view;
     }
-    case 'result': return fields(event, ['type', 'subtype', 'is_error', 'duration_ms', 'total_cost_usd']);
+    case 'result': {
+      const view = fields(event, ['type', 'subtype', 'is_error', 'duration_ms', 'total_cost_usd']);
+      // Error text is short and lets the reply footer offer a fix, such as signing in after an expired Claude login.
+      if (event.is_error && typeof event.result === 'string') view.result = event.result.slice(0, 500);
+      return view;
+    }
     case 'system':
       return fields(event, event.subtype?.startsWith('task_')
         ? ['type', 'subtype', 'tool_use_id', 'usage', 'description', 'is_backgrounded', 'status', 'summary']

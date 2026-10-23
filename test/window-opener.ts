@@ -56,6 +56,20 @@ try {
   const rows = fs.readFileSync(path.join(dir, "window-opener.jsonl"), "utf8").trim().split("\n").map(l => JSON.parse(l));
   assert.deepEqual(rows[0], { ts: night, dryRun: false, provider: "claude", ...OPENER_ROUTES.claude });
 
+  // each ready Claude account has its own window; Nefro opens on its own key and account
+  {
+    fs.rmSync(path.join(dir, "window-opener.jsonl"), { force: true });
+    fs.writeFileSync(cfg, JSON.stringify({ opener: { enabled: true, dryRun: false, providers: ["claude"] } }));
+    const calls: any[] = []; let u3: any = { claude: w(t + 3_600_000) };
+    const o3 = createOpener({ usage: () => u3, claudeAccounts: () => ["sunny", "nefro"], open: (p, _r, a) => { calls.push([p, a]); }, dir, now: () => t });
+    t = night; assert.deepEqual(await o3.tick(), ["claude:nefro"], "sunny live, nefro idle"); assert.deepEqual(calls, [["claude", "nefro"]]);
+    const row = JSON.parse(fs.readFileSync(path.join(dir, "window-opener.jsonl"), "utf8").trim().split("\n")[0]);
+    assert.equal(row.account, "nefro");
+    t += 5 * 60_000; u3 = {}; assert.deepEqual(await o3.tick(), ["claude"], "nefro gap holds; sunny now idle");
+    const o4 = createOpener({ usage: () => ({}), claudeAccounts: () => ["sunny"], open: () => {}, dir, now: () => t });
+    assert.deepEqual(await o4.tick(), [], "unsigned account is skipped; ledger gap holds for sunny");
+  }
+
   // dry run logs once per gap and opens nothing
   fs.rmSync(path.join(dir, "window-opener.jsonl")); opened.length = 0; usage = {};
   fs.writeFileSync(cfg, JSON.stringify({ opener: { enabled: true, providers: ["codex"] } }));

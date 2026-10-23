@@ -57,7 +57,8 @@ export function needsOpen(u: ProviderUsage | undefined, now: number): boolean {
 export function createOpener(opts: {
   usage: () => Record<string, ProviderUsage>;
   refresh?: () => Promise<void>; // fresh quota readings (Codex can be asked on demand; Claude only reports during turns)
-  open?: (provider: string, route: { model: string; effort: string }) => Promise<void> | void;
+  open?: (provider: string, route: { model: string; effort: string }, account?: string) => Promise<void> | void;
+  claudeAccounts?: () => string[]; // signed-in Claude accounts; each has its own quota window. Default: Sunny only
   dir?: string;
   now?: () => number;
   events?: EventLog;
@@ -66,7 +67,9 @@ export function createOpener(opts: {
   const ledger = path.join(dir, "window-opener.jsonl");
   const now = opts.now ?? Date.now;
   const lastOpened = new Map<string, number>();
-  try { for (const l of fs.readFileSync(ledger, "utf8").split("\n").filter(Boolean)) { const r = JSON.parse(l); if (!r.dryRun && !r.error) lastOpened.set(r.provider, r.ts); } } catch {}
+  try { for (const l of fs.readFileSync(ledger, "utf8").split("\n").filter(Boolean)) { const r = JSON.parse(l); if (!r.dryRun && !r.error) lastOpened.set(r.account ? `${r.provider}:${r.account}` : r.provider, r.ts); } } catch {}
+  // usage key per quota window: Claude fans out per account, Nefro's key is "claude:nefro"
+  const targets = (providers: string[]) => providers.flatMap(p => p === "claude" ? (opts.claudeAccounts?.() ?? ["sunny"]).map(a => a === "nefro" ? "claude:nefro" : "claude") : [p]);
   async function tick() {
     const cfg = loadOpenerConfig(path.join(dir, "window-dispatch.json"));
     if (!cfg.enabled) return [];
@@ -75,27 +78,28 @@ export function createOpener(opts: {
     await opts.refresh?.().catch(() => {});
     const live = !cfg.dryRun && !!opts.open;
     const opened: string[] = [];
-    for (const provider of cfg.providers) {
-      if (!needsOpen(opts.usage()[provider], now())) continue;
-      if (now() - (lastOpened.get(provider) ?? 0) < MIN_GAP_MS) continue;
+    for (const key of targets(cfg.providers)) {
+      const [provider, account] = key.split(":");
+      if (!needsOpen(opts.usage()[key], now())) continue;
+      if (now() - (lastOpened.get(key) ?? 0) < MIN_GAP_MS) continue;
       // A dry run logs once per gap too, so the log shows what would have happened rather than a line per tick.
-      if (!live && now() - (lastOpened.get("dry:" + provider) ?? 0) < MIN_GAP_MS) continue;
-      const row = { ts: now(), dryRun: !live, provider, ...OPENER_ROUTES[provider] };
+      if (!live && now() - (lastOpened.get("dry:" + key) ?? 0) < MIN_GAP_MS) continue;
+      const row = { ts: now(), dryRun: !live, provider, ...(account ? { account } : {}), ...OPENER_ROUTES[provider] };
       fs.appendFileSync(ledger, JSON.stringify(row) + "\n", { mode: 0o600 });
-      lastOpened.set(live ? provider : "dry:" + provider, now());
-      const run = `open:${provider}:${now()}`;
-      ev?.record({ step: "opener", kind: "start", run, ref: provider });
-      if (live) try { await opts.open!(provider, OPENER_ROUTES[provider]); } catch (e: any) {
-        lastOpened.delete(provider); // a failed open does not count; the next tick may try again
+      lastOpened.set(live ? key : "dry:" + key, now());
+      const run = `open:${key}:${now()}`;
+      ev?.record({ step: "opener", kind: "start", run, ref: key });
+      if (live) try { await opts.open!(provider, OPENER_ROUTES[provider], account); } catch (e: any) {
+        lastOpened.delete(key); // a failed open does not count; the next tick may try again
         const error = String(e?.message ?? e).slice(0, 300);
         fs.appendFileSync(ledger, JSON.stringify({ ...row, error }) + "\n", { mode: 0o600 });
-        ev?.record({ step: "opener", kind: "fail", run, ref: provider, msg: `${provider}: ${error}` });
+        ev?.record({ step: "opener", kind: "fail", run, ref: key, msg: `${key}: ${error}` });
         continue;
       }
-      ev?.record({ step: "opener", kind: "ok", run, ref: provider, msg: live ? `opened ${provider}` : `would open ${provider} (dry run)` });
-      opened.push(provider);
+      ev?.record({ step: "opener", kind: "ok", run, ref: key, msg: live ? `opened ${key}` : `would open ${key} (dry run)` });
+      opened.push(key);
     }
-    if (!opened.length) ev?.record({ step: "opener", kind: "info", msg: `nothing to do: ${cfg.providers.every(p => !needsOpen(opts.usage()[p], now())) ? "every window is live" : "an open was tried in the last 10 minutes"}` });
+    if (!opened.length) ev?.record({ step: "opener", kind: "info", msg: `nothing to do: ${targets(cfg.providers).every(k => !needsOpen(opts.usage()[k], now())) ? "every window is live" : "an open was tried in the last 10 minutes"}` });
     return opened;
   }
   return { tick };

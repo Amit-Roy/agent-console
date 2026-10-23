@@ -9,7 +9,8 @@ const data = path.join(root, "data");
 const cwd = path.join(root, "private-checkout");
 const bin = path.join(root, "bin");
 const sentinel = path.join(root, "shared-skill");
-const coding = "nvidia/nvidia/nemotron-3-super-120b-a12b";
+const coding = "nvidia/nvidia/nemotron-3-ultra-550b-a55b";
+const retired = "nvidia/nvidia/nemotron-3-super-120b-a12b"; // NVIDIA 404s it; no longer approved
 const vision = "nvidia/meta/llama-3.2-11b-vision-instruct";
 fs.mkdirSync(cwd);
 fs.mkdirSync(bin);
@@ -42,10 +43,12 @@ process.env.AGENT_CONSOLE_ENV_FILES = path.join(root, "no-env-file");
 process.env.AGENT_CONSOLE_BRAIN = path.join(root, "no-brain");
 process.env.AGENT_CONSOLE_LABELS = "0";
 process.env.AGENT_CONSOLE_HEADROOM = "0";
-process.env.AGENT_CONSOLE_PI_MODELS = `${vision},${coding}`;
+process.env.AGENT_CONSOLE_PI_MODELS = `${vision},${retired},${coding}`;
 process.env.PATH = `${bin}${path.delimiter}${process.env.PATH}`;
 const { Threads } = await import("../server/threads.ts");
 const { pi, refreshPiModels } = await import("../server/providers/pi.ts");
+const { startModelRateBroker } = await import("../server/providers/model-rate-client.ts");
+startModelRateBroker(1, data); // Pi children receive the loopback admission broker; the fake Pi never calls it
 await refreshPiModels();
 // Exercise the real Pi adapter without credentials or any model API request.
 pi.status = () => ({ ok: true });
@@ -70,7 +73,7 @@ try {
   await refreshPiModels();
   assert.throws(() => threads.create({ provider: "pi", cwd, issueRun }), /no approved coding model/);
   assert.equal(fs.existsSync(path.join(cwd, "worker-started")), false, "rejected models never launch a provider");
-  process.env.AGENT_CONSOLE_PI_MODELS = `${vision},${coding}`;
+  process.env.AGENT_CONSOLE_PI_MODELS = `${vision},${retired},${coding}`;
   await refreshPiModels();
 
   const auto = threads.create({ provider: "pi", cwd, title: "Auto isolation fixture", issueRun });
@@ -80,6 +83,12 @@ try {
   assert.equal(fs.readFileSync(sentinel, "utf8"), "original");
   assert.equal(outcome.tmp, path.join(data, "auto-runtime", auto.id, "tmp"));
   assert.equal(threads.history(auto.id).some((event: any) => event.type === "result" && !event.is_error), true);
+
+  // A run saved on a model that was later retired restarts on an approved one instead of failing closed forever.
+  threads.shutdown(); // drop the live process so the next send starts a new one
+  threads.get(auto.id)!.model = retired;
+  await run(auto.id);
+  assert.equal(threads.get(auto.id)!.model, coding, "a retired stored model is re-selected on restart");
 
   // The same real adapter permits an explicit manual model and normal writes.
   // This control proves the prior EACCES came from Auto confinement.

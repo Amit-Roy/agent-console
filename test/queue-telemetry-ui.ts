@@ -16,6 +16,8 @@ const seed=()=>{
 };seed();
 process.env.AGENT_CONSOLE_DATA=data;
 const {makeToken}=await import('../server/auth.ts');
+const {RETENTION_DAYS}=await import('../server/latency.ts');
+const windowLabel=`Last ${RETENTION_DAYS} days`;
 const start=()=>spawn(process.execPath,['server/index.ts'],{env:{...process.env,PORT:'17776',AGENT_CONSOLE_MOCK:'1',AGENT_CONSOLE_BRAIN:path.join(data,'no-brain')},stdio:'ignore'});
 let server=start(),browser;
 const ready=async()=>{for(let i=0;i<100;i++){try{if((await fetch(base)).status<500)return;}catch{}await new Promise(r=>setTimeout(r,100));}throw Error('Server not ready');};
@@ -49,8 +51,8 @@ try{
   await page.locator('#more').click();await page.getByRole('menuitem',{name:/Run details/}).click();await page.waitForFunction(()=>document.querySelector('#latency-summary')?.textContent?.includes('Open a thread'));
   // Percentile sliders retitle and recompute both time windows, never cross, and persist across dialog openings.
   assert.deepEqual(await page.locator('.speed thead th').allTextContents(),['','Typical p50','Slowest p95']);
-  await page.getByRole('button',{name:'Last 14 days'}).click();assert.equal(await page.getByRole('button',{name:'Last 14 days'}).getAttribute('aria-pressed'),'true');
-  assert.ok((await page.locator('.speed caption').textContent())!.includes('14 days'));
+  await page.getByRole('button',{name:windowLabel}).click();assert.equal(await page.getByRole('button',{name:windowLabel}).getAttribute('aria-pressed'),'true');
+  assert.ok((await page.locator('.speed caption').textContent())!.includes(`${RETENTION_DAYS} days`));
   const typical=page.getByRole('slider',{name:/Typical/}),slowest=page.getByRole('slider',{name:/Slowest/});
   await slowest.fill('80');await typical.fill('90');
   assert.equal(await slowest.inputValue(),'90','typical cannot pass slowest');
@@ -60,7 +62,7 @@ try{
   await page.screenshot({path:`/tmp/run-details-${width}.png`});
   await page.getByRole('button',{name:'Done',exact:true}).click();
   await page.locator('#more').click();await page.getByRole('menuitem',{name:/Run details/}).click();await page.waitForFunction(()=>document.querySelector('#latency-summary')?.textContent?.includes('Open a thread'));
-  assert.equal(await page.getByRole('slider',{name:/Typical/}).inputValue(),'90');assert.equal(await page.getByRole('button',{name:'Last 14 days'}).getAttribute('aria-pressed'),'true');
+  assert.equal(await page.getByRole('slider',{name:/Typical/}).inputValue(),'90');assert.equal(await page.getByRole('button',{name:windowLabel}).getAttribute('aria-pressed'),'true');
   assert.equal(await page.locator('#run-details').evaluate(d=>d.scrollWidth>d.clientWidth),false,'speed table fits the dialog');
   await page.getByRole('button',{name:'Done',exact:true}).click();
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);assert.deepEqual(errors,[]);

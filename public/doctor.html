@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <title>Doctor · Agent Console</title>
+  <link rel="icon" href="/icon.svg">
+  <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="/doctor.css">
+</head>
+<body class="doctor">
+  <header class="doctor-head">
+    <a class="btn ghost" href="/" aria-label="Back to the console"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="m10 3.5-4.5 4.5L10 12.5"/></svg>Console</a>
+    <h1>Doctor</h1>
+    <a class="btn ghost" href="/host">Host</a>
+  </header>
+  <main class="doctor-main" id="doctor-main">
+    <section class="doctor-summary" aria-labelledby="doctor-title">
+      <h2 id="doctor-title">Check your setup</h2>
+      <p id="doctor-status" role="status" aria-live="polite">Checking connections, sign-ins, and agent processes…</p>
+      <div class="doctor-actions">
+        <button id="doctor-repair" class="btn primary" type="button" disabled>Repair setup</button>
+        <button id="doctor-check" class="btn" type="button" disabled>Check again</button>
+      </div>
+      <p class="doctor-note">Repairs preserve saved conversations and healthy running work. Stalled turns beyond the inactivity limit may stop. Sign-in and external service failures may need your attention.</p>
+    </section>
+    <section aria-labelledby="doctor-checks-title" class="doctor-section">
+      <div class="doctor-section-head"><h2 id="doctor-checks-title">Setup checks</h2><span id="doctor-checked" class="doctor-note"></span></div>
+      <ul id="doctor-checks" class="doctor-checks" aria-busy="true"></ul>
+    </section>
+    <section id="doctor-repairs" class="doctor-section" aria-labelledby="doctor-repairs-title" hidden>
+      <h2 id="doctor-repairs-title">Repair results</h2>
+      <ul id="doctor-repair-results" class="doctor-checks" aria-live="polite"></ul>
+    </section>
+  </main>
+  <script type="module" src="/doctor.js"></script>
+</body>
+</html>

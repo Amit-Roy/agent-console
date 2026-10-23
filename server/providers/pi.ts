@@ -9,8 +9,11 @@ import { harnessInstructions } from "./brain.ts";
 import { childEnv } from "./env.ts";
 import { parseJson, spawnLines, type Proc } from "./proc.ts";
 import { piQuestions } from "./pi-questions.ts";
+import { piRateEnv } from "./pi-rate-env.ts";
+import { CODING_ROUTE, DIRECT_CODING_MODELS } from "./pi-coding-route.mjs";
 import { defaultPiModel } from "./pi-model.ts";
 import { retryEvent } from "../turn-timing.ts";
+import { acquireModelRequest } from "./model-rate-client.ts";
 import { clip, IMAGE_ONLY_PROMPT, type Agent, type AgentCtx, type Attachment, type Command, type Provider, type ThreadSpec } from "./types.ts";
 
 // pi (github.com/earendil-works/pi) in RPC mode: one long-lived process per thread, any model pi knows about
@@ -19,7 +22,9 @@ import { clip, IMAGE_ONLY_PROMPT, type Agent, type AgentCtx, type Attachment, ty
 const SESSIONS = path.join(DATA_DIR, "pi-sessions");
 const READ_ONLY_TOOLS = "read,grep,find,ls,ask_user,schedule_list,save_output";
 const QUESTIONS_EXTENSION = fileURLToPath(new URL("./pi-questions-extension.mjs", import.meta.url));
+const SUBAGENT_EXTENSION = fileURLToPath(new URL("./pi-subagent-extension.mjs", import.meta.url));
 const TOOLS_EXTENSION = fileURLToPath(new URL("./console-tools.mjs", import.meta.url)); // scheduled tasks + save_output
+const CODING_ROUTE_EXTENSION = fileURLToPath(new URL("./pi-coding-route.mjs", import.meta.url));
 
 let cached: string[] = [];
 const thinking = new Set<string>();
@@ -27,6 +32,8 @@ const contexts = new Map<string, number>(); // "provider/model" -> context windo
 const NVIDIA_FREE_MODELS = new Set([
   "meta/llama-3.2-11b-vision-instruct",
   "nvidia/nemotron-3-super-120b-a12b",
+  "nvidia/nemotron-3-ultra-550b-a55b",
+  "nvidia/nemotron-3.5-lightning-30b-a3b",
   "nvidia/nemotron-3.5-super-vl-120b-a12b",
   "openai/gpt-oss-20b",
   "stepfun-ai/step-5-preview",
@@ -68,13 +75,20 @@ export function refreshPiModels(): Promise<string[]> {
       return resolve(cached);
     }
     execFile("pi", ["--list-models"], { env, timeout: 20_000, maxBuffer: 4 << 20 }, (err, stdout, stderr) => {
-      if (!err) cached = parsePiModels(stdout + stderr, env.AGENT_CONSOLE_PI_ALL === "1");
+      if (!err) {
+        cached = parsePiModels(stdout + stderr, env.AGENT_CONSOLE_PI_ALL === "1");
+        try { fs.writeFileSync(MODELS_FILE, stdout + stderr, { mode: 0o600 }); } catch {}
+      }
       resolve(cached);
     });
   });
 }
+// `pi --list-models` takes seconds and the server runs it only after it listens. Until it answers, use the list the previous
+// process saw, so Pi is ready the moment the server is.
+const MODELS_FILE = path.join(DATA_DIR, "pi-models.txt");
+try { const env = childEnv(); if (!env.AGENT_CONSOLE_PI_MODELS) cached = parsePiModels(fs.readFileSync(MODELS_FILE, "utf8"), env.AGENT_CONSOLE_PI_ALL === "1"); } catch {}
 
-const CAP: Record<string, string> = { bash: "Bash", read: "Read", write: "Write", edit: "Edit", grep: "Grep", find: "Glob", ls: "Glob" };
+const CAP: Record<string, string> = { subagent: "Agent", bash: "Bash", read: "Read", write: "Write", edit: "Edit", grep: "Grep", find: "Glob", ls: "Glob" };
 
 // Make pi's tool calls look like Claude's so the UI's cards (diff view, shell highlighting, icons) apply.
 export function normTool(name: string, a: Record<string, any> = {}): { name: string; input: Record<string, any> } {
@@ -87,6 +101,7 @@ export function normTool(name: string, a: Record<string, any> = {}): { name: str
     const o = edit.oldText ?? edit.old_string ?? edit.oldString, nw = edit.newText ?? edit.new_string ?? edit.newString;
     if (typeof o === "string" && typeof nw === "string") Object.assign(input, { old_string: o, new_string: nw });
   }
+  if (n === "Agent") input.description ??= clip(String(a.prompt ?? "Subagent"), 80);
   return { name: n, input };
 }
 
@@ -119,6 +134,23 @@ export function piTranslator(emit: (ev: any) => void, onCommands?: (list: Comman
     usageModels = [];
     failure = undefined;
   };
+  const subagents = new Map<string, string>(); // toolCallId -> description, while a subagent tool call runs
+  const blocks = (m: any) =>
+    (m.content ?? [])
+      .map((b: any) => {
+        if (b.type === "text") return { type: "text", text: b.text };
+        if (b.type === "thinking") return { type: "thinking", thinking: b.thinking ?? "" };
+        if (b.type === "toolCall") return { type: "tool_use", id: b.id, ...normTool(b.name, b.arguments) };
+      })
+      .filter(Boolean);
+  const toolResult = (id: string, content: any, isError: boolean) => ({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: clip(textOf(content)), is_error: isError }] } });
+  // The subagent extension forwards each child pi event in the tool update's details; show it tagged with the parent call.
+  const child = (parent: string, c: any) => {
+    if (c?.type === "message_end" && c.message?.role === "assistant") {
+      const content = blocks(c.message);
+      if (content.length) emit({ type: "assistant", parent_tool_use_id: parent, message: { role: "assistant", content } });
+    } else if (c?.type === "tool_execution_end") emit({ ...toolResult(c.toolCallId, c.result?.content, !!c.isError), parent_tool_use_id: parent });
+  };
   return (r: any) => {
     switch (r?.type) {
       case "agent_start":
@@ -144,18 +176,27 @@ export function piTranslator(emit: (ev: any) => void, onCommands?: (list: Comman
         // a provider error that pi retried successfully must not fail the whole turn: only the last reply counts
         if (m.stopReason === "error" && m.errorMessage) failure = friendlyError(m.errorMessage);
         else if (m.stopReason !== "aborted") failure = undefined;
-        const content = (m.content ?? [])
-          .map((b: any) => {
-            if (b.type === "text") return { type: "text", text: b.text };
-            if (b.type === "thinking") return { type: "thinking", thinking: b.thinking ?? "" };
-            if (b.type === "toolCall") return { type: "tool_use", id: b.id, ...normTool(b.name, b.arguments) };
-          })
-          .filter(Boolean);
+        const content = blocks(m);
         if (content.length) emit({ type: "assistant", message: { role: "assistant", content, model: m.model, usage: m.usage } });
         break;
       }
+      case "tool_execution_start":
+        if (r.toolName === "subagent") {
+          const description = normTool("subagent", r.args).input.description;
+          subagents.set(r.toolCallId, description);
+          emit({ type: "system", subtype: "task_started", task_id: r.toolCallId, tool_use_id: r.toolCallId, task_type: "local_agent", description });
+        }
+        break;
+      case "tool_execution_update":
+        if (subagents.has(r.toolCallId)) child(r.toolCallId, r.partialResult?.details?.event);
+        break;
       case "tool_execution_end":
-        emit({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: r.toolCallId, content: clip(textOf(r.result?.content)), is_error: !!r.isError }] } });
+        if (subagents.has(r.toolCallId)) {
+          const summary = clip(textOf(r.result?.content), 300);
+          emit({ type: "system", subtype: "task_notification", task_id: r.toolCallId, tool_use_id: r.toolCallId, status: r.isError ? "failed" : "completed", summary: summary || subagents.get(r.toolCallId) });
+          subagents.delete(r.toolCallId);
+        }
+        emit(toolResult(r.toolCallId, r.result?.content, !!r.isError));
         break;
       case "auto_retry_start": // turn timing only: status + error class, never the message
         emit(retryEvent({ attempt: r.attempt, message: String(r.errorMessage ?? ""), delay: r.delayMs }));
@@ -210,7 +251,12 @@ export const pi: Provider = {
   start(t: ThreadSpec, ctx: AgentCtx): Agent {
     const dir = path.join(SESSIONS, t.id);
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-    const args = ["--mode", "rpc", "--model", t.model, "--session-dir", dir, "--extension", QUESTIONS_EXTENSION, "--extension", TOOLS_EXTENSION];
+    // Only unattended NVIDIA coding runs use the host router. Manual model
+    // choices and explicit OpenRouter selections retain their exact provider.
+    const routed = !!t.issueRun && DIRECT_CODING_MODELS.some(id => t.model === `nvidia/${id}`);
+    const args = ["--mode", "rpc", "--model", routed ? CODING_ROUTE : t.model, "--session-dir", dir, "--extension", QUESTIONS_EXTENSION, "--extension", TOOLS_EXTENSION];
+    if (t.mode !== "plan") args.push("--extension", SUBAGENT_EXTENSION); // a child would not inherit Plan's read-only limit
+    if (routed) args.push("--extension", CODING_ROUTE_EXTENSION);
     if (fs.readdirSync(dir).length) args.push("--continue");
     if (t.mode === "plan") args.push("--tools", READ_ONLY_TOOLS);
     const translate = piTranslator((ev) => ctx.event(ev), (list) => ctx.commands(list), () => contexts.get(t.model));
@@ -218,17 +264,36 @@ export const pi: Provider = {
     let p: Proc | undefined, dead = false;
     const queued: string[] = [];
     const write = (line: string) => (p ? p.write(line) : void queued.push(line));
+    // A 429 that outlives pi's own 3 retries: wait out the shared cooldown, re-send the prompt once per user turn.
+    // Only when the failed reply made no tool call, so no side effect can run twice.
+    let last: { text: string; images: Attachment[] } | undefined, retried = false, hadTools = false, resending: AbortController | undefined;
     const questions = piQuestions(msg => write(JSON.stringify(msg)), ctx.event);
     void harnessInstructions().then((brain) => {
       if (dead) return;
       if (brain) args.push("--append-system-prompt", brain); // style preamble + shared memory index
-      const launch = sandboxLaunch(t, "pi", args, { ...childEnv(), AGENT_CONSOLE_THREAD: t.id });
+      const launch = sandboxLaunch(t, "pi", args, piRateEnv({ ...childEnv(), AGENT_CONSOLE_THREAD: t.id }, t.issueRun ? "automation" : "interactive"));
       p = spawnLines("pi", launch.command, launch.args, { cwd: t.cwd, env: launch.env }, {
         ...ctx,
         exited(info) { questions.cancelAll(); ctx.exited(info); },
       }, (line) => {
         const r = parseJson(line);
-        if (r && !questions.handle(r)) translate(r);
+        if (!r || questions.handle(r)) return;
+        if (r.type === "message_end" && r.message?.role === "assistant") hadTools ||= (r.message.content ?? []).some((b: any) => b?.type === "toolCall");
+        if (r.type === "auto_retry_end" && r.success === false && !retried && !hadTools && last && /\b429\b/.test(String(r.finalError ?? ""))) {
+          retried = true;
+          resending = new AbortController();
+          const { signal } = resending, again = last;
+          ctx.event(retryEvent({ attempt: 4, status: 429, message: String(r.finalError), delay: 0 }));
+          acquireModelRequest({ signal, provider: t.model.startsWith("nvidia/") ? "nvidia" : t.model.startsWith("openrouter/") ? "openrouter" : "other", priority: t.issueRun ? "automation" : "interactive" }).then(() => { if (!signal.aborted) write(JSON.stringify({ id: `p${++n}`, type: "prompt", ...body(again.text, again.images) })); }, () => {});
+          return; // swallow the failure and the settle that follows it; the re-send continues the same turn
+        }
+        if (r.type === "agent_settled" && resending) {
+          const aborted = resending.signal.aborted;
+          resending = undefined;
+          if (!aborted && !r.aborted) return;
+          return translate({ ...r, aborted: true });
+        }
+        translate(r);
       });
       for (const line of queued.splice(0)) p.write(line);
     }).catch(error => {
@@ -237,6 +302,7 @@ export const pi: Provider = {
       ctx.exited({ code: 78, signal: null, stderr: String(error?.message || error), aborted: false });
     });
     const stop = (how: "abort" | "kill") => {
+      resending?.abort();
       questions.cancelAll();
       if (p) return p[how]();
       if (dead) return;
@@ -255,7 +321,7 @@ export const pi: Provider = {
         return !dead && (!p || p.alive());
       },
       compact: (instructions = "") => write(JSON.stringify({ id: `compact${++n}`, type: "compact", ...(instructions ? { customInstructions: instructions } : {}) })),
-      send: (text, images = []) => write(JSON.stringify({ id: `p${++n}`, type: "prompt", ...body(text, images) })),
+      send: (text, images = []) => (last = { text, images }, retried = false, hadTools = false, resending = undefined, write(JSON.stringify({ id: `p${++n}`, type: "prompt", ...body(text, images) }))),
       // Pi's `steer` is delivered after the current assistant turn finishes its tool calls, before the next model call
       steer: (text, images = []) => write(JSON.stringify({ id: `p${++n}`, type: "steer", ...body(text, images) })),
       answer: (id, reply) => questions.answer(id, reply),
