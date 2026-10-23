@@ -1,6 +1,7 @@
-import { $, el, icon, iconButton, wireCopy, renderMarkdown, highlightInto, langFromPath, parseFileRef, setFileScope } from "/render.js";
+import { $, el, icon, iconButton, wireCopy, renderMarkdown, highlightInto, langFromPath, parseFileRef, setFileScope, localImage, isImageFile } from "/render.js";
 import { createMenu } from "/menu.js";
 import { composerField } from "/composer-field.js";
+import { attachmentDraftStore } from "/attachment-drafts.js";
 import { toolName, toolSummary } from "/tool-display.js";
 import { createLatencyReporter } from "/telemetry.js";
 import { createQuestions } from "/questions.js";
@@ -10,6 +11,9 @@ import { setupNotifications } from "/notifications.js";
 import { createChatSearch } from "/chat-search.js";
 import { createSchedules, REPEAT_ITEMS, DAY_ITEMS } from "/schedules.js";
 import { createAutoLane } from "/automation-lane.js";
+import { openJobDebug } from "/automation-job-debug.js";
+import { autoCandidates, autoPick } from "/auto-pick.js";
+import { showAssignmentProgress } from "/assign-progress.js";
 
 composerField($("input"));
 
@@ -40,9 +44,11 @@ const chatSearch = createChatSearch({
   navigate: () => { releaseHistoryAnchor(); state.stick = false; },
 });
 let ws, retry = 0, reconnectTimer = 0, probeTimer = 0;
+let draftsLoaded = false;
 
 // ---------- connection ----------
 function connect() {
+  if (!draftsLoaded) return;
   clearTimeout(reconnectTimer);
   if (ws && ws.readyState <= 1) return; // connecting or open already
   const sock = ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
@@ -109,24 +115,36 @@ addEventListener("pageshow", (e) => e.persisted && reconnectNow());
 // Messages the user typed or Stop presses: kept until the server acknowledges them, resent after a reconnect (the server drops
 // repeats by id), so a dead socket neither loses nor duplicates them.
 const outbox = [];
+const sendingDrafts = new Map();
 let cidSeq = 0;
-function sendReliable(msg) {
+function sendReliable(msg, draft) {
   const item = { ...msg, cid: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}-${++cidSeq}` };
+  if (draft) {
+    draft = { ...draft, createdAt: Date.now(), sequence: cidSeq };
+    sendingDrafts.set(item.cid, draft);
+    try { localStorage.setItem(`ac_sending:${item.cid}`, JSON.stringify(draft)); }
+    catch { toast("Browser storage unavailable. Keep this page open until your message sends."); }
+  }
   outbox.push(item);
   if (!send(item)) { toast("Offline. Your message will send when the connection is back."); return false; }
-  if (!state.features.acks) outbox.splice(outbox.indexOf(item), 1); // an older server cannot acknowledge: never resend
+  if (!state.features.acks) acked(item.cid); // An older server cannot acknowledge: never resend.
   else setTimeout(() => outbox.includes(item) && probe(), 2000);
   return true;
 }
 function flushOutbox() {
   for (const item of [...outbox]) {
     if (!send(item)) return;
-    if (!state.features.acks) outbox.splice(outbox.indexOf(item), 1);
+    if (!state.features.acks) acked(item.cid);
   }
 }
-function acked(cid) {
+function acked(cid, accepted = true) {
   const at = outbox.findIndex((x) => x.cid === cid);
   if (at >= 0) outbox.splice(at, 1);
+  const draft = sendingDrafts.get(cid);
+  sendingDrafts.delete(cid);
+  if (!accepted && draft) void recoverSendingDraft(cid, draft);
+  else if (draft) void finishSendingDraft(cid, draft);
+  else try { localStorage.removeItem(`ac_sending:${cid}`); } catch {}
 }
 const send = (o) => { if (ws?.readyState !== 1) return false; ws.send(JSON.stringify(o)); return true; };
 const questions = createQuestions({ send, root: () => $("chat"), changed: () => { renderThreads(); updateWorking(); } });
@@ -284,11 +302,11 @@ function handle(m) {
     case "removed":
       state.threads.delete(m.thread);
       views.delete(m.thread);
+      for (const item of [...outbox]) if (item.thread === m.thread) acked(item.cid);
       writeDraft(m.thread, "");
-      if (pending.length && pending[0].thread === m.thread) {
-        pending.length = 0; // the server already deleted that thread's uploads
-        renderThumbs();
-      }
+      for (const p of attachmentDrafts.get(m.thread) || []) forgetAttachment(p);
+      attachmentDrafts.delete(m.thread);
+      if (state.current === m.thread) { pending = []; renderThumbs(); }
       if (state.current === m.thread) {
         state.current = null;
         $("input").value = "";
@@ -323,6 +341,10 @@ function handle(m) {
       state.queues[m.thread] = m.items;
       if (m.thread === state.current) renderQueue();
       break;
+    case "create_issue_done":
+    case "create_issue_error":
+      issueDraftReply(m);
+      break;
     case "queue_edit":
     case "queue_edit_done":
     case "queue_edit_error":
@@ -353,7 +375,7 @@ function handle(m) {
       acked(m.cid);
       break;
     case "error":
-      if (m.cid) acked(m.cid);
+      if (m.cid) acked(m.cid, false);
       addNote(m.message, "errtxt");
       break;
   }
@@ -391,9 +413,105 @@ function syncDialogAccount() {
   const visible = menus.dProv.value === "claude" && dialogTask === null;
   $("account-field").hidden = !visible;
   const account = claudeAccount(menus.dAccount.value);
-  $("d-account-note").textContent = account.ready ? "This account supplies the allowance for this thread." : "Sign in to this account on the server before creating a thread.";
+  $("d-account-note").textContent = account.ready ? "This account supplies the allowance for this thread." : "Sign in to this account before creating a thread.";
   $("d-ok").disabled = visible ? !account.ready : !prov(menus.dProv.value)?.ok;
+  $("d-signin").hidden = !visible || !!account.ready;
+  if (signingIn !== account.id) $("d-signin-code").hidden = true;
+  if (dialogFork) syncForkContext();
 }
+const accountItems = () => claudeAccounts().map(a => ({ value: a.id, label: a.label, desc: a.email || (a.ready ? "Signed in" : "Sign-in required") }));
+// Claude sign-in from the dialog: the server runs `claude auth login`; Anthropic's page shows a code the user pastes back here.
+let signingIn = null;
+async function claudeLogin(account, body) {
+  const r = await apiFetch(`/api/claude-login/${account}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error || "Sign-in failed.");
+  return data;
+}
+$("d-signin-go").onclick = async () => {
+  const account = menus.dAccount.value, note = $("d-account-note");
+  const tab = window.open("", "_blank"); // open now, inside the tap, so the browser does not block it as a popup
+  $("d-signin-go").disabled = true;
+  note.textContent = "Opening Claude sign-in…";
+  try {
+    const { url } = await claudeLogin(account, {});
+    if (tab) { tab.opener = null; tab.location.href = url; } else window.open(url, "_blank", "noopener");
+    signingIn = account;
+    $("d-code").value = "";
+    $("d-signin-code").hidden = false;
+    note.textContent = `Sign in as ${claudeAccount(account).email}, then paste the code Claude shows.`;
+    $("d-code").focus();
+  } catch (e) { tab?.close(); note.textContent = e.message; }
+  $("d-signin-go").disabled = false;
+};
+async function finishSignIn() {
+  const account = signingIn, note = $("d-account-note");
+  if (!account) return;
+  $("d-signin-finish").disabled = true;
+  note.textContent = "Checking the code…";
+  try {
+    const { providers } = await claudeLogin(account, { code: $("d-code").value });
+    state.providers = new Map(providers.map((p) => [p.id, p]));
+    signingIn = null;
+    menus.dAccount.setItems(accountItems(), account);
+    syncDialogAccount();
+  } catch (e) { note.textContent = e.message; }
+  $("d-signin-finish").disabled = false;
+}
+$("d-signin-finish").onclick = finishSignIn;
+// An existing thread whose Claude login expired: open the new-thread dialog on that account so its Sign in button shows.
+const CLAUDE_AUTH_FAILED = /Failed to authenticate|OAuth session expired|Not logged in|Please run \/login/i;
+function signInButton(account) {
+  const btn = el("button", "btn sm", `Sign in to ${claudeAccount(account).label}`);
+  btn.type = "button";
+  btn.onclick = () => {
+    const a = claudeAccounts().find(x => x.id === account);
+    if (a) a.ready = false; // hello-time readiness is stale once the CLI has rejected the login
+    openNewDialog();
+    menus.dProv.setValue("claude");
+    fillDialog("claude");
+    menus.dAccount.setItems(accountItems(), account);
+    syncDialogAccount();
+  };
+  return btn;
+}
+$("d-code").onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); finishSignIn(); } };
+// Auto: Sonnet or Sol at medium effort, on whichever five-hour window would otherwise leave the most allowance unused.
+const autoUsable = (r) => !!prov(r.provider)?.ok && prov(r.provider).models?.includes(r.model) && (!r.account || !!claudeAccount(r.account).ready);
+const autoName = (r) => r.provider === "claude" ? `Claude · ${claudeAccount(r.account).label}` : provLabel(r.provider);
+const AUTO_HINT = "Sonnet or Sol medium, on the allowance closest to going unused.";
+const resetClock = (at) => new Date(at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+function renderAutoPanel() {
+  const list = autoCandidates(state.usage, Date.now(), autoUsable), best = autoPick(list);
+  const head = el("div", "auto-line hdr");
+  head.append(el("span", "", "5-hour"), el("span", "", "Left"), el("span", "", "Resets"));
+  $("d-auto-panel").replaceChildren(head, ...list.map(c => {
+    const row = el("div", `auto-line${c === best ? " best" : ""}${c.blocked ? " off" : ""}`);
+    row.title = c.blocked ? `Skipped: ${c.blocked}` : c === best ? "Auto picks this one" : "";
+    row.append(el("span", "", autoName(c.route)), el("span", "", c.known ? `${Math.round(c.left)}% left` : "Unknown"), el("span", "", c.resetsAt ? `${resetClock(c.resetsAt)} · ${resetsText(c.resetsAt).replace(/^Resets in /, "")}` : "No reset"));
+    return row;
+  }));
+}
+$("d-auto-info").onclick = () => {
+  const open = $("d-auto-panel").hidden;
+  if (open) renderAutoPanel();
+  $("d-auto-panel").hidden = !open;
+  $("d-auto-info").setAttribute("aria-expanded", String(open));
+};
+$("d-auto").onclick = () => {
+  const best = autoPick(autoCandidates(state.usage, Date.now(), autoUsable));
+  if (!best) return void ($("d-auto-note").textContent = "No signed-in agent has five-hour allowance left.");
+  const r = best.route;
+  menus.dProv.setValue(r.provider);
+  fillDialog(r.provider);
+  if (r.account) menus.dAccount.setValue(r.account);
+  menus.dModel.setValue(r.model);
+  dialogEffort(r.model, r.provider);
+  menus.dEffort.setValue(r.effort);
+  syncDialogAccount();
+  $("d-auto-note").textContent = `${autoName(r)} · ${menus.dModel.items().find(i => i.value === r.model)?.label || r.model} · medium. ${best.known ? `${Math.round(best.left)}% left${best.resetsAt ? `, ${resetsText(best.resetsAt).toLowerCase()}` : ""}` : "Usage unknown"}.`;
+  if (!$("d-auto-panel").hidden) renderAutoPanel();
+};
 function fillDialog(id) {
   const p = prov(id);
   if (!p) return;
@@ -403,7 +521,7 @@ function fillDialog(id) {
   $("d-warn").hidden = p.defaultMode !== "bypassPermissions";
   $("d-note").hidden = !p.note;
   $("d-note").textContent = p.note || "";
-  menus.dAccount.setItems(claudeAccounts().map(a => ({ value: a.id, label: a.label, desc: a.email || (a.ready ? "Signed in" : "Sign-in required") })), menus.dAccount.value || "sunny");
+  menus.dAccount.setItems(accountItems(), menus.dAccount.value || "sunny");
   syncDialogAccount();
 }
 const modeItems = (modes) => modes.map((v) => ({ value: v, label: MODE_META[v]?.label || v, desc: MODE_META[v]?.desc, icon: MODE_META[v]?.icon, tone: MODE_META[v]?.tone }));
@@ -434,9 +552,6 @@ function fieldTrigger(it, b) {
 }
 // ---------- thread actions: one list, used by the ⋯ on every row and by the header ⋯ ----------
 const threadActions = (id) => {
-  const cur = state.threads.get(id)?.provider;
-  const others = [...state.providers.values()].filter((p) => p.id !== cur && p.id !== "mock" && p.ok !== false);
-  const forks = others.map((p) => ({ value: `fork:${p.id}`, label: `Fork in ${p.label}`, desc: "Replay this conversation in another agent", icon: "fork" }));
   const filed = !!state.threads.get(id)?.archived;
   const thread = state.threads.get(id);
   const items = THREAD_ACTIONS.map((a) => {
@@ -455,7 +570,8 @@ const threadActions = (id) => {
     action("rename"),
     { value: "compaction-menu", label: "Compaction", desc: "Reduce context or manage automatic compaction", icon: "sparkle", children: [action("compact"), action("idle-compaction")] },
     action("economy"),
-    { value: "fork-menu", label: "Fork", desc: "Continue in a new thread or another agent", icon: "fork", children: [action("fork"), ...forks, action("fork-recent")] },
+    action("fork"),
+    action("create-issue"),
     action("download"), action("share"), action("details"),
     { value: "archive-menu", label: "Archive", desc: filed ? "Restore or permanently delete this thread" : "Archive or permanently delete this thread", icon: "archive", children: [action(filed ? "unarchive" : "archive"), action("delete")] },
   ];
@@ -466,8 +582,8 @@ const THREAD_ACTIONS = [
   { value: "compact", label: "Compact context", desc: "Reduce context; keep the transcript", icon: "sparkle" },
   { value: "idle-compaction", label: "Automatic compaction", icon: "sparkle" },
   { value: "economy", label: "Economy settings", desc: "Use medium effort and turn the advisor off; keep the selected model", icon: "sparkle" },
-  { value: "fork", label: "Fork", desc: "Continue in a new thread", icon: "fork" },
-  { value: "fork-recent", label: "Fork with recent context", desc: "Carry a short recent handoff; keep the full transcript available", icon: "fork" },
+  { value: "fork", label: "Fork…", desc: "Continue in a new thread; pick agent, model and context", icon: "fork" },
+  { value: "create-issue", label: "Create GitHub issue", desc: "Pi drafts an issue from the composer text; review, then open GitHub", icon: "compose" },
   { value: "download", label: "Download", desc: "Save as a Markdown file", icon: "download" },
   { value: "share", label: "Share", desc: "Send the conversation as text", icon: "share" },
   { value: "details", label: "Run details", desc: "Model, effort, tokens and load timings", icon: "code" },
@@ -517,12 +633,8 @@ async function runThreadAction(id, action) {
     send({ t: "archive", thread: id, archived: action === "archive" });
   } else if (action === "delete") {
     if (confirm(`Delete "${t.title}" and its history?`)) send({ t: "delete", thread: id });
-  } else if (action === "fork-recent") {
-    send({ t: "fork", thread: id, context: "recent" });
-  } else if (action.startsWith("fork:")) {
-    send({ t: "fork", thread: id, provider: action.slice(5) });
   } else if (action === "fork") {
-    send({ t: "fork", thread: id }); // the server answers "created" and we open the new thread
+    openForkDialog(id);
   } else if (action === "download") {
     const a = el("a");
     a.href = `/export/${id}`;
@@ -530,6 +642,8 @@ async function runThreadAction(id, action) {
     document.body.append(a);
     a.click();
     a.remove();
+  } else if (action === "create-issue") {
+    createIssueDraft(id);
   } else if (action === "share") {
     const r = await apiFetch(`/export/${id}`).catch(() => null);
     if (!r?.ok) return toast("Could not read that conversation.");
@@ -569,6 +683,7 @@ const menus = {
   }),
   dProv: createMenu({ trigger: $("d-prov"), label: "Agent", renderTrigger: fieldTrigger, onSelect: (v) => { fillDialog(v); queueMicrotask(syncDialogAccount); } }),
   dAccount: createMenu({ trigger: $("d-account"), label: "Claude account", renderTrigger: fieldTrigger, value: "sunny", onSelect: () => queueMicrotask(syncDialogAccount) }),
+  dContext: createMenu({ trigger: $("d-context"), label: "Context", renderTrigger: fieldTrigger, value: "full" }),
   dCwd: createMenu({ trigger: $("d-cwd"), label: "Folder", renderTrigger: fieldTrigger }),
   dModel: createMenu({ trigger: $("d-model"), label: "Model", renderTrigger: fieldTrigger, onSelect: v => dialogEffort(v) }),
   dMode: createMenu({ trigger: $("d-mode"), label: "Permission mode", renderTrigger: fieldTrigger, onSelect: (v) => { $("d-warn").hidden = v !== "bypassPermissions"; } }),
@@ -582,7 +697,7 @@ const schedules = createSchedules({
 
 // ---------- threads UI ----------
 const cur = () => state.threads.get(state.current);
-const autoLane = createAutoLane({ state, openThread: (id) => openThread(id), setNav: (open) => setNav(open), provLabel: (id) => provLabel(id), ago: (ts) => ago(ts) });
+const autoLane = createAutoLane({ state, openThread: (id) => openThread(id), setNav: (open) => setNav(open), provLabel: (id) => provLabel(id), ago: (ts) => ago(ts), assignPremium: openPremiumDialog, debugIssue: (issue) => openJobDebug({ ...issue, openThread: (id) => { setNav(false); openThread(id); } }) });
 function ago(ts) {
   const s = Math.max(0, (Date.now() - ts) / 1000);
   if (s < 60) return "now";
@@ -688,10 +803,51 @@ function writeDraft(id, text) {
   try {
     if (text) localStorage.setItem(`ac_draft:${id}`, text);
     else localStorage.removeItem(`ac_draft:${id}`);
-  } catch {} // Keep thread switching usable when browser storage is unavailable.
+  } catch {
+    if (!storageWarning) toast("Browser storage unavailable. Drafts are kept only while this page stays open.");
+    storageWarning = true;
+  }
 }
 function saveDraft() {
   writeDraft(state.current, $("input").value);
+}
+async function finishSendingDraft(cid, draft) {
+  // A synchronous receipt prevents an interrupted IndexedDB deletion from restoring a sent file.
+  try { localStorage.setItem(`ac_sending:${cid}`, JSON.stringify({ ...draft, accepted: true })); } catch {}
+  const keys = new Set(draft.attachments.map(p => p.key));
+  const list = attachmentDrafts.get(draft.thread) || [];
+  for (let i = list.length - 1; i >= 0; i--) if (keys.has(list[i].key)) list.splice(i, 1);
+  await Promise.all(draft.attachments.map(p => attachmentStorage.remove(p.key)));
+  if (!storageWarning) try { localStorage.removeItem(`ac_sending:${cid}`); } catch {}
+}
+async function recoverSendingDraft(cid, draft) {
+  let text = drafts.get(draft.thread) || "";
+  try { text = localStorage.getItem(`ac_draft:${draft.thread}`) ?? text; } catch {}
+  const list = attachmentDrafts.get(draft.thread) || [];
+  attachmentDrafts.set(draft.thread, list);
+  const saved = [];
+  const labels = new Map();
+  for (const p of draft.attachments) {
+    const existing = list.find(item => item.key === p.key);
+    if (existing) {
+      if (p.n && existing.n !== p.n) labels.set(p.n, existing.n);
+      continue;
+    }
+    if (p.n && list.some(item => item.n === p.n)) {
+      const n = Math.max(0, ...list.map(item => item.n || 0)) + 1;
+      labels.set(p.n, n);
+      p.n = n;
+    }
+    list.push(p);
+    saved.push(attachmentStorage.save(p));
+  }
+  list.sort((a, b) => (a.order || 0) - (b.order || 0));
+  const recovered = draft.text.replace(/\[Image #(\d+)\]/g, (token, n) => labels.has(Number(n)) ? `[Image #${labels.get(Number(n))}]` : token);
+  if (recovered && text !== recovered && !text.startsWith(`${recovered}\n\n`)) text = recovered + (text ? `\n\n${text}` : "");
+  writeDraft(draft.thread, text);
+  if (state.current === draft.thread) restoreDraft(draft.thread);
+  await Promise.all(saved);
+  if (!storageWarning) try { localStorage.removeItem(`ac_sending:${cid}`); } catch {}
 }
 function restoreDraft(id) {
   let text = drafts.get(id) || "";
@@ -702,6 +858,16 @@ function restoreDraft(id) {
     sessionStorage.removeItem("ac_draft");
   } catch {}
   $("input").value = text;
+  pending = attachmentDrafts.get(id) || [];
+  attachmentDrafts.set(id, pending);
+  imageCount = Math.max(0, ...pending.map(p => p.n || 0));
+  for (const p of pending) {
+    if (p.id) {
+      p.url = `/uploads/${p.thread}/${p.id}/${encodeURIComponent(p.name)}`;
+      p.ready = Promise.resolve();
+    } else if (!p.ready) startUpload(p);
+  }
+  renderThumbs();
   sizeInput();
   closeSlash();
 }
@@ -718,12 +884,12 @@ function openThread(id) {
   const old = cur();
   if (old && (!state.rendering && !state.loading || state.snapshot)) {
     if (state.live?.raf) { cancelAnimationFrame(state.live.raf); state.live.raf = 0; }
-    const snapshot = (!state.deferredRefresh && state.snapshot) || { nodes: [...$("chat").childNodes], cards: state.cards, subs: state.subs, subTools: state.subTools, live: state.live, compact: state.compact, start: state.start, latestStart: state.latestStart, end: state.end, scroll: $("chat").scrollTop, stats: $("diagnostics").textContent };
+    const snapshot = (!state.deferredRefresh && state.snapshot) || { nodes: [...$("chat").childNodes], cards: state.cards, doneTasks: state.doneTasks, subs: state.subs, subTools: state.subTools, live: state.live, compact: state.compact, start: state.start, latestStart: state.latestStart, end: state.end, scroll: $("chat").scrollTop, anchor: viewAnchor(), stats: $("diagnostics").textContent };
     snapshot.stale ||= !!state.revalidating || !!state.loadingEarlier || old.id === id;
     views.delete(old.id);
     views.set(old.id, snapshot);
     if (views.size > 5) views.delete(views.keys().next().value);
-    state.cards = new Map(); state.subs = new Map(); state.subTools = new Map(); state.live = null;
+    state.cards = new Map(); state.subs = new Map(); state.subTools = new Map(); state.doneTasks = null; state.live = null;
   }
   state.revalidating = false;
   state.loadingEarlier = false;
@@ -734,7 +900,6 @@ function openThread(id) {
   $("conversation-updating")?.remove();
   state.openAt = performance.now();
   state.request = (state.request || 0) + 1;
-  if (pending.length && pending[0].thread !== id) clearPending(); // attachments belong to the thread they were uploaded to
   state.current = id;
   history.replaceState(null, "", `${location.pathname}${location.search}#thread=${encodeURIComponent(id)}`);
   if (switching) restoreDraft(id);
@@ -753,13 +918,11 @@ function openThread(id) {
   if (cached) {
     if (state.features.selectiveEvents) send({ t: "subscribe", thread: id });
     clearTimeout(state.loadTimer); state.loading = null;
-    state.cards = cached.cards; state.subs = cached.subs; state.subTools = cached.subTools; state.start = cached.start; state.latestStart = cached.latestStart; state.end = cached.end; state.live = cached.live; state.compact = cached.compact;
+    state.cards = cached.cards; state.doneTasks = cached.doneTasks; state.subs = cached.subs; state.subTools = cached.subTools; state.start = cached.start; state.latestStart = cached.latestStart; state.end = cached.end; state.live = cached.live; state.compact = cached.compact;
     $("chat").replaceChildren(...cached.nodes);
     questions.ensure(id);
     earlierIdle();
-    $("chat").scrollTop = cached.scroll;
-    state.lastScrollTop = $("chat").scrollTop;
-    state.stick = nearBottom();
+    restoreView(cached);
     const total_ms = Math.round(performance.now() - state.openAt);
     window.agentConsoleMetrics = { thread: id, cached: true, total_ms };
     latency.record({ kind: "cached", thread: id, total_ms, render_ms: total_ms, wait_ms: 0 });
@@ -782,6 +945,28 @@ function openThread(id) {
   send({ t: "open", thread: id, request: state.request, foregroundOnly: !!state.features.selectiveEvents, small: SMALL_PAGES });
 }
 
+// Saved scroll offsets go stale when virtual rows resolve their real height; remember the first visible message (or "at bottom") instead.
+function viewAnchor() {
+  const chat = $("chat");
+  if (nearBottom()) return { bottom: true };
+  const top = chat.getBoundingClientRect().top;
+  for (const node of chat.children) {
+    const rect = node.getBoundingClientRect();
+    if (rect.bottom > top + 1) return { node, offset: rect.top - top };
+  }
+  return null;
+}
+function restoreView(view) {
+  const chat = $("chat"), anchor = view.anchor;
+  if (anchor?.bottom) { scrollDown(true); state.stick = true; }
+  else if (anchor?.node?.isConnected) {
+    const top = chat.getBoundingClientRect().top;
+    chat.scrollTop += anchor.node.getBoundingClientRect().top - top - anchor.offset;
+    holdHistoryAnchor(anchor.node, top + anchor.offset);
+    state.stick = nearBottom();
+  } else { chat.scrollTop = view.scroll; state.stick = nearBottom(); }
+  state.lastScrollTop = chat.scrollTop;
+}
 function refreshConversation() {
   if (state.rendering || state.loadingEarlier) return;
   state.deferredRefresh = false;
@@ -841,7 +1026,7 @@ async function showHistory(m) {
   if (refreshing) {
     if (state.live?.raf) cancelAnimationFrame(state.live.raf);
     state.live = null; state.compact = null;
-    state.cards = new Map(); state.subs = new Map(); state.subTools = new Map();
+    state.cards = new Map(); state.subs = new Map(); state.subTools = new Map(); state.doneTasks = null;
   } else clearChat();
   state.rendering = true;
   $("chat").setAttribute("aria-busy", "true");
@@ -1014,6 +1199,7 @@ function renderHead() {
   const t = cur();
   if (!$("ttl-edit")) $("ttl").textContent = t ? t.title : state.ready ? "No thread" : "";
   $("cwd").hidden = !t;
+  $("ttl-archived").hidden = !t?.archived;
   $("thread-account").hidden = t?.provider !== "claude";
   $("thread-account").textContent = t?.provider === "claude" ? `${claudeAccount(t.claudeAccount).label} ·` : "";
   $("thread-account").title = t?.provider === "claude" ? `Claude account: ${claudeAccount(t.claudeAccount).email || claudeAccount(t.claudeAccount).label}` : "";
@@ -1078,10 +1264,11 @@ function renderAction() {
   const running = t?.status === "running";
   const waiting = questions.count(t?.id) || t?.waiting;
   const empty = !$("input").value.trim() && !pending.length;
-  const stop = running && empty;
+  const busy = running || !!t?.background; // background subagents outlive the turn; Stop still ends them
+  const stop = busy && empty;
   $("stop").hidden = !stop;
   $("send").hidden = stop;
-  $("send").disabled = !t || (empty && !running);
+  $("send").disabled = !t || (empty && !busy);
   $("send").title = waiting ? "Reply to the agent (Enter)" : running ? "Queue: sent when this turn ends (Enter)" : "Send (Enter)";
   $("send").setAttribute("aria-label", waiting ? "Reply to agent" : running ? "Queue message" : "Send");
 }
@@ -1116,6 +1303,47 @@ function renderQueue() {
   );
 }
 document.addEventListener("visibilitychange", () => { if (state.measurement && document.hidden) state.measurement.hidden = true; });
+// Quick issue creator: pi drafts title and body from the composer text; the owner reviews them before GitHub opens.
+const MAX_ISSUE_DRAFT = 2000; // keep in sync with server/issue-draft.ts
+let issueDraft = null, issueRequest = 0;
+function createIssueDraft(thread) {
+  const draft = $("input").value.trim();
+  if (!draft) return toast("Type the issue in the composer first.");
+  if (draft.length > MAX_ISSUE_DRAFT) return toast(`Issue text is over ${MAX_ISSUE_DRAFT} characters. Shorten it.`);
+  if (ws?.readyState !== 1) return toast("Reconnect before creating an issue.");
+  issueDraft = { cid: `issue-${++issueRequest}` };
+  $("issue-note").textContent = "Pi is drafting the title and body…";
+  $("issue-error").textContent = "";
+  $("issue-title").value = ""; $("issue-body").value = "";
+  $("issue-title").disabled = $("issue-body").disabled = $("issue-open").disabled = true;
+  $("issue-review").showModal();
+  send({ t: "create_issue", thread, draft, cid: issueDraft.cid });
+}
+function issueDraftReply(m) {
+  if (!issueDraft || m.cid !== issueDraft.cid) return;
+  if (m.t === "create_issue_error") {
+    $("issue-note").textContent = "";
+    $("issue-error").textContent = m.message;
+    return;
+  }
+  Object.assign(issueDraft, { owner: m.owner, repo: m.repo });
+  $("issue-note").textContent = `Review the draft for ${m.owner}/${m.repo}, then open GitHub.`;
+  $("issue-title").value = m.title; $("issue-body").value = m.body;
+  $("issue-title").disabled = $("issue-body").disabled = $("issue-open").disabled = false;
+  $("issue-title").focus();
+}
+$("issue-form").onsubmit = e => {
+  e.preventDefault();
+  if (!issueDraft?.repo) return;
+  const url = new URL(`https://github.com/${encodeURIComponent(issueDraft.owner)}/${encodeURIComponent(issueDraft.repo)}/issues/new`);
+  url.searchParams.set("title", $("issue-title").value.trim());
+  url.searchParams.set("body", $("issue-body").value);
+  window.open(url, "_blank", "noopener");
+  issueDraft = null; $("issue-review").close();
+};
+$("issue-cancel").onclick = () => { issueDraft = null; $("issue-review").close(); };
+$("issue-review").addEventListener("cancel", () => { issueDraft = null; });
+
 let queueEditor, queueRequest = 0;
 function editQueuedMessage(id) {
   if (ws?.readyState !== 1) return toast("Reconnect before editing a queued message.");
@@ -1402,6 +1630,7 @@ function clearChat() {
   if (state.live?.raf) cancelAnimationFrame(state.live.raf);
   state.live = null;
   state.cards.clear();
+  state.doneTasks = null;
   state.compact = null;
   state.subs.clear();
   state.subTools.clear();
@@ -1538,6 +1767,16 @@ function errBlock(text) {
 function summarize(name, input) {
   return toolSummary(name, input || {});
 }
+const FILE_TOOLS = new Set(["Read", "Write", "Edit", "MultiEdit", "NotebookEdit"]);
+// File tools get an eye link next to the label that opens the file viewer. It is a sibling of .sum, so relabelling the text never removes it.
+function fileView(name, input) {
+  const path = FILE_TOOLS.has(name) && (input?.file_path || input?.notebook_path);
+  if (!path || typeof path !== "string" || !parseFileRef(path)) return [];
+  const a = el("a", "file-view");
+  a.href = "#"; a.dataset.fileRef = path; a.title = "Open file"; a.setAttribute("aria-label", `Open ${path}`);
+  a.append(icon("eye"));
+  return [a];
+}
 // A shell command is cryptic; when the agent said what it is for, show that and keep the command in the card body and on hover.
 const describedAs = (name, input) => (name === "Bash" && typeof input?.description === "string" && input.description.trim()) || "";
 const TOOL_ICON = { Bash: "terminal", Edit: "pencil", MultiEdit: "pencil", NotebookEdit: "pencil", Write: "file", Read: "file", Grep: "search", Glob: "search", WebFetch: "globe", WebSearch: "globe", WebFind: "globe", WebBrowse: "globe", Task: "sparkle", Agent: "sparkle" };
@@ -1561,6 +1800,10 @@ function toolBody(name, input) {
     for (const l of String(input.old_string).split("\n")) pre.append(el("div", "del", l));
     for (const l of String(input.new_string).split("\n")) pre.append(el("div", "add", l));
     box.append(pre);
+  } else if (name === "Read" && isImageFile(input.file_path)) {
+    const preview = el("div", "prose tool-preview");
+    preview.append(localImage(input.file_path));
+    box.append(preview, codePre(JSON.stringify(input, null, 2), "json"));
   } else if (name === "Write" && "content" in input) {
     box.append(codePre(String(input.content).slice(0, 4000), langFromPath(input.file_path)));
   } else if (name === "Bash" && input.command) {
@@ -1785,7 +2028,7 @@ function subEvent(e, live) {
         const st = el("span", "st");
         st.append(el("i", "spin"));
         const why = describedAs(b.name, b.input);
-        li.append(icon(TOOL_ICON[b.name] || "code", "tool"), el("span", "name", isAgent(b.name) ? "Agent" : toolName(b.name, b.input)), el("span", why || isAgent(b.name) ? "sum human" : "sum", why || (isAgent(b.name) ? b.input?.description || "Subagent" : summarize(b.name, b.input))), st);
+        li.append(icon(TOOL_ICON[b.name] || "code", "tool"), el("span", "name", isAgent(b.name) ? "Agent" : toolName(b.name, b.input)), el("span", why || isAgent(b.name) ? "sum human" : "sum", why || (isAgent(b.name) ? b.input?.description || "Subagent" : summarize(b.name, b.input))), ...fileView(b.name, b.input), st);
         li.title = summarize(b.name, b.input);
         state.subTools.set(b.id, li);
         if (isAgent(b.name)) {
@@ -1808,9 +2051,21 @@ function subEvent(e, live) {
   if (live && following()) scrollDown(false);
 }
 // task_started / task_progress / task_notification: live stats on the card, and a status chip for work that outlives the call
+function finishChip(card, chip, e) {
+  const word = { completed: "finished", failed: "failed", stopped: "stopped" }[e.status] || e.status || "finished";
+  chip.className = `task-chip ${e.status === "failed" ? "err" : "done"}`;
+  chip.replaceChildren(icon(e.status === "failed" ? "x" : "check"), el("span", "", word));
+  if (e.summary) chip.title = e.summary;
+  const now = card.querySelector(".now");
+  if (now) now.textContent = "";
+}
 function taskEvent(e) {
   const card = state.cards.get(e.tool_use_id);
-  if (!card) return;
+  if (!card) {
+    // history is paged newest-first: the notification can arrive before the older page that holds its card and task_started
+    if (e.subtype === "task_notification") (state.doneTasks ||= new Map()).set(e.tool_use_id, e);
+    return;
+  }
   if (e.subtype === "task_progress" && card.classList.contains("agent")) {
     const u = e.usage || {};
     card.querySelector(".stats").textContent = [u.tool_uses != null && `${u.tool_uses} tool${u.tool_uses === 1 ? "" : "s"}`, u.total_tokens != null && `${fmtTok(u.total_tokens)} tokens`, u.duration_ms != null && fmtDur(u.duration_ms)].filter(Boolean).join(" · ");
@@ -1827,14 +2082,9 @@ function taskEvent(e) {
     chip.hidden = false;
     chip.className = "task-chip running";
     chip.replaceChildren(el("i", "spin"), el("span", "", "in background"));
-  } else if (e.subtype === "task_notification" && chip && !chip.hidden) {
-    const word = { completed: "finished", failed: "failed", stopped: "stopped" }[e.status] || e.status || "finished";
-    chip.className = `task-chip ${e.status === "failed" ? "err" : "done"}`;
-    chip.replaceChildren(icon(e.status === "failed" ? "x" : "check"), el("span", "", word));
-    if (e.summary) chip.title = e.summary;
-    const now = card.querySelector(".now");
-    if (now) now.textContent = "";
-  }
+    const done = state.doneTasks?.get(e.tool_use_id);
+    if (done) { state.doneTasks.delete(e.tool_use_id); finishChip(card, chip, done); }
+  } else if (e.subtype === "task_notification" && chip && !chip.hidden) finishChip(card, chip, e);
   updateWorking();
 }
 
@@ -1942,7 +2192,7 @@ function onEvent(e, live) {
           const st = el("span", "st");
           st.append(el("i", "spin"), el("span", "sr-only", "running"));
           const why = describedAs(b.name, b.input);
-          sum.append(tool, el("span", "name", toolName(b.name, b.input)), el("span", why ? "sum human" : "sum", why || summarize(b.name, b.input)), st, icon("chev-right", "chev"));
+          sum.append(tool, el("span", "name", toolName(b.name, b.input)), el("span", why ? "sum human" : "sum", why || summarize(b.name, b.input)), ...fileView(b.name, b.input), st, icon("chev-right", "chev"));
           sum.title = summarize(b.name, b.input);
           card.toolInput = { name: b.name, input: b.input };
           card.append(sum, el("div", "body")); // the open row wraps to show the whole label, so it is not repeated below
@@ -1990,11 +2240,15 @@ function onEvent(e, live) {
       bits.push(at.toDateString() === new Date().toDateString() ? clock : `${at.toLocaleDateString([], { month: "short", day: "numeric" })} ${clock}`);
       if (e.duration_ms) bits.push(`${(e.duration_ms / 1000).toFixed(1)}s`);
       if (typeof e.total_cost_usd === "number") bits.push(`$${e.total_cost_usd.toFixed(4)}`);
-      if (e.is_error || (e.subtype && e.subtype !== "success")) bits.push(e.subtype || "error");
+      // Claude CLI reports failed turns (expired login, API errors) as subtype "success" with is_error set.
+      if (e.is_error || (e.subtype && e.subtype !== "success")) bits.push(e.subtype && e.subtype !== "success" ? e.subtype : "error");
       const last = (state.into || $("chat")).lastElementChild;
       const row = last?.matches(".msg.asst") ? last.querySelector(".actions") : null;
-      if (row) row.append(el("span", "foot", bits.join(" · "))); // stats sit on the reply's action row
+      const foot = el("span", "foot", bits.join(" · "));
+      if (row) row.append(foot); // stats sit on the reply's action row
       else push(el("div", "msg foot", bits.join(" · ")), live);
+      const t = cur();
+      if (e.is_error && t?.provider === "claude" && CLAUDE_AUTH_FAILED.test(e.result || "")) (row ? foot : (state.into || $("chat")).lastElementChild).append(" ", signInButton(t.claudeAccount || "sunny"));
       break;
     }
     case "system":
@@ -2004,7 +2258,9 @@ function onEvent(e, live) {
       const card = state.cards.get(e.tool_use_id) ?? state.subTools.get(e.tool_use_id);
       if (!card) break;
       card.querySelector(".name").textContent = toolName(e.name, e.input);
-      card.querySelector(".sum").textContent = summarize(e.name, e.input);
+      const sumEl = card.querySelector(".sum");
+      sumEl.textContent = summarize(e.name, e.input);
+      if (!card.querySelector(".file-view")) sumEl.after(...fileView(e.name, e.input));
       const summary = card.querySelector("summary") || card;
       summary.title = summarize(e.name, e.input);
       const body = card.querySelector(".body");
@@ -2050,6 +2306,12 @@ function setUsage(e, provider = threadUsageKey(cur())) {
   state.usage[provider] = { updatedAt: Date.now(), windows: [["5-hour", w.five_hour], ["7-day", w.seven_day]].filter(([,x]) => Number.isFinite(x?.utilization)).map(([label,x]) => ({ label, used: x.utilization * 100, limit: 100, unit: "%", ...((x.resetsAt || x.resets_at) ? { resetsAt: (x.resetsAt || x.resets_at) * 1000 } : {}) })) };
   renderUsage();
 }
+function resetsText(at) {
+  const ms = at - Date.now();
+  if (ms <= 0) return "Reset passed";
+  const m = Math.round(ms / 60000), d = Math.floor(m / 1440), h = Math.floor(m % 1440 / 60);
+  return `Resets in ${d ? `${d}d ${h}h` : h ? `${h}h ${m % 60}m` : `${m}m`}`;
+}
 function usageMeter(label, used, limit, unit = "%", resetsAt) {
   const pct = Math.max(0, Math.min(100, used / limit * 100));
   const row = el("div", "u");
@@ -2063,6 +2325,7 @@ function usageMeter(label, used, limit, unit = "%", resetsAt) {
   const fill = el("i"); fill.style.width = `${pct}%`; fill.style.background = meterColor(pct); bar.append(fill);
   const value = el("span", "pct", unit === "%" || unit === "tokens" ? `${Math.round(pct)}%` : text); value.style.color = meterColor(pct);
   row.append(el("span", "", label), bar, value);
+  if (resetsAt) row.append(el("span", "u-reset", resetsText(resetsAt)));
   return row;
 }
 const usageName = (p) => p?.id === "claude" ? "Claude" : p?.id === "pi" ? "OpenRouter" : p?.label || "";
@@ -2152,8 +2415,9 @@ async function submit(mode) {
   const tapAt = performance.now();
   const thread = state.current;
   try {
-    await Promise.all(pending.map((p) => p.ready)); // uploads still in flight; failed ones remove themselves
+    await Promise.all(pending.map((p) => p.ready));
     if (state.current !== thread) return; // Upload completion must not submit another thread's draft.
+    if (pending.some(p => !p.id)) { toast("Retry or remove failed attachments before sending."); return; }
     const text = box.value.trim();
     if (/^\/(model|effort)$/i.test(text)) {
       if (text.toLowerCase() === "/effort" && $("effort").hidden) { toast("This agent does not expose effort settings."); return; }
@@ -2167,10 +2431,12 @@ async function submit(mode) {
     if (!mode && !attachments.length && (questions.count(state.current) || cur()?.waiting)) mode = "steer";
     // mid-turn a message queues until the turn ends; mode "steer" (Alt+Enter, or Steer on a queued card) hands it to the agent now
     const startsTurn = !mode && cur()?.status !== "running";
-    if (sendReliable({ t: "send", thread: state.current, text, attachments, ...(mode ? { mode } : {}) }) && startsTurn) firstToken = { thread: state.current, at: tapAt, wait_ms: performance.now() - tapAt };
+    const draft = { thread, text: box.value, attachments: pending.map(({ key, thread, name, kind, size, n, id, order }) => ({ key, thread, name, kind, size, n, id, order })) };
+    if (sendReliable({ t: "send", thread: state.current, text, attachments, ...(mode ? { mode } : {}) }, draft) && startsTurn) firstToken = { thread: state.current, at: tapAt, wait_ms: performance.now() - tapAt };
     box.value = "";
     saveDraft();
     box.style.height = "";
+    for (const p of pending) forgetAttachment(p);
     pending.length = 0;
     imageCount = 0;
     renderThumbs();
@@ -2224,7 +2490,14 @@ function removeToken(n) {
   box.value = box.value.includes(token + " ") ? box.value.replace(token + " ", "") : box.value.replace(token, "");
   box.dispatchEvent(new Event("input"));
 }
-const pending = []; // { thread, name, kind: "image"|"file", size, url (images: data: URL, so the CSP needs no blob:), id (once uploaded), busy, ready }
+const attachmentDrafts = new Map();
+let attachmentOrder = Date.now();
+let pending = [];
+let storageWarning = false;
+const attachmentStorage = attachmentDraftStore(() => {
+  if (!storageWarning) toast("Browser storage unavailable. Attachments are kept only while this page stays open.");
+  storageWarning = true;
+});
 
 const fmtSize = (n) => (n < 1024 ? `${n} B` : n < 1048576 ? `${Math.round(n / 1024)} KB` : `${(n / 1048576).toFixed(1)} MB`);
 const readDataUrl = (blob) =>
@@ -2273,16 +2546,61 @@ async function upload(thread, blob, name) {
   if (!r.ok) throw new Error(j.error || `Upload failed (${r.status}).`);
   return j;
 }
-const discard = (p) => p.ready.then(() => p.id && apiFetch(`/uploads/${p.thread}/${p.id}`, { method: "DELETE" }).catch(() => {}));
-function dropPending(p) {
-  const i = pending.indexOf(p);
-  if (i >= 0) pending.splice(i, 1);
-  renderThumbs();
+const discard = (p) => Promise.resolve(p.ready).then(() => p.id && apiFetch(`/uploads/${p.thread}/${p.id}`, { method: "DELETE" }).catch(() => {}));
+function forgetAttachment(p) {
+  p.removed = true;
+  attachmentStorage.remove(p.key);
 }
-function clearPending() {
-  for (const p of pending.splice(0)) discard(p);
-  imageCount = 0;
-  renderThumbs();
+function dropPending(p) {
+  const list = attachmentDrafts.get(p.thread) || [];
+  const i = list.indexOf(p);
+  if (i >= 0) list.splice(i, 1);
+  forgetAttachment(p);
+  if (state.current === p.thread) renderThumbs();
+}
+function startUpload(p) {
+  p.busy = true;
+  p.error = false;
+  p.ready = (async () => {
+    // Persist the original file before image decoding, resizing, or networking.
+    await attachmentStorage.save(p);
+    if (p.removed) return;
+    if (!p.prepared) {
+      const prep = await prepare(p.blob);
+      if (p.removed) return;
+      Object.assign(p, prep, { size: prep.blob.size, prepared: true });
+      if (p.kind === "image" && !p.n) {
+        p.n = Math.max(0, ...(attachmentDrafts.get(p.thread) || []).map(item => item.n || 0)) + 1;
+        p.labelPending = true;
+      }
+      await attachmentStorage.save(p);
+    } else if (p.kind === "image") p.url = await readDataUrl(p.blob);
+    if (p.removed) return;
+    if (p.labelPending) {
+      const token = `[Image #${p.n}]`;
+      if (state.current === p.thread) {
+        imageCount = p.n;
+        if (!$("input").value.includes(token)) insertToken(token);
+      } else {
+        const text = drafts.get(p.thread) || "";
+        if (!text.includes(token)) writeDraft(p.thread, `${text}${text && !/\s$/.test(text) ? " " : ""}${token} `);
+      }
+      p.labelPending = false;
+      await attachmentStorage.save(p);
+    }
+    if (p.removed) return;
+    if (state.current === p.thread) renderThumbs();
+    const result = await upload(p.thread, p.blob, p.name);
+    Object.assign(p, { id: result.id, name: result.name, kind: result.kind });
+    if (!p.removed) await attachmentStorage.save(p);
+    delete p.blob;
+  })().catch(error => {
+    p.error = true;
+    if (!p.removed && state.current === p.thread) toast(`${p.name}: ${error.message}`);
+  }).finally(() => {
+    p.busy = false;
+    if (state.current === p.thread) renderThumbs();
+  });
 }
 
 function renderThumbs() {
@@ -2298,12 +2616,19 @@ function renderThumbs() {
       if (p.busy) li.setAttribute("aria-busy", "true");
       if (p.kind === "image") {
         const img = el("img");
-        img.src = p.url;
+        if (p.url) img.src = p.url;
         img.alt = p.n ? `${p.name} (Image ${p.n})` : p.name;
         li.append(img);
         if (p.n) li.append(el("span", "n", String(p.n)));
       } else {
         li.append(icon("file"), el("span", "nm", p.name), el("span", "sz", fmtSize(p.size)));
+      }
+      if (p.error) {
+        const retry = el("button", "btn", "Retry");
+        retry.type = "button";
+        retry.setAttribute("aria-label", `Retry ${p.name}`);
+        retry.onclick = () => { startUpload(p); renderThumbs(); };
+        li.append(retry);
       }
       const rm = el("button", "btn rm");
       rm.type = "button";
@@ -2323,35 +2648,26 @@ function renderThumbs() {
 
 // serialised, so two quick pastes cannot both pass the MAX_ATTACH check while their files are still being processed
 let adding = Promise.resolve();
-const addFiles = (files) => (adding = adding.then(() => addFilesNow(files)));
-async function addFilesNow(files) {
+const addFiles = (files) => {
   const thread = state.current;
+  return (adding = adding.then(() => addFilesNow(files, thread)));
+};
+async function addFilesNow(files, thread) {
   if (!thread) return;
+  const list = attachmentDrafts.get(thread) || [];
+  attachmentDrafts.set(thread, list);
   for (const f of files) {
-    if (pending.length >= MAX_ATTACH) {
+    if (list.length >= MAX_ATTACH) {
       addNote(`At most ${MAX_ATTACH} attachments per message.`, "errtxt");
       break;
     }
     try {
-      const prep = await prepare(f);
-      if (state.current !== thread) return; // switched threads while processing
-      const p = { thread, name: prep.name, kind: prep.kind, size: prep.blob.size, url: prep.url, busy: true, n: prep.kind === "image" ? ++imageCount : 0 };
-      if (p.n) insertToken(`[Image #${p.n}]`);
-      p.ready = upload(thread, prep.blob, prep.name).then(
-        (r) => {
-          Object.assign(p, { id: r.id, name: r.name, kind: r.kind });
-        },
-        (err) => {
-          dropPending(p);
-          if (p.n) removeToken(p.n);
-          addNote(`${prep.name}: ${err.message}`, "errtxt");
-        },
-      ).finally(() => {
-        p.busy = false;
-        renderThumbs();
-      });
-      pending.push(p);
-      renderThumbs();
+      if (!f.size) throw new Error(`${f.name || "That file"} is empty (or a folder).`);
+      if (f.size > MAX_FILE_BYTES && f.type && !f.type.startsWith("image/")) throw new Error(`${f.name || "That file"} is over ${MAX_FILE_BYTES >> 20} MB.`);
+      const p = { key: crypto.randomUUID(), thread, name: f.name || "file", kind: "file", size: f.size, blob: f, n: 0, order: attachmentOrder = Math.max(Date.now(), attachmentOrder + 1) };
+      list.push(p);
+      startUpload(p);
+      if (state.current === thread) renderThumbs();
     } catch (err) {
       addNote(err.message, "errtxt");
     }
@@ -2514,6 +2830,7 @@ $("input").addEventListener("keydown", (e) => {
 });
 function sizeInput() {
   const box = $("input");
+  const scrollTop = box.scrollTop;
   box.style.height = "auto";
   const viewport = window.visualViewport?.height || window.innerHeight;
   const line = parseFloat(getComputedStyle(box).lineHeight);
@@ -2521,6 +2838,30 @@ function sizeInput() {
   const reserve = $("head").offsetHeight + $("composer").offsetHeight - box.offsetHeight
     + parseFloat(chat.paddingTop) + parseFloat(chat.paddingBottom) + line;
   box.style.height = Math.max(line, Math.min(box.scrollHeight, viewport * 0.35, viewport - reserve)) + "px";
+  // Measuring at full height clears the editable's scroll position. Restore it before revealing the caret.
+  box.scrollTop = scrollTop;
+  const selection = getSelection();
+  if (document.activeElement !== box || !selection?.focusNode || !box.contains(selection.focusNode)) return;
+  const caret = document.createRange();
+  caret.setStart(selection.focusNode, selection.focusOffset);
+  caret.collapse(true);
+  let rect = caret.getBoundingClientRect();
+  // Blank lines need their newline or placeholder <br> to supply the range's bounds.
+  if (!rect.height && selection.focusNode.nodeType === Node.TEXT_NODE
+      && selection.focusNode.textContent[selection.focusOffset] === "\n") {
+    caret.setEnd(selection.focusNode, selection.focusOffset + 1);
+    rect = caret.getBoundingClientRect();
+  }
+  const next = selection.focusNode.nodeType === Node.TEXT_NODE
+    ? selection.focusNode.nextSibling : selection.focusNode.childNodes[selection.focusOffset];
+  if (!rect.height && next?.nodeName === "BR") {
+    caret.selectNode(next);
+    rect = caret.getBoundingClientRect();
+  }
+  if (!rect.height) return;
+  const bounds = box.getBoundingClientRect();
+  if (rect.bottom > bounds.bottom) box.scrollTop += rect.bottom - bounds.bottom;
+  else if (rect.top < bounds.top) box.scrollTop -= bounds.top - rect.top;
 }
 $("input").addEventListener("input", () => {
   saveDraft();
@@ -2559,9 +2900,18 @@ document.addEventListener("keydown", (e) => {
 // The new-thread dialog doubles as the scheduled-task editor: same agent, folder, model, effort and permission fields, plus the task's
 // name, instructions and schedule.
 let dialogTask = null; // "new" or the task being edited; null for a new thread
+let dialogAssignment = null;
+let assignmentPending = false;
+$("dlg").addEventListener("cancel", (event) => { if (assignmentPending) event.preventDefault(); });
 function setDialogKind(task) {
+  dialogAssignment = null;
+  $("d-assignment-error").hidden = true;
+  menus.dProv.setItems([...state.providers.values()].map(p => ({ value: p.id, label: p.label, disabled: !p.ok })), menus.dProv.value);
   const wasTask = dialogTask !== null;
   dialogTask = task;
+  $("d-auto-panel").hidden = true;
+  $("d-auto-info").setAttribute("aria-expanded", "false");
+  $("d-auto-note").textContent = AUTO_HINT;
   const isTask = task !== null, editing = isTask && task !== "new";
   $("task-fields").hidden = $("save-field").hidden = !isTask;
   $("dlg-title").textContent = editing ? "Edit scheduled task" : isTask ? "New scheduled task" : "New thread";
@@ -2591,7 +2941,108 @@ function setDialogKind(task) {
     if (first) { menus.dProv.setValue(first); fillDialog(first); }
   }
   $("d-ok").textContent = editing ? "Save task" : isTask ? "Schedule task" : "Create thread";
+  dialogFork = null;
+  $("context-field").hidden = true;
+  $("cwd-field").hidden = false;
   syncDialogAccount();
+}
+// Fork reuses the dialog: prefilled from the source thread, folder fixed, plus how much of the conversation to carry.
+let dialogFork = null; // the thread being forked
+function syncForkContext() {
+  const t = state.threads.get(dialogFork);
+  const native = t && menus.dProv.value === t.provider && (t.provider !== "claude" || menus.dAccount.value === (t.claudeAccount || "sunny"));
+  menus.dContext.setItems([
+    { value: "full", label: "Full conversation", desc: native ? "Continue the same session; nothing is lost." : "Replay the whole conversation as text." },
+    { value: "recent", label: "Recent context only", desc: "Carry a short handoff; the full transcript stays available." },
+  ], menus.dContext.value || "full");
+}
+function openForkDialog(id) {
+  const t = state.threads.get(id);
+  if (!t) return;
+  if (t.status === "running") return void toast("Wait for the current turn to finish before forking.");
+  setNav(false);
+  setDialogKind(null);
+  dialogFork = id;
+  const pid = prov(t.provider)?.ok !== false ? t.provider : [...state.providers.values()].find((p) => p.ok)?.id;
+  menus.dProv.setValue(pid);
+  fillDialog(pid);
+  if (pid === t.provider) {
+    menus.dAccount.setValue(t.claudeAccount || "sunny");
+    if (menus.dModel.items().some((i) => i.value === t.model)) { menus.dModel.setValue(t.model); dialogEffort(t.model, pid); }
+    if (menus.dEffort.items().some((i) => i.value === t.effort)) menus.dEffort.setValue(t.effort);
+    if (menus.dMode.items().some((i) => i.value === t.mode)) menus.dMode.setValue(t.mode);
+    $("d-warn").hidden = menus.dMode.value !== "bypassPermissions";
+  }
+  $("dlg-title").textContent = "Fork thread";
+  $("dlg-sub").textContent = `Continue “${t.title}” in a new thread, in ${t.cwd.replace(/^.*\/repos\/?/, "~/repos/")}.`;
+  $("context-field").hidden = false;
+  $("cwd-field").hidden = true;
+  menus.dContext.setValue("full");
+  $("d-ok").textContent = "Fork thread";
+  syncDialogAccount();
+  $("dlg").showModal();
+}
+function openPremiumDialog(issue) {
+  setNav(false);
+  setDialogKind(null);
+  const providers = [...state.providers.values()].filter(p => ["claude", "codex"].includes(p.id));
+  const chosen = providers.find(p => p.ok);
+  if (!chosen) return void toast("No premium agent is ready. Sign in to Claude or Codex first.");
+  dialogAssignment = issue;
+  menus.dProv.setItems(providers.map(p => ({ value: p.id, label: p.label, disabled: !p.ok })), chosen.id);
+  fillDialog(chosen.id);
+  const related = [...state.threads.values()].filter(t => t.issueRun?.repo?.toLowerCase() === issue.repo.toLowerCase() && t.issueRun.number === issue.number);
+  $("dlg-title").textContent = "Assign to premium";
+  $("dlg-sub").textContent = `${issue.repo}#${issue.number} · ${related.length} related runs. The new session receives remaining work, current state, failed thread IDs and linked PRs.`;
+  $("cwd-field").hidden = true;
+  $("d-ok").textContent = "Start premium session";
+  $("dlg").showModal();
+}
+async function submitPremiumAssignment(settings, account) {
+  if (assignmentPending) return;
+  assignmentPending = true;
+  const issue = dialogAssignment;
+  const cancel = $("dform").querySelector('button[value="cancel"]');
+  cancel.disabled = true;
+  $("d-ok").disabled = true;
+  $("d-ok").textContent = "Starting…";
+  $("d-assignment-error").hidden = true;
+  const reset = () => { assignmentPending = false; cancel.disabled = false; $("d-ok").textContent = "Start premium session"; syncDialogAccount(); };
+  let response;
+  try {
+    const { cwd, ...choice } = settings;
+    response = await apiFetch("/api/automation/assign", { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/x-ndjson" }, body: JSON.stringify({ v: 1, ...issue, ...choice, ...account }) });
+    if (!response.ok || !response.headers.get("content-type")?.includes("ndjson")) {
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "Could not start a premium session.");
+      $("dlg").close();
+      dialogAssignment = null;
+      return void openThread(result.thread);
+    }
+  } catch (error) {
+    $("d-assignment-error").textContent = error.message;
+    $("d-assignment-error").hidden = false;
+    return void reset();
+  }
+  // Checkout preparation takes up to a minute: the settings dialog gives way to a live timeline of its steps.
+  $("dlg").close();
+  reset();
+  const back = (message) => {
+    if (dialogAssignment !== issue) openPremiumDialog(issue);
+    else { setNav(false); $("dlg").showModal(); }
+    $("d-assignment-error").textContent = message;
+    $("d-assignment-error").hidden = false;
+  };
+  try {
+    await showAssignmentProgress(response, {
+      title: `${issue.repo}#${issue.number}`,
+      onBack: () => back($("ap-error").textContent),
+      onOpen: (id) => { if (dialogAssignment === issue) dialogAssignment = null; openThread(id); },
+    });
+    if (!$("ap").open) toast("Premium session started.");
+  } catch (error) {
+    if (!$("ap").open) toast(error.message);
+  }
 }
 function syncWhen() {
   const r = menus.dRepeat.value;
@@ -2651,15 +3102,25 @@ createMenu({
     { value: "task", label: "New scheduled task", icon: "clock" },
     { value: "notifications", label: "Notifications", desc: /: on$/.test($("notifications").getAttribute("aria-label") || "") ? "On for this device" : "Off", icon: "bell" },
     { value: "dashboard", label: "Usage dashboard", icon: "chart" },
+    { value: "benchmarks", label: "Model benchmarks", icon: "chart" },
     { value: "automation", label: "Automation dashboard", icon: "play" },
     { value: "host", label: "Host dashboard", icon: "terminal" },
+    { value: "security", label: "Security scans", desc: "Malware, CVEs, open ports", icon: "shield" },
+    { value: "vault", label: "Vault", desc: "API tokens, write-only", icon: "key" },
+    { value: "doctor", label: "Doctor", desc: "Check and repair the setup", icon: "alert" },
+    { value: "ideas", label: "App ideas", icon: "sparkle" },
     { value: "reload", label: "Reload page", icon: "refresh" },
     { value: "restart", label: "Restart server…", desc: "Once every thread is idle", icon: "power" },
   ],
   onSelect: (v) => {
     if (v === "dashboard") location.href = $("dash-link").href;
+    else if (v === "benchmarks") location.href = $("benchmarks-link").href;
     else if (v === "automation") location.href = $("auto-link").href;
     else if (v === "host") location.href = $("host-link").href;
+    else if (v === "security") location.href = $("security-link").href;
+    else if (v === "vault") location.href = $("vault-link").href;
+    else if (v === "doctor") location.href = "/doctor";
+    else if (v === "ideas") location.href = $("ideas-link").href;
     else if (v === "task") { setLane("tasks"); openTaskDialog(); }
     else (v === "new" ? $("new") : $(v)).click();
   },
@@ -2671,6 +3132,15 @@ $("restart").onclick = async () => {
 $("dform").addEventListener("submit", (e) => {
   if (e.submitter?.value !== "ok") return;
   const settings = { provider: menus.dProv.value, cwd: menus.dCwd.value, model: menus.dModel.value, effort: menus.dEffort.value, mode: menus.dMode.value };
+  const account = settings.provider === "claude" ? { claudeAccount: menus.dAccount.value || "sunny" } : {};
+  if (dialogAssignment) {
+    e.preventDefault();
+    return void submitPremiumAssignment(settings, account);
+  }
+  if (dialogFork) {
+    const { cwd, ...pick } = settings;
+    return void send({ t: "fork", thread: dialogFork, ...pick, ...account, context: menus.dContext.value });
+  }
   if (dialogTask === null) return void send({ t: "create", ...settings, ...(settings.provider === "claude" ? { claudeAccount: menus.dAccount.value || "sunny" } : {}) });
   send({
     t: "task_save", ...(dialogTask !== "new" ? { id: dialogTask.id } : {}), ...settings,
@@ -2702,4 +3172,22 @@ if ("serviceWorker" in navigator) {
 setupNotifications({ apiFetch });
 clearChat();
 renderHead();
+for (const p of await attachmentStorage.load()) {
+  attachmentOrder = Math.max(attachmentOrder, p.order || 0);
+  const list = attachmentDrafts.get(p.thread) || [];
+  list.push(p);
+  attachmentDrafts.set(p.thread, list);
+}
+try {
+  const recovered = Object.keys(localStorage).filter(key => key.startsWith("ac_sending:")).map(key => ({ key, draft: JSON.parse(localStorage.getItem(key)) }));
+  recovered.sort((a, b) => b.draft.createdAt - a.draft.createdAt || b.draft.sequence - a.draft.sequence);
+  for (const { key, draft } of recovered) {
+    if (draft?.thread && typeof draft.text === "string" && Array.isArray(draft.attachments)) {
+      const cid = key.slice("ac_sending:".length);
+      if (draft.accepted) await finishSendingDraft(cid, draft);
+      else await recoverSendingDraft(cid, draft);
+    }
+  }
+} catch { toast("A message recovery copy could not be loaded."); }
+draftsLoaded = true;
 connect();

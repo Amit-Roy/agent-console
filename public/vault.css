@@ -1,0 +1,59 @@
+/* Vault page. Reuses the host dashboard shell (host.css); adds source groups, key rows and the add/replace/delete sheets. */
+.vlt .note{margin:var(--sp-3) 0 0;color:var(--t3);font:var(--fw-reg) var(--f-xs)}
+.vlt .vfoot{text-align:center}
+.restart{margin:0;padding:var(--sp-3) var(--sp-4);border:1px solid color-mix(in srgb,var(--warn) 45%,var(--edge));border-radius:var(--r-md);background:var(--warn-tint);color:var(--warn);font:var(--fw-med) var(--f-sm)}
+.vmsg{margin:0;padding:var(--sp-3) var(--sp-4);border:1px solid var(--edge);border-radius:var(--r-md);background:var(--card);color:var(--t2);font:var(--fw-reg) var(--f-sm)}
+.vmsg.bad{color:var(--bad)}
+#groups{display:grid;gap:var(--sp-3);min-width:0}
+.vgroup .head{display:flex;align-items:center;justify-content:space-between;gap:var(--sp-3)}
+.vgroup .head h2{margin:0;min-width:0;overflow-wrap:anywhere}
+.vgroup .gerr{margin:0 0 var(--sp-2);color:var(--warn);font:var(--fw-reg) var(--f-sm)}
+.vgroup .gempty{margin:0;color:var(--t3);font:var(--fw-reg) var(--f-sm)}
+.hrow.vrow{grid-template-columns:minmax(0,1fr) auto;cursor:default;align-items:center}
+.hrow.vrow:hover{background:none}
+.hrow.vrow .hname b{white-space:normal;overflow-wrap:anywhere;font-family:var(--font-mono)}
+.hrow.vrow .hctx{white-space:normal;overflow-wrap:anywhere}
+.vact{display:flex;gap:var(--sp-1)}
+.vact .btn{min-height:var(--ctl-h-sm)}
+@media (pointer:coarse){.vact .btn{min-height:44px;min-width:44px}}
+.vdlg .sub{margin:0 0 var(--sp-3);overflow-wrap:anywhere}
+.fld{display:grid;gap:var(--sp-1);margin:var(--sp-3) 0 0;min-width:0}
+.fld>span:first-child{color:var(--t2);font:var(--fw-med) var(--f-sm)}
+.fld[hidden]{display:none}
+.fld .input{width:100%;min-width:0;box-sizing:border-box;font-family:var(--font-mono)}
+.pw{display:flex;gap:var(--sp-2);align-items:center}
+.pw .input{flex:1}
+.pw .btn{flex:0 0 auto;min-height:44px}
+.vdlg .err{margin:var(--sp-3) 0 0;color:var(--bad);font:var(--fw-reg) var(--f-sm)}
+.vdlg .err[hidden]{display:none}
+.vdlg .row{display:flex;gap:var(--sp-2);justify-content:flex-end;margin-top:var(--sp-4)}
+.vdlg .btn{min-height:44px}
+.vlt .btn:focus-visible,.vlt .input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.vdlg .wait{margin:var(--sp-3) 0 0;color:var(--accent);font:var(--fw-med) var(--f-sm)}
+.vdlg .wait[hidden]{display:none}
+.lockt{display:inline-flex;align-items:center;gap:var(--sp-1);color:var(--t3);white-space:nowrap}
+.lockt svg{width:.8rem;height:.8rem;fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+.vrow .shown{margin-top:var(--sp-1);padding:var(--sp-2);border-radius:var(--r-sm);background:var(--s2);font:var(--fw-reg) var(--fm-xs) var(--font-mono);overflow-wrap:anywhere;user-select:all}
+#passkeys .head{display:flex;align-items:center;justify-content:space-between;gap:var(--sp-3)}
+#passkeys .note{margin:0 0 var(--sp-2)}
+#passkeys .note:empty{display:none}
+.hrow.prow{grid-template-columns:minmax(0,1fr) auto;cursor:default}
+.hrow.prow:hover{background:none}
+.vban{display:flex;align-items:center;justify-content:space-between;gap:var(--sp-3);flex-wrap:wrap;padding:var(--sp-4);border:1px solid color-mix(in srgb,var(--accent) 50%,var(--edge));border-radius:var(--r-md);background:color-mix(in srgb,var(--accent) 10%,var(--card))}
+.vban[hidden]{display:none}
+.vban p{margin:0;display:grid;gap:var(--sp-1);min-width:0;flex:1 1 14rem}
+.vban b{font:var(--fw-semi,600) var(--f-md,1rem) var(--font-sans,inherit)}
+.vban span{color:var(--t2);font:var(--fw-reg) var(--f-sm)}
+.vban .btn{min-height:44px}
+#passkeys[hidden]{display:none}
+#passkeys>summary{cursor:pointer;color:var(--t2);font:var(--fw-med) var(--f-sm);min-height:32px;display:flex;align-items:center}
+#passkeys[open]>summary{margin-bottom:var(--sp-2)}
+#passkeys .head h2{margin:0;font:var(--fw-med) var(--f-sm)}
+.vnew{margin-top:var(--sp-2);padding:0 var(--sp-3) var(--sp-3);border-left:2px solid var(--edge)}
+.vnew[hidden]{display:none}
+select.input{min-height:44px;font-family:inherit}
+.hintline{margin:var(--sp-2) 0 0;color:var(--t3);font:var(--fw-reg) var(--f-xs)}
+.hintline[hidden]{display:none}
+.hmark{color:var(--t3);font:var(--fw-reg) var(--f-xs);opacity:.7;white-space:nowrap}
+@media (max-width:560px){.vlt .dh{gap:var(--sp-2)}.vlt .dh .back span{display:none}.vlt .dh .btn.sm{padding-inline:var(--sp-3)}.vlt .dh h1{flex:1 0 auto;min-width:0}}
+@media (max-width:420px){.vlt #refresh{display:none}}

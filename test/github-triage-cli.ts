@@ -49,7 +49,9 @@ await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
 const port = (server.address() as { port: number }).port;
 await new Promise<void>(resolve => server.close(() => resolve()));
 fs.writeFileSync(configuration, JSON.stringify({ repos: ["fixture/repository"], secret: "test-only-scratch-webhook-secret-1234567890", url: "https://example.invalid/api/github/webhook", port, host: "127.0.0.1" }), { mode: 0o600 });
-const env = { ...process.env, PATH: `${fixtureBin}:${process.env.PATH}`, TRIAGE_TEST_GITHUB: githubState, AGENT_CONSOLE_ENV_FILES: "/dev/null", AGENT_CONSOLE_TRIAGE_CONFIG: configuration, AGENT_CONSOLE_TRIAGE_RUN: runtime };
+const env = { ...process.env, PATH: `${fixtureBin}:${process.env.PATH}`, TRIAGE_TEST_GITHUB: githubState, AGENT_CONSOLE_ENV_FILES: "/dev/null", AGENT_CONSOLE_TRIAGE_CONFIG: configuration, AGENT_CONSOLE_TRIAGE_RUN: runtime,
+  // Each CLI call and the detached worker re-load the same TypeScript graph; a shared V8 code cache cuts that startup roughly 3x.
+  NODE_COMPILE_CACHE: path.join(scratch, "compile-cache") };
 delete env.AGENT_CONSOLE_MOCK;
 const cli = (...args: string[]) => new Promise<string>((resolve, reject) => {
   execFile(process.execPath, [path.join(root, "scripts/github-triage.ts"), ...args], { cwd: root, env, timeout: 25_000 }, (error, stdout) => error ? reject(error) : resolve(stdout));
@@ -63,7 +65,9 @@ try {
   fs.writeFileSync(retained, "Existing private calibration must survive a failed refresh.", { mode: 0o600 });
   await assert.rejects(new Promise<void>((resolve, reject) => {
     execFile(process.execPath, [path.join(root, "scripts/github-triage.ts"), "calibrate"], {
-      cwd: root, env: { ...env, AGENT_CONSOLE_DATA: path.join(scratch, "missing-source"), AGENT_CONSOLE_TRIAGE_HISTORY: retained }, timeout: 25_000,
+      cwd: root, env: { ...env, AGENT_CONSOLE_DATA: path.join(scratch, "missing-source"), AGENT_CONSOLE_TRIAGE_HISTORY: retained,
+        // Deterministic failing fit step: never boots a developer machine's real training venv (several seconds).
+        AGENT_CONSOLE_TRIAGE_PYTHON: "/bin/false" }, timeout: 25_000,
     }, error => error ? reject(error) : resolve());
   }));
   assert.equal(fs.readFileSync(retained, "utf8"), "Existing private calibration must survive a failed refresh.");
@@ -75,7 +79,7 @@ try {
   assert.equal(workerPid(), originalPid, "Healthy watchdog must not restart the worker");
   assert.equal(fs.readFileSync(path.join(runtime, "last-reconcile"), "utf8"), firstScan, "Healthy watchdog must respect the reconciliation interval");
   process.kill(originalPid, "SIGKILL");
-  for (const deadline = Date.now() + 5_000; ; await new Promise(resolve => setTimeout(resolve, 100))) {
+  for (const deadline = Date.now() + 5_000; ; await new Promise(resolve => setTimeout(resolve, 20))) {
     try { process.kill(originalPid, 0); } catch { break; }
     assert.ok(Date.now() < deadline, "Killed worker must exit");
   }

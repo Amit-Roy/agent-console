@@ -1,0 +1,54 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>Security · Agent Console</title>
+<link rel="icon" href="/icon.svg"><link rel="apple-touch-icon" href="/icon-192.png">
+<meta name="theme-color" content="#eeeef2" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0b0b0d" media="(prefers-color-scheme: dark)">
+<link rel="preload" href="/fonts/inter-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/dashboard.css"><link rel="stylesheet" href="/host.css"><link rel="stylesheet" href="/security.css"></head>
+<body class="host sec">
+<header class="dh">
+  <a class="btn ghost back" href="/" aria-label="Back to the console"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M10 3.5 5.5 8l4.5 4.5"/></svg><span>Console</span></a>
+  <h1>Security</h1>
+  <a class="btn sm ghost" href="/host">Host</a>
+  <a class="btn sm ghost" href="/vault">Vault</a>
+  <button type="button" class="btn sm primary" id="run">Run scan</button>
+</header>
+<main id="hm" aria-busy="true">
+  <section id="verdict" class="verdict" aria-label="Overall result" aria-live="polite"></section>
+  <section id="running" class="panel running" aria-label="Scan in progress" aria-live="polite" hidden></section>
+  <section class="panel" id="findings" aria-label="Findings" hidden></section>
+  <section id="tools" class="tools" aria-label="Scanners"></section>
+  <section class="panel" id="falco" aria-label="Runtime threats" hidden>
+    <div class="head"><h2>Runtime threats (Falco) <span class="hcount" id="falco-count"></span></h2></div>
+    <div id="falco-rows"></div>
+  </section>
+  <section class="panel" id="trivy" aria-label="Vulnerabilities" hidden>
+    <div class="head"><h2>Vulnerabilities <span class="hcount" id="trivy-count"></span></h2>
+      <label class="sw"><input type="checkbox" id="fixed-only"><span>Fix available only</span></label>
+    </div>
+    <div id="trivy-rows"></div>
+  </section>
+  <section class="panel" id="ports" aria-label="Open ports" hidden>
+    <div class="head"><h2>Open ports <span class="hcount" id="port-count"></span></h2></div>
+    <div class="rows" id="port-rows"></div>
+  </section>
+  <section class="panel" id="history" aria-label="Scan history" hidden>
+    <div class="head"><h2>History <span class="hcount" id="hist-count"></span></h2></div>
+    <div class="strip" id="strip" role="list"></div>
+    <p class="note" id="hist-note"></p>
+  </section>
+</main>
+<dialog id="logsheet" class="logsheet" aria-labelledby="log-title">
+  <div class="lhead">
+    <div class="ltitle"><h2 id="log-title">Scan log</h2><span class="lsub" id="log-sub"></span></div>
+    <span class="pill" id="log-state" hidden></span>
+    <button type="button" class="btn sm ghost" id="log-close" aria-label="Close log">Close</button>
+  </div>
+  <div class="lbody" id="log-body" role="log" aria-live="off" tabindex="0"></div>
+  <button type="button" class="btn sm primary ljump" id="log-jump" hidden>Jump to latest</button>
+</dialog>
+<div id="toast" role="status" aria-live="polite"></div>
+<script type="module" src="/security.js"></script>
+</body></html>

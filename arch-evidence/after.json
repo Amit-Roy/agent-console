@@ -1,97 +1,46 @@
 {
-  "title": "Thread Naming Algorithm",
-  "subtitle": "Thread title generation for Android display width",
+  "title": "Thread quota handling after auto-resume",
+  "subtitle": "Premium model threads auto-resume on usage window reset",
   "direction": "row",
   "items": [
     {
-      "group": "Thread Naming",
-      "border": "solid",
-      "color": "indigo",
-      "icon": "text",
-      "direction": "row",
+      "group": "Thread lifecycle",
       "items": [
-        {
-          "id": "max_title",
-          "label": "MAX_TITLE",
-          "tech": "JS const",
-          "desc": "Max char width (20)",
-          "icon": "ruler",
-          "color": "orange",
-          "status": "modified"
-        },
-        {
-          "id": "max_words",
-          "label": "MAX_WORDS",
-          "tech": "JS const",
-          "desc": "Max word count (4)",
-          "icon": "text",
-          "color": "orange",
-          "status": "modified"
-        },
-        {
-          "id": "clean_title",
-          "label": "cleanTitle()",
-          "tech": "JS function",
-          "desc": "Cleans/validates model. 30→20, 5→4. Android budget.",
-          "icon": "code",
-          "color": "orange",
-          "status": "modified"
-        },
-        {
-          "id": "prompt",
-          "label": "suggestTitle()",
-          "tech": "Template",
-          "desc": "LLM prompt: 2-4→2-3 words. Android conciseness.",
-          "icon": "terminal",
-          "color": "orange",
-          "status": "modified"
-        }
-      ]
+        { "id": "user", "label": "User", "tech": "Browser", "desc": "Sends messages", "icon": "user", "color": "blue", "status": "unchanged" },
+        { "id": "thread", "label": "Thread", "tech": "threads.ts", "desc": "Agent conversation", "icon": "message-circle", "color": "indigo", "status": "unchanged" },
+        { "id": "quota-paused", "label": "Quota paused", "tech": "quotaPaused field", "desc": "Thread paused due to exhausted window", "icon": "pause", "color": "purple", "status": "added" },
+        { "id": "resumed", "label": "Resumed", "tech": "threads.ts", "desc": "Thread receives Continue.", "icon": "play", "color": "cyan", "status": "added" }
+      ],
+      "id": "thread-lifecycle",
+      "color": "slate",
+      "border": "solid"
     },
     {
-      "group": "Window Dispatch",
-      "border": "solid",
-      "color": "purple",
-      "icon": "grid",
-      "direction": "row",
+      "group": "Usage tracking",
       "items": [
-        {
-          "id": "max_thread_title",
-          "label": "MAX_THREAD",
-          "tech": "JS const",
-          "desc": "Max char width (20)",
-          "icon": "ruler",
-          "color": "orange",
-          "status": "modified"
-        },
-        {
-          "id": "threadTitle",
-          "label": "threadTitle()",
-          "tech": "JS function",
-          "desc": "Generates issue title (20 char limit)",
-          "icon": "terminal",
-          "color": "orange",
-          "status": "modified"
-        }
-      ]
+        { "id": "usage", "label": "Usage module", "tech": "usage.ts", "desc": "Tracks provider windows", "icon": "gauge", "color": "orange", "status": "unchanged" },
+        { "id": "window-reset", "label": "Window reset", "tech": "subscribeWindowReset", "desc": "Detects exhausted -> available transition", "icon": "refresh-cw", "color": "teal", "status": "added" }
+      ],
+      "id": "usage-tracking",
+      "color": "orange",
+      "border": "solid"
+    },
+    {
+      "group": "Auto-resume",
+      "items": [
+        { "id": "resume-quota-paused", "label": "Resume quota-paused", "tech": "resumeQuotaPaused()", "desc": "Sends Continue. to non-archived threads", "icon": "send", "color": "teal", "status": "added" }
+      ],
+      "id": "auto-resume",
+      "color": "teal",
+      "border": "solid"
     }
   ],
   "edges": [
-    {
-      "from": "max_title",
-      "to": "clean_title"
-    },
-    {
-      "from": "max_words",
-      "to": "clean_title"
-    },
-    {
-      "from": "prompt",
-      "to": "clean_title"
-    },
-    {
-      "from": "max_thread_title",
-      "to": "threadTitle"
-    }
+    { "from": "user", "to": "thread", "label": "send message", "status": "unchanged" },
+    { "from": "thread", "to": "quota-paused", "label": "rate limit error", "status": "modified" },
+    { "from": "quota-paused", "to": "usage", "label": "report usage", "status": "unchanged" },
+    { "from": "usage", "to": "window-reset", "label": "detect reset", "status": "added" },
+    { "from": "window-reset", "to": "resume-quota-paused", "label": "trigger resume", "status": "added" },
+    { "from": "resume-quota-paused", "to": "resumed", "label": "send continue", "status": "added" }
   ]
 }

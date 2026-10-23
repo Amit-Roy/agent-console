@@ -1,12 +1,15 @@
 import fs from "node:fs";
 import path from "node:path";
-import webpush from "web-push";
+import { createRequire } from "node:module";
+import type webpushModule from "web-push";
 
 export type ThreadNotice = { kind: "finished" | "failed" | "needs_input"; thread: string; title: string };
 type Subscription = { endpoint: string; keys: { p256dh: string; auth: string }; silent?: boolean };
 type Device = { subscription: Subscription; origin: string; silent?: boolean };
 type State = { publicKey: string; privateKey: string; devices: Device[] };
-type Sender = typeof webpush.sendNotification;
+type Sender = typeof webpushModule.sendNotification;
+// web-push takes ~100 ms to load; boot needs it only to make the first keys, deliveries load it on first use.
+const webpush = (): typeof webpushModule => createRequire(import.meta.url)("web-push");
 
 // Only browser push services can receive deliveries. Never fetch arbitrary submitted URLs.
 export function validSubscription(value: any): value is Subscription {
@@ -30,7 +33,7 @@ export class Notifications {
   private file: string;
   private send: Sender;
 
-  constructor(directory: string, send: Sender = webpush.sendNotification) {
+  constructor(directory: string, send: Sender = (...args) => webpush().sendNotification(...args)) {
     this.file = path.join(directory, "notifications.json");
     this.send = send;
     if (fs.existsSync(this.file)) {
@@ -40,7 +43,7 @@ export class Notifications {
       }
       fs.chmodSync(this.file, 0o600);
     } else {
-      this.state = { ...webpush.generateVAPIDKeys(), devices: [] };
+      this.state = { ...webpush().generateVAPIDKeys(), devices: [] };
       this.save();
     }
   }

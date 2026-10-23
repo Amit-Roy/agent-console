@@ -1,0 +1,43 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>App ideas · Agent Console</title>
+<link rel="icon" href="/icon.svg"><link rel="apple-touch-icon" href="/icon-192.png">
+<meta name="theme-color" content="#eeeef2" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0b0b0d" media="(prefers-color-scheme: dark)">
+<link rel="preload" href="/fonts/inter-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/dashboard.css"><link rel="stylesheet" href="/ideas.css"></head>
+<body class="ideas">
+<header class="dh">
+  <a class="btn ghost back" id="back" href="/" aria-label="Back to the console"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M10 3.5 5.5 8l4.5 4.5"/></svg><span id="backLabel">Console</span></a>
+  <h1 id="title">App ideas</h1>
+  <button type="button" class="btn add" id="add" aria-expanded="false" aria-controls="form"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg><span>New idea</span></button>
+  <button type="button" class="btn add icon" id="addBullet" aria-expanded="false" aria-controls="bulletForm" aria-label="Add bullet" hidden><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg></button>
+</header>
+<main id="im" aria-busy="true">
+  <form id="form" class="sheet" hidden autocomplete="off">
+    <label>Name<input id="name" name="name" maxlength="80" required placeholder="Plant Pal"></label>
+    <label>One line<input id="line" name="line" maxlength="200" required placeholder="Reminds me to water my plants"></label>
+    <p class="err" id="formErr" role="alert" hidden></p>
+    <div class="row"><button type="button" class="btn ghost" id="cancel">Cancel</button><button type="submit" class="btn primary" id="save">Add idea</button></div>
+  </form>
+  <form id="bulletForm" class="sheet" hidden autocomplete="off">
+    <fieldset class="seg" aria-label="Section">
+      <label><input type="radio" name="section" value="Features" checked><span>Features</span></label>
+      <label><input type="radio" name="section" value="Implementation"><span>Implementation</span></label>
+      <label><input type="radio" name="section" value="Others"><span>Others</span></label>
+    </fieldset>
+    <label>Bullet<input id="bullet" name="text" maxlength="300" required placeholder="Weekly digest email"></label>
+    <p class="err" id="bulletErr" role="alert" hidden></p>
+    <div class="row"><button type="button" class="btn ghost" id="bulletCancel">Cancel</button><button type="submit" class="btn primary" id="bulletSave">Add bullet</button></div>
+  </form>
+  <section id="listView" aria-labelledby="title">
+    <p class="muted" id="status" aria-live="polite">Loading ideas…</p>
+    <ul class="group" id="list"></ul>
+    <p class="muted foot" id="repo"></p>
+  </section>
+  <article id="detail" class="group prose" hidden aria-live="polite"></article>
+</main>
+<div id="toast" role="status" aria-live="polite" hidden></div>
+<script type="module" src="/ideas.js"></script>
+</body></html>

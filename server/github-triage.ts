@@ -32,6 +32,11 @@ type Options = {
   // Called after the named CI workflow passes on a push to main of an allowed repository.
   deploy?: { workflow: string; run: (repo: string, sha: string) => void };
   log?: (metadata: Record<string, unknown>) => void;
+  // Called for each accepted webhook, each finished non-webhook job (queued, repair, reconcile) and each reconciled item
+  // that looks like it has no telemetry comment. Must be idempotent; failures are logged, never thrown (token telemetry comment).
+  // Called for an issue closed or a pull request merged, so the Console can archive the matching automation threads.
+  onClosed?: (item: { repo: string; number: number; kind: Kind }) => void;
+  onItem?: (item: { repo: string; number: number; kind: Kind }) => Promise<unknown> | void;
 };
 
 class GithubError extends Error {
@@ -212,6 +217,12 @@ export function createTriageService(options: Options) {
     return cached?.text ?? "";
   }
 
+  async function notifyItem(repo: string, number: number, kind: Kind) {
+    if (!options.onItem) return;
+    try { await options.onItem({ repo, number, kind }); }
+    catch { log("on_item_failed"); }
+  }
+
   const reconciling = new Map<string, Promise<{ scanned: number; queued: number }>>();
   async function scan(selectedRepo?: string) {
     let scanned = 0;
@@ -228,7 +239,11 @@ export function createTriageService(options: Options) {
           const pr = kind === "pull_request" ? await github("GET", `repos/${repo}/pulls/${issue.number}`) : undefined;
           const assessment = cachedAssessment(repo, issue.number, triageSourceMarker(issue, pr, await repoContext(repo)), revision());
           const comment = await findComment(repo, issue.number);
-          if (matchesAssessment(issue, comment, assessment)) continue;
+          if (matchesAssessment(issue, comment, assessment)) {
+            // Triage comment present; fewer than two comments means no telemetry comment yet (cheap check, no extra API call).
+            if (typeof issue.comments === "number" && issue.comments < 2) await notifyItem(repo, issue.number, kind);
+            continue;
+          }
           if (enqueue(repo, issue.number, kind, "reconcile")) queued++;
         }
         if (items.length < 100) break;
@@ -340,6 +355,8 @@ export function createTriageService(options: Options) {
       active = (async () => {
         try {
           const result = await processJob(job);
+          // Webhook jobs already notified on receipt; every other path (lost webhook, reconcile, repair) must not skip it.
+          if (result.status === "done" && job.reason !== "webhook") await notifyItem(job.repo, job.number, job.kind);
           db.prepare("UPDATE github_triage SET status=?,model=?,updated=? WHERE delivery=?")
             .run(result.status, result.model ?? null, Date.now(), job.delivery);
           log(result.status, { repo: job.repo, number: job.number, model: result.model ?? null });
@@ -416,6 +433,20 @@ export function createTriageService(options: Options) {
       try { options.deploy.run(repo, run.head_sha); } catch { log("deploy_failed", { repo }); }
       return;
     }
+    if ((event === "issues" || event === "pull_request") && payload.action === "closed") {
+      const repo = payload.repository?.full_name;
+      if (typeof repo !== "string" || !repos.has(repo)) { respond(res, 403, { error: "Repository not allowed" }); return; }
+      const item = event === "issues" ? payload.issue : payload.pull_request;
+      const number = item?.number;
+      if (!Number.isSafeInteger(number) || number <= 0) { respond(res, 400, { error: "Invalid item number" }); return; }
+      const done = event === "issues" ? !item.pull_request : item.merged === true;
+      if (done) {
+        try { options.onClosed?.({ repo, number, kind: event === "issues" ? "issue" : "pull_request" }); }
+        catch { log("on_closed_failed"); }
+      }
+      respond(res, 200, { closed: done });
+      return;
+    }
     if (!Object.hasOwn(ACTIONS, event)) { respond(res, 200, { ignored: true }); return; }
     const repo = payload.repository?.full_name;
     if (typeof repo !== "string" || !repos.has(repo)) { respond(res, 403, { error: "Repository not allowed" }); return; }
@@ -427,6 +458,10 @@ export function createTriageService(options: Options) {
     if (event === "issues" && item.pull_request) { respond(res, 200, { ignored: true }); return; }
     const inserted = enqueue(repo, number, event === "issues" ? "issue" : "pull_request", payload.action === "unlabeled" ? "repair" : "webhook", delivery);
     respond(res, 202, { accepted: true, duplicate: !inserted });
+    if (options.onItem) {
+      try { void Promise.resolve(options.onItem({ repo, number, kind: event === "issues" ? "issue" : "pull_request" })).catch(() => log("on_item_failed")); }
+      catch { log("on_item_failed"); }
+    }
     schedule();
   }
 

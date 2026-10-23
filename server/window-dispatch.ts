@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { randomUUID } from "node:crypto";
 import { DATA_DIR } from "./auth.ts";
 import { EFFORT_LABELS, PRIORITY_LABELS, githubRequest, type GithubRequest } from "./github-triage.ts";
@@ -22,6 +23,8 @@ export interface Config {
   enabled: boolean;      // false = plan and log only
   dryRun: boolean;
   leadMinutes: number;   // assign only inside the last N minutes of a 5-hour window
+  lowUsagePct: number;   // a window used less than this opens earlier: more quota would otherwise expire
+  lowUsageLeadMinutes: number; // lead time for such a window
   maxUsedPct: number;    // skip a window that is already this full: nothing would be wasted
   perWindow: number;     // issues handed to one provider per window
   repos: string[];
@@ -29,9 +32,9 @@ export interface Config {
   authors: string[];     // only issues opened by these GitHub logins are dispatched: issue text steers an unattended agent
 }
 export interface Issue { repo: string; number: number; title: string; labels: string[] }
-export interface Decision { key: string; issue: Issue; effort: Effort; route: Route; window?: { provider: string; resetsAt: number; used: number }; reason: string }
+export interface Decision { key: string; issue: Issue; effort: Effort; route: Route; premium?: boolean; window?: { provider: string; resetsAt: number; used: number }; reason: string }
 
-export const DEFAULTS: Config = { enabled: false, dryRun: true, leadMinutes: 90, maxUsedPct: 90, perWindow: 2, repos: ["Amit-Roy/agent-console"], authors: ["Amit-Roy"], routing: { mode: "shadow", bauOnPi: false } };
+export const DEFAULTS: Config = { enabled: false, dryRun: true, leadMinutes: 90, lowUsagePct: 60, lowUsageLeadMinutes: 180, maxUsedPct: 90, perWindow: 2, repos: ["Amit-Roy/agent-console"], authors: ["Amit-Roy"], routing: { mode: "shadow", bauOnPi: false } };
 
 // Issue #10: BAU = Sonnet medium or Sol low; Deep = Opus medium or Sol high; Trivial = any cheap Pi model, reviewed by a better one.
 export const ROUTES: Record<Effort, Route[]> = {
@@ -39,6 +42,8 @@ export const ROUTES: Record<Effort, Route[]> = {
   bau: [{ provider: "claude", model: "sonnet", effort: "medium" }, { provider: "codex", model: "gpt-6.1-sol", effort: "low" }],
   trivial: [{ provider: "pi", model: "default", effort: "default" }],
 };
+// Spare premium slots (no Deep work left) run the next issue at low effort.
+export const FILL: Route[] = [{ provider: "claude", model: "sonnet", effort: "low" }, { provider: "codex", model: "gpt-6.1-sol", effort: "low" }];
 export const REVIEWERS: Route[] = [{ provider: "claude", model: "sonnet", effort: "medium" }, { provider: "codex", model: "gpt-6.1-sol", effort: "low" }];
 
 export const issueKey = (i: Pick<Issue, "repo" | "number">) => `${i.repo}#${i.number}`;
@@ -48,19 +53,32 @@ export function effortOf(labels: string[]): Effort | undefined {
   return hit.length === 1 ? hit[0][0] : undefined;
 }
 const rank = (labels: string[]) => { const i = Object.values(PRIORITY_LABELS).findIndex(l => labels.includes(l)); return i < 0 ? 9 : i; };
+const EFFORT_ORDER: Effort[] = ["deep", "bau", "trivial"];
 
 export function fiveHour(u: ProviderUsage | undefined, now: number): (UsageWindow & { resetsAt: number }) | undefined {
   const w = u?.windows.find(x => x.label === "5-hour" && x.resetsAt);
   return w && w.resetsAt! > now ? w as UsageWindow & { resetsAt: number } : undefined;
 }
 
-// A provider has expiring quota when its window ends within the lead time. `full` marks a window at or above maxUsedPct:
-// big work skips it, but trivial work (small, reviewed) does not need the room check.
+// A provider has expiring quota when its window ends within the lead time, longer for a window used below lowUsagePct.
+// `full` marks a window at or above maxUsedPct: big work skips it, but trivial work (small, reviewed) does not need the room check.
 export function expiring(u: ProviderUsage | undefined, now: number, cfg: Config) {
   const w = fiveHour(u, now);
-  if (!w || w.resetsAt - now > cfg.leadMinutes * 60_000) return undefined;
+  if (!w) return undefined;
   const pct = w.limit ? w.used / w.limit * 100 : 100;
+  const lead = pct < cfg.lowUsagePct ? Math.max(cfg.leadMinutes, cfg.lowUsageLeadMinutes) : cfg.leadMinutes;
+  if (w.resetsAt - now > lead * 60_000) return undefined;
   return { resetsAt: w.resetsAt, used: pct, full: pct >= cfg.maxUsedPct };
+}
+
+/** Pure: premium usage keys (claude, claude:<account>, codex) whose quota-paused threads may continue now. Same gate as Deep
+ *  work: the 5-hour window is expiring and below maxUsedPct, and no window is still exhausted. */
+export function resumeDue(usage: Record<string, ProviderUsage>, now: number, cfg: Config): string[] {
+  return Object.entries(usage).filter(([p, u]) => {
+    if (!/^(claude|codex)(:|$)/.test(p) || u.windows.some(w => w.used >= w.limit && (!w.resetsAt || w.resetsAt > now))) return false;
+    const e = expiring(u, now, cfg);
+    return !!e && !e.full;
+  }).map(([p]) => p);
 }
 
 /** Pure: which open issues to start now. `done` holds keys already assigned (any window). */
@@ -75,28 +93,46 @@ export function plan(input: { now: number; usage: Record<string, ProviderUsage>;
     if (e) room.set(p, { ...e, left: cfg.perWindow });
   }
   const out: Decision[] = [];
-  let piLeft = cfg.perWindow;
+  const minutes = (w: { resetsAt: number }) => Math.round((w.resetsAt - input.now) / 60_000);
   // Deep work first: it needs the most quota, so it gets first pick of what is expiring.
-  for (const effort of ["deep", "bau", "trivial"] as Effort[]) {
-    for (const issue of open.filter(i => effortOf(i.labels) === effort)) {
+  // Premium slots left without Deep work take the next issue by priority, then effort. Work that would otherwise run on Pi
+  // gets the low-effort FILL routes; BAU kept off Pi keeps its own BAU route.
+  const piWork = (e: Effort) => e === "trivial" || (e === "bau" && cfg.routing.mode === "live" && cfg.routing.bauOnPi);
+  const byPriority = open.filter(i => effortOf(i.labels) !== "deep")
+    .sort((a, b) => rank(a.labels) - rank(b.labels) || EFFORT_ORDER.indexOf(effortOf(a.labels)!) - EFFORT_ORDER.indexOf(effortOf(b.labels)!) || a.number - b.number);
+  const fill = new Set<Issue>();
+  for (const issue of [...open.filter(i => effortOf(i.labels) === "deep"), ...byPriority]) {
+    const effort = effortOf(issue.labels)!;
+    const pool = effort === "deep" ? ROUTES.deep : piWork(effort) ? FILL : ROUTES.bau;
+    const route = pool.find(r => { const w = room.get(r.provider); return !!w && w.left > 0 && !w.full; });
+    if (!route) continue;
+    const w = room.get(route.provider)!;
+    w.left--;
+    fill.add(issue);
+    out.push({
+      key: issueKey(issue), issue, effort, route, premium: pool === FILL,
+      window: { provider: route.provider, resetsAt: w.resetsAt, used: Math.round(w.used) },
+      reason: `${route.provider} window ends in ${minutes(w)} min at ${Math.round(w.used)}% used${effort === "deep" ? "" : "; no Deep work left"}`,
+    });
+  }
+  let piLeft = cfg.perWindow;
+  for (const effort of ["bau", "trivial"] as Effort[]) {
+    for (const issue of open.filter(i => effortOf(i.labels) === effort && !fill.has(i))) {
       // Live Pi workers use their own capacity; premium review can wait until the PR is ready.
       if (cfg.routing.mode === "live" && (effort === "trivial" || (effort === "bau" && cfg.routing.bauOnPi))) {
         if (piLeft-- > 0) out.push({ key: issueKey(issue), issue, effort, route: ROUTES.trivial[0], reason: "Pi work is independent of premium reset windows" });
         continue;
       }
-      // Trivial work runs on Pi but needs a Sonnet/Sol reviewer, so it also draws on an expiring window.
-      const pool = effort === "trivial" ? REVIEWERS : ROUTES[effort];
-      const route = pool.find(r => { const w = room.get(r.provider); return !!w && w.left > 0 && (effort === "trivial" || !w.full); });
+      // Trivial work runs on Pi but needs a Sonnet/Sol reviewer, so it also draws on an expiring window, even a full one.
+      if (effort !== "trivial") continue; // BAU had its premium chance above
+      const route = REVIEWERS.find(r => { const w = room.get(r.provider); return !!w && w.left > 0; });
       if (!route) continue;
       const w = room.get(route.provider)!;
       w.left--;
       out.push({
-        key: issueKey(issue), issue, effort,
-        route: effort === "trivial" ? ROUTES.trivial[0] : route,
+        key: issueKey(issue), issue, effort, route: ROUTES.trivial[0],
         window: { provider: route.provider, resetsAt: w.resetsAt, used: Math.round(w.used) },
-        reason: effort === "trivial"
-          ? `${route.provider} window ends in ${Math.round((w.resetsAt - input.now) / 60_000)} min at ${Math.round(w.used)}% used; reviewer ${route.model}`
-          : `${route.provider} window ends in ${Math.round((w.resetsAt - input.now) / 60_000)} min at ${Math.round(w.used)}% used`,
+        reason: `${route.provider} window ends in ${minutes(w)} min at ${Math.round(w.used)}% used; reviewer ${route.model}`,
       });
     }
   }
@@ -137,15 +173,32 @@ export function issuePrompt(d: Decision, branch: string, base: string): string {
   ].join("\n\n");
 }
 
-export type IssueRun = { key: string; repo: string; number: number; effort: string; role: "work" | "review" | "debug"; branch?: string; base?: string; pr?: number; reviewedAt?: number; finishedAt?: number };
+export type IssueRun = {
+  key: string; repo: string; number: number; effort: string; role: "work" | "review" | "debug"; branch?: string; base?: string; pr?: number; reviewedAt?: number; finishedAt?: number;
+  premiumAssignment?: boolean; // Explicit premium owner started through the issue dialog.
+  recoveries?: number; // Bounded resumptions of incomplete worker turns, preserved across restarts.
+  retryAt?: number;   // Earliest time another worker recovery may start.
+  rerouted?: boolean; // work: its recoveries were reset once because its Pi model was retired upstream
+  stalled?: number;   // work: recoveries ran out without a PR; the sweep leaves it until a person runs a turn
+  missingPr?: number; // work: when "no open PR" was logged, so a restart does not log it again
+  reviews?: number;   // Reserved review slots; attempts without a verdict return their slot after a cooldown.
+  reviewThread?: string; // Work: the reviewer holding its current slot; rejects late refunds from older reviewers.
+  takeover?: boolean; // Review: the final slot owns fixes, final review, and merge instead of another worker redo.
+  redoing?: boolean;  // work: the worker is fixing review findings
+  nudges?: number;    // work: times the worker was asked to push because the PR had no commit after the last verdict
+  worker?: string;    // review: the worker thread whose PR this reviews
+  startedAt?: number; // review: when the reviewer started; its verdict comment is newer
+  verdictAfter?: number; // Review: only comments created after this existing GitHub comment ID belong to this attempt.
+  outcome?: string;   // review: set once the end of the reviewer's turn has been judged
+};
 export interface IssueRunner {
   create(opts: { provider: string; model: string; effort: string; cwd: string; mode: "bypassPermissions"; title: string; issueRun: IssueRun }): { id: string };
   send(id: string, text: string): void;
 }
 /** Work that goes through a PR may not push to the default branch: the worktree's pre-push hook refuses it. */
-export function installPrOnlyHook(cwd: string, base: string, git: (cwd: string, ...args: string[]) => string) {
-  git(cwd, "config", "extensions.worktreeConfig", "true");
-  const hooks = path.join(git(cwd, "rev-parse", "--absolute-git-dir"), "ac-hooks");
+export async function installPrOnlyHook(cwd: string, base: string, git: Git) {
+  await git(cwd, "config", "extensions.worktreeConfig", "true");
+  const hooks = path.join(await git(cwd, "rev-parse", "--absolute-git-dir"), "ac-hooks");
   fs.mkdirSync(hooks, { recursive: true });
   fs.writeFileSync(path.join(hooks, "pre-push"), `#!/bin/sh
 # agent-console: this worktree opens pull requests; it never pushes to ${base}.
@@ -157,60 +210,66 @@ while read local_ref local_sha remote_ref remote_sha; do
 done
 exit 0
 `, { mode: 0o755 });
-  git(cwd, "config", "--worktree", "core.hooksPath", hooks);
+  await git(cwd, "config", "--worktree", "core.hooksPath", hooks);
 }
 const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || "issue";
 
-type Git = (cwd: string, ...args: string[]) => string;
-export const defaultGit: Git = (cwd, ...args) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", timeout: 60_000 }).trim();
+// Async: clones and fetches take tens of seconds, and a synchronous call would freeze every request and stream on the server.
+export type Git = (cwd: string, ...args: string[]) => string | Promise<string>;
+const run = promisify(execFile);
+export const defaultGit = async (cwd: string, ...args: string[]) => (await run("git", ["-C", cwd, ...args], { encoding: "utf8", timeout: 60_000, maxBuffer: 16 << 20 })).stdout.trim();
 export const defaultDirs = () => ({ repos: process.env.AGENT_CONSOLE_REPOS || path.join(os.homedir(), "repos"), worktrees: process.env.AGENT_CONSOLE_WORKTREES || path.join(os.homedir(), "worktrees") });
 
 /** Create a private clone with its own Git metadata. Shared worktrees are never reused. */
-export function addWorktree(o: { repo: string; dirs: { repos: string; worktrees: string }; dirName: string; branch: string; git?: Git }) {
+export async function addWorktree(o: { repo: string; dirs: { repos: string; worktrees: string }; dirName: string; branch: string; git?: Git; step?: (id: "fetch" | "clone") => void }) {
   const git = o.git ?? defaultGit;
   const main = path.join(o.dirs.repos, o.repo);
   if (!fs.existsSync(path.join(main, ".git"))) throw new Error(`No local checkout of ${o.repo} at ${main}`);
   if (path.basename(o.dirName) !== o.dirName || o.dirName === "." || o.dirName === "..") throw new Error("Invalid private checkout name");
-  git(main, "fetch", "-q", "origin");
-  const base = git(main, "symbolic-ref", "--short", "refs/remotes/origin/HEAD").replace(/^origin\//, "");
-  const remote = git(main, "remote", "get-url", "origin");
+  o.step?.("fetch");
+  await git(main, "fetch", "-q", "origin");
+  const base = (await git(main, "symbolic-ref", "--short", "refs/remotes/origin/HEAD")).replace(/^origin\//, "");
+  const remote = await git(main, "remote", "get-url", "origin");
+  o.step?.("clone");
   fs.mkdirSync(o.dirs.worktrees, { recursive: true });
   const cwd = path.join(fs.realpathSync(o.dirs.worktrees), o.dirName);
   const exists = (() => { try { fs.lstatSync(cwd); return true; } catch { return false; } })();
-  const privateCheckout = (checkBranch = true) => {
+  const privateCheckout = async (checkBranch = true) => {
     const metadata = path.join(cwd, ".git");
     if (fs.lstatSync(cwd).isSymbolicLink() || !fs.lstatSync(metadata).isDirectory() || fs.lstatSync(metadata).isSymbolicLink()) throw new Error(`Refusing non-private checkout at ${cwd}`);
-    if (fs.realpathSync(git(cwd, "rev-parse", "--show-toplevel")) !== cwd || fs.realpathSync(git(cwd, "rev-parse", "--path-format=absolute", "--git-common-dir")) !== metadata) throw new Error(`Refusing shared Git metadata at ${cwd}`);
-    if ((checkBranch && git(cwd, "rev-parse", "--abbrev-ref", "HEAD") !== o.branch) || git(cwd, "remote", "get-url", "origin") !== remote) throw new Error(`Refusing stale checkout at ${cwd}`);
+    if (fs.realpathSync(await git(cwd, "rev-parse", "--show-toplevel")) !== cwd || fs.realpathSync(await git(cwd, "rev-parse", "--path-format=absolute", "--git-common-dir")) !== metadata) throw new Error(`Refusing shared Git metadata at ${cwd}`);
+    if ((checkBranch && await git(cwd, "rev-parse", "--abbrev-ref", "HEAD") !== o.branch) || await git(cwd, "remote", "get-url", "origin") !== remote) throw new Error(`Refusing stale checkout at ${cwd}`);
   };
   if (exists) {
-    try { privateCheckout(); } catch (e: any) { throw new Error(`Refusing existing checkout: ${e.message}`); }
+    try { await privateCheckout(); } catch (e: any) { throw new Error(`Refusing existing checkout: ${e.message}`); }
   } else {
     // Transport cloning copies committed objects only, with no hardlinks or alternates to the live repository.
-    git(main, "clone", "-q", "--no-local", "--no-hardlinks", "--no-checkout", main, cwd);
+    // Only the default branch is copied: local agent branches would drag their whole history into every clone.
+    await git(main, "clone", "-q", "--no-local", "--no-hardlinks", "--no-checkout", "--single-branch", "--branch", base, main, cwd);
     try {
-      git(cwd, "remote", "set-url", "origin", remote);
-      git(cwd, "fetch", "-q", "origin");
-      git(cwd, "checkout", "-q", "-b", o.branch, `origin/${base}`);
-      privateCheckout();
+      await git(cwd, "remote", "set-url", "origin", remote);
+      await git(cwd, "remote", "set-branches", "origin", "*");
+      await git(cwd, "fetch", "-q", "origin");
+      await git(cwd, "checkout", "-q", "-b", o.branch, `origin/${base}`);
+      await privateCheckout();
     } catch (e) { fs.rmSync(cwd, { recursive: true, force: true }); throw e; }
   }
   const marker = path.join(cwd, ".git", "agent-console-auto");
   if (!exists) fs.writeFileSync(marker, "private-checkout-v1\n", { mode: 0o600, flag: "wx" });
   else if (!fs.lstatSync(marker).isFile() || fs.lstatSync(marker).isSymbolicLink() || fs.readFileSync(marker, "utf8") !== "private-checkout-v1\n") throw new Error("Refusing unowned private checkout");
   const created = !exists;
-  return { cwd, base, branch: o.branch, created, remove: () => {
+  return { cwd, base, branch: o.branch, created, remove: async () => {
     if (!created) return;
-    try { privateCheckout(false); fs.rmSync(cwd, { recursive: true, force: true }); } catch {}
+    try { await privateCheckout(false); fs.rmSync(cwd, { recursive: true, force: true }); } catch {}
   } };
 }
 
 /** Start one decision: a worktree on a new branch, then a thread titled for the issue working in it. */
-export function startIssue(d: Decision, runner: IssueRunner, dirs = defaultDirs(), git: Git = defaultGit) {
+export async function startIssue(d: Decision, runner: IssueRunner, dirs = defaultDirs(), git: Git = defaultGit) {
   const name = d.issue.repo.split("/")[1];
   const attempt = randomUUID().slice(0, 8);
-  const { cwd, base, branch } = addWorktree({ repo: name, dirs, dirName: `${name}-issue-${d.issue.number}-${attempt}`, branch: `issue-${d.issue.number}-${slug(d.issue.title)}-${attempt}`, git });
-  if (!(d.effort === "deep" && DIRECT_REPOS.includes(name))) installPrOnlyHook(cwd, base, git);
+  const { cwd, base, branch } = await addWorktree({ repo: name, dirs, dirName: `${name}-issue-${d.issue.number}-${attempt}`, branch: `issue-${d.issue.number}-${slug(d.issue.title)}-${attempt}`, git });
+  if (!(d.effort === "deep" && DIRECT_REPOS.includes(name))) await installPrOnlyHook(cwd, base, git);
   const thread = runner.create({ ...d.route, cwd, mode: "bypassPermissions", title: threadTitle(d.issue), issueRun: { key: d.key, repo: d.issue.repo, number: d.issue.number, effort: d.effort, role: "work", branch, base } });
   runner.send(thread.id, issuePrompt(d, branch, base));
   return { thread: thread.id, cwd, branch };
@@ -224,6 +283,8 @@ export function loadConfig(file = path.join(DATA_DIR, "window-dispatch.json")): 
     enabled: raw.enabled === true,
     dryRun: raw.dryRun !== false,
     leadMinutes: num(raw.leadMinutes, DEFAULTS.leadMinutes, 5, 300),
+    lowUsagePct: num(raw.lowUsagePct, DEFAULTS.lowUsagePct, 0, 100),
+    lowUsageLeadMinutes: num(raw.lowUsageLeadMinutes, DEFAULTS.lowUsageLeadMinutes, 5, 300),
     maxUsedPct: num(raw.maxUsedPct, DEFAULTS.maxUsedPct, 1, 100),
     perWindow: num(raw.perWindow, DEFAULTS.perWindow, 1, 10),
     routing: { mode: raw.routing?.mode === "live" ? "live" : "shadow", bauOnPi: raw.routing?.bauOnPi === true },
@@ -274,7 +335,7 @@ export function createDispatcher(opts: {
       let deferred = 0;
       const active = [...(opts.active?.() ?? [])];
       for (let d of planned) {
-        const rr = routeWork({ role: "work", effort: d.effort, usage: opts.usage(), active, now: now(), flags: { bauOnPi: cfg.routing.bauOnPi }, failures: opts.failures?.() });
+        const rr = routeWork({ role: "work", effort: d.effort, premium: d.premium, usage: opts.usage(), active, now: now(), flags: { bauOnPi: cfg.routing.bauOnPi }, failures: opts.failures?.() });
         const shadow = { decision: rr.decision, route: rr.route, why: rr.why };
         ev?.record({ step: "router", kind: rr.decision === "defer" ? "info" : "ok", ref: d.key, msg: `${cfg.routing.mode}: ${rr.decision}${rr.route ? ` ${rr.route.provider}/${rr.route.model}` : ""} — ${rr.why}`, data: { legacy: d.route, router: rr.route } });
         if (cfg.routing.mode === "live") {
@@ -301,7 +362,7 @@ export function createDispatcher(opts: {
           ev?.record({ step: "worktree", kind: "fail", run: wt, ref: d.key, msg: error });
         }
       }
-      ev?.record({ step: "dispatcher", kind: "ok", run, msg: `picked ${picked.length}${deferred ? `, deferred ${deferred}` : ""}${picked.length || deferred ? "" : " (no eligible Pi work or premium window in its last " + cfg.leadMinutes + " min with room)"}` });
+      ev?.record({ step: "dispatcher", kind: "ok", run, msg: `picked ${picked.length}${deferred ? `, deferred ${deferred}` : ""}${picked.length || deferred ? "" : ` (no eligible Pi work or premium window in its last ${cfg.leadMinutes} min, or ${cfg.lowUsageLeadMinutes} min below ${cfg.lowUsagePct}% used, with room)`}` });
       return picked;
     } catch (e: any) {
       ev?.record({ step: "dispatcher", kind: "fail", run, msg: String(e?.message ?? e) });

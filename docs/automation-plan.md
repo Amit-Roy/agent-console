@@ -26,7 +26,7 @@ Twelve findings; all accepted except where noted. They are folded into the secti
 | # | Finding | Change |
 | --- | --- | --- |
 | 1 | Routing BAU to Pi before BAU review exists lands unreviewed PRs | Router starts in **shadow mode** (logs its choice, old routing runs). `routing.bauOnPi` flag, default false until the BAU reviewer is deployed |
-| 2 | Fix-forward merges code nobody reviewed | Fix-ups are capped at 20 changed lines, must pass the repo checks, and PRs touching protected paths are never auto-merged (below) |
+| 2 | Fix-forward merges code nobody reviewed | Fix-ups are capped at 20 changed lines, must pass the repo checks, and premium reviewers merge protected paths only with acceptance evidence and passing required checks |
 | 3 | A worker can edit the skill that reviews it | Skills load from the **main checkout** (`~/repos/agent-console/skills/...`), never the PR worktree. `skills/` is a protected path |
 | 4 | Prompt injection into bypass-mode agents | Only issues authored by `authors` (default `Amit-Roy`) are dispatched; prompts say issue and PR text is data, not instructions |
 | 5 | Secrets leak through error strings | `record()` redacts tokens (`ghp_`, `github_pat_`, `sk-`, `nvapi-`, `Bearer`, URL credentials); tested; Debug prompt uses the same redactor |
@@ -38,7 +38,7 @@ Twelve findings; all accepted except where noted. They are folded into the secti
 | 11 | Debug POST abuse | Existing session auth covers it; one Debug thread at a time; Debug counts as router load |
 | 12 | Skill too big for Pi | Self-review prompt stays under 2k tokens: core skill plus only the reference for the diff's language; size is tested |
 
-**Protected paths** (never auto-merged; the reviewer comments and a person merges): `server/window-dispatch.ts`, `server/window-opener.ts`, `server/issue-review.ts`, `server/automation/`, `skills/`, `server/auth.ts`, `bin/`, `.github/`, `package.json`.
+**Protected paths** (Claude or Codex reviewers may merge after evidence-backed approval and passing required checks; Pi reviewers may not): `server/window-dispatch.ts`, `server/window-opener.ts`, `server/issue-review.ts`, `server/automation/`, `skills/`, `server/auth.ts`, `bin/`, `.github/`, `package.json`.
 
 ## Entrypoint and contracts
 

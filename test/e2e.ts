@@ -21,41 +21,58 @@ const withHost = (host: string) =>
     r.on("error", rej);
     r.end();
   });
+const loginBody = JSON.stringify({ password: "nope" });
+const [ssoCodes, evil, apiBlocked, pageRedirect, badLogin, indexAuthed, vendorAuthed] = await Promise.all([
+  Promise.all(CODER_HOST ? CODER_HOSTS.map((h: string) => withHost(h)) : []),
+  CODER_HOST ? withHost("evil.example") : Promise.resolve(0),
+  fetch(BASE + "/vendor/marked.js").then((r) => r.status),
+  fetch(BASE + "/", { redirect: "manual", headers: { accept: "text/html" } }).then((r) => r.status),
+  fetch(BASE + "/login", { method: "POST", headers: { "content-type": "application/json" }, body: loginBody }).then((r) => r.status),
+  fetch(BASE + "/", { headers: { cookie } }).then((r) => r.status),
+  fetch(BASE + "/vendor/marked.js", { headers: { cookie } }).then((r) => r.status),
+]);
 if (CODER_HOST) {
-  for (const h of CODER_HOSTS) check(`coder host ${h} passes without cookie (SSO)`, (await withHost(h)) === 200);
-  check("wrong host without cookie blocked", (await withHost("evil.example")) === 401);
+  CODER_HOSTS.forEach((h: string, i: number) => check(`coder host ${h} passes without cookie (SSO)`, ssoCodes[i] === 200));
+  check("wrong host without cookie blocked", evil === 401);
 } else console.log("SKIP  SSO checks (no VSCODE_PROXY_URI)");
-check("unauthenticated API is blocked", (await fetch(BASE + "/vendor/marked.js")).status === 401);
-check("page redirects to login", (await fetch(BASE + "/", { redirect: "manual", headers: { accept: "text/html" } })).status === 302);
-check("bad password rejected", (await fetch(BASE + "/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ password: "nope" }) })).status === 401);
-check("authed index loads", (await fetch(BASE + "/", { headers: { cookie } })).status === 200);
-check("authed vendor lib loads", (await fetch(BASE + "/vendor/marked.js", { headers: { cookie } })).status === 200);
+check("unauthenticated API is blocked", apiBlocked === 401);
+check("page redirects to login", pageRedirect === 302);
+check("bad password rejected", badLogin === 401);
+check("authed index loads", indexAuthed === 200);
+check("authed vendor lib loads", vendorAuthed === 200);
 
 const inbox: any[] = [];
+const wakers = new Set<() => void>(); // waitFor sleepers, woken by the next incoming message instead of polling
 const open = (headers: Record<string, string>) =>
   new Promise<WebSocket | null>((res) => {
     const w = new WebSocket(BASE.replace("http", "ws") + "/ws", { headers });
-    w.on("message", (d) => inbox.push(JSON.parse(String(d)))); // before "open": the server sends hello immediately
+    w.on("message", (d) => { inbox.push(JSON.parse(String(d))); for (const wake of [...wakers]) wake(); }); // before "open": the server sends hello immediately
     w.on("open", () => res(w));
     w.on("error", () => res(null));
     w.on("unexpected-response", () => res(null));
   });
-check("ws without cookie refused", (await open({ origin: BASE })) === null);
-check("ws with foreign origin refused", (await open({ cookie, origin: "https://evil.example" })) === null);
-
-const ws = await open({ cookie, origin: BASE });
+const [wsNoCookie, wsForeign, ws] = await Promise.all([open({ origin: BASE }), open({ cookie, origin: "https://evil.example" }), open({ cookie, origin: BASE })]);
+check("ws without cookie refused", wsNoCookie === null);
+check("ws with foreign origin refused", wsForeign === null);
 check("ws with cookie+origin accepted", ws !== null);
 if (!ws) process.exit(1);
 
 const waitFor = async (pred: (m: any) => boolean, ms = 90_000) => {
-  const t0 = Date.now();
-  while (Date.now() - t0 < ms) {
+  const end = Date.now() + ms;
+  for (;;) {
     const m = inbox.find(pred);
     if (m) return m;
-    await new Promise((r) => setTimeout(r, 100));
+    const left = end - Date.now();
+    if (left <= 0) return null;
+    await new Promise<void>((r) => {
+      const done = () => { clearTimeout(timer); wakers.delete(done); r(); };
+      const timer = setTimeout(done, left);
+      wakers.add(done);
+    });
   }
-  return null;
 };
+// short settle window for "this did NOT happen" checks: every server emit for a mock turn precedes its result on the same socket
+const settle = (ms = 50) => new Promise((r) => setTimeout(r, ms));
 const hello = await waitFor((m) => m.t === "hello");
 check("hello received", !!hello);
 
@@ -108,7 +125,7 @@ if (hello.providers.some((p: any) => p.id === "mock")) {
   clear();
   ws.send(JSON.stringify({ t: "send", thread: id, text: "tool second" }));
   await waitFor((m) => m.t === "event" && m.event.type === "result", 4000);
-  await new Promise((r) => setTimeout(r, 800));
+  await settle(100);
   check("memory upkeep never starts an automatic model turn", !inbox.some(m => m.t === "event" && m.event.type === "user_input" && m.event.auto === "brain"));
 
   clear();
@@ -147,7 +164,7 @@ if (hello.providers.some((p: any) => p.id === "mock")) {
   clear();
   ws.send(JSON.stringify({ t: "send", thread: autoId, text: "ok" }));
   await waitFor((m) => m.t === "event" && m.event.type === "result", 5000);
-  await new Promise((r) => setTimeout(r, 300));
+  await settle();
   check("title: a one-word opener does not use up the rename", !inbox.some((m) => m.t === "thread" && m.thread.id === autoId && m.thread.title !== "tmp"));
   clear();
   ws.send(JSON.stringify({ t: "send", thread: autoId, text: "fix the flaky login test please" }));
@@ -166,17 +183,22 @@ if (hello.providers.some((p: any) => p.id === "mock")) {
   await waitFor((m) => m.t === "event" && m.event.type === "result", 5000);
   ws.send(JSON.stringify({ t: "delete", thread: autoId }));
   await waitFor((m) => m.t === "removed", 3000);
-  const typed = await create({ provider: "mock", model: "echo", title: "" });
-  ws.send(JSON.stringify({ t: "update", thread: typed.thread.id, title: "my own name" }));
+  // the two "title is left alone" cases are independent threads: run their turns side by side, scoped by thread id
+  const typed = (await create({ provider: "mock", model: "echo", title: "" })).thread.id;
+  const explicit = (await create({ provider: "mock", model: "echo", title: "explicit" })).thread.id;
+  ws.send(JSON.stringify({ t: "update", thread: typed, title: "my own name" }));
   await waitFor((m) => m.t === "thread" && m.thread.title === "my own name", 3000);
   clear();
-  ws.send(JSON.stringify({ t: "send", thread: typed.thread.id, text: "hello there friend" }));
-  await waitFor((m) => m.t === "event" && m.event.type === "result", 5000);
-  await new Promise((r) => setTimeout(r, 300));
-  check("title: a manual rename is never overwritten", !inbox.some((m) => m.t === "thread" && m.thread.title !== "my own name"));
-  ws.send(JSON.stringify({ t: "delete", thread: typed.thread.id }));
-  await waitFor((m) => m.t === "removed", 3000);
-  check("title: an explicit title at creation is kept", await (async () => { const n = await create({ provider: "mock", model: "echo", title: "explicit" }); clear(); ws.send(JSON.stringify({ t: "send", thread: n.thread.id, text: "something else here" })); await waitFor((m) => m.t === "event" && m.event.type === "result", 5000); await new Promise((r) => setTimeout(r, 300)); const kept = !inbox.some((m) => m.t === "thread" && m.thread.title !== "explicit"); ws.send(JSON.stringify({ t: "delete", thread: n.thread.id })); await waitFor((m) => m.t === "removed", 3000); return kept; })());
+  const turnDone = (tid: string) => waitFor((m) => m.t === "event" && m.thread === tid && m.event.type === "result", 5000);
+  const pending = [turnDone(typed), turnDone(explicit)];
+  ws.send(JSON.stringify({ t: "send", thread: typed, text: "hello there friend" }));
+  ws.send(JSON.stringify({ t: "send", thread: explicit, text: "something else here" }));
+  await Promise.all(pending);
+  await settle();
+  check("title: a manual rename is never overwritten", !inbox.some((m) => m.t === "thread" && m.thread.id === typed && m.thread.title !== "my own name"));
+  check("title: an explicit title at creation is kept", !inbox.some((m) => m.t === "thread" && m.thread.id === explicit && m.thread.title !== "explicit"));
+  for (const t of [typed, explicit]) ws.send(JSON.stringify({ t: "delete", thread: t }));
+  await Promise.all([typed, explicit].map((t) => waitFor((m) => m.t === "removed" && m.thread === t, 3000)));
 
   // ---- steering, queued messages, context meter, noise, paged history
   const steerT = (await create({ provider: "mock", model: "echo", title: "steer" })).thread.id;
@@ -189,7 +211,7 @@ if (hello.providers.some((p: any) => p.id === "mock")) {
   ws.send(JSON.stringify({ t: "send", thread: steerT, text: "change course", mode: "steer" })); // while it is running: steers
   const steered = await waitFor((m) => m.t === "event" && m.event.type === "user_input", 3000);
   check("steer: a message sent mid-turn is logged as a steer and delivered to the agent now", steered?.event?.delivery === "steer" && steered.event.text === "change course" && !!(await waitFor((m) => m.t === "event" && m.event.type === "stream_event" && JSON.stringify(m.event.event).includes("[steered: change course]"), 3000)));
-  check("steer: the turn keeps running and no error is raised", !inbox.some((m) => m.t === "error") && !(await waitFor((m) => m.t === "event" && m.event.type === "result", 300)));
+  check("steer: the turn keeps running and no error is raised", !inbox.some((m) => m.t === "error") && !(await waitFor((m) => m.t === "event" && m.event.type === "result", 100)));
   clear();
   ws.send(JSON.stringify({ t: "send", thread: steerT, text: "later one", mode: "queue" }));
   const q1 = await waitFor((m) => m.t === "queue" && m.thread === steerT, 3000);
@@ -258,11 +280,15 @@ if (hello.providers.some((p: any) => p.id === "mock")) {
   await waitFor((m) => m.t === "removed", 3000);
 
   // ---- export (Download / Share)
-  const exp = await fetch(`${BASE}/export/${id}`, { headers: { cookie } });
+  const [exp, expAnon, expMissing] = await Promise.all([
+    fetch(`${BASE}/export/${id}`, { headers: { cookie } }),
+    fetch(`${BASE}/export/${id}`),
+    fetch(`${BASE}/export/00000000-0000-0000-0000-000000000000`, { headers: { cookie } }),
+  ]);
   const md = await exp.text();
   check("export: markdown attachment named after the thread", exp.status === 200 && /attachment; filename="?e2e\.md"?/.test(exp.headers.get("content-disposition") ?? "") && exp.headers.get("content-type")?.startsWith("text/markdown") === true);
   check("export: title, both speakers, tool activity", md.startsWith("# e2e\n") && md.includes("## You\n\nhello there") && md.includes("## Agent") && /^> Bash: /m.test(md), md.slice(0, 200));
-  check("export: needs a session, unknown thread is 404", (await fetch(`${BASE}/export/${id}`)).status === 401 && (await fetch(`${BASE}/export/00000000-0000-0000-0000-000000000000`, { headers: { cookie } })).status === 404);
+  check("export: needs a session, unknown thread is 404", expAnon.status === 401 && expMissing.status === 404);
 
   // ---- fork: a new thread that continues from this one
   const histLen = async (tid: string) => { clear(); ws.send(JSON.stringify({ t: "open", thread: tid })); return (await waitFor((m) => m.t === "history" && m.thread === tid, 3000))?.events?.length ?? -1; };
@@ -312,36 +338,53 @@ if (hello.providers.some((p: any) => p.id === "mock")) {
     return waitFor((m) => (wait === "result" ? m.t === "event" && m.event.type === "result" : m.t === "error"), 5000);
   };
 
-  const img = await (await up(id, "shot.png", PNG, "image/png")).json();
+  const upJson = (...args: Parameters<typeof up>) => up(...args).then((r) => r.json());
+  const [img, doc, fake, html, renamed] = await Promise.all([
+    upJson(id, "shot.png", PNG, "image/png"),
+    upJson(id, "../../etc/notes report.txt", "hello file", "text/plain"),
+    upJson(id, "fake.png", "<html><script>alert(1)</script></html>", "image/png"),
+    upJson(id, "page.html", "<script>alert(1)</script>", "text/html"),
+    upJson(id, "photo.txt", PNG, "text/plain"),
+  ]);
   check("upload: image recognised by its bytes", img.kind === "image" && img.media_type === "image/png" && img.name === "shot.png" && img.size === PNG.length, JSON.stringify(img));
-  const doc = await (await up(id, "../../etc/notes report.txt", "hello file", "text/plain")).json();
   check("upload: text file kept as a file, name sanitised to one segment", doc.kind === "file" && doc.name === "notes report.txt" && doc.media_type === "text/plain", JSON.stringify(doc));
-  const fake = await (await up(id, "fake.png", "<html><script>alert(1)</script></html>", "image/png")).json();
   check("upload: claimed image type is not trusted", fake.kind === "file", JSON.stringify(fake));
-  const html = await (await up(id, "page.html", "<script>alert(1)</script>", "text/html")).json();
-  const renamed = await (await up(id, "photo.txt", PNG, "text/plain")).json();
   check("upload: image bytes under a wrong extension get the right one", renamed.kind === "image" && renamed.name === "photo.png", JSON.stringify(renamed));
 
-  check("upload: needs a session", (await fetch(`${BASE}/uploads/${id}`, { method: "POST", headers: { origin: BASE }, body: "x" })).status === 401);
-  check("upload: cross-site request refused", (await up(id, "a.txt", "x", "text/plain", { origin: "https://evil.example" })).status === 403);
-  check("upload: request without Origin refused", (await up(id, "a.txt", "x", "text/plain", {})).status === 403);
-  check("upload: unknown thread", (await up("00000000-0000-0000-0000-000000000000", "a.txt", "x")).status === 404);
-  check("upload: empty file rejected", (await up(id, "a.txt", "")).status === 400);
-  const big = await up(id, "big.bin", Buffer.alloc(26 << 20));
+  const [noSession, crossSite, noOrigin, unknownThread, empty, big, bigImage] = await Promise.all([
+    fetch(`${BASE}/uploads/${id}`, { method: "POST", headers: { origin: BASE }, body: "x" }),
+    up(id, "a.txt", "x", "text/plain", { origin: "https://evil.example" }),
+    up(id, "a.txt", "x", "text/plain", {}),
+    up("00000000-0000-0000-0000-000000000000", "a.txt", "x"),
+    up(id, "a.txt", ""),
+    up(id, "big.bin", Buffer.alloc(26 << 20)),
+    up(id, "big.png", Buffer.concat([PNG, Buffer.alloc(6 << 20)]), "image/png"),
+  ]);
+  check("upload: needs a session", noSession.status === 401);
+  check("upload: cross-site request refused", crossSite.status === 403);
+  check("upload: request without Origin refused", noOrigin.status === 403);
+  check("upload: unknown thread", unknownThread.status === 404);
+  check("upload: empty file rejected", empty.status === 400);
   check("upload: over 25 MB rejected with a message", big.status === 413 && /25 MB/.test((await big.json()).error), String(big.status));
-  check("upload: image over 5 MB rejected", (await up(id, "big.png", Buffer.concat([PNG, Buffer.alloc(6 << 20)]), "image/png")).status === 400);
+  check("upload: image over 5 MB rejected", bigImage.status === 400);
 
   const get = (a: { id: string; name: string }, t = id) => fetch(`${BASE}/uploads/${t}/${a.id}/${encodeURIComponent(a.name)}`, { headers: { cookie } });
-  const gi = await get(img);
+  const [gi, gd, gh, gf, gAnon, gTrick1, gTrick2, gTrick3] = await Promise.all([
+    get(img),
+    get(doc),
+    get(html),
+    get(fake),
+    fetch(`${BASE}/uploads/${id}/${img.id}/shot.png`),
+    fetch(`${BASE}/uploads/${id}/${img.id}/..%2f..%2fthreads.json`, { headers: { cookie } }),
+    fetch(`${BASE}/uploads/${id}/${img.id}/.hidden`, { headers: { cookie } }),
+    get(img, "../x"),
+  ]);
   check("download: image served inline with its type", gi.status === 200 && gi.headers.get("content-type") === "image/png" && !gi.headers.get("content-disposition") && Buffer.from(await gi.arrayBuffer()).equals(PNG));
-  const gd = await get(doc);
   check("download: other files are attachments, octet-stream", gd.status === 200 && /attachment/.test(gd.headers.get("content-disposition") ?? "") && gd.headers.get("content-type")?.startsWith("application/octet-stream") === true && (await gd.text()) === "hello file");
-  const gh = await get(html);
   check("download: uploaded html can never render on this origin", /attachment/.test(gh.headers.get("content-disposition") ?? "") && !gh.headers.get("content-type")?.includes("html") && gh.headers.get("x-content-type-options") === "nosniff");
-  const gf = await get(fake);
   check("download: a fake .png is not served as an image", !gf.headers.get("content-type")?.startsWith("image/") && /attachment/.test(gf.headers.get("content-disposition") ?? ""));
-  check("download: needs a session", (await fetch(`${BASE}/uploads/${id}/${img.id}/shot.png`)).status === 401);
-  check("download: path tricks are 404", (await fetch(`${BASE}/uploads/${id}/${img.id}/..%2f..%2fthreads.json`, { headers: { cookie } })).status === 404 && (await fetch(`${BASE}/uploads/${id}/${img.id}/.hidden`, { headers: { cookie } })).status === 404 && (await get(img, "../x")).status === 404);
+  check("download: needs a session", gAnon.status === 401);
+  check("download: path tricks are 404", gTrick1.status === 404 && gTrick2.status === 404 && gTrick3.status === 404);
 
   check("send: image + file + text turn finishes", !!(await send("what are these", [{ id: img.id }, { id: doc.id }])));
   const sent = events(id).find((e) => e.type === "user_input");
