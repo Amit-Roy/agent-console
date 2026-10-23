@@ -102,7 +102,7 @@ function totals(r) {
       c.fixHigh += f.HIGH;
     }
   }
-  c.openPorts = t.nmap?.openPorts?.length || 0;
+  c.openPorts = (t.nmap?.openPorts || []).filter((p) => p.exposed !== false).length;
   return c;
 }
 
@@ -263,7 +263,7 @@ function toolFacts(key, t) {
   if (key === "trivy") return [["Targets", String((t.targets || []).length)]];
   return [
     ["Target", t.target],
-    ["Open", String((t.openPorts || []).length)],
+    ["Open", String((t.openPorts || []).filter((p) => p.exposed !== false).length)],
   ];
 }
 function renderTools() {
@@ -504,7 +504,8 @@ function renderPorts() {
   box.hidden = !t || t.status === "skipped" || (t.status === "error" && !t.openPorts?.length);
   if (box.hidden) return;
   const ports = t.openPorts || [];
-  $("port-count").textContent = `${ports.length}${t.target ? ` on ${t.target}` : ""}`;
+  const exposed = ports.filter((p) => p.exposed !== false).length;
+  $("port-count").textContent = `${exposed}${t.target ? ` on ${t.target}` : ""}`;
   const rows = $("port-rows");
   rows.replaceChildren();
   if (!ports.length) rows.append(el("p", "note", "No open ports found."));
@@ -512,7 +513,11 @@ function renderPorts() {
     const row = el("div", "hrow port sport");
     const n = el("div", "hname");
     n.append(el("b", "", p.service || "unknown"), el("span", "hctx", p.product || ""));
-    row.append(el("span", "pn", String(p.port)), n, el("span", "hnum", p.proto || "tcp"));
+    row.append(
+      el("span", "pn", String(p.port)),
+      n,
+      el("span", "hnum", p.exposed === false ? "internal only" : p.proto || "tcp"),
+    );
     rows.append(row);
   }
 }

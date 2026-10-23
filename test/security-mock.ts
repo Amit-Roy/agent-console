@@ -125,9 +125,9 @@ export const LATEST = {
       durationSec: 38,
       target: "206.51.227.101",
       openPorts: [
-        { port: 22, proto: "tcp", service: "ssh", product: "OpenSSH 10.0" },
-        { port: 80, proto: "tcp", service: "http", product: "Caddy httpd" },
-        { port: 443, proto: "tcp", service: "https", product: "Caddy httpd" },
+        { port: 22, proto: "tcp", service: "ssh", product: "OpenSSH 10.0", exposed: false },
+        { port: 80, proto: "tcp", service: "http", product: "Caddy httpd", exposed: false },
+        { port: 443, proto: "tcp", service: "https", product: "Caddy httpd", exposed: true },
       ],
       error: null,
     },
@@ -161,7 +161,7 @@ const sum = (r: any, status: string) => ({
     runtimeAlerts: r.tools.falco.alerts.length,
     critical: r.tools.trivy.targets.reduce((a: number, t: any) => a + t.counts.CRITICAL, 0),
     high: r.tools.trivy.targets.reduce((a: number, t: any) => a + t.counts.HIGH, 0),
-    openPorts: r.tools.nmap.openPorts.length,
+    openPorts: r.tools.nmap.openPorts.filter((p: any) => p.exposed !== false).length,
   },
 });
 export const HISTORY = [
