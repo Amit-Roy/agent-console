@@ -1,6 +1,6 @@
-// Automation dashboard: each workflow (PR workflow, window opener) as its own panel of phases and boxes with icons, the active
-// step, a log per step, triggers, failures and git hooks.
-// Everything comes from GET /api/automation (see server/automation/contracts.ts); the page holds no state of its own.
+// Automation page: a sidebar of workflows, the selected workflow's phases and steps, its triggers and failures, and a
+// drawer with one step's log. Everything comes from GET /api/automation (see server/automation/contracts.ts); security
+// rows come from GET /api/security/automations. The page holds no state beyond the selected workflow.
 const $ = (id) => document.getElementById(id);
 const el = (tag, cls, text) => {
   const n = document.createElement(tag);
@@ -35,6 +35,16 @@ const ICONS = {
   redo: "M3 8a5 5 0 0 1 8.5-3.5L13 6M13 2.5V6H9.5M13 8a5 5 0 0 1-8.5 3.5L3 10M3 13.5V10h3.5",
   next: "M2.5 8h10M9 4.5 12.5 8 9 11.5",
   back: "M13.5 8h-10M7 4.5 3.5 8 7 11.5",
+  database:
+    "M8 2.5c3 0 5 .7 5 1.5S11 5.5 8 5.5 3 4.8 3 4s2-1.5 5-1.5zM3 4v4c0 .8 2 1.5 5 1.5s5-.7 5-1.5V4M3 8v4c0 .8 2 1.5 5 1.5s5-.7 5-1.5V8",
+  shield: "M8 2 3 4v3.5c0 2.8 2 5.1 5 6.5 3-1.4 5-3.7 5-6.5V4z",
+  scan: "M2.5 5.5v-3h3M13.5 5.5v-3h-3M2.5 10.5v3h3M13.5 10.5v3h-3M2.5 8h11",
+  mail: "M2.5 4.5h11v7h-11zM2.5 5 8 9l5.5-4",
+  bell: "M8 2.5a3.5 3.5 0 0 1 3.5 3.5c0 2.5.5 3.5 1.5 4.5H3c1-1 1.5-2 1.5-4.5A3.5 3.5 0 0 1 8 2.5zM6.5 12.5a1.5 1.5 0 0 0 3 0",
+  activity: "M2.5 8.5h2l1.5-4 2 7 1.5-3h4",
+  layers: "M8 2.5 14 6l-6 3.5L2 6zM2 9.5 8 13l6-3.5M2 12l6 3.5 6-3.5",
+  chart: "M3 13V8M6.5 13V5M10 13V9M13.5 13V3",
+  plus: "M8 3v10M3 8h10",
 };
 const icon = (name) => {
   const s = svg("svg", { class: "ico", viewBox: "0 0 16 16", "aria-hidden": "true" });
@@ -47,7 +57,7 @@ const STATE_TEXT = {
   active: "Working",
   ok: "OK",
   failed: "Failed",
-  abandoned: "Abandoned",
+  abandoned: "Overdue",
   disabled: "Off",
 };
 
@@ -61,9 +71,20 @@ const when = (ts, now) => {
   if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
   return `${day(ts)} ${time(ts)}`;
 };
+const until = (ts, now) => {
+  const s = Math.max(0, (ts - now) / 1000);
+  if (s < 90) return "in under a min";
+  if (s < 3600) return `in ${Math.round(s / 60)} min`;
+  if (s < 86400) return `in ${Math.round(s / 3600)} h`;
+  return `${day(ts)} ${time(ts)}`;
+};
 
 let snap = null;
+let sec = null;
+let secError = null;
 let openStep = null;
+let selected = null;
+let detailFor = null;
 const logState = { entries: [], next: undefined };
 
 async function getJson(url, init) {
@@ -73,17 +94,91 @@ async function getJson(url, init) {
   return body;
 }
 
-// ---------- workflows ----------
-function stepNode(n) {
-  const b = el("button", "node");
-  b.type = "button";
-  b.dataset.step = n.id;
-  b.title = n.hint;
-  const ni = el("span", "ni");
-  ni.append(icon(n.icon));
-  b.append(ni, el("span", "nl", n.label), el("span", "ns"));
-  b.onclick = () => openDrawer(n.id);
-  return b;
+// ---------- workflow data ----------
+const pipelineOf = (id) => snap?.flow.pipelines.find((p) => p.id === id) || null;
+const stepIdsOf = (p) => p.phases.flatMap((ph) => ph.steps);
+const pipelineOfStep = (id) => snap?.flow.pipelines.find((p) => stepIdsOf(p).includes(id)) || null;
+const isSecurity = (p) => p?.group === "security";
+
+/** Security rows, and the VPS unit each drawn step stands for. A step with no row keeps its last verdict. */
+const SEC_ROWS = {
+  cve: [
+    "opencve-sync",
+    "opencve-webhook",
+    "tool-watch",
+    "tool-patch",
+    "opencve-digest",
+    "opencve-backup",
+  ],
+  runtime: ["falco-alert"],
+  scans: ["secscan", "osv"],
+  deadman: ["heartbeat"],
+};
+const SEC_ROW_MAP = {
+  opencve: ["opencve-sync"],
+  receiver: ["opencve-webhook"],
+  tool_watch: ["tool-watch"],
+  tool_patch: ["tool-patch"],
+  digest: ["opencve-digest"],
+  falco: ["falco-alert"],
+  falco_queue: ["falco-alert"],
+  scan: ["secscan"],
+  osv_check: ["osv"],
+  report: ["secscan", "osv"],
+  heartbeat: ["heartbeat"],
+  status_check: ["heartbeat"],
+};
+const TONE_STATE = { ok: "ok", warn: "abandoned", bad: "failed", idle: "idle" };
+const TONE_RANK = { bad: 3, warn: 2, idle: 1, ok: 0 };
+
+function secRows(p) {
+  const ids = SEC_ROWS[p.id] || [];
+  const rows = sec?.rows || [];
+  const out = rows
+    .filter((r) => ids.includes(r.id))
+    .sort((a, b) => {
+      const ai = ids.indexOf(a.id),
+        bi = ids.indexOf(b.id);
+      return (ai < 0 ? 99 : ai) - (bi < 0 ? 99 : bi);
+    });
+  const down = rows.filter((r) => r.id === "status-host");
+  return down.length ? [...down, ...out] : out;
+}
+function securityView(id, pipeline) {
+  const p = pipeline || pipelineOfStep(id);
+  if (!isSecurity(p)) return null;
+  if (!sec) return { state: "idle", sub: secError ? "Status unavailable" : "Loading…" };
+  const all = secRows(p);
+  if (id === "push") {
+    const bad = all.filter((r) => r.tone === "bad").length;
+    const last = all.reduce((a, b) => Math.max(a, b.lastRun || 0), 0) || null;
+    return {
+      state: bad ? "failed" : "idle",
+      ...(last ? { lastAt: last } : {}),
+      sub: bad ? "Alert raised" : "Ready",
+    };
+  }
+  const mapped = SEC_ROW_MAP[id] ? all.filter((r) => SEC_ROW_MAP[id].includes(r.id)) : [];
+  const rows = mapped.length ? mapped : all;
+  if (!rows.length) return { state: "idle", sub: "No check reported" };
+  const worst = rows.reduce((a, b) => (TONE_RANK[b.tone] > TONE_RANK[a.tone] ? b : a));
+  const last = rows.reduce((a, b) => Math.max(a, b.lastRun || 0), 0) || null;
+  return {
+    state: TONE_STATE[worst.tone] || "idle",
+    ...(last ? { lastAt: last } : {}),
+    sub: rows.length > 1 ? `${worst.label} · ${rows.length} checks` : worst.label,
+    say: worst.detail || worst.schedule,
+  };
+}
+/** The selected workflow owns a shared step (the phone alert, the transport) while it is open. */
+function currentPipeline(id) {
+  const p = pipelineOf(selected);
+  return p && stepIdsOf(p).includes(id) ? p : null;
+}
+function viewOf(id) {
+  const sv = securityView(id, currentPipeline(id));
+  if (sv) return sv;
+  return snap?.steps.find((x) => x.id === id) || { state: "idle", open: 0, failures: 0 };
 }
 
 const TOGGLES = { "dispatch-tick": "dispatcher", "opener-tick": "opener" };
@@ -103,34 +198,20 @@ async function toggle(target, enabled, btn) {
   }
 }
 
-// One panel per workflow; inside it the phases in order, each a chain of steps. A phase's loop (review and redo) is a box
-// with a caption; its steps get a two-way link. Each arrow shows its edge's condition.
-function buildPipeline(s, p) {
-  const sec = panel(p.label, p.hint);
-  sec.classList.add("pipeline");
-  sec.dataset.pipeline = p.id;
-  const trig = s.triggers.filter((t) => t.pipeline === p.id);
-  if (trig.length) {
-    const ul = el("ul", "ptrig");
-    for (const t of trig) {
-      const li = el("li", t.enabled ? "" : "off");
-      li.dataset.trigger = t.id;
-      li.title = t.detail;
-      li.append(el("span", "k", t.kind), el("span", "", t.label), el("span", "w"));
-      const target = TOGGLES[t.id];
-      if (target) {
-        const sw = el("button", "tog", t.enabled ? "On" : "Off");
-        sw.type = "button";
-        sw.setAttribute("role", "switch");
-        sw.setAttribute("aria-checked", String(t.enabled));
-        sw.setAttribute("aria-label", `${t.label}: ${t.enabled ? "on" : "off"}`);
-        sw.onclick = () => toggle(target, !t.enabled, sw);
-        li.append(sw);
-      }
-      ul.append(li);
-    }
-    sec.append(ul);
-  }
+// ---------- steps ----------
+function stepNode(n) {
+  const b = el("button", "node");
+  b.type = "button";
+  b.dataset.step = n.id;
+  b.title = n.hint;
+  const ni = el("span", "ni");
+  ni.append(icon(n.icon));
+  b.append(ni, el("span", "nl", n.label), el("span", "ns"));
+  b.onclick = () => openDrawer(n.id);
+  return b;
+}
+
+function buildChain(s, p) {
   const edges = new Map(s.flow.edges.map((e) => [`${e.from}>${e.to}`, e]));
   const arrow = (name, label) => {
     const a = el("span", "arrow");
@@ -149,7 +230,6 @@ function buildPipeline(s, p) {
       if (!n) return;
       const inLoop = ph.loop?.steps.includes(id);
       if (j) {
-        // A step after a loop leaves from the loop step that links to it; inside the loop, steps link both ways.
         const prev =
           (!inLoop && ph.loop?.steps.find((x) => edges.has(`${x}>${id}`))) || ph.steps[j - 1];
         const fwd = edges.get(`${prev}>${id}`),
@@ -170,35 +250,38 @@ function buildPipeline(s, p) {
     li.append(chain);
     phases.append(li);
   });
-  sec.append(phases);
-  return sec;
+  return phases;
 }
 
 function updateFlow(s) {
   for (const st of s.steps) {
     const b = document.querySelector(`[data-step="${st.id}"]`);
     if (!b) continue;
-    b.dataset.state = st.state;
+    const v = viewOf(st.id);
+    b.dataset.state = v.state;
     const sub =
-      st.state === "idle"
+      v.sub ??
+      (v.state === "idle"
         ? STATE_TEXT.idle
-        : `${STATE_TEXT[st.state]}${st.lastAt ? ` · ${when(st.lastAt, s.now)}` : ""}`;
+        : `${STATE_TEXT[v.state]}${v.lastAt ? ` · ${when(v.lastAt, s.now)}` : ""}`);
     b.querySelector(".ns").textContent = sub;
+    const node = s.flow.nodes.find((n) => n.id === st.id);
     b.setAttribute(
       "aria-label",
-      `${s.flow.nodes.find((n) => n.id === st.id)?.label}: ${STATE_TEXT[st.state].toLowerCase()}${st.failures ? `, ${st.failures} failures in 24 hours` : ""}`,
+      `${node?.label}: ${STATE_TEXT[v.state].toLowerCase()}${v.failures ? `, ${v.failures} failures in 24 hours` : ""}`,
     );
     let badge = b.querySelector(".badge");
-    if (st.failures) {
+    const count = v.failures || 0;
+    if (count) {
       if (!badge) {
         badge = el("span", "badge");
         b.append(badge);
       }
-      badge.textContent = String(st.failures);
+      badge.textContent = String(count);
     } else badge?.remove();
     document
       .querySelector(`.link[data-to="${st.id}"]`)
-      ?.classList.toggle("live", st.state === "active");
+      ?.classList.toggle("live", v.state === "active");
   }
   for (const t of s.triggers) {
     const w = document.querySelector(`[data-trigger="${t.id}"] .w`);
@@ -215,13 +298,103 @@ function updateFlow(s) {
   }
 }
 
-const until = (ts, now) => {
-  const s = Math.max(0, (ts - now) / 1000);
-  if (s < 90) return "in under a min";
-  if (s < 3600) return `in ${Math.round(s / 60)} min`;
-  if (s < 86400) return `in ${Math.round(s / 3600)} h`;
-  return `${day(ts)} ${time(ts)}`;
-};
+// ---------- sidebar ----------
+const OTHER = { id: "other", label: "Other triggers", icon: "clock", group: "console" };
+function navItems() {
+  return [
+    ...snap.flow.pipelines.map((p) => ({ id: p.id, label: p.label, icon: p.icon, group: p.group })),
+    OTHER,
+  ];
+}
+function pipelineStatus(id) {
+  if (id === "other") {
+    const n = (snap?.triggers || []).filter((t) => !t.pipeline && t.kind === "cron").length;
+    return n ? `${n} scheduled` : "None";
+  }
+  const p = pipelineOf(id);
+  if (!p) return "";
+  if (isSecurity(p)) {
+    const rows = secRows(p);
+    const bad = rows.filter((r) => r.tone === "bad").length;
+    const warn = rows.filter((r) => r.tone === "warn").length;
+    if (!sec) return secError ? "Status unavailable" : "Loading…";
+    return bad ? `${bad} failing` : warn ? `${warn} overdue` : "All OK";
+  }
+  const steps = stepIdsOf(p).map(viewOf);
+  const bad = steps.filter((s) => s.state === "failed").length;
+  const active = steps.filter((s) => s.state === "active").length;
+  if (bad) return `${bad} failed`;
+  if (active) return "Working";
+  const disabled = steps.every((s) => s.state === "disabled");
+  return disabled ? "Off" : "Idle";
+}
+function statusTone(id) {
+  const p = pipelineOf(id);
+  if (!p) return "";
+  if (isSecurity(p)) {
+    if (!sec) return "idle";
+    const rows = secRows(p);
+    return rows.some((r) => r.tone === "bad")
+      ? "bad"
+      : rows.some((r) => r.tone === "warn")
+        ? "warn"
+        : "ok";
+  }
+  const steps = stepIdsOf(p).map(viewOf);
+  if (steps.some((s) => s.state === "failed")) return "bad";
+  if (steps.some((s) => s.state === "active")) return "live";
+  return "idle";
+}
+function buildNav() {
+  const nav = $("wf-nav");
+  if (nav.childElementCount) return;
+  for (const [group, title] of [
+    ["workflow", "Workflows"],
+    ["security", "Security"],
+    ["console", "Console"],
+  ]) {
+    const items = navItems().filter((i) => i.group === group);
+    if (!items.length) continue;
+    const box = el("div", "rail-group");
+    box.append(el("h2", "rail-title", title));
+    for (const item of items) {
+      const b = el("button", "rail-item");
+      b.type = "button";
+      b.dataset.wf = item.id;
+      b.append(icon(item.icon), el("span", "rl", item.label), el("span", "rs"));
+      b.onclick = () => select(item.id);
+      box.append(b);
+    }
+    nav.append(box);
+  }
+}
+function updateNav() {
+  for (const b of document.querySelectorAll("[data-wf]")) {
+    const id = b.dataset.wf;
+    b.querySelector(".rs").textContent = pipelineStatus(id);
+    b.dataset.tone = statusTone(id);
+    if (id === selected) b.setAttribute("aria-current", "page");
+    else b.removeAttribute("aria-current");
+  }
+  const hidden = document.querySelectorAll("[data-wf]").length <= 1;
+  $("wf-nav").hidden = hidden;
+}
+
+function select(id) {
+  if (!snap) return;
+  if (!navItems().some((i) => i.id === id)) id = "pr";
+  if (id === selected) return;
+  selected = id;
+  detailFor = null;
+  const hash = `#${id}`;
+  if (location.hash !== hash) history.replaceState(null, "", hash);
+  render(snap);
+  if (matchMedia("(max-width: 760px)").matches)
+    document
+      .querySelector(`[data-wf="${id}"]`)
+      ?.scrollIntoView({ block: "nearest", inline: "center" });
+  $("am").focus({ preventScroll: true });
+}
 
 // ---------- panels ----------
 function panel(title, sub) {
@@ -236,138 +409,51 @@ function panel(title, sub) {
 }
 const empty = (text) => el("div", "empty-c", text);
 
-function triggersPanel(s) {
-  const p = panel(
-    "Other triggers",
-    "Scheduled prompts and manual starts outside the workflows above",
+function triggersPanel(s, p) {
+  const trig = p
+    ? s.triggers.filter((t) => t.pipeline === p.id)
+    : s.triggers.filter((t) => !t.pipeline);
+  const box = panel(
+    p ? "Triggers" : "Other triggers",
+    p ? "What starts this workflow" : "Scheduled prompts and manual starts outside the workflows",
   );
-  const ul = el("ul", "rows");
-  ul.id = "triggers";
-  for (const t of s.triggers.filter((x) => !x.pipeline)) {
-    const li = el("li");
-    li.append(
-      el("span", "a", t.label),
-      el("span", "b", t.enabled ? (t.lastAt ? when(t.lastAt, s.now) : "waiting") : "off"),
-      el("span", "c", `${t.kind} · ${t.detail}`),
+  if (!trig.length) {
+    box.append(
+      empty(p ? "No trigger is attached to this workflow." : "Nothing else is scheduled."),
     );
-    ul.append(li);
+    return box;
   }
-  p.append(ul);
-  return p;
-}
-
-// Security automations: VPS timers, OpenCVE and the patch bridge, read from GET /api/security/automations (server/sec-automations.ts).
-const TONE_TEXT = { ok: "OK", warn: "Needs attention", bad: "Failing", idle: "Waiting" };
-let sec = null;
-let secError = null;
-async function runNow(kind, btn) {
-  btn.disabled = true;
-  try {
-    await getJson(
-      kind === "quick-scan" ? "/api/security/run?mode=quick" : "/api/security/tools/run",
-      {
-        method: "POST",
-      },
-    );
-    await refreshSecurity();
-  } catch (e) {
-    alert(`Could not start the run: ${e.message}`);
-  } finally {
-    btn.disabled = false;
-  }
-}
-function securityPanel() {
-  const p = panel(
-    "Security automations",
-    "VPS timers, OpenCVE and the tool patch bridge · Updated every minute",
-  );
-  p.id = "sec-auto";
-  const ul = el("ul", "rows");
-  ul.id = "sec-rows";
-  if (secError && !sec) {
-    p.append(empty(`Security status is unavailable: ${secError}`));
-    return p;
-  }
-  if (!sec) {
-    p.append(empty("Loading security automations…"));
-    return p;
-  }
-  const now = sec.generatedAt;
-  const sum = sec.summary;
-  const head = p.querySelector(".head");
-  const chip = el(
-    "span",
-    `chip-s sec-${sum.tone}`,
-    sum.bad ? `${sum.bad} failing` : sum.warn ? `${sum.warn} overdue` : "All OK",
-  );
-  chip.id = "sec-summary";
-  head.append(chip);
-  for (const r of sec.rows) {
-    const li = el("li", `sec-row ${r.tone}`);
-    li.dataset.sec = r.id;
-    li.dataset.tone = r.tone;
-    const name = el("span", "a");
-    name.append(el("span", `sdot ${r.tone}`));
-    const a = el("a", "", r.name);
-    a.href = r.link;
-    if (/^https:/.test(r.link)) {
-      a.target = "_blank";
-      a.rel = "noopener noreferrer";
-    }
-    name.append(a);
-    const state = el("span", `b st ${r.tone}`, r.label);
-    const facts = el(
-      "span",
-      "c",
-      [
-        r.schedule,
-        r.lastRun ? `Last run ${when(r.lastRun, now)}` : r.continuous ? "Always on" : "Never run",
-        r.next ? `Next ${until(r.next, now)}` : "",
-      ]
-        .filter(Boolean)
-        .join(" · "),
-    );
-    li.append(name, state, facts);
-    if (r.detail) li.append(el("span", r.tone === "bad" ? "c bad" : "c", r.detail));
-    if (r.runnable) {
-      const b = el(
-        "button",
-        "btn sm run-now",
-        r.runnable === "quick-scan" ? "Run quick scan" : "Run now",
-      );
-      b.type = "button";
-      b.onclick = () => runNow(r.runnable, b);
-      const c = el("span", "c");
-      c.append(b);
-      li.append(c);
+  const ul = el("ul", "ptrig");
+  if (!p) ul.id = "triggers";
+  for (const t of trig) {
+    const li = el("li", t.enabled ? "" : "off");
+    li.dataset.trigger = t.id;
+    li.title = t.detail;
+    li.append(el("span", "k", t.kind), el("span", "", t.label), el("span", "w"));
+    const target = TOGGLES[t.id];
+    if (target) {
+      const sw = el("button", "tog", t.enabled ? "On" : "Off");
+      sw.type = "button";
+      sw.setAttribute("role", "switch");
+      sw.setAttribute("aria-checked", String(t.enabled));
+      sw.setAttribute("aria-label", `${t.label}: ${t.enabled ? "on" : "off"}`);
+      sw.onclick = () => toggle(target, !t.enabled, sw);
+      li.append(sw);
     }
     ul.append(li);
   }
-  if (sec.stale) p.append(el("div", "empty-c", "The VPS did not answer; showing the last answer."));
-  p.append(ul);
-  return p;
-}
-function renderSecurity() {
-  const host = $("sec-auto");
-  if (host) host.replaceWith(securityPanel());
-}
-async function refreshSecurity() {
-  try {
-    sec = await getJson("/api/security/automations");
-    secError = null;
-  } catch (e) {
-    secError = e.message;
-    sec = null;
-  }
-  renderSecurity();
+  box.append(ul);
+  return box;
 }
 
-function failuresPanel(s) {
-  const p = panel("Failures", "Most recent first · Resolved entries remain in history");
+function failuresPanel(s, p) {
+  const ids = p ? stepIdsOf(p) : [];
+  const list = p ? s.failures.filter((f) => ids.includes(f.step)) : [];
+  const box = panel("Failures", "Most recent first · Resolved entries remain in history");
   const ul = el("ul", "rows");
   ul.id = "failures";
-  if (!s.failures.length) p.append(empty("No failures recorded."));
-  for (const f of s.failures) {
+  if (!list.length) box.append(empty("No failures recorded for this workflow."));
+  for (const f of list) {
     const li = el("li");
     const button = el("button", "failure-row");
     button.type = "button";
@@ -388,8 +474,8 @@ function failuresPanel(s) {
     li.append(button);
     ul.append(li);
   }
-  if (s.failures.length) p.append(ul);
-  return p;
+  if (list.length) box.append(ul);
+  return box;
 }
 
 function hooksPanel(s) {
@@ -457,6 +543,184 @@ function configPanel(s) {
   return p;
 }
 
+// ---------- security ----------
+async function runNow(kind, btn) {
+  btn.disabled = true;
+  try {
+    await getJson(
+      kind === "quick-scan" ? "/api/security/run?mode=quick" : "/api/security/tools/run",
+      { method: "POST" },
+    );
+    await refreshSecurity();
+  } catch (e) {
+    alert(`Could not start the run: ${e.message}`);
+  } finally {
+    btn.disabled = false;
+  }
+}
+function securityChecks(p) {
+  const box = panel("Runs and checks", "The VPS units behind this workflow · Updated every minute");
+  box.id = "sec-auto";
+  if (secError && !sec) {
+    box.append(empty(`Security status is unavailable: ${secError}`));
+    return box;
+  }
+  if (!sec) {
+    box.append(empty("Loading security status…"));
+    return box;
+  }
+  const ul = el("ul", "rows sec-rows");
+  ul.id = "sec-rows";
+  for (const r of secRows(p)) {
+    const li = el("li", `sec-row ${r.tone}`);
+    li.dataset.sec = r.id;
+    li.dataset.tone = r.tone;
+    const name = el("span", "a");
+    name.append(el("span", `sdot ${r.tone}`));
+    const a = el("a", "", r.name);
+    a.href = r.link;
+    if (/^https:/.test(r.link)) {
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+    }
+    name.append(a);
+    const state = el("span", `b st ${r.tone}`, r.label);
+    const facts = el(
+      "span",
+      "c",
+      [
+        r.schedule,
+        r.lastRun
+          ? `Last run ${when(r.lastRun, sec.generatedAt)}`
+          : r.continuous
+            ? "Always on"
+            : "Never run",
+        r.next ? `Next ${until(r.next, sec.generatedAt)}` : "",
+      ]
+        .filter(Boolean)
+        .join(" · "),
+    );
+    li.append(name, state, facts);
+    if (r.detail) li.append(el("span", r.tone === "bad" ? "c bad" : "c", r.detail));
+    if (r.runnable) {
+      const b = el(
+        "button",
+        "btn sm run-now",
+        r.runnable === "quick-scan" ? "Run quick scan" : "Run now",
+      );
+      b.type = "button";
+      b.onclick = () => runNow(r.runnable, b);
+      const c = el("span", "c");
+      c.append(b);
+      li.append(c);
+    }
+    ul.append(li);
+  }
+  if (sec.stale)
+    box.append(el("div", "empty-c", "The VPS did not answer; showing the last answer."));
+  box.append(ul);
+  return box;
+}
+
+// ---------- detail ----------
+function workflowState(p) {
+  if (isSecurity(p)) {
+    if (!sec) return { text: secError ? "Unavailable" : "Loading…", tone: "off" };
+    const rows = secRows(p);
+    const bad = rows.filter((r) => r.tone === "bad").length;
+    const warn = rows.filter((r) => r.tone === "warn").length;
+    return {
+      text: bad ? `${bad} failing` : warn ? `${warn} overdue` : "All OK",
+      tone: bad ? "bad" : warn ? "warn" : "ok",
+    };
+  }
+  const steps = stepIdsOf(p).map(viewOf);
+  const bad = steps.filter((s) => s.state === "failed").length;
+  const active = steps.filter((s) => s.state === "active").length;
+  if (bad) return { text: `${bad} failed`, tone: "bad" };
+  if (active) return { text: "Working", tone: "live" };
+  if (steps.every((s) => s.state === "disabled")) return { text: "Off", tone: "off" };
+  return { text: "Idle", tone: "ok" };
+}
+
+function detailHead(item) {
+  const p = pipelineOf(item.id);
+  const head = el("header", "wf-head");
+  const ic = el("span", "wf-ic");
+  ic.append(icon(item.icon));
+  const text = el("div", "wf-title");
+  text.append(el("h2", "", item.label));
+  text.append(
+    el(
+      "p",
+      "wf-hint",
+      p ? p.hint : "Scheduled prompts and the Debug button, outside every drawn workflow",
+    ),
+  );
+  head.append(ic, text);
+  if (p) {
+    const st = workflowState(p);
+    const chip = el("span", `chip-s wf-state ${st.tone}`, st.text);
+    if (isSecurity(p)) chip.id = "sec-summary";
+    else chip.id = "wf-state";
+    head.append(chip);
+  }
+  return head;
+}
+
+function buildDetail(s) {
+  const item = navItems().find((i) => i.id === selected) || navItems()[0];
+  const p = pipelineOf(item.id);
+  const main = $("am");
+  const nodes = [detailHead(item)];
+  if (p) {
+    const flow = el("section", "wf-flow panel");
+    flow.dataset.pipeline = p.id;
+    flow.append(buildChain(s, p));
+    nodes.push(flow);
+  }
+  const tagged = (node, zone) => {
+    node.dataset.zone = zone;
+    return node;
+  };
+  if (p && isSecurity(p)) {
+    nodes.push(tagged(securityChecks(p), "checks"));
+  } else if (p && p.id === "pr") {
+    const cols = el("div", "cols");
+    cols.append(tagged(triggersPanel(s, p), "triggers"), tagged(failuresPanel(s, p), "failures"));
+    const cols2 = el("div", "cols");
+    cols2.append(
+      tagged(runsPanel(s), "runs"),
+      tagged(hooksPanel(s), "hooks"),
+      tagged(configPanel(s), "config"),
+    );
+    nodes.push(cols, cols2);
+  } else if (p && p.id === "windows") {
+    const cols = el("div", "cols");
+    cols.append(tagged(triggersPanel(s, p), "triggers"), tagged(failuresPanel(s, p), "failures"));
+    nodes.push(cols, tagged(configPanel(s), "config"));
+  } else if (p) {
+    const cols = el("div", "cols");
+    cols.append(tagged(triggersPanel(s, p), "triggers"), tagged(failuresPanel(s, p), "failures"));
+    nodes.push(cols);
+  } else {
+    nodes.push(tagged(triggersPanel(s, null), "triggers"));
+    const cols = el("div", "cols");
+    cols.append(tagged(runsPanel(s), "runs"), tagged(configPanel(s), "config"));
+    nodes.push(cols);
+  }
+  main.replaceChildren(...nodes);
+  main.setAttribute("aria-busy", "false");
+  detailFor = item.id;
+  if (matchMedia("(max-width: 760px)").matches)
+    requestAnimationFrame(() =>
+      document
+        .querySelector(`[data-wf="${item.id}"]`)
+        ?.scrollIntoView({ block: "nearest", inline: "center" }),
+    );
+}
+
+// ---------- render ----------
 const modeChip = (label, c) => {
   const on = c.enabled,
     text = !on ? "off" : c.dryRun ? "dry run" : "live";
@@ -464,45 +728,79 @@ const modeChip = (label, c) => {
 };
 
 function render(s) {
+  const focusedFailure = document.activeElement?.dataset?.failure;
   snap = s;
-  const main = $("am");
-  main.setAttribute("aria-busy", "false");
+  $("am").setAttribute("aria-busy", "false");
   $("mode").replaceChildren(
     modeChip("Dispatcher", s.config.dispatch),
     modeChip("Opener", s.config.opener),
   );
-  if (!main.querySelector(".pipeline")) {
-    main.replaceChildren(
-      ...s.flow.pipelines.map((p) => buildPipeline(s, p)),
-      securityPanel(),
-      el("div", "cols"),
-      el("div", "cols"),
-    );
+  buildNav();
+  if (detailFor !== selected) buildDetail(s);
+  else {
+    const p = pipelineOf(selected);
+    const head = $("am").querySelector(".wf-head");
+    if (p && head) {
+      const st = workflowState(p);
+      const chip = head.querySelector(".chip-s");
+      if (chip) {
+        chip.className = `chip-s wf-state ${st.tone}`;
+        chip.textContent = st.text;
+      }
+    }
+    // Refresh the panels in place: the step boxes keep their pulse and keyboard focus.
+    const make = {
+      triggers: () => triggersPanel(s, !p ? null : p),
+      failures: () => failuresPanel(s, p),
+      runs: () => runsPanel(s),
+      hooks: () => hooksPanel(s),
+      config: () => configPanel(s),
+      checks: () => securityChecks(p),
+    };
+    for (const zone of document.querySelectorAll("[data-zone]")) {
+      const fresh = make[zone.dataset.zone]?.();
+      if (!fresh) continue;
+      fresh.dataset.zone = zone.dataset.zone;
+      zone.replaceWith(fresh);
+    }
   }
+  updateNav();
   updateFlow(s);
-  const focusedFailure = document.activeElement?.dataset.failure;
-  const [a, b] = main.querySelectorAll(".cols");
-  a.replaceChildren(failuresPanel(s), triggersPanel(s));
-  b.replaceChildren(runsPanel(s), hooksPanel(s), configPanel(s));
   if (focusedFailure) findFailure(focusedFailure)?.focus({ preventScroll: true });
   if (openStep) fillDrawerFacts(openStep);
 }
 
 // ---------- drawer ----------
 function fillDrawerFacts(id) {
-  const st = snap.steps.find((x) => x.id === id),
+  const st = viewOf(id),
     node = snap.flow.nodes.find((n) => n.id === id);
-  if (!st || !node) return;
+  if (!node) return;
   $("drawer-title").textContent = node.label;
   $("drawer-hint").textContent = node.hint;
   const f = $("drawer-facts");
   f.replaceChildren();
   const add = (k, v) => f.append(el("dt", "", k), el("dd", "", v));
-  add("State", STATE_TEXT[st.state]);
-  if (st.lastAt) add("Last event", `${when(st.lastAt, snap.now)} (${time(st.lastAt)})`);
-  if (st.lastMsg) add("Last message", st.lastMsg);
-  add("Running now", String(st.open));
-  add("Failures, 24 h", String(st.failures));
+  const p = currentPipeline(id) || pipelineOfStep(id);
+  if (isSecurity(p)) {
+    const rows = SEC_ROW_MAP[id]
+      ? secRows(p).filter((r) => SEC_ROW_MAP[id].includes(r.id))
+      : secRows(p);
+    add("State", STATE_TEXT[st.state] || st.state);
+    if (!rows.length) add("Checks", "The VPS did not report this step.");
+    for (const r of rows) {
+      add(r.name, `${r.label} · ${r.schedule}`);
+      if (r.lastRun) add("Last run", `${when(r.lastRun, sec.generatedAt)} (${time(r.lastRun)})`);
+      if (r.next) add("Next run", until(r.next, sec.generatedAt));
+      if (r.detail) add("Detail", r.detail);
+    }
+    add("Where", "VPS units; full results are on the Security page.");
+  } else {
+    add("State", STATE_TEXT[st.state] || st.state);
+    if (st.lastAt) add("Last event", `${when(st.lastAt, snap.now)} (${time(st.lastAt)})`);
+    if (st.lastMsg) add("Last message", st.lastMsg);
+    add("Running now", String(st.open ?? 0));
+    add("Failures, 24 h", String(st.failures ?? 0));
+  }
 }
 
 function renderLog() {
@@ -510,7 +808,16 @@ function renderLog() {
   ol.replaceChildren();
   if (!logState.entries.length) {
     const li = el("li");
-    li.append(el("span", "m", "Nothing recorded for this step yet."));
+    const p = currentPipeline(openStep) || pipelineOfStep(openStep);
+    li.append(
+      el(
+        "span",
+        "m",
+        isSecurity(p)
+          ? "This step runs on the VPS. Its runs are listed above."
+          : "Nothing recorded for this step yet.",
+      ),
+    );
     ol.append(li);
   }
   for (const e of logState.entries) {
@@ -563,6 +870,11 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") closeDrawer();
 });
 
+// ---------- new workflow ----------
+$("new-workflow").onclick = () => {
+  location.href = "/?new=workflow";
+};
+
 // ---------- debug ----------
 $("debug").onclick = async () => {
   const b = $("debug");
@@ -587,6 +899,11 @@ $("debug").onclick = async () => {
 async function refresh() {
   try {
     const s = await getJson("/api/automation");
+    snap = s;
+    if (!selected) {
+      const hash = location.hash.slice(1);
+      selected = s.flow.pipelines.some((p) => p.id === hash) || hash === "other" ? hash : "pr";
+    }
     render(s);
     if (openStep) loadLog().catch(() => {});
   } catch (e) {
@@ -594,6 +911,20 @@ async function refresh() {
     if (st) st.textContent = `Automation data is unavailable: ${e.message}`;
   }
 }
+async function refreshSecurity() {
+  try {
+    sec = await getJson("/api/security/automations");
+    secError = null;
+  } catch (e) {
+    secError = e.message;
+    sec = null;
+  }
+  if (snap) render(snap);
+}
+addEventListener("hashchange", () => {
+  const id = location.hash.slice(1);
+  if (snap && navItems().some((i) => i.id === id)) select(id);
+});
 await refresh();
 void refreshSecurity();
 setInterval(() => {

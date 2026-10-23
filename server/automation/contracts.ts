@@ -18,7 +18,21 @@ export type StepId =
   | "merge"
   | "apply"
   | "monitor"
-  | "escalate";
+  | "escalate"
+  | "opencve"
+  | "receiver"
+  | "tool_watch"
+  | "tool_patch"
+  | "digest"
+  | "push"
+  | "falco"
+  | "falco_queue"
+  | "transport"
+  | "scan"
+  | "osv_check"
+  | "report"
+  | "heartbeat"
+  | "status_check";
 export type StepState = "idle" | "active" | "ok" | "failed" | "abandoned" | "disabled";
 export type EventKind = "start" | "ok" | "fail" | "info" | "abandoned";
 
@@ -40,6 +54,9 @@ export interface Pipeline {
   id: string;
   label: string;
   hint: string;
+  /** Sidebar group: the work loop, or the VPS security automations. */
+  group: "workflow" | "security";
+  icon: string;
   phases: { label: string; steps: StepId[]; loop?: { steps: StepId[]; label: string } }[];
 }
 
@@ -145,6 +162,104 @@ export const FLOW: { nodes: FlowNode[]; edges: FlowEdge[]; pipelines: Pipeline[]
       kind: "agent",
       hint: "Unresolved alert: L3 Pi, then L2 Claude or Codex, then L1 Opus, then the owner. Dry run unless monitor.json says live",
     },
+    {
+      id: "opencve",
+      label: "OpenCVE sync",
+      icon: "database",
+      kind: "source",
+      hint: "Hourly CVE knowledge-base sync; Airflow diffs new commits and matches subscriptions",
+    },
+    {
+      id: "receiver",
+      label: "Webhook receiver",
+      icon: "shield",
+      kind: "gate",
+      hint: "Bearer token, deduplicated for 7 days; writes a marker and never forwards advisory text",
+    },
+    {
+      id: "tool_watch",
+      label: "Tool watch",
+      icon: "scan",
+      kind: "action",
+      hint: "The marker starts one fixed tool-watch run; pinned versions are compared with upstream",
+    },
+    {
+      id: "tool_patch",
+      label: "Patch bridge",
+      icon: "pr",
+      kind: "action",
+      hint: "Tool changes become branches and pull requests for review and merge",
+    },
+    {
+      id: "digest",
+      label: "Daily digest",
+      icon: "mail",
+      kind: "action",
+      hint: "One AgentMail message at 22:15 UTC with the day's event and CVE change counts",
+    },
+    {
+      id: "push",
+      label: "Phone alert",
+      icon: "bell",
+      kind: "action",
+      hint: "Web push to the owner's devices; the console bell is the only path for non-security alerts",
+    },
+    {
+      id: "falco",
+      label: "Falco runtime",
+      icon: "eye",
+      kind: "source",
+      hint: "Kernel-level runtime detection; Warning and above are queued",
+    },
+    {
+      id: "falco_queue",
+      label: "Alert queue",
+      icon: "layers",
+      kind: "action",
+      hint: "Falco events append to a local queue; the flusher sends them every 5 minutes",
+    },
+    {
+      id: "transport",
+      label: "Alert transport",
+      icon: "mail",
+      kind: "gate",
+      hint: "vps-harden-notify: ALERT_TRANSPORT is AgentMail, ntfy, webhook or SMTP",
+    },
+    {
+      id: "scan",
+      label: "Security scan",
+      icon: "scan",
+      kind: "action",
+      hint: "ClamAV, Falco, Trivy and nmap; full scan Saturday 23:15 UTC, quick scan on demand",
+    },
+    {
+      id: "osv_check",
+      label: "OSV malware check",
+      icon: "shield",
+      kind: "action",
+      hint: "Daily 22:30 UTC check of installed packages against OSV advisories",
+    },
+    {
+      id: "report",
+      label: "Security page",
+      icon: "chart",
+      kind: "action",
+      hint: "Results reach /security over the forced-command scan key",
+    },
+    {
+      id: "heartbeat",
+      label: "Dead-man switch",
+      icon: "activity",
+      kind: "source",
+      hint: "Every 5 minutes the VPS reports unit, OpenCVE stack and backup health",
+    },
+    {
+      id: "status_check",
+      label: "VPS status",
+      icon: "gauge",
+      kind: "decision",
+      hint: "One failed or overdue unit turns the check red and raises the owner alert",
+    },
   ],
   edges: [
     { from: "triage", to: "dispatcher" },
@@ -161,11 +276,27 @@ export const FLOW: { nodes: FlowNode[]; edges: FlowEdge[]; pipelines: Pipeline[]
     { from: "review", to: "merge", label: "approved" },
     { from: "merge", to: "apply" },
     { from: "monitor", to: "escalate", label: "alert unresolved" },
+    { from: "opencve", to: "receiver", label: "subscription match" },
+    { from: "receiver", to: "tool_watch", label: "deduplicated" },
+    { from: "tool_watch", to: "tool_patch", label: "release changed" },
+    { from: "opencve", to: "digest", label: "daily counts" },
+    { from: "digest", to: "push", label: "AgentMail digest" },
+    { from: "tool_patch", to: "push", label: "PR opened" },
+    { from: "falco", to: "falco_queue", label: "Warning or above" },
+    { from: "falco_queue", to: "transport", label: "flushed every 5 min" },
+    { from: "transport", to: "push", label: "owner" },
+    { from: "scan", to: "report", label: "findings" },
+    { from: "osv_check", to: "report", label: "malware match" },
+    { from: "report", to: "transport", label: "needs attention" },
+    { from: "heartbeat", to: "status_check", label: "unit missed" },
+    { from: "status_check", to: "transport", label: "failed or overdue" },
   ],
   pipelines: [
     {
       id: "pr",
       label: "PR workflow",
+      group: "workflow",
+      icon: "pr",
       hint: "From a new issue to a merged pull request",
       phases: [
         { label: "Issue to labels", steps: ["triage"] },
@@ -186,16 +317,65 @@ export const FLOW: { nodes: FlowNode[]; edges: FlowEdge[]; pipelines: Pipeline[]
     {
       id: "windows",
       label: "Window opener",
+      group: "workflow",
+      icon: "clock",
       hint: "Starts Claude and Codex 5-hour windows overnight and reads their usage; the dispatcher plans from these readings",
       phases: [{ label: "Quota windows", steps: ["opener", "usage"] }],
     },
     {
       id: "monitor",
       label: "Workspace monitor",
+      group: "workflow",
+      icon: "gauge",
       hint: "Watches CPU, RAM, agent failures and console health; escalates alerts that nobody resolves",
       phases: [
         { label: "Signals to alerts", steps: ["monitor"] },
         { label: "Escalation chain", steps: ["escalate"] },
+      ],
+    },
+    {
+      id: "cve",
+      label: "CVE alerts",
+      group: "security",
+      icon: "shield",
+      hint: "OpenCVE match to a patch PR and the owner's daily digest",
+      phases: [
+        { label: "Detect", steps: ["opencve", "receiver"] },
+        { label: "Patch path", steps: ["tool_watch", "tool_patch"] },
+        { label: "Owner alerting", steps: ["digest", "push"] },
+      ],
+    },
+    {
+      id: "runtime",
+      label: "Runtime guard",
+      group: "security",
+      icon: "eye",
+      hint: "Falco runtime events to the owner's alert channel",
+      phases: [
+        { label: "Detect", steps: ["falco", "falco_queue"] },
+        { label: "Notify", steps: ["transport", "push"] },
+      ],
+    },
+    {
+      id: "scans",
+      label: "Scheduled scans",
+      group: "security",
+      icon: "scan",
+      hint: "ClamAV, Falco, Trivy, nmap and OSV results to the security page and the owner",
+      phases: [
+        { label: "Scan", steps: ["scan", "osv_check"] },
+        { label: "Report and alert", steps: ["report", "transport", "push"] },
+      ],
+    },
+    {
+      id: "deadman",
+      label: "Dead-man switch",
+      group: "security",
+      icon: "activity",
+      hint: "The VPS checks its own units, OpenCVE stack and backups every 5 minutes",
+      phases: [
+        { label: "Watch", steps: ["heartbeat", "status_check"] },
+        { label: "Alert", steps: ["transport", "push"] },
       ],
     },
   ],

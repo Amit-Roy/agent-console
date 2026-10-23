@@ -1,6 +1,5 @@
 // Security automations on the /automation page and the sidebar shield, in real Chromium: desktop and phone, light and dark.
 // Scratch server on a free port (mock providers); /api/security/* is mocked in the page, so no SSH and no VPS.
-import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
@@ -105,20 +104,42 @@ try {
       return r.fulfill(json({ started: true }));
     });
 
-    await page.goto(`${base}/automation`);
+    await page.goto(`${base}/automation#cve`);
     await page.waitForSelector("#sec-rows .sec-row");
     const rows = page.locator("#sec-rows .sec-row");
-    check(`${name}: 10 rows`, (await rows.count()) === 10);
+    check(`${name}: CVE workflow lists its real units`, (await rows.count()) === 6);
     check(
-      `${name}: failing chip`,
-      (await page.locator("#sec-summary").innerText()) === "2 failing",
+      `${name}: CVE architecture steps`,
+      (await page.locator('[data-pipeline="cve"] [data-step]').count()) === 6,
     );
-    check(`${name}: red rows`, (await page.locator(".sec-row.bad").count()) === 2);
+    check(
+      `${name}: failing chip for this workflow`,
+      (await page.locator("#sec-summary").innerText()) === "1 failing",
+    );
+    check(`${name}: red row`, (await page.locator(".sec-row.bad").count()) === 1);
     check(`${name}: amber row`, (await page.locator(".sec-row.warn").count()) === 1);
     check(
-      `${name}: failure reason visible`,
+      `${name}: OpenCVE path is drawn, not summarised`,
+      /OpenCVE sync[\s\S]*Webhook receiver[\s\S]*Tool watch[\s\S]*Patch bridge[\s\S]*Daily digest[\s\S]*Phone alert/.test(
+        await page.locator('[data-pipeline="cve"]').innerText(),
+      ),
+    );
+    check(
+      `${name}: OpenCVE link`,
+      /^https:\/\//.test(
+        (await page.locator('[data-sec="opencve-backup"] a').getAttribute("href")) ?? "",
+      ),
+    );
+    check(`${name}: one run button here`, (await page.locator(".run-now").count()) === 1);
+    check(`${name}: shared rows list`, (await page.locator("ul.rows#sec-rows").count()) === 1);
+    await page.click('[data-wf="deadman"]');
+    await page.waitForSelector('[data-sec="heartbeat"]');
+    check(
+      `${name}: failure reason visible in the dead-man workflow`,
       (await page.locator('[data-sec="heartbeat"]').innerText()).includes("falco-alert inactive"),
     );
+    await page.click('[data-wf="scans"]');
+    await page.waitForSelector('[data-sec="secscan"]');
     const first = await page.locator('[data-sec="secscan"]').innerText();
     check(
       `${name}: schedule, last and next`,
@@ -129,19 +150,6 @@ try {
       `${name}: Security link`,
       (await page.locator('[data-sec="secscan"] a').getAttribute("href")) === "/security",
     );
-    check(
-      `${name}: OpenCVE link`,
-      /^https:\/\//.test(
-        (await page.locator('[data-sec="opencve-backup"] a').getAttribute("href")) ?? "",
-      ),
-    );
-    check(`${name}: run buttons`, (await page.locator(".run-now").count()) === 2);
-    // same look as the other panels: rows sit in the shared .rows list
-    check(
-      `${name}: shared rows list`,
-      (await page.locator("ul.rows#sec-rows").count()) === 1 &&
-        (await page.locator("ul.rows#triggers").count()) === 1,
-    );
     const overflow = await page.evaluate(
       () => document.documentElement.scrollWidth - window.innerWidth,
     );
@@ -150,7 +158,12 @@ try {
     await page.screenshot({ path: `${OUT}/sec-automations-${name}-red.png` });
 
     await page.locator(".run-now").first().click();
-    await page.locator(".run-now").nth(1).click();
+    await page.waitForFunction(
+      () => !(document.querySelector(".run-now") as HTMLButtonElement | null)?.disabled,
+    );
+    await page.click('[data-wf="cve"]');
+    await page.waitForSelector('[data-sec="tool-watch"]');
+    await page.locator(".run-now").first().click();
     await page.waitForFunction(
       () => !(document.querySelector(".run-now") as HTMLButtonElement | null)?.disabled,
     );
@@ -159,33 +172,44 @@ try {
       posts.includes("POST quick") && posts.includes("POST tool-watch"),
       posts.join(),
     );
+    await page.click('[data-wf="other"]');
+    check(`${name}: other triggers list`, (await page.locator("ul#triggers").count()) === 1);
 
     current = "green";
+    await page.click('[data-wf="cve"]');
+    await page.waitForSelector("#sec-rows .sec-row");
     await page.reload();
     await page.waitForSelector("#sec-rows .sec-row");
     check(
       `${name}: green summary`,
       (await page.locator("#sec-summary").innerText()) === "All OK" &&
         (await page.locator(".sec-row.bad, .sec-row.warn").count()) === 0,
+      `${await page.locator("#sec-summary").innerText()} / ${await page.locator(".sec-row").count()} rows`,
     );
     await page.locator("#sec-auto").scrollIntoViewIfNeeded();
     await page.screenshot({ path: `${OUT}/sec-automations-${name}-green.png` });
 
     current = "amber";
+    await page.click('[data-wf="cve"]');
+    await page.waitForSelector("#sec-rows .sec-row");
     await page.reload();
     await page.waitForSelector("#sec-rows .sec-row");
     check(
       `${name}: amber summary`,
       (await page.locator("#sec-summary").innerText()) === "1 overdue",
+      await page.locator("#sec-summary").innerText(),
     );
 
     current = "down";
+    await page.click('[data-wf="cve"]');
+    await page.waitForSelector("#sec-rows .sec-row");
     await page.reload();
     await page.waitForSelector("#sec-rows .sec-row");
     check(
       `${name}: SSH failure row`,
       (await page.locator('[data-sec="status-host"].bad').count()) === 1 &&
         (await page.locator("#sec-summary").innerText()) === "1 failing",
+      `${await page.locator("#sec-summary").innerText()} / ${await page.locator(".sec-row").count()} rows`,
     );
     await page.locator("#sec-auto").scrollIntoViewIfNeeded();
     await page.screenshot({ path: `${OUT}/sec-automations-${name}-down.png` });

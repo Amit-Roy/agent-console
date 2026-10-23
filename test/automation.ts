@@ -115,12 +115,16 @@ try {
   assert.equal(snap.steps.length, FLOW.nodes.length);
   for (const e of FLOW.edges) assert.ok(ids.has(e.from) && ids.has(e.to), `${e.from}->${e.to}`);
   assert.ok(FLOW.nodes.every((n) => n.icon && n.label));
-  // every step sits in exactly one pipeline; the PR workflow runs issue -> labels -> PR -> premium review and merge
-  const placed = FLOW.pipelines.flatMap((p) => p.phases.flatMap((ph) => ph.steps));
-  assert.deepEqual([...placed].sort(), [...ids].sort(), "each step drawn once");
+  // every step is drawn somewhere; the alert steps are shared by the security workflows
+  const placed = new Set(FLOW.pipelines.flatMap((p) => p.phases.flatMap((ph) => ph.steps)));
+  assert.deepEqual([...placed].sort(), [...ids].sort(), "every step is drawn");
   assert.deepEqual(
     FLOW.pipelines.map((p) => p.id),
-    ["pr", "windows", "monitor"],
+    ["pr", "windows", "monitor", "cve", "runtime", "scans", "deadman"],
+  );
+  assert.deepEqual(
+    FLOW.pipelines.filter((p) => p.group === "security").map((p) => p.icon),
+    ["shield", "eye", "scan", "activity"],
   );
   assert.deepEqual(
     FLOW.pipelines[0].phases.map((ph) => ph.steps[0]),
