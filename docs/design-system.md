@@ -256,4 +256,19 @@ The design system mandates a single icon pack for visual consistency. All icons 
 
 ## Publishing
 
-The design system is published as an npm package to GitHub Packages. See `package.json` for the package configuration.
+The design system is published as an npm package to GitHub Packages. See `packages/design-system/package.json` for the package configuration.
+
+- **Versioning**: semver in `packages/design-system/package.json`. Token removal or rename = major; new token/component = minor; value tweak = patch.
+- **Publish**: `cd packages/design-system && npm publish` (registry `https://npm.pkg.github.com`, needs a GitHub token with `write:packages` in your own `~/.npmrc`; never commit it). `npm pack --dry-run` shows the tarball: `index.js`, `index.d.ts`, `tokens.json`, `design-system.css`.
+- **Install**: `npm install @agent-console/design-system`, then `import { tokens, cssString } from '@agent-console/design-system'` or `@agent-console/design-system/css`.
+
+## Popular-opinion sources
+
+`scripts/check-design-system-sources.js` polls these sources and turns new matches into GitHub issues (labels `design-system`, `suggestion`), deduplicated by URL in `.design-system-seen.json`:
+
+| Source | Endpoint | Match |
+| --- | --- | --- |
+| Reddit r/design_system | `new.json?limit=10` | title has "design system" plus improve/suggestion/idea/feedback |
+| Hacker News | newest 50 stories | same title rule, story must have a URL |
+
+Run it: `node scripts/check-design-system-sources.js` (`--dry-run` prints without creating issues). Schedule it daily with the console's Schedules (`schedule_create`, folder = repo root, prompt = run that command and report the result); a manual `schedule_run_now` is the end-to-end check. Matches are appended to `logs/design-system-suggestions.log`. Test: `node test/design-system-sources.ts` (fetch and `gh` are injected, no network).

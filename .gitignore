@@ -8,3 +8,4 @@ __pycache__/
 # Impeccable design hook: shared config is committed, per-developer state is not
 .impeccable/*
 !.impeccable/config.json
+.design-system-seen.json

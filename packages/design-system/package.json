@@ -5,15 +5,20 @@
   "main": "index.js",
   "types": "index.d.ts",
   "files": [
-    "src/design-system.css",
-    "src/tokens.json",
+    "design-system.css",
+    "tokens.json",
     "index.js",
     "index.d.ts"
   ],
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node ../../test/design-system.ts"
   },
-  "keywords": ["design system", "tokens", "ui", "agent-console"],
+  "keywords": [
+    "design system",
+    "tokens",
+    "ui",
+    "agent-console"
+  ],
   "author": "Amit-Roy",
   "license": "MIT",
   "homepage": "https://github.com/Amit-Roy/agent-console#readme",
@@ -28,5 +33,14 @@
   "dependencies": {},
   "publishConfig": {
     "registry": "https://npm.pkg.github.com"
+  },
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    },
+    "./css": "./design-system.css",
+    "./tokens.json": "./tokens.json"
   }
 }
