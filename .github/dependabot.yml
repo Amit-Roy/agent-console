@@ -37,9 +37,9 @@ updates:
       - dependency-type: "direct"
       - dependency-type: "indirect"
     ignore:
-      # Ignore major version updates for production deps (handled manually)
-      - dependency-type: "production"
-        update-type: "version-update:semver-major"
+      # Ignore major version updates (handled manually); ignore rules cannot filter by dependency type
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
 
   # pip ecosystem - requirements-triage.txt
   - package-ecosystem: "pip"
@@ -66,4 +66,5 @@ updates:
       - dependency-type: "indirect"
     ignore:
       # Ignore major version updates (handled manually)
-      - update-type: "version-update:semver-major"
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]

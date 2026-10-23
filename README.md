@@ -42,6 +42,8 @@ Open the URL, sign in, create a thread. You're running.
 
 **Notifications.** Sidebar → **Notifications** → Enable. Push alerts when a thread finishes, fails, or needs input — even when the app is closed. Requires HTTPS or localhost. On iOS, use the installed Home Screen app.
 
+**[CI cost and local hook](docs/ci.md).** Measured CI minutes, keep/move/remove decision per step, and the opt-in `.githooks/pre-commit` that runs `npm test` before a commit.
+
 **[Automatic GitHub triage](docs/github-triage.md).** Labels issues and PRs by effort and priority via a signed webhook. Token telemetry comments per issue/PR; the `telemetry-comment` CI check fails a PR without one. Backfill with `bin/token-telemetry backfill`.
 
 **Usage & savings** (`/dashboard`). Today / 7 / 30 / 90 days, previous-period comparison. Turns, tokens, API-equivalent cost, RTK and Headroom savings, per-day charts, model/tool/thread breakdowns, weekday-by-hour heatmap.
