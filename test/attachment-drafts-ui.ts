@@ -458,17 +458,12 @@ try {
     1,
     "interrupted upload is still pending",
   );
-  // Abort the held upload once navigation starts, so cancellation cannot delay the reload.
-  const navigating = page.waitForRequest((request) => request.isNavigationRequest(), {
-    timeout: 7000,
-  });
-  const reloaded = page.reload(navigation);
+  // Keep the interrupted request held until the old document has unloaded.
   try {
-    await navigating;
+    await page.reload(navigation);
   } finally {
     release();
   }
-  await reloaded;
   await ready();
   await thread(0);
   await settled(1);

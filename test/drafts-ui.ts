@@ -45,7 +45,11 @@ const server = spawn(process.execPath, [process.env.TEST_SERVER_ENTRY || "server
     AGENT_CONSOLE_RUN: path.join(data, "run"),
     AGENT_CONSOLE_BRAIN: path.join(data, "no-brain"),
   },
-  stdio: ["ignore", "pipe", "ignore"],
+  stdio: ["ignore", "pipe", "pipe"],
+});
+let serverErrors = "";
+server.stderr.on("data", (chunk) => {
+  serverErrors = (serverErrors + chunk.toString()).slice(-8192);
 });
 let browser: Browser;
 try {
@@ -59,7 +63,7 @@ try {
     });
     server.once("exit", (code) => {
       clearTimeout(timer);
-      reject(new Error(`Scratch server exited: ${code}`));
+      reject(new Error(`Scratch server exited: ${code} ${serverErrors}`));
     });
   });
   browser = await chromium.launch();
@@ -271,8 +275,10 @@ try {
   );
 } finally {
   await browser?.close();
-  const exited = once(server, "exit");
-  server.kill();
-  await exited;
+  if (server.exitCode === null && server.signalCode === null) {
+    const exited = once(server, "exit");
+    server.kill();
+    await exited;
+  }
   fs.rmSync(data, { recursive: true, force: true });
 }
