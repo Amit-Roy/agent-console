@@ -199,6 +199,7 @@ export function piTranslator(
         if (b.type === "thinking") return { type: "thinking", thinking: b.thinking ?? "" };
         if (b.type === "toolCall")
           return { type: "tool_use", id: b.id, ...normTool(b.name, b.arguments) };
+        return undefined;
       })
       .filter(Boolean);
   const toolResult = (id: string, content: any, isError: boolean) => ({

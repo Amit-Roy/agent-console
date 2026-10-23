@@ -15,10 +15,10 @@ import matplotlib.pyplot as plt
 from matplotlib.ticker import StrMethodFormatter
 
 OUT = Path(__file__).resolve().parent
-C, S, R, W, I, O = 100_000, 20_000, 0.10, 4.0, 2.0, 10.0
+C, S, R, W, IN_PRICE, OUT_PRICE = 100_000, 20_000, 0.10, 4.0, 2.0, 10.0
 M = 1_000_000
 n = np.arange(1, 61)
-compact_warm_call = (C * R + S * O) / M
+compact_warm_call = (C * R + S * OUT_PRICE) / M
 # A summary's first user continuation writes the new prefix, even if the prior prefix was warm.
 compact_before = compact_warm_call + S * W / M + (n - 1) * S * R / M
 keep_warm = n * C * R / M
@@ -31,7 +31,7 @@ with (OUT / "costs.csv").open("w") as f:
     writer.writerow(
         ["next_requests", "retain_warm_usd", "compact_before_usd", "retain_cold_resume_usd"]
     )
-    writer.writerows(zip(n, keep_warm, compact_before, keep_cold))
+    writer.writerows(zip(n, keep_warm, compact_before, keep_cold, strict=True))
 plt.rcParams.update(
     {
         "text.parse_math": False,

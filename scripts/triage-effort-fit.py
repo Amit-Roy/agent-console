@@ -315,9 +315,12 @@ def scenario(sample, prediction, token_yield_basis="actions"):
     observed = sample["outcomes"]
     work = observed_work(sample, "totalTokens" if token_yield_basis == "workload" else "toolCalls")
     denominator = work + (1 if token_yield_basis == "actions-plus-one" else 0)
+
     # A measured zero-token session is valid. Its component fractions are zero,
     # while optional measurements remain unavailable when absent.
-    ratio = lambda value: value / denominator if denominator else 0.0
+    def ratio(value):
+        return value / denominator if denominator else 0.0
+
     fresh = observed.get("nonCachedInputTokens")
     # Never infer fresh input by subtracting a cache counter: provider
     # accounting conventions differ and counters may overlap.
@@ -360,7 +363,7 @@ def quote(model, scenarios, samples, token_yield_basis="actions"):
         ]:
             values = [
                 (w + (1 if token_yield_basis == "actions-plus-one" else 0)) * s[field]
-                for w, s in zip(adjusted, scenarios)
+                for w, s in zip(adjusted, scenarios, strict=True)
                 if s[field] is not None
             ]
             row[channel] = quantiles(values) if len(values) == len(scenarios) else None
@@ -376,14 +379,16 @@ def quote(model, scenarios, samples, token_yield_basis="actions"):
         ]
         if all(value is not None for value in input_yields):
             units = [w + (1 if token_yield_basis == "actions-plus-one" else 0) for w in adjusted]
-            row["inputTokens"] = quantiles([w * y for w, y in zip(units, input_yields)])
+            row["inputTokens"] = quantiles(
+                [w * y for w, y in zip(units, input_yields, strict=True)]
+            )
             row["totalTokens"] = (
                 row["work"]
                 if token_yield_basis == "workload"
                 else quantiles(
                     [
                         w * (y + s["outputPerWork"])
-                        for w, y, s in zip(units, input_yields, scenarios)
+                        for w, y, s in zip(units, input_yields, scenarios, strict=True)
                     ]
                 )
             )
@@ -415,7 +420,7 @@ def build_artifact(dataset):
         residuals = []
         for older, validation in cv:
             prediction = predict_work(fit_model(older, alpha, workload_metric), validation)
-            residuals.extend((s, float(p)) for s, p in zip(validation, prediction))
+            residuals.extend((s, float(p)) for s, p in zip(validation, prediction, strict=True))
         mse = float(
             np.mean(
                 [
@@ -456,7 +461,7 @@ def build_artifact(dataset):
             np.mean(
                 [
                     observed_work(s, workload_metric) <= q["work"][name]
-                    for s, q in zip(heldout, quotes)
+                    for s, q in zip(heldout, quotes, strict=True)
                 ]
             )
         )
@@ -467,7 +472,7 @@ def build_artifact(dataset):
             np.mean(
                 [
                     s["outcomes"]["outputTokens"] <= q["outputTokens"][name]
-                    for s, q in zip(heldout, quotes)
+                    for s, q in zip(heldout, quotes, strict=True)
                 ]
             )
         )
@@ -553,7 +558,10 @@ def build_artifact(dataset):
             validation[f"{channel.removesuffix('Tokens')}Coverage"] = {
                 name: float(
                     np.mean(
-                        [value <= q[channel][name] for value, q in zip(observed_channel, quotes)]
+                        [
+                            value <= q[channel][name]
+                            for value, q in zip(observed_channel, quotes, strict=True)
+                        ]
                     )
                 )
                 for name in QUANTILES
@@ -638,7 +646,12 @@ def build_artifact(dataset):
             key = channel.removesuffix("Tokens")
             validation["activeCoverage"][key] = {
                 name: float(
-                    np.mean([value <= q[channel][name] for value, q in zip(actual, active_quotes)])
+                    np.mean(
+                        [
+                            value <= q[channel][name]
+                            for value, q in zip(actual, active_quotes, strict=True)
+                        ]
+                    )
                 )
                 for name in QUANTILES
             }

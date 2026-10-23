@@ -4,7 +4,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { chromium } from "playwright";
+import { type Browser, chromium } from "playwright";
 
 const data = fs.mkdtempSync(path.join(os.tmpdir(), "ac-mobile-ui-"));
 const base = "http://127.0.0.1:17774",
@@ -89,7 +89,7 @@ const server = spawn(process.execPath, ["server/index.ts"], {
   env: { ...process.env, PORT: "17774", AGENT_CONSOLE_MOCK: "1" },
   stdio: "ignore",
 });
-let browser;
+let browser: Browser;
 try {
   for (let i = 0; i < 100; i++) {
     try {

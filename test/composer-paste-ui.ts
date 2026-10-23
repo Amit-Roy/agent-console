@@ -5,7 +5,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { chromium } from "playwright";
+import { type Browser, chromium } from "playwright";
 
 const data = fs.mkdtempSync(path.join(os.tmpdir(), "ac-paste-ui-"));
 const port = Number(process.env.PASTE_UI_PORT || 7076),
@@ -45,7 +45,7 @@ const server = spawn(process.execPath, ["server/index.ts"], {
   },
   stdio: ["ignore", "pipe", "inherit"],
 });
-let browser;
+let browser: Browser;
 try {
   await new Promise<void>((ok, bad) => {
     const t = setTimeout(() => bad(new Error("server did not start")), 15000);

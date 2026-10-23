@@ -47,7 +47,9 @@ export function createMenu(opts) {
   function setActive(i, scroll = true) {
     if (!pop) return;
     active = i;
-    pop.querySelectorAll("[data-active]").forEach((n) => n.removeAttribute("data-active"));
+    pop.querySelectorAll("[data-active]").forEach((n) => {
+      n.removeAttribute("data-active");
+    });
     const node = pop.children[i + (pop.firstChild?.classList.contains("m-head") ? 1 : 0)];
     if (!node) return pop.removeAttribute("aria-activedescendant");
     node.setAttribute("data-active", "");

@@ -5,7 +5,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { chromium } from "playwright";
+import { type Browser, chromium } from "playwright";
 import { WebSocket } from "ws";
 
 const data = fs.mkdtempSync(path.join(os.tmpdir(), "ac-reconnect-ui-"));
@@ -53,7 +53,7 @@ const inputs = (text: string) =>
     .filter(Boolean)
     .map((l) => JSON.parse(l))
     .filter((e) => e.type === "user_input" && e.text === text).length;
-let browser;
+let browser: Browser;
 try {
   for (let i = 0; i < 100; i++) {
     try {

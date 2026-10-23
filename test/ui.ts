@@ -1837,7 +1837,9 @@ for (const scheme of ["dark", "light"] as const) {
     await page.waitForFunction(
       () =>
         document.getElementById("stop")!.hidden &&
-        /mock reply[^]*before compaction/.test(document.getElementById("chat")!.textContent || ""),
+        /mock reply[\s\S]*before compaction/.test(
+          document.getElementById("chat")!.textContent || "",
+        ),
       null,
       { timeout: 8000 },
     );

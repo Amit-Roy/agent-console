@@ -36,6 +36,7 @@
   </section>
   <section class="panel" id="history" aria-label="Scan history" hidden>
     <div class="head"><h2>History <span class="hcount" id="hist-count"></span></h2></div>
+    <!-- biome-ignore lint/a11y/useSemanticElements: role=list on a div styled by .strip; ul would change the layout -->
     <div class="strip" id="strip" role="list"></div>
     <p class="note" id="hist-note"></p>
   </section>
@@ -46,6 +47,7 @@
     <span class="pill" id="log-state" hidden></span>
     <button type="button" class="btn sm ghost" id="log-close" aria-label="Close log">Close</button>
   </div>
+  <!-- biome-ignore lint/a11y/noNoninteractiveTabindex: scrollable log must be keyboard focusable so it can be scrolled -->
   <div class="lbody" id="log-body" role="log" aria-live="off" tabindex="0"></div>
   <button type="button" class="btn sm primary ljump" id="log-jump" hidden>Jump to latest</button>
 </dialog>

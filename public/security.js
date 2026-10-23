@@ -423,7 +423,9 @@ function renderTrivy() {
       body.id = id;
       if (vulns.length) {
         const list = el("ul", "vulns");
-        vulns.forEach((v) => list.append(vulnRow(v)));
+        vulns.forEach((v) => {
+          list.append(vulnRow(v));
+        });
         body.append(list);
       } else
         body.append(

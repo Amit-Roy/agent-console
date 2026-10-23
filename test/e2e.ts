@@ -45,9 +45,9 @@ const [ssoCodes, evil, apiBlocked, pageRedirect, badLogin, indexAuthed, vendorAu
     fetch(BASE + "/vendor/marked.js", { headers: { cookie } }).then((r) => r.status),
   ]);
 if (CODER_HOST) {
-  CODER_HOSTS.forEach((h: string, i: number) =>
-    check(`coder host ${h} passes without cookie (SSO)`, ssoCodes[i] === 200),
-  );
+  CODER_HOSTS.forEach((h: string, i: number) => {
+    check(`coder host ${h} passes without cookie (SSO)`, ssoCodes[i] === 200);
+  });
   check("wrong host without cookie blocked", evil === 401);
 } else console.log("SKIP  SSO checks (no VSCODE_PROXY_URI)");
 check("unauthenticated API is blocked", apiBlocked === 401);

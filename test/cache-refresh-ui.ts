@@ -4,7 +4,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { chromium } from "playwright";
+import { type Browser, chromium } from "playwright";
 
 const data = fs.mkdtempSync(path.join(os.tmpdir(), "ac-cache-ui-")),
   base = "http://127.0.0.1:17779";
@@ -48,7 +48,7 @@ const server = spawn(process.execPath, ["server/index.ts"], {
   stdio: "ignore",
 });
 const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
-let browser;
+let browser: Browser;
 try {
   for (let i = 0; i < 100; i++) {
     try {

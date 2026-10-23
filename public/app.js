@@ -4019,9 +4019,9 @@ function updateSlash() {
 function moveSlash(d) {
   if (!slash.items.length) return;
   slash.idx = (slash.idx + d + slash.items.length) % slash.items.length;
-  [...slashEl.children].forEach((li, i) =>
-    li.setAttribute("aria-selected", String(i === slash.idx)),
-  );
+  [...slashEl.children].forEach((li, i) => {
+    li.setAttribute("aria-selected", String(i === slash.idx));
+  });
   slashEl.children[slash.idx]?.scrollIntoView({ block: "nearest" });
   $("input").setAttribute("aria-activedescendant", `slash-${slash.idx}`);
 }

@@ -7,7 +7,7 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { chromium } from "playwright";
+import { type Browser, chromium } from "playwright";
 
 const data = fs.mkdtempSync(path.join(os.tmpdir(), "ac-pi-e2e-"));
 const port = Number(process.env.PI_E2E_PORT || 7076),
@@ -93,7 +93,7 @@ const server = spawn(process.execPath, ["server/index.ts"], {
 let log = "";
 server.stdout.on("data", (c) => (log += c));
 server.stderr.on("data", (c) => (log += c));
-let browser;
+let browser: Browser;
 try {
   await new Promise<void>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error("Scratch server did not start")), 20000);

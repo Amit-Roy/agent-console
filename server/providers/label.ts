@@ -135,7 +135,10 @@ export function createLabeler(onLabel: (job: LabelJob, label: string) => void): 
             (raw) => parseLabels(raw, batch.length),
           );
         }
-        if (labels) batch.forEach((j, i) => onLabel(j, labels![i]));
+        if (labels)
+          batch.forEach((j, i) => {
+            onLabel(j, labels![i]);
+          });
       }
     } finally {
       busy = false;

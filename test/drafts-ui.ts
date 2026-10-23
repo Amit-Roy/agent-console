@@ -5,7 +5,7 @@ import { once } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { chromium } from "playwright";
+import { type Browser, chromium } from "playwright";
 
 const data = fs.mkdtempSync(path.join(os.tmpdir(), "ac-drafts-ui-"));
 const port = Number(process.env.DRAFTS_UI_PORT || 7075),
@@ -47,7 +47,7 @@ const server = spawn(process.execPath, ["server/index.ts"], {
   },
   stdio: ["ignore", "pipe", "ignore"],
 });
-let browser;
+let browser: Browser;
 try {
   await new Promise<void>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error("Scratch server did not start")), 15000);

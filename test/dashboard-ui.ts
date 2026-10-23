@@ -123,7 +123,10 @@ for (const [name, viewport, scheme] of [
     badKeys: string[] = [];
   const walk = (v: unknown, k = "") => {
     if (typeof v === "string" && v.length > 200) longs.push(k);
-    else if (Array.isArray(v)) v.forEach((x) => walk(x, k));
+    else if (Array.isArray(v))
+      v.forEach((x) => {
+        walk(x, k);
+      });
     else if (v && typeof v === "object") for (const [kk, x] of Object.entries(v)) walk(x, kk);
   };
   walk(oh);

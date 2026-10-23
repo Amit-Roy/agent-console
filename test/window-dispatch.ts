@@ -259,16 +259,16 @@ const dec = (repo: string, effort: any): any => ({
 assert.match(issuePrompt(dec("o/agent-console", "deep"), "b", "main"), /push to main/);
 assert.match(
   issuePrompt(dec("o/agent-console", "bau"), "b", "main"),
-  /pull request[^]*Sonnet or Sol review/,
+  /pull request[\s\S]*Sonnet or Sol review/,
   "BAU must wait for review even in direct repos",
 );
 assert.match(
   issuePrompt(dec("o/webapp", "bau"), "b", "main"),
-  /open a pull request into main[^]*Do not merge/,
+  /open a pull request into main[\s\S]*Do not merge/,
 );
 assert.match(
   issuePrompt(dec("o/agent-console", "trivial"), "b", "main"),
-  /pull request[^]*Sonnet or Sol review/,
+  /pull request[\s\S]*Sonnet or Sol review/,
   "trivial work never pushes to the default branch",
 );
 

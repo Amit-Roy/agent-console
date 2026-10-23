@@ -26,9 +26,9 @@ export function createChatSearch({ current, history, loadEarlier, prepare, navig
         new Highlight(...(ranges[index] ? [ranges[index]] : [])),
       );
     }
-    chat
-      .querySelectorAll(".search-active")
-      .forEach((node) => node.classList.remove("search-active"));
+    chat.querySelectorAll(".search-active").forEach((node) => {
+      node.classList.remove("search-active");
+    });
     if (!supported)
       ranges[index]?.startContainer.parentElement?.closest(".msg")?.classList.add("search-active");
     const loading = query && (history().older || history().busy);
@@ -161,9 +161,9 @@ export function createChatSearch({ current, history, loadEarlier, prepare, navig
       CSS.highlights.delete("chat-search");
       CSS.highlights.delete("chat-search-active");
     }
-    chat
-      .querySelectorAll(".search-active")
-      .forEach((node) => node.classList.remove("search-active"));
+    chat.querySelectorAll(".search-active").forEach((node) => {
+      node.classList.remove("search-active");
+    });
     if (focus) toggle.focus({ preventScroll: true });
   }
   function move(delta) {

@@ -42,7 +42,9 @@ function fixture(t: any, fetcher: typeof fetch) {
     return service;
   };
   t.after(() => {
-    services.forEach((s) => s.close());
+    services.forEach((s) => {
+      s.close();
+    });
     fs.rmSync(dir, { recursive: true, force: true });
   });
   return {

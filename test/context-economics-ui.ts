@@ -4,7 +4,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { chromium } from "playwright";
+import { type Browser, chromium } from "playwright";
 
 const data = fs.mkdtempSync(path.join(os.tmpdir(), "ac-context-ui-"));
 const root = process.env.APP_ROOT || process.cwd();
@@ -43,7 +43,7 @@ const server = spawn(process.execPath, ["server/index.ts"], {
   },
   stdio: "ignore",
 });
-let browser;
+let browser: Browser;
 try {
   await new Promise<void>((resolve, reject) => {
     const deadline = setTimeout(() => {

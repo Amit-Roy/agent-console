@@ -169,8 +169,12 @@ async function stampOf(home: string, cwd: string): Promise<string> {
     STYLE_FILE,
   ]);
   for (const d of await layout(home, cwd)) {
-    d.instructions.forEach((i) => files.add(i.file));
-    d.skillDirs.forEach((s) => files.add(s));
+    d.instructions.forEach((i) => {
+      files.add(i.file);
+    });
+    d.skillDirs.forEach((s) => {
+      files.add(s);
+    });
     if (d.agentsDir) files.add(d.agentsDir);
     if (d.overrides) files.add(d.overrides);
   }

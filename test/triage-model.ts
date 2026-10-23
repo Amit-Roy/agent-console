@@ -157,14 +157,13 @@ assert.deepEqual(sparse.scorecard!.facts, { deletions: 0 });
 // Pre-work complexity changes the learned quote; token metadata and work-plan length do not.
 function scores(values: number[]) {
   const record = structuredClone(assessment);
-  Object.keys(record.metrics).forEach(
-    (name, index) =>
-      (record.metrics[name] = {
-        value: values[index],
-        evidence:
-          name === "urgency" && values[index] === 2 ? "Production is currently down" : "Deployment",
-      }),
-  );
+  Object.keys(record.metrics).forEach((name, index) => {
+    record.metrics[name] = {
+      value: values[index],
+      evidence:
+        name === "urgency" && values[index] === 2 ? "Production is currently down" : "Deployment",
+    };
+  });
   return parseTriageReply(
     JSON.stringify({ ...record, effort: "deep", priority: "p0", tokens: 1 }),
     input,

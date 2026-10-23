@@ -362,7 +362,7 @@ export function readCodexUsage(): Promise<void> {
     p.stdin.on("error", () => {});
     p.stdout.on("data", (d) => {
       out += d;
-      for (let i; (i = out.indexOf("\n")) >= 0; ) {
+      for (let i: number; (i = out.indexOf("\n")) >= 0; ) {
         const line = out.slice(0, i);
         out = out.slice(i + 1);
         let m: any;

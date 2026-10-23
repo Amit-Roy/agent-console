@@ -272,7 +272,7 @@ export function scanDisk(): Promise<void> {
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => {
       buf += chunk;
-      let i;
+      let i: number;
       while ((i = buf.indexOf("\n")) >= 0) {
         const m = /^(\d+)\t(.+)$/.exec(buf.slice(0, i));
         buf = buf.slice(i + 1);

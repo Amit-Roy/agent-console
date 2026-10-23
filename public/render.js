@@ -663,15 +663,19 @@ function chartTable(cfg) {
   t.append(thead, body);
   const rows = [];
   if (scatter)
-    cfg.datasets.forEach((d, i) =>
-      d.data.forEach((p) => p && rows.push([d.label || `Series ${i + 1}`, p.x, p.y])),
-    );
+    cfg.datasets.forEach((d, i) => {
+      d.data.forEach((p) => {
+        if (p) rows.push([d.label || `Series ${i + 1}`, p.x, p.y]);
+      });
+    });
   else
     for (let r = 0; r < Math.max(cfg.labels.length, ...cfg.datasets.map((d) => d.data.length)); r++)
       rows.push([cfg.labels[r] ?? r + 1, ...cfg.datasets.map((d) => d.data[r] ?? "")]);
   for (const r of rows.slice(0, 60)) {
     const tr = el("tr");
-    r.forEach((v) => tr.append(el("td", "", String(v))));
+    r.forEach((v) => {
+      tr.append(el("td", "", String(v)));
+    });
     body.append(tr);
   }
   const w = el("div", "table-wrap");

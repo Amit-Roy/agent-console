@@ -89,9 +89,9 @@ export function renderTriageComment(decision: TriageDecision, sourceMarker = "")
     );
     return lines.join("\n");
   }
-  score.work.forEach((item, index) =>
-    lines.push(`${index + 1}. ${safeTriageText(item.step)} Check: ${safeTriageText(item.check)}`),
-  );
+  score.work.forEach((item, index) => {
+    lines.push(`${index + 1}. ${safeTriageText(item.step)} Check: ${safeTriageText(item.check)}`);
+  });
   const price = score.pricing;
   const session = price.scope === "completed-session";
   const totalTarget = price.workloadMetric === "totalTokens";
@@ -119,7 +119,7 @@ export function renderTriageComment(decision: TriageDecision, sourceMarker = "")
     (coverage) => (coverage?.p80 ?? 1) < 0.8 || (coverage?.p95 ?? 1) < 0.95,
   );
   const budget = price.total?.[price.recommendedBudget] ?? null;
-  let tokenUsageText;
+  let tokenUsageText: string;
   if (price.total) {
     tokenUsageText = price.total
       ? `About **${compact(price.total.p50)}** tokens typical; **${compact(price.total.p80)}** likely ceiling; **${compact(price.total.p95)}** worst case. Plan with **${compact(budget ?? price.total.p80)}**.`

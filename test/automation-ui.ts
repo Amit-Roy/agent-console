@@ -5,7 +5,7 @@ import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { chromium } from "playwright";
+import { type Browser, chromium } from "playwright";
 
 const data = fs.mkdtempSync(path.join(os.tmpdir(), "ac-automation-ui-"));
 const wts = path.join(data, "worktrees");
@@ -113,7 +113,7 @@ const post = (body: object) =>
     headers: { "content-type": "application/json", cookie: `ac_session=${cookie.value}` },
     body: JSON.stringify(body),
   });
-let browser;
+let browser: Browser;
 try {
   for (let i = 0; i < 100; i++) {
     try {

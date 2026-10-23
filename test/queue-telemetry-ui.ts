@@ -4,7 +4,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { chromium } from "playwright";
+import { type Browser, chromium } from "playwright";
 
 const data = fs.mkdtempSync(path.join(os.tmpdir(), "ac-queue-ui-"));
 const base = "http://127.0.0.1:17776";
@@ -61,7 +61,7 @@ const start = () =>
     stdio: "ignore",
   });
 let server = start(),
-  browser;
+  browser: Browser;
 const ready = async () => {
   for (let i = 0; i < 100; i++) {
     try {

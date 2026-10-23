@@ -244,7 +244,7 @@ export function createPasskeys(d: Deps) {
         const s = load();
         if (c.first !== (s.credentials.length === 0))
           throw new PasskeyError(400, "That request expired. Try again.");
-        let v;
+        let v: Awaited<ReturnType<typeof verifyRegistrationResponse>>;
         try {
           v = await verifyRegistrationResponse({
             response: req.body?.response,
@@ -344,7 +344,7 @@ export function createPasskeys(d: Deps) {
           fail(req, "assertion: unknown credential");
           throw new PasskeyError(401, "That passkey is not registered.");
         }
-        let v;
+        let v: Awaited<ReturnType<typeof verifyAuthenticationResponse>>;
         try {
           v = await verifyAuthenticationResponse({
             response: req.body.response,

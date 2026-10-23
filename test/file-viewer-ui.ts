@@ -285,9 +285,9 @@ try {
   await page.waitForFunction(() => (window as any).__heldIdle.length > 0);
   assert.deepEqual(assets, [], "warmup waits for idle after history rendered");
   await page.evaluate(() =>
-    (window as any).__heldIdle
-      .splice(0)
-      .forEach((fn: any) => fn({ didTimeout: false, timeRemaining: () => 50 })),
+    (window as any).__heldIdle.splice(0).forEach((fn: any) => {
+      fn({ didTimeout: false, timeRemaining: () => 50 });
+    }),
   );
   await page.waitForFunction(
     () =>

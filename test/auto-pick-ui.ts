@@ -4,7 +4,7 @@ import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { chromium, type Page } from "playwright";
+import { type Browser, chromium, type Page } from "playwright";
 
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "ac-auto-pick-ui-"));
 const home = path.join(scratch, "home"),
@@ -100,7 +100,7 @@ async function fixture(page: Page) {
   return (message: unknown) => client.send(JSON.stringify(message));
 }
 
-let browser;
+let browser: Browser;
 const out = process.env.OUT || path.join(scratch, "screenshots");
 fs.mkdirSync(out, { recursive: true });
 try {

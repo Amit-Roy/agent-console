@@ -416,8 +416,8 @@ export class Schedules {
 
   // Weaker models need the playbook spelled out: where the last report is, how to research, where output goes.
   private instructions(t: Task, trigger: Run["trigger"], when: { date: string; time: string }) {
-    const prev = t.runs.findLast((r) => r.output?.path && fs.existsSync(r.output.path))?.output!
-      .path;
+    const prev = t.runs.findLast((r) => r.output?.path && fs.existsSync(r.output.path))?.output
+      ?.path;
     return (
       `Scheduled task "${t.title}", ${trigger === "catch-up" ? "catch-up run for a missed time" : "run"} at ${when.date} ${when.time} (${t.tz}). ` +
       "Nobody is watching this run, so do not ask questions: make sensible assumptions and state them. " +

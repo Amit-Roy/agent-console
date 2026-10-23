@@ -172,12 +172,12 @@ if __name__ == "__main__":
                             ("127.0.0.1", ConsoleRouting.port), timeout=0.1
                         ):
                             break
-                    except OSError:
+                    except OSError as err:
                         if process.poll() is not None or time.monotonic() >= deadline:
                             raise RuntimeError(
                                 "Fixture Caddy failed to start: "
                                 + (scratch / "caddy.log").read_text()
-                            )
+                            ) from err
                         time.sleep(0.02)
                 result = unittest.TextTestRunner(verbosity=2).run(
                     unittest.defaultTestLoader.loadTestsFromTestCase(ConsoleRouting)

@@ -7,6 +7,7 @@ import re
 import urllib.error
 import urllib.request
 from pathlib import Path
+from urllib.parse import urlsplit
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--coder-url", required=True)
@@ -17,7 +18,6 @@ parser.add_argument("--bridge-url", required=True, help="HTTPS origin of the ded
 args = parser.parse_args()
 if args.port == 7070 or not 1024 <= args.port <= 65535:
     parser.error("Use a separate bridge port; never expose the Console port.")
-from urllib.parse import urlsplit
 
 bridge = urlsplit(args.bridge_url)
 if (

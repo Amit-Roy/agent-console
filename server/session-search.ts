@@ -194,7 +194,7 @@ export class SessionSearch {
       const title = String(t.title ?? "Untitled").slice(0, 500),
         provider = String(t.provider ?? "unknown").slice(0, 100);
       let old = this.db.prepare("SELECT * FROM sessions WHERE thread=?").get(t.id) as any;
-      let stat;
+      let stat: fs.Stats | undefined;
       try {
         stat = await fsp.stat(file);
       } catch (error: any) {
