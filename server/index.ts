@@ -29,6 +29,7 @@ import fs from "node:fs";
 import crypto from "node:crypto";
 import http from "node:http";
 import { execFileSync, spawn } from "node:child_process";
+import { createIssueDraft } from "./issue-draft.ts";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -663,6 +664,13 @@ wss.on("connection", (ws) => {
           } catch (e: any) {
             return reply({ t: "answer_error", thread: m.thread, id: m.id, request: m.request, message: e?.message || "Could not send your answer." });
           }
+        }
+        case "create_issue": {
+          const cid = typeof m.cid === "string" ? m.cid : undefined;
+          createIssueDraft(threads.get(m.thread)?.cwd, m.draft).then(
+            draft => reply({ t: "create_issue_done", cid, ...draft }),
+            (e: any) => reply({ t: "create_issue_error", cid, message: e?.message || "Could not create the issue draft." }));
+          return;
         }
         case "queue_edit":
         case "queue_save":

@@ -185,7 +185,7 @@ function codexLuna(): string | undefined {
 
 export const RATE_LIMIT_RETRIES = [3_000, 8_000, 15_000];
 
-async function askPi(provider: string, model: string, prompt: string, system: string): Promise<string> {
+export async function askPi(provider: string, model: string, prompt: string, system: string): Promise<string> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ac-triage-"));
   try {
     const env = piRateEnv({ ...childEnv(), PI_CODING_AGENT_DIR: dir, PI_OFFLINE: "1", PI_TELEMETRY: "0" }, "triage");

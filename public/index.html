@@ -184,6 +184,14 @@
   <section id="turn-breakdown" class="turn-timing turn-breakdown" aria-labelledby="tb-title" hidden></section>
   <form method="dialog"><div class="row"><button class="btn" autofocus>Done</button></div></form>
 </dialog>
+<dialog id="issue-review" aria-labelledby="issue-heading"><form id="issue-form">
+  <h2 id="issue-heading">Create GitHub issue</h2>
+  <p id="issue-note" class="sub" role="status"></p>
+  <label class="fld"><span class="lbl">Title</span><input id="issue-title" class="input" maxlength="100" autocomplete="off" required></label>
+  <label class="fld"><span class="lbl">Body</span><textarea id="issue-body" class="input" rows="8" maxlength="3000"></textarea></label>
+  <p id="issue-error" role="alert"></p>
+  <div class="row"><button id="issue-cancel" class="btn" type="button">Cancel</button><button id="issue-open" class="btn primary" type="submit">Open GitHub</button></div>
+</form></dialog>
 <dialog id="queue-editor" aria-labelledby="queue-edit-title"><form id="queue-edit-form">
   <h2 id="queue-edit-title">Edit queued message</h2>
   <p id="queue-edit-note" class="sub"></p>
