@@ -96,11 +96,11 @@ export function triagePrompt(input: TriageInput): string {
   );
 }
 
-export function parseTriageReply(
+export async function parseTriageReply(
   raw: string | undefined,
   input: TriageInput,
   model: LoadedEffortModel = loadEffortModel(),
-): Omit<TriageDecision, "model"> | undefined {
+): Promise<Omit<TriageDecision, "model"> | undefined> {
   if (model.status !== "ready") return;
   const extracted = parseAssessment(raw, input);
   return extracted ? deriveAssessment(extracted, input, model) : undefined;
@@ -489,7 +489,7 @@ export function createTriageClassifier(
       ...engine,
       call: async (prompt: string, system: string) => {
         const input = JSON.parse(prompt.slice(prompt.indexOf("{"))) as TriageInput;
-        const decision = parseTriageReply(await engine.call(prompt, system), input, modelFor());
+        const decision = await parseTriageReply(await engine.call(prompt, system), input, modelFor());
         return decision ? JSON.stringify({ ...decision, model: engine.id }) : undefined;
       },
     })),

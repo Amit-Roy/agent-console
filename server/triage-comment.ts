@@ -60,16 +60,20 @@ const investigation: Record<MetricName, string> = {
 /** Budget, biggest cost driver and the cheapest missing item, so a sparse request shows what it costs. */
 function structureLines(structure?: StructureQuote, typical?: number): string[] {
   if (!structure || structure.budget === null) return [];
-  const inferred = structure.flags.inferredFromRepo ? " (inferred from repo context)" : "";
-  return [
+  const lines = [
     `Recommended budget **${compact(structure.budget)}** tokens${typical === undefined ? "" : `; typical **${compact(typical)}**`}.`,
     ...(structure.costDriver ? [`Biggest cost driver: ${structure.costDriver}.`] : []),
     ...(structure.counterfactual
       ? [
-          `Add ${structure.counterfactual.label} → estimated budget drops to **${compact(structure.counterfactual.budget)}** tokens.${inferred}`,
+          `Add ${structure.counterfactual.label} → estimated budget drops to **${compact(structure.counterfactual.budget)}** tokens.`,
         ]
       : []),
   ];
+  // Mark the expected-output flag itself as inferred from repo context.
+  if (structure.flags.hasExpectedOutput && structure.flags.inferredFromRepo) {
+    lines.push("the expected output (inferred from repo context)");
+  }
+  return lines;
 }
 
 /** Pi supplies work and evidence; the renderer preserves computed labels and token counts. */

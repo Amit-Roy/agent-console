@@ -280,7 +280,7 @@ export function deriveUrgency(
   return { score: score as UrgencyAssessment["score"], priority, drivers };
 }
 
-export function deriveAssessment(
+export async function deriveAssessment(
   extracted: ExtractedAssessment,
   input: AssessmentInput,
   model: LoadedEffortModel,
@@ -344,7 +344,7 @@ export function deriveAssessment(
       confidence: pricing.confidence,
     },
     pricing,
-    structure: quoteStructure(requestText, pricing, input.repoContext),
+    structure: await quoteStructure(requestText, pricing, input.repoContext),
   };
   const actions = (value: number) => value.toLocaleString("en-US", { maximumFractionDigits: 1 });
   const workUnit =
