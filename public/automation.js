@@ -219,8 +219,11 @@ function failuresPanel(s) {
   if (!s.failures.length) p.append(empty("No failures recorded."));
   for (const f of s.failures) {
     const li = el("li");
+    const button = el("button", "failure-row");
+    button.type = "button";
+    button.dataset.failure = JSON.stringify([f.ts, f.step, f.ref, f.msg]);
     const label = s.flow.nodes.find((n) => n.id === f.step)?.label || f.step;
-    li.append(
+    button.append(
       el("span", "a", `${label}${f.ref ? ` · ${f.ref}` : ""}`),
       el("span", "b", when(f.ts, s.now)),
       el("span", f.resolvedAt != null ? "c" : "c bad", f.msg || "No message"),
@@ -230,8 +233,9 @@ function failuresPanel(s) {
         f.resolvedAt != null ? `Resolved · ${when(f.resolvedAt, s.now)}` : "Unresolved",
       ),
     );
-    li.style.cursor = "pointer";
-    li.onclick = () => openDrawer(f.step);
+    button.setAttribute("aria-haspopup", "dialog");
+    button.onclick = () => openDrawer(f.step, button);
+    li.append(button);
     ul.append(li);
   }
   if (s.failures.length) p.append(ul);
@@ -325,9 +329,11 @@ function render(s) {
     );
   }
   updateFlow(s);
+  const focusedFailure = document.activeElement?.dataset.failure;
   const [a, b] = main.querySelectorAll(".cols");
   a.replaceChildren(failuresPanel(s), triggersPanel(s));
   b.replaceChildren(runsPanel(s), hooksPanel(s), configPanel(s));
+  if (focusedFailure) findFailure(focusedFailure)?.focus({ preventScroll: true });
   if (openStep) fillDrawerFacts(openStep);
 }
 
@@ -376,7 +382,11 @@ async function loadLog(more = false) {
   renderLog();
 }
 
-function openDrawer(id) {
+const findFailure = (key) =>
+  [...document.querySelectorAll(".failure-row")].find((b) => b.dataset.failure === key);
+let drawerFailure;
+function openDrawer(id, trigger) {
+  drawerFailure = trigger?.dataset.failure;
   openStep = id;
   logState.entries = [];
   logState.next = undefined;
@@ -394,7 +404,7 @@ function closeDrawer() {
   const id = openStep;
   openStep = null;
   $("drawer").hidden = true;
-  document.querySelector(`[data-step="${id}"]`)?.focus();
+  (findFailure(drawerFailure) || document.querySelector(`[data-step="${id}"]`))?.focus();
 }
 $("drawer-close").onclick = closeDrawer;
 $("drawer-more").onclick = () => loadLog(true).catch(() => {});
