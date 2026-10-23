@@ -571,6 +571,7 @@ const threadActions = (id) => {
     { value: "compaction-menu", label: "Compaction", desc: "Reduce context or manage automatic compaction", icon: "sparkle", children: [action("compact"), action("idle-compaction")] },
     action("economy"),
     action("fork"),
+    action("create-issue"),
     action("download"), action("share"), action("details"),
     { value: "archive-menu", label: "Archive", desc: filed ? "Restore or permanently delete this thread" : "Archive or permanently delete this thread", icon: "archive", children: [action(filed ? "unarchive" : "archive"), action("delete")] },
   ];
