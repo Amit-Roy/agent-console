@@ -34,7 +34,7 @@
   }
   function renderSubscriptions() {
     const s = data?.subscriptions;
-    text('subscription-cost', number(s?.totalMonthly) === null ? 'Monthly fees are not configured.' : `${money(s.totalMonthly)}/month fixed across ${s.plans.length} subscriptions. Included work does not become an API bill.`);
+    text('subscription-cost', !s ? 'Subscription settings are unavailable. Reload once the server update completes.' : number(s.totalMonthly) === null ? 'Monthly fees are not configured.' : `${money(s.totalMonthly)}/month fixed across ${s.plans.length} subscriptions. Included work does not become an API bill.`);
     $('subscription-plans').replaceChildren();
     for (const plan of s?.plans || []) {
       const entry = document.createElement('div');
@@ -65,6 +65,7 @@
     $('refresh').disabled = pending || !!data?.refreshing || (Number.isFinite(due) && due > Date.now());
     $('refresh').title = due > Date.now() ? `Next allowed refresh: ${date(due)}` : 'Fetch one new benchmark snapshot';
     $('weekly').disabled = pending || !data;
+    $('save-fees').disabled = pending || !data?.subscriptions;
   }
   function selectModel(id) {
     selected = id;
@@ -172,12 +173,12 @@
   $('controls').addEventListener('submit', event => event.preventDefault());
   $('subscription-fees').addEventListener('input', () => { feesDirty = true; });
   $('subscription-fees').addEventListener('submit', async event => {
-    event.preventDefault(); if (pending || !$('subscription-fees').reportValidity()) return;
+    event.preventDefault(); if (pending || !data?.subscriptions || !$('subscription-fees').reportValidity()) return;
     const fees = { claude: validValue('fee-claude', 0, 100000), 'claude:nefro': validValue('fee-nefro', 0, 100000), codex: validValue('fee-codex', 0, 100000) };
     pending = true; $('save-fees').disabled = true; error('');
     try { data = await request('/api/benchmarks/subscriptions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ fees }) }); feesDirty = false; render(); }
     catch (err) { error(`Could not save subscription fees: ${err.message}`); }
-    finally { pending = false; $('save-fees').disabled = false; updateRefresh(); }
+    finally { pending = false; updateRefresh(); }
   });
   $('controls').addEventListener('input', render);
   $('scope').addEventListener('change', () => { renderTable(); renderChart(); });
