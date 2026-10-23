@@ -364,7 +364,7 @@ function openFileLink(event) {
     .finally(() => link.removeAttribute("aria-busy"));
 }
 $("files").onclick = async () => {
-  const opener = $("files"),
+  const opener = $("side-more"),
     openedAt = performance.now();
   opener.setAttribute("aria-busy", "true");
   try {
@@ -1256,6 +1256,40 @@ function renderThreads() {
   autoLane.render();
 }
 setInterval(() => state.threads.size && renderThreads(), 30000);
+
+// Security shield in the sidebar: green = nothing to do, amber = a patch PR is open or a tool is behind, red = unsanctioned change or failed patch.
+async function refreshSecurity() {
+  const link = $("sec-status");
+  let tone = "",
+    text = "Security: status unavailable";
+  try {
+    const r = await apiFetch("/api/security/tools", { cache: "no-store" });
+    if (!r.ok) throw new Error(String(r.status));
+    const d = await r.json();
+    const behind = (d.records || []).filter((x) => x.installed !== x.fixed);
+    const open = behind.filter((x) => x.pr).length;
+    const failed = behind.filter((x) => x.failed).length;
+    const changed = (d.mismatches || []).length;
+    if (changed || failed) {
+      tone = "bad";
+      text = `Security: ${changed ? `${changed} unsanctioned change${changed > 1 ? "s" : ""}` : `${failed} failed patch${failed > 1 ? "es" : ""}`}`;
+    } else if (behind.length) {
+      tone = "warn";
+      text = open
+        ? `Security: ${open} patch PR${open > 1 ? "s" : ""} open`
+        : `Security: ${behind.length} tool${behind.length > 1 ? "s" : ""} behind`;
+    } else {
+      tone = "ok";
+      text = "Security: all clear";
+    }
+  } catch {}
+  link.dataset.tone = tone;
+  link.setAttribute("aria-label", text);
+  link.title = text;
+}
+void refreshSecurity();
+setInterval(refreshSecurity, 5 * 60_000);
+document.addEventListener("visibilitychange", () => !document.hidden && void refreshSecurity());
 
 function setNav(open) {
   document.body.classList.toggle("nav", open);
@@ -4439,6 +4473,7 @@ createMenu({
   getItems: () => [
     { value: "new", label: "New thread", icon: "plus" },
     { value: "task", label: "New scheduled task", icon: "clock" },
+    { value: "files", label: "Files", desc: "Browse ~/repos", icon: "folder" },
     {
       value: "notifications",
       label: "Notifications",

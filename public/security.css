@@ -621,14 +621,3 @@
   justify-content: space-between;
   gap: var(--sp-3);
 }
-
-#tw-banner {
-  color: var(--bad);
-  border: 1px solid color-mix(in srgb, var(--bad) 45%, transparent);
-  border-radius: 8px;
-  padding: 8px 10px;
-  font-weight: 600;
-}
-#tw-banner[hidden] {
-  display: none;
-}
