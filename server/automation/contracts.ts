@@ -250,6 +250,7 @@ export interface RunView {
 }
 export interface FailureView {
   ts: number;
+  resolvedAt?: number;
   step: StepId;
   ref?: string;
   msg: string;

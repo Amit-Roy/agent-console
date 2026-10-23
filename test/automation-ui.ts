@@ -123,6 +123,8 @@ try {
   }
   // events after start-up, so the open run is genuinely active
   for (const e of [
+    { step: "triage", kind: "fail", ref: "o/r#4", msg: "Temporary labeling failure" },
+    { step: "triage", kind: "ok", ref: "o/r#4", msg: "Labels repaired" },
     { step: "triage", kind: "ok", ref: "o/r#5", msg: "labeled by pi/nemotron" },
     {
       step: "router",
@@ -389,6 +391,15 @@ try {
       "failures list the failed step",
       (await page.locator("#failures li").allInnerTexts()).join(" ").includes("No local checkout"),
     );
+    const resolved = page.locator("#failures li").filter({ hasText: "Temporary labeling failure" });
+    const unresolved = page.locator("#failures li").filter({ hasText: "No local checkout" });
+    ok(
+      "recovered failures are marked without warning color",
+      /Resolved/.test(await resolved.innerText()) && (await resolved.locator(".bad").count()) === 0,
+    );
+    ok("unconfirmed failures remain flagged", /Unresolved/.test(await unresolved.innerText()));
+    await page.locator("#failures").scrollIntoViewIfNeeded();
+    await page.screenshot({ path: `${OUT}/resolved-failures-${name}.png` });
     ok(
       "other triggers list what belongs to no workflow",
       (await page.locator("#triggers").innerText()).includes("Debug button") &&

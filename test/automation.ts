@@ -173,6 +173,26 @@ try {
     "triage is the webhook worker's, not ours to switch off",
   );
 
+  // Recovery must belong to the same issue and stage, including a new retry run.
+  log.record({ step: "review", kind: "fail", ref: "o/r#10", run: "old" });
+  log.record({ step: "review", kind: "ok", ref: "o/r#11" });
+  log.record({ step: "merge", kind: "ok", ref: "o/r#10" });
+  assert.equal(api.snapshot().failures[0].resolvedAt, undefined);
+  log.record({ step: "review", kind: "ok", ref: "o/r#10", run: "retry" });
+  assert.equal(api.snapshot().failures[0].resolvedAt, now);
+  log.record({ step: "review", kind: "fail", ref: "o/r#10" });
+  assert.equal(api.snapshot().failures[0].resolvedAt, undefined);
+  log.record({ step: "escalate", kind: "fail", ref: "headroom" });
+  log.record({ step: "monitor", kind: "info", ref: "headroom", data: { state: "firing" } });
+  assert.equal(api.snapshot().failures[0].resolvedAt, undefined);
+  log.record({ step: "monitor", kind: "info", ref: "headroom", data: { state: "resolved" } });
+  assert.equal(api.snapshot().failures[0].resolvedAt, now);
+  log.record({ step: "worker", kind: "fail", run: "anonymous" });
+  log.record({ step: "worker", kind: "ok", run: "other" });
+  assert.equal(api.snapshot().failures[0].resolvedAt, undefined);
+  log.record({ step: "worker", kind: "ok", run: "anonymous" });
+  assert.equal(api.snapshot().failures[0].resolvedAt, now);
+
   // request/response contract: unknown fields ignored, newer versions refused
   assert.doesNotThrow(() => api.snapshot({ v: 1, since: 0, limit: 5, future: "ignored" } as any));
   assert.throws(() => api.snapshot({ v: 2 } as any), /unsupported/i);
