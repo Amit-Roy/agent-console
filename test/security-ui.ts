@@ -99,6 +99,19 @@ for (const [name, viewport, scheme] of [
     `${name}: target fixable chip`,
     (await page.locator("#trivy .chip.fix").allInnerTexts()).join(",") === "2 fixable",
   );
+  check(
+    `${name}: third-party row separate and not counted`,
+    (await page.locator("#trivy .tpsep").textContent()) === "Third-party clones (not counted)" &&
+      (await page.locator("#trivy-count").textContent()) === "3" &&
+      (await page.locator("#trivy .hrow.tgt").last().innerText()).includes("third-party repos"),
+  );
+  check(
+    `${name}: trivy card counts own targets and notes third-party`,
+    (await page.locator(".tool", { hasText: "Trivy" }).innerText())
+      .replace(/\s+/g, " ")
+      .includes("Targets 3") &&
+      (await page.locator(".tool", { hasText: "Trivy" }).innerText()).includes("1 (not counted)"),
+  );
   check(`${name}: four tool cards`, (await page.locator(".tool").count()) === 4);
   check(
     `${name}: infected file listed`,
