@@ -72,6 +72,7 @@ import { SessionSearch } from "./session-search.ts";
 import { Threads, turnTiming } from "./threads.ts";
 import { createTelemetryService } from "./token-telemetry.ts";
 import { startToolPriority } from "./tool-priority.ts";
+import { createToolWatch } from "./tool-watch.ts";
 import {
   isId,
   MAX_FILE_BYTES,
@@ -1045,8 +1046,25 @@ app.get("/api/host/history", hostHistory);
 app.get("/api/host/du", hostDu);
 app.post("/api/host/du/rescan", sameOrigin, hostDuRescan);
 app.post("/api/host/processes/:pid/kill", express.json({ limit: "1kb" }), sameOrigin, hostKill);
+// Tool-watch bridge: VPS tool versions -> dotfiles issues, deterministic tools.lock PR, Claude review. Gated by tool-watch.json.
+const toolWatch = createToolWatch({
+  launchReview: ({ cwd, title, prompt }) => {
+    const answer = routeWork({
+      role: "review",
+      effort: "bau",
+      usage: usage.all(),
+      active: [],
+      now: Date.now(),
+    });
+    const route = answer.decision === "route" ? answer.route : undefined;
+    if (!route || route.provider !== "claude") throw new Error("No Claude reviewer available");
+    const t = threads.create({ ...route, cwd, mode: "bypassPermissions", title });
+    threads.send(t.id, prompt);
+  },
+});
+if (process.env.AGENT_CONSOLE_MOCK !== "1") toolWatch.start();
 // Security scan results from the VPS host (read over SSH; "Run scan" is same-origin only).
-mountSecurity(app, sameOrigin);
+mountSecurity(app, sameOrigin, toolWatch);
 // Vault: write-only API token management (metadata out, values in; writes are same-origin only).
 mountVault(app, sameOrigin);
 // App ideas: index.md + one markdown file per idea in a private git repo (server/ideas.ts). Adding commits, so same-origin only.
