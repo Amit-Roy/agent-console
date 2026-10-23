@@ -29,7 +29,7 @@ import {
 // (OpenRouter, OpenAI, Google, local, ...). Pi has no per-action approvals, so only Plan (read-only tools) and Bypass exist.
 
 const SESSIONS = path.join(DATA_DIR, "pi-sessions");
-const READ_ONLY_TOOLS = "read,grep,find,ls,ask_user,schedule_list,save_output";
+const READ_ONLY_TOOLS = "read,grep,find,ls,ask_user,schedule_list,save_output,subagent";
 const QUESTIONS_EXTENSION = fileURLToPath(new URL("./pi-questions-extension.mjs", import.meta.url));
 const SUBAGENT_EXTENSION = fileURLToPath(new URL("./pi-subagent-extension.mjs", import.meta.url));
 const TOOLS_EXTENSION = fileURLToPath(new URL("./console-tools.mjs", import.meta.url)); // scheduled tasks + save_output
@@ -214,7 +214,22 @@ export function piTranslator(
   // The subagent extension forwards each child pi event in the tool update's details; show it tagged with the parent call.
   const child = (parent: string, c: any) => {
     if (c?.type === "message_end" && c.message?.role === "assistant") {
-      const content = blocks(c.message);
+      const m = c.message;
+      const u = m.usage;
+      if (u) {
+        cost += Number(u.cost?.total) || 0;
+        usageModels.push({
+          model: m.model || "unknown",
+          role: "subagent",
+          fresh: u.input,
+          cacheWrite: u.cacheWrite,
+          cacheRead: u.cacheRead,
+          output: u.output,
+          reasoning: u.reasoning,
+          cost: u.cost?.total,
+        });
+      }
+      const content = blocks(m);
       if (content.length)
         emit({
           type: "assistant",
@@ -421,8 +436,9 @@ export const pi: Provider = {
       QUESTIONS_EXTENSION,
       "--extension",
       TOOLS_EXTENSION,
+      "--extension",
+      SUBAGENT_EXTENSION,
     ];
-    if (t.mode !== "plan") args.push("--extension", SUBAGENT_EXTENSION); // a child would not inherit Plan's read-only limit
     if (routed) args.push("--extension", CODING_ROUTE_EXTENSION);
     if (fs.readdirSync(dir).length) args.push("--continue");
     if (t.mode === "plan") args.push("--tools", READ_ONLY_TOOLS);
@@ -452,7 +468,12 @@ export const pi: Provider = {
           "pi",
           args,
           piRateEnv(
-            { ...childEnv(), AGENT_CONSOLE_THREAD: t.id },
+            {
+              ...childEnv(),
+              AGENT_CONSOLE_THREAD: t.id,
+              AGENT_CONSOLE_PI_MODE: t.mode,
+              AGENT_CONSOLE_PI_INSTRUCTIONS: brain,
+            },
             t.issueRun ? "automation" : "interactive",
           ),
         );
@@ -573,13 +594,13 @@ export const pi: Provider = {
             ...(instructions ? { customInstructions: instructions } : {}),
           }),
         ),
-      send: (text, images = []) => (
-        (last = { text, images }),
-        (retried = false),
-        (hadTools = false),
-        (resending = undefined),
-        write(JSON.stringify({ id: `p${++n}`, type: "prompt", ...body(text, images) }))
-      ),
+      send: (text, images = []) => {
+        last = { text, images };
+        retried = false;
+        hadTools = false;
+        resending = undefined;
+        write(JSON.stringify({ id: `p${++n}`, type: "prompt", ...body(text, images) }));
+      },
       // Pi's `steer` is delivered after the current assistant turn finishes its tool calls, before the next model call
       steer: (text, images = []) =>
         write(JSON.stringify({ id: `p${++n}`, type: "steer", ...body(text, images) })),
