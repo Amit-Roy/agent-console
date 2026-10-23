@@ -46,7 +46,7 @@ fs.writeFileSync(path.join(bin, "pi"), `#!/bin/sh\ncat >/dev/null\nprintf '%s\\n
   mode: 0o755,
 });
 
-const server = spawn("node", ["server/index.ts"], {
+const server = spawn("node", [process.env.TEST_SERVER_ENTRY || "server/index.ts"], {
   stdio: "ignore",
   env: {
     ...process.env,

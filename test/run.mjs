@@ -1,5 +1,9 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { run } from "node:test";
 import { spec } from "node:test/reporters";
+import { pathToFileURL } from "node:url";
+import { build } from "esbuild";
 
 // Node's CLI sorts file names. Start the longest suites first so they overlap
 // short suites instead of extending the end of the pool (CI baseline, 2026-10-23).
@@ -18,11 +22,65 @@ const priority = (file) => {
 };
 files.sort((a, b) => priority(a) - priority(b));
 if (!files.length) throw new Error("Pass test files to the runner.");
+const outdir = ".bundle/tests";
+await build({
+  entryPoints: files,
+  outdir,
+  entryNames: "[name]",
+  chunkNames: "chunks/[name]-[hash]",
+  outExtension: { ".js": ".mjs" },
+  bundle: true,
+  splitting: true,
+  packages: "external",
+  platform: "node",
+  format: "esm",
+  target: "node24",
+  logLevel: "warning",
+  plugins: [
+    {
+      name: "original-import-meta-url",
+      setup(builder) {
+        builder.onLoad({ filter: /\.(?:ts|mjs|js)$/ }, async ({ path: sourcePath }) => {
+          if (sourcePath.includes(`${path.sep}node_modules${path.sep}`)) return;
+          const source = await fs.readFile(sourcePath, "utf8");
+          return {
+            contents: source
+              .replaceAll("import.meta.url", JSON.stringify(pathToFileURL(sourcePath).href))
+              .replaceAll("import.meta.dirname", JSON.stringify(path.dirname(sourcePath)))
+              .replaceAll("import.meta.filename", JSON.stringify(sourcePath)),
+            loader: sourcePath.endsWith(".ts") ? "ts" : "js",
+          };
+        });
+      },
+    },
+  ],
+});
+const originalFiles = new Map(
+  files.map((file) => [`${outdir}/${path.basename(file, path.extname(file))}.mjs`, file]),
+);
 const stream = run({
-  files,
+  files: [...originalFiles.keys()],
   concurrency: Number(process.env.TEST_CONCURRENCY || 4),
 });
 stream.on("test:fail", () => {
   process.exitCode = 1;
 });
-stream.compose(new spec()).pipe(process.stdout);
+// Report original file identities and include bundling in the enforced wall budget.
+async function* originalEvents(events) {
+  for await (const event of events) {
+    const data = { ...event.data };
+    for (const field of ["name", "file"]) {
+      if (typeof data[field] !== "string") continue;
+      for (const [bundle, original] of originalFiles) {
+        if (data[field] === bundle) data[field] = original;
+        else if (data[field] === path.resolve(bundle)) data[field] = path.resolve(original);
+      }
+    }
+    if (event.type === "test:diagnostic" && data.message.startsWith("duration_ms ")) {
+      data.message = `duration_ms ${performance.now()}`;
+    }
+    if (event.type === "test:summary") data.duration_ms = performance.now();
+    yield { ...event, data };
+  }
+}
+stream.compose(originalEvents).compose(new spec()).pipe(process.stdout);

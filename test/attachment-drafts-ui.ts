@@ -39,7 +39,7 @@ for (const id of ids)
     JSON.stringify({ type: "user_input", text: "fixture" }) + "\n",
   );
 process.env.AGENT_CONSOLE_DATA = data;
-const server = spawn(process.execPath, ["server/index.ts"], {
+const server = spawn(process.execPath, [process.env.TEST_SERVER_ENTRY || "server/index.ts"], {
   env: {
     ...process.env,
     PORT: String(port),
