@@ -39,7 +39,7 @@ function config(): { sources: any[] | null; extra: any[]; alertTo: string[]; ale
   let raw: any = null;
   try { raw = JSON.parse(fs.readFileSync(path.join(confDir(), "vault-sources.json"), "utf8")); } catch {}
   const list = (v: unknown, d: string[]) => (Array.isArray(v) && v.every((x) => typeof x === "string" && x.includes("@")) && v.length ? (v as string[]) : d);
-  return { sources: Array.isArray(raw) ? raw : Array.isArray(raw?.sources) ? raw.sources : null, extra: Array.isArray(raw?.extra) ? raw.extra : [], showAllKeys: raw?.showAllKeys === true, alertTo: list(raw?.alertTo, DEFAULT_ALERT_TO), alertCc: list(raw?.alertCc, DEFAULT_ALERT_CC), rpId: typeof raw?.rpId === "string" && /^[\w.-]+$/.test(raw.rpId) ? raw.rpId : undefined };
+  return { sources: Array.isArray(raw) ? raw : Array.isArray(raw?.sources) ? raw.sources : null, extra: Array.isArray(raw?.extra) ? raw.extra : [], showAllKeys: raw?.showAllKeys === true, alertTo: list(raw?.alertTo, DEFAULT_ALERT_TO), alertCc: list(raw?.alertCc, DEFAULT_ALERT_CC), rpId: typeof raw?.rpId === "string" && /^[\w.-]+$/.test(raw.rpId) ? raw.rpId : undefined, origins: Array.isArray(raw?.origins) ? raw.origins.filter((o: unknown) => typeof o === "string" && /^https:\/\/[\w.-]+$/.test(o)) : [] };
 }
 
 export function sources(): Source[] {
@@ -448,7 +448,7 @@ export function mountVault(app: express.Express, sameOrigin: express.RequestHand
     const fwd = oneLine(req.headers["x-forwarded-for"], 120);
     return { ip: `${req.ip || req.socket.remoteAddress || ""}${fwd ? ` (forwarded ${fwd})` : ""}`, ua: oneLine(req.headers["user-agent"]) };
   };
-  const pk = createPasskeys({ confDir, rpId: () => config().rpId, atomicWrite, audit, alert: sendMail });
+  const pk = createPasskeys({ confDir, rpId: () => config().rpId, origins: () => config().origins, atomicWrite, audit, alert: sendMail });
   pk.mount(app, sameOrigin, body);
   // `mine` marks real vs extra entries, and only goes to a client holding a live grant
   app.get("/api/vault", guard(async (req) => listVault({ mine: pk.granted(req) })));
