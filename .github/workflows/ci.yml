@@ -15,6 +15,7 @@ concurrency:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   # Required check: every PR carries the one token-telemetry comment (the server posts it, even if only
@@ -120,7 +121,19 @@ jobs:
             PORT=7070 nohup node .bundle/server/index.ts.mjs >"$RUNNER_TEMP/server.log" 2>&1 &
           for _ in $(seq 60); do curl -s -o /dev/null http://127.0.0.1:7070/login && exit 0; sleep 0.5; done
           cat "$RUNNER_TEMP/server.log"; exit 1
-      # One parallel pool: unit suites plus the UI and Pi smoke suites, each on its own port.
+      # Align the measured test windows after independently provisioned runners finish setup.
+      - run: echo ready > "$RUNNER_TEMP/shard-ready"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: test-ready-${{ github.run_attempt }}-${{ strategy.job-index }}
+          path: ${{ runner.temp }}/shard-ready
+          retention-days: 1
+      - name: Wait for both runners to be ready
+        env:
+          GH_TOKEN: ${{ github.token }}
+          READY_PREFIX: test-ready-${{ github.run_attempt }}-
+        run: node test/wait-ci-shards.mjs
+      # One parallel pool per shard, with independent UI servers and browsers.
       # TEST_CONCURRENCY above the CPU count pays off because most files wait on servers and browsers.
       - name: Tests
         shell: bash
