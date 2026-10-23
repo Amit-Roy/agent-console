@@ -84,6 +84,8 @@ try {
     assert.ok((await request("/open", "POST", { path: target }, token)).status >= 400, target);
   }
   assert.equal((await request("/open", "POST", { path: "repo/image.bin" }, token)).status, 415);
+  assert.equal((await request("/open", "POST", { path: "repo/tsconfig.json" }, token)).status, 404);
+  assert.equal((await request("/open", "POST", { path: "repo/src/note.txt/child" }, token)).status, 404);
   assert.equal((await request("/tree?cursor=-1", "GET", undefined, token)).status, 400);
   await mkdir(path.join(dir, "repo/many"));
   await Promise.all(Array.from({ length: 205 }, (_, i) => writeFile(path.join(dir, `repo/many/file${i}`), "x")));

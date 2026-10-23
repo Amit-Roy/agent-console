@@ -208,6 +208,30 @@ try {
   put("limit.png", Buffer.concat([png.subarray(0, 16), Buffer.alloc(MAX_PREVIEW_IMAGE_BYTES - 16)]));
   assert.equal((await file("limit.png")).status, 200); assert.equal((await rawFile("limit.png")).status, 200);
 
+  // Audio and video: metadata from /api/file (no preview size limit), bytes streamed from /api/file-media with Range.
+  const wav = Buffer.concat([Buffer.from("RIFF"), Buffer.alloc(4), Buffer.from("WAVEfmt "), Buffer.alloc(MAX_VIEW_BYTES + 64)]);
+  put("music.wav", wav);
+  const audio = await (await file("music.wav")).json();
+  assert.equal(audio.kind, "media"); assert.equal(audio.media_type, "audio/wav"); assert.equal(audio.bytes, wav.length);
+  assert.equal(audio.content, undefined);
+  const audioUrl = new URL(audio.url, base);
+  assert.equal(audioUrl.pathname, "/api/file-media"); assert.equal(audioUrl.searchParams.get("thread"), id);
+  const ranged = await fetch(audioUrl, { headers: { cookie, range: "bytes=0-11" } });
+  assert.equal(ranged.status, 206); assert.equal(ranged.headers.get("content-type"), "audio/wav");
+  assert.deepEqual(Buffer.from(await ranged.arrayBuffer()), wav.subarray(0, 12));
+  assert.equal((await fetch(audioUrl)).status, 401, "media requires authentication");
+  put("song.mp3", Buffer.concat([Buffer.from("ID3"), Buffer.alloc(32)]));
+  assert.equal((await (await file("song.mp3")).json()).media_type, "audio/mpeg");
+  put("clip.mp4", Buffer.concat([Buffer.from([0, 0, 0, 24]), Buffer.from("ftypisom"), Buffer.alloc(32)]));
+  const video = await (await file("clip.mp4")).json();
+  assert.equal(video.kind, "media"); assert.equal(video.media_type, "video/mp4");
+  put("fake.wav", "not audio at all, just text");
+  const fakeAudio = await (await file("fake.wav")).json();
+  assert.equal(fakeAudio.kind, "text", "wrong magic falls back to text");
+  const media = (requested: string) => fetch(`${base}/api/file-media?${new URLSearchParams({ thread: id, path: requested })}`, { headers: { cookie } });
+  assert.equal((await media("fake.wav")).status, 415);
+  assert.equal((await media("hello.ts")).status, 415);
+
   fs.mkdirSync(path.join(cwd, "src")); put("src/nested.ts", "export {};");
   let listingResponse = await tree();
   assert.equal(listingResponse.status, 200); assert.match(listingResponse.headers.get("server-timing")!, /^tree;dur=\d/);

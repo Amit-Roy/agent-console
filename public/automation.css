@@ -1,4 +1,4 @@
-/* Automation page: flow graph of boxes with icons, step states, drawer with logs. Reuses the console's tokens and the dashboard's page shell. */
+/* Automation page: one panel per workflow, boxes with icons, step states, drawer with logs. Reuses the console's tokens and the dashboard's page shell. */
 body.auto{--n-w:10.5rem;--n-h:4.25rem}
 .chips{display:inline-flex;flex-wrap:wrap;gap:var(--sp-2);flex:none}
 #am{background:transparent;box-shadow:none;border:0;border-radius:0;display:grid;gap:var(--sp-4);width:min(76rem,100%);margin:0 auto;padding:var(--sp-5) max(var(--sp-5),env(safe-area-inset-left)) var(--sp-8)}
@@ -6,14 +6,25 @@ body.auto{--n-w:10.5rem;--n-h:4.25rem}
 .chip-s.dry{background:var(--warn-tint);color:var(--warn)}
 .chip-s.off{background:var(--s3);color:var(--t3)}
 
-/* flow */
-.flow-wrap{position:relative;overflow-x:auto;padding:var(--sp-2) 0}
-#flow{position:relative;display:grid;grid-template-columns:repeat(6,minmax(var(--n-w),1fr));grid-template-rows:repeat(3,auto);gap:var(--sp-6) var(--sp-4);min-width:66rem}
-#edges{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;overflow:visible}
-#edges path{fill:none;stroke:var(--edge-strong);stroke-width:1.5}
-#edges path.live{stroke:var(--accent);stroke-dasharray:5 5;animation:flow-dash 1s linear infinite}
-#edges marker path{fill:var(--edge-strong);stroke:none}
-@keyframes flow-dash{to{stroke-dashoffset:-10}}
+/* workflows: one panel each, phases top to bottom, steps of a phase left to right */
+.ptrig{display:flex;flex-wrap:wrap;gap:var(--sp-2);list-style:none;margin:0 0 var(--sp-3);padding:0;font:var(--fw-reg) var(--f-xs) var(--font-ui)}
+.ptrig li{display:inline-flex;align-items:center;gap:var(--sp-2);padding:2px var(--sp-2) 2px 2px;border:1px solid var(--edge);border-radius:var(--r-full);color:var(--t1)}
+.ptrig li.off{opacity:.6;border-style:dashed}
+.ptrig .k{padding:0 .4rem;border-radius:var(--r-full);background:var(--s3);color:var(--t2);text-transform:uppercase;font-size:10px;letter-spacing:.04em}
+.ptrig .w{color:var(--t3);font-variant-numeric:tabular-nums}
+.phases{display:grid;gap:var(--sp-4);list-style:none;margin:0;padding:0}
+.phase h3{margin:0 0 var(--sp-2);color:var(--t2);font:var(--fw-semi) var(--f-xs) var(--font-ui);letter-spacing:.04em;text-transform:uppercase}
+.chain{display:flex;align-items:center;gap:var(--sp-2);overflow-x:auto;padding:6px 4px}
+.chain .node{flex:1 1 0;min-width:8.5rem;max-width:var(--n-w)}
+.link{display:grid;gap:var(--sp-1);place-items:center;flex:none;color:var(--edge-strong)}
+.link .ico{width:1.1rem;height:1.1rem}
+.link.loop{color:var(--t2)}
+.arrow{display:grid;justify-items:center;color:inherit}
+.arrow span{color:var(--t3);font:var(--fw-reg) 10px/1.2 var(--font-ui);white-space:nowrap}
+.cycle{position:relative;display:flex;align-items:center;gap:var(--sp-2);flex:0 1 auto;padding:calc(var(--sp-3) + 1rem) var(--sp-3) var(--sp-3);border:1px dashed var(--edge-strong);border-radius:var(--r-lg)}
+.cycle .cap{position:absolute;top:var(--sp-2);left:var(--sp-3);right:var(--sp-3);color:var(--t2);font:var(--fw-med) var(--f-xs) var(--font-ui);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.link.live{color:var(--accent);animation:link-pulse 1s ease-in-out infinite alternate}
+@keyframes link-pulse{to{opacity:.35}}
 .node{position:relative;z-index:1;display:grid;grid-template-columns:auto 1fr;grid-template-rows:auto auto;align-items:center;column-gap:var(--sp-3);row-gap:2px;min-height:var(--n-h);padding:var(--sp-2) var(--sp-3);border:1px solid var(--edge);border-radius:var(--r-lg);background:var(--card);color:var(--t1);font:var(--fw-med) var(--f-sm) var(--font-ui);text-align:left;cursor:pointer;box-shadow:var(--shadow-card);transition:border-color var(--dur-1),transform var(--dur-1)}
 .node:hover{border-color:var(--edge-strong)}
 .node:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
@@ -34,15 +45,17 @@ body.auto{--n-w:10.5rem;--n-h:4.25rem}
 .node[data-state=abandoned] .ns{color:var(--warn)}
 .node[data-state=disabled]{border-style:dashed;opacity:.6}
 .node[data-state=idle] .ns{color:var(--t3)}
-@media (prefers-reduced-motion:reduce){.node[data-state=active]::after,#edges path.live{animation:none}}
+@media (prefers-reduced-motion:reduce){.node[data-state=active]::after,.link.live{animation:none}}
 
-/* phone: one column in flow order, a short connector between boxes, no drawn edges */
+/* phone: each phase is one column in flow order, links point down */
 @media (max-width:760px){
-  .flow-wrap{overflow:visible}
-  #flow{display:flex;flex-direction:column;gap:var(--sp-4);min-width:0}
-  #edges{display:none}
-  .node{width:100%}
-  .node+.node:not(:first-child)::before{content:"";position:absolute;left:1.9rem;top:calc(-1 * var(--sp-4));height:var(--sp-4);border-left:1.5px solid var(--edge-strong)}
+  .chain{flex-direction:column;align-items:stretch;gap:var(--sp-1);overflow:visible;padding:0}
+  .chain .node{width:100%;max-width:none;flex:none}
+  .link{justify-self:start;padding-left:1.4rem;place-items:start}
+  .link .ico{transform:rotate(90deg)}
+  .arrow{display:flex;align-items:center;gap:var(--sp-2)}
+  .cycle{flex-direction:column;align-items:stretch;gap:var(--sp-1)}
+  .cycle .cap{position:static;white-space:normal}
 }
 
 /* panels */

@@ -7,6 +7,9 @@ const STAGES = ['server_ms', 'render_ms', 'wait_ms', 'prepare_ms', 'roundtrip_ms
 const duration = (n: unknown) => typeof n === 'number' && Number.isFinite(n) && n >= 0 && n <= 300_000;
 const size = (n: unknown, max: number) => typeof n === 'number' && Number.isInteger(n) && n >= 0 && n <= max;
 
+export const RETENTION_DAYS = 7;
+const DAY_MS = 86_400_000;
+
 // Local, bounded measurements only. Never accept arbitrary metadata, URLs, prompts or browser fingerprints.
 export class LatencyStore {
   private db: DatabaseSync;
@@ -50,7 +53,7 @@ export class LatencyStore {
     return rows.length;
   }
   private prune(now = Date.now()) {
-    this.db.prepare('DELETE FROM latency WHERE at < ?').run(now - 14 * 86400_000);
+    this.db.prepare('DELETE FROM latency WHERE at < ?').run(now - RETENTION_DAYS * DAY_MS);
     this.db.prepare('DELETE FROM latency WHERE id <= (SELECT id FROM latency ORDER BY id DESC LIMIT 1 OFFSET ?)').run(this.maxSamples);
   }
   summary(now = Date.now()) {
@@ -63,7 +66,7 @@ export class LatencyStore {
       if (!row.hidden) add(`${row.kind}/visible`, row);
       add(`${row.kind}/${row.provider}/${row.width <= 600 ? 'mobile' : row.width <= 1024 ? 'tablet' : 'desktop'}/${row.hidden ? 'background' : 'visible'}`, row);
     }
-    // latest 20 foreground samples per kind: shows a fix (or a regression) that the 14-day pool hides
+    // latest 20 foreground samples per kind: shows a fix (or a regression) that the retention-window pool hides
     for (const [key, group] of [...groups].filter(([key]) => key.endsWith('/visible') && key.split('/').length === 2))
       groups.set(`${key}/recent`, [...group].sort((a, b) => b.at - a.at || b.id - a.id).slice(0, 20).sort((a, b) => a.total_ms - b.total_ms));
     const stats = (group: any[]) => ({ count: group.length, median_ms: group[Math.floor((group.length-1)*.5)].total_ms, p95_ms: group[Math.ceil(group.length*.95)-1].total_ms, max_ms: group.at(-1).total_ms, mean_ms: Math.round(group.reduce((n,r)=>n+r.total_ms,0)/group.length) });
@@ -81,7 +84,7 @@ export class LatencyStore {
     });
     // The Run details table picks its own percentiles, so its two windows carry every sorted time (whole ms keep it small).
     const shown = (key: string) => /^[^/]+\/visible(\/recent)?$/.test(key);
-    return { retention_days: 14, max_samples: this.maxSamples, count: rows.length, groups: Object.fromEntries([...groups].map(([key, values])=>[key, { ...stats(values), ...(key.startsWith('viewer_') ? viewerStats(values) : {}), ...(shown(key) ? { samples_ms: values.map(r => Math.round(r.total_ms)) } : {}) }])), slowest: rows.slice(-10).reverse(), recent: this.db.prepare('SELECT * FROM latency ORDER BY id DESC LIMIT 20').all() };
+    return { retention_days: RETENTION_DAYS, max_samples: this.maxSamples, count: rows.length, groups: Object.fromEntries([...groups].map(([key, values])=>[key, { ...stats(values), ...(key.startsWith('viewer_') ? viewerStats(values) : {}), ...(shown(key) ? { samples_ms: values.map(r => Math.round(r.total_ms)) } : {}) }])), slowest: rows.slice(-10).reverse(), recent: this.db.prepare('SELECT * FROM latency ORDER BY id DESC LIMIT 20').all() };
   }
   // Foreground samples of one kind in a window, for the dashboard's per-provider percentiles.
   samples(kind: string, from: number, to: number) {

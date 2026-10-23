@@ -2,10 +2,22 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { raisedItems, raisedPrs } from "../server/session-prs.ts";
 import { createTelemetryService, linkThread, parseRemote, renderTelemetry, NO_USAGE_TEXT, TELEMETRY_MARKER } from "../server/token-telemetry.ts";
 
 const repo = "Amit-Roy/agent-console";
 const repos = [repo];
+
+// --- issues a thread filed link to it, but are not listed as PRs ---
+const toolLog = (id: string, command: string, out: string) => [
+  JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", id, name: "Bash", input: { command } }] } }),
+  JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: id, content: out }] } }),
+].join("\n");
+const filed = toolLog("t1", "cd /tmp && gh issue create -R Amit-Roy/agent-console --title x", `https://github.com/${repo}/issues/39`);
+assert.deepEqual(raisedItems(filed).map(i => i.number), [39]);
+assert.deepEqual(raisedPrs(filed), []);
+assert.deepEqual(raisedItems(toolLog("t2", "gh pr create --fill", `https://github.com/${repo}/pull/23`)).map(i => i.number), [23]);
+assert.deepEqual(raisedItems(toolLog("t3", 'grep "gh issue create" x', `https://github.com/${repo}/issues/5`)), []);
 
 // --- linkage ---
 const run = { repo, number: 7, branch: "issue-7", pr: 9 };
@@ -117,6 +129,16 @@ store.delete(3);
 await svc.threadTurnEnded(threadList[1]); await svc.flush();
 assert.equal(store.get(3)!.length, 1);
 
+// git runs once per cwd, not per thread per sync; a turn end refreshes it
+const gitCalls: string[] = [];
+const shared = [...threadList, { id: "manual-2", provider: "codex", title: "Chat 2", createdAt: 0, cwd: "/w" }];
+const cached = make({ threads: () => shared, git: async (cwd: string, ...args: string[]) => { gitCalls.push(cwd); return args[0] === "rev-parse" ? "manual-branch" : "git@github.com:Amit-Roy/agent-console.git"; } });
+await cached.syncByNumber(repo, 3); await cached.syncByNumber(repo, 3);
+assert.equal(gitCalls.length, 2, "one rev-parse and one remote lookup for the shared cwd");
+await cached.threadTurnEnded(threadList[1]); await cached.flush();
+assert.equal(gitCalls.length, 4, "turn end refreshes the thread's cwd");
+cached.close();
+
 // failures are logged, never thrown
 const broken = make({ github: async () => { throw new Error("boom token=secret"); } });
 await assert.doesNotReject(broken.threadTurnEnded(threadList[0]));
@@ -132,5 +154,71 @@ const counts = await svc.backfill(repo);
 assert.equal(counts.created, 4);
 assert.equal(counts.failed, 0);
 await assert.rejects(svc.backfill("evil/repo"));
+
+// App-server usage is recorded in the ledger, while its transcript result has no usage fields.
+const ledgerThread = { id: "codex-app", provider: "codex", model: "gpt", title: "App server", createdAt: 50, issueRun: { repo, number: 41 } };
+const ledgerFile = path.join(dir, "turns.jsonl");
+const appLog = path.join(dir, "logs", `${ledgerThread.id}.jsonl`);
+const completedTurn = (ts: number) => [
+  JSON.stringify({ type: "user_input", ts, text: "Work on the issue." }),
+  resultLine({ ts: ts + 10, subtype: "success", duration_ms: 10 }),
+].join("\n");
+const ledgerRow = (ts: number, usage: object = {}) => ({ ts, thread: ledgerThread.id, provider: "codex", model: "gpt", accounting: 2, ...usage });
+const appendLedger = (...rows: object[]) => fs.appendFileSync(ledgerFile, rows.map(row => JSON.stringify(row) + "\n").join(""));
+fs.writeFileSync(appLog, completedTurn(100));
+appendLedger(
+  ledgerRow(100, { in: 1200, cache: 900, out: 80 }),
+  ledgerRow(100, { provider: "claude", in: 9000, cache: 8000, out: 900 }),
+  ledgerRow(100, { thread: "another-thread", in: 9000, cache: 8000, out: 900 }),
+  ledgerRow(40, { in: 9000, cache: 8000, out: 900 }),
+  ledgerRow(100, { in: -1, cache: -1, out: 80 }),
+);
+fs.appendFileSync(ledgerFile, [
+  "null",
+  JSON.stringify(ledgerRow(100, { in: "1200", out: 80 })),
+  `{"ts":100,"thread":"codex-app","provider":"codex","accounting":2,"in":1e309,"out":80}`,
+  '{"ts":100,"thread":"codex-app",',
+].join("\n") + "\n");
+const appSvc = make({ threads: () => [ledgerThread] });
+const appBody = () => store.get(41)![0].body;
+assert.equal((await appSvc.syncByNumber(repo, 41)).status, "created");
+assert.ok(appBody().includes("| 1,200 | 900 | 80 | 1 |"), appBody());
+assert.equal((await appSvc.syncByNumber(repo, 41)).status, "unchanged", "ledger and transcript represent one turn");
+assert.equal(store.get(41)!.length, 1);
+
+// A completed ledger-only turn must appear even if the transcript cache has not changed.
+const unchangedLog = fs.readFileSync(appLog, "utf8");
+appendLedger(ledgerRow(200, { in: 300, cache: 200, out: 20 }));
+assert.equal((await appSvc.syncByNumber(repo, 41)).status, "updated");
+assert.equal(fs.readFileSync(appLog, "utf8"), unchangedLog);
+assert.ok(appBody().includes("| 1,500 | 1,100 | 100 | 2 |"), appBody());
+assert.equal((await appSvc.syncByNumber(repo, 41)).status, "unchanged");
+
+// Missing counters remain unknown until a late ledger row supplies the measurement.
+fs.appendFileSync(appLog, "\n" + completedTurn(300));
+appendLedger(ledgerRow(300));
+await appSvc.syncByNumber(repo, 41);
+assert.ok(appBody().includes("| 1,500 | 1,100 | 100 | 3 (1 unmeasured) |"), appBody());
+appendLedger(ledgerRow(300, { in: 100, cache: 50, out: 10 }));
+assert.equal((await appSvc.syncByNumber(repo, 41)).status, "updated");
+assert.ok(appBody().includes("| 1,600 | 1,150 | 110 | 3 |"), appBody());
+
+// Historical transcript measurements remain usable without complete ledger counters.
+fs.appendFileSync(appLog, "\n" + [
+  JSON.stringify({ type: "user_input", ts: 400, text: "Historical turn." }),
+  JSON.stringify({ type: "token_usage", input_tokens: 400, cached_input_tokens: 300, output_tokens: 40 }),
+  resultLine({ duration_ms: 5 }),
+].join("\n"));
+await appSvc.syncByNumber(repo, 41);
+assert.ok(appBody().includes("| 2,000 | 1,450 | 150 | 4 |"), appBody());
+appendLedger(ledgerRow(400, { in: 400 }));
+await appSvc.syncByNumber(repo, 41);
+assert.ok(appBody().includes("| 2,000 | 1,450 | 150 | 4 |"), "incomplete ledger must preserve the logged measurement");
+
+// Retained ledger measurements survive removal of the conversation log.
+fs.unlinkSync(appLog);
+await appSvc.syncByNumber(repo, 41);
+assert.ok(appBody().includes("| 1,600 | 1,150 | 110 | 4 (1 unmeasured) |"), appBody());
+appSvc.close();
 svc.close(); fs.rmSync(dir, { recursive: true, force: true });
 console.log("token-telemetry ok");

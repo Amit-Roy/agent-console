@@ -21,13 +21,15 @@ Claude and Codex subscriptions reset every 5 hours whether or not the quota was 
 | `enabled` | `false` | Master switch. |
 | `dryRun` | `true` | Log decisions to `window-dispatch.jsonl`; start nothing. |
 | `leadMinutes` | `90` | Assign premium work only in the last N minutes of a 5-hour window (5–300). |
+| `lowUsagePct` | `60` | A window used less than this percentage uses `lowUsageLeadMinutes` instead (0–100). |
+| `lowUsageLeadMinutes` | `180` | Lead time for a lightly used window (5–300); never shorter than `leadMinutes`. |
 | `maxUsedPct` | `90` | Deep and BAU skip a window already this full; nothing would expire. Trivial work ignores this check. |
 | `perWindow` | `2` | Premium candidates per provider per tick; Pi candidates per tick. |
 | `repos` | `["Amit-Roy/agent-console"]` | Allowlist, `owner/name` only. |
 | `authors` | `["Amit-Roy"]` | Only issues opened by these GitHub logins are dispatched: issue text steers an unattended agent. |
 | `routing` | `{"mode":"shadow","bauOnPi":false}` | `shadow`: the router logs its choice beside the legacy route. `live`: the router decides. `bauOnPi`: BAU runs on Pi. |
 
-Only open issues with exactly one `Eff:` label are considered. Higher `Pri:` goes first; Deep gets first pick of expiring quota.
+Only open issues with exactly one `Eff:` label are considered. Higher `Pri:` goes first; Deep gets first pick of expiring quota. Premium slots left without Deep work take the next issue by priority, then effort (BAU before Trivial), on Sonnet low or `gpt-6.1-sol` low when the issue would otherwise run on Pi (Trivial, or BAU with live `routing.bauOnPi`); other BAU keeps its BAU route. Pi takes the rest.
 
 | Effort | Worker | Second model |
 | --- | --- | --- |
@@ -40,6 +42,10 @@ In live routing, Trivial work and BAU with `routing.bauOnPi` start independently
 ## Threads for picked issues
 
 Each started issue gets its own private clone, `~/worktrees/<repo>-issue-<n>-<attempt>` on branch `issue-<n>-<slug>-<attempt>` from the default branch, and a thread working in it with the route's provider, model and effort. The thread is named `<repo>:<issue#> <short desc>`, at most 30 characters (the width an Android sidebar row shows, issue #11). A long repo name is shortened to its initials: `ac:10 Identify unused reset`. It is created with a chosen title, so the auto-namer never changes it, and neither does a later rename (see below). Runs are unattended, so the thread uses `bypassPermissions`. A failed start (no local checkout under `~/repos`, git error) is logged with its error in `window-dispatch.jsonl` and is not retried.
+
+## Quota-paused threads
+
+A Claude or Codex thread whose turn ends on a rate-limit error while its quota is exhausted is marked quota-paused. Every 5 minutes, with the dispatcher enabled, such threads continue with `Continue.` once their provider (per Claude account) passes the same gate as Deep issues: the 5-hour window is in its last `leadMinutes` (or `lowUsageLeadMinutes` below `lowUsagePct` used), is below `maxUsedPct`, and no window is still exhausted. With the defaults that is the last 180 minutes of a lightly used window. `dryRun` only logs. A manual message or archiving clears the pause.
 
 ## Window opener
 

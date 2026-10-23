@@ -7,5 +7,5 @@ fetch("/api/acode/setup", { cache: "no-store" }).then(async response => {
   download.href = setup.plugin;
   download.textContent = `Download Agent Console ${setup.version || ""} plugin ZIP`;
   download.removeAttribute("aria-disabled");
-  status.textContent = "Version 1.1.1 fixes reopening existing tabs after plugin updates. If already installed, update the plugin with this ZIP.";
+  status.textContent = "Version 1.1.2 stops false \u201cfile changed\u201d alerts when Acode looks for missing project files. If already installed, update the plugin with this ZIP.";
 }).catch(error => { status.textContent = error.message; });

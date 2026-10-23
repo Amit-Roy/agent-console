@@ -13,6 +13,7 @@ export interface RouteRequest {
   usage: Record<string, ProviderUsage>;
   active: readonly { provider: string; role: string }[]; // automation threads running now
   now: number;
+  premium?: boolean; // non-Deep work given an expiring premium slot: Sonnet low or Sol low, never Pi
   flags?: { bauOnPi?: boolean };
   failures?: Record<string, number>; // recent failed runs per provider
 }
@@ -35,6 +36,7 @@ const PI_CONCURRENCY = 3, PI_FAILURE_LIMIT = 3, LOAD_PENALTY = 10, GOOD = 20;
 function candidates(req: RouteRequest): Route[] | undefined {
   if (req.role === "review") return req.effort === "deep" ? undefined : [SONNET, SOL("low")];
   if (req.role === "debug") return [SONNET, SOL("medium"), PI];
+  if (req.premium && req.effort !== "deep") return [{ ...SONNET, effort: "low" }, SOL("low")];
   if (req.effort === "trivial") return [PI];
   if (req.effort === "bau") return req.flags?.bauOnPi ? [PI] : [SONNET, SOL("low")];
   return [{ ...OPUS, effort: "medium" }, SOL("high")];
@@ -50,10 +52,8 @@ function score(route: Route, req: RouteRequest): Scored | undefined {
   if (p === "pi") {
     if (load >= PI_CONCURRENCY) return undefined;
     if ((req.failures?.pi ?? 0) >= PI_FAILURE_LIMIT) return undefined;
-    const day = live(u, "Free/day", req.now);
-    if (day && room(day) <= 0) return undefined;
-    const base = day ? room(day) : 50, s = base - load * 5 - (req.failures?.pi ?? 0) * 10;
-    return { route, score: s, klass: day ? (base >= GOOD ? 0 : 2) : 1, why: day ? `pi has ${Math.round(base)}% of its daily allowance` : "pi allowance unknown" };
+    // The reported Free/day counter is OpenRouter's; direct NVIDIA workers do not draw on it, so it never gates dispatch.
+    return { route, score: 50 - load * 5 - (req.failures?.pi ?? 0) * 10, klass: 1, why: "pi has its own capacity" };
   }
   const five = live(u, "5-hour", req.now), week = live(u, "7-day", req.now);
   if ((five && room(five) <= 0) || (week && room(week) <= 0)) return undefined; // exhausted, or weekly cap reached
