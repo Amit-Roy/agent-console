@@ -15,8 +15,11 @@ const manifests = logs.map((log) =>
 assert.ok(Array.isArray(manifests[0]), "The full suite manifest is required.");
 assert.deepEqual(manifests[0], manifests[1], "Both shards must select from the same full suite.");
 const timings = logs.flatMap((log) => [...log.matchAll(/^[✔✖] (test\/\S+) \(([\d.]+)ms\)/gm)]);
+const executed = logs.flatMap((log) =>
+  JSON.parse(log.match(/^Test executed files: (.+)$/m)?.[1] || "null"),
+);
 assert.deepEqual(
-  timings.map((match) => match[1]).sort(),
+  executed.sort(),
   [...manifests[0]].sort(),
   "Every test file must run exactly once across the shards.",
 );

@@ -78,6 +78,7 @@ stream.on("test:fail", () => {
   process.exitCode = 1;
 });
 // Report original file identities and include bundling in the enforced wall budget.
+const executed = new Set();
 async function* originalEvents(events) {
   for await (const event of events) {
     const data = { ...event.data };
@@ -88,7 +89,13 @@ async function* originalEvents(events) {
         else if (data[field] === path.resolve(bundle)) data[field] = path.resolve(original);
       }
     }
+    if ((event.type === "test:pass" || event.type === "test:fail") && data.file) {
+      const file = path.relative(process.cwd(), data.file);
+      if (files.includes(file)) executed.add(file);
+    }
     if (event.type === "test:diagnostic" && data.message.startsWith("duration_ms ")) {
+      if (process.env.TEST_SHARD)
+        console.log(`Test executed files: ${JSON.stringify([...executed])}`);
       data.message = `duration_ms ${performance.now()}`;
     }
     if (event.type === "test:summary") data.duration_ms = performance.now();
