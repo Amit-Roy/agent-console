@@ -1257,7 +1257,7 @@ function renderThreads() {
 }
 setInterval(() => state.threads.size && renderThreads(), 30000);
 
-// Security shield in the sidebar: green = nothing to do, amber = a patch PR is open or a tool is behind, red = unsanctioned change or failed patch.
+// Security shield in the sidebar: green = nothing to do, amber = a patch PR is open or a tool is behind, red = unsanctioned change, failed patch or a failing security automation.
 async function refreshSecurity() {
   const link = $("sec-status");
   let tone = "",
@@ -1269,10 +1269,17 @@ async function refreshSecurity() {
     const behind = (d.records || []).filter((x) => x.installed !== x.fixed);
     const open = behind.filter((x) => x.pr).length;
     const failed = behind.filter((x) => x.failed).length;
+    const auto = await apiFetch("/api/security/automations", { cache: "no-store" })
+      .then((a) => (a.ok ? a.json() : null))
+      .catch(() => null);
+    const failing = auto?.summary?.bad ?? 0;
     const changed = (d.mismatches || []).length;
     if (changed || failed) {
       tone = "bad";
       text = `Security: ${changed ? `${changed} unsanctioned change${changed > 1 ? "s" : ""}` : `${failed} failed patch${failed > 1 ? "es" : ""}`}`;
+    } else if (failing) {
+      tone = "bad";
+      text = `Security: ${failing} automation${failing > 1 ? "s" : ""} failing`;
     } else if (behind.length) {
       tone = "warn";
       text = open

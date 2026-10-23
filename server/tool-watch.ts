@@ -290,6 +290,11 @@ type State = {
   failed: Record<string, string>;
   /** One-shot markers: `reviewed:<pr>:<sha>`, `mismatch:<key>`. */
   done: string[];
+  /** Counters for the dashboard: patch PRs merged and reviewer rejections. */
+  merged: number;
+  rejected: number;
+  /** Last hourly poll, so the dashboard can tell a stuck bridge from a quiet one. */
+  lastTick?: { at: number; error?: string };
 };
 
 export function createToolWatch(deps: ToolWatchDeps = {}) {
@@ -337,9 +342,18 @@ export function createToolWatch(deps: ToolWatchDeps = {}) {
         pending: Array.isArray(s.pending) ? s.pending : [],
         failed: s.failed && typeof s.failed === "object" ? s.failed : {},
         done: Array.isArray(s.done) ? s.done : [],
+        merged: Number.isFinite(s.merged) ? s.merged : 0,
+        rejected: Number.isFinite(s.rejected) ? s.rejected : 0,
+        lastTick:
+          s.lastTick && Number.isFinite(s.lastTick.at)
+            ? {
+                at: s.lastTick.at,
+                ...(typeof s.lastTick.error === "string" ? { error: s.lastTick.error } : {}),
+              }
+            : undefined,
       };
     } catch {
-      return { pending: [], failed: {}, done: [] };
+      return { pending: [], failed: {}, done: [], merged: 0, rejected: 0 };
     }
   };
   const writeState = (s: State) => {
@@ -520,7 +534,9 @@ export function createToolWatch(deps: ToolWatchDeps = {}) {
   }
 
   /** Merged patch: a node update only takes effect after a restart. */
-  async function merged(r: { tool: string; pr: number }) {
+  async function merged(r: { tool: string; pr: number }, st: State) {
+    st.merged += 1;
+    writeState(st);
     await push("Tool-watch: patch merged", `${r.tool} PR #${r.pr} in ${REPO}`);
     if (r.tool === "node")
       await (deps.restart ?? defaultRestart)().catch((e) =>
@@ -584,7 +600,7 @@ export function createToolWatch(deps: ToolWatchDeps = {}) {
       );
       st.pending = st.pending.filter((p) => p.pr !== pr);
       writeState(st);
-      return merged({ tool: r.tool, pr });
+      return merged({ tool: r.tool, pr }, st);
     }
     const why = [...verdict.reasons, ...blocks.map((b) => `merge blocked: ${b}`)];
     await gh(
@@ -604,6 +620,8 @@ export function createToolWatch(deps: ToolWatchDeps = {}) {
         `Reviewed head: ${sha}. This PR stays open; merge it yourself if you disagree.`,
       ].join("\n"),
     ).catch(() => "");
+    st.rejected += 1;
+    writeState(st);
     await push(
       "Tool-watch: reviewer rejected a patch",
       `${r.tool} PR #${pr} in ${REPO} stays open`,
@@ -641,7 +659,7 @@ export function createToolWatch(deps: ToolWatchDeps = {}) {
         state = (await prView(p.pr)).state;
       } catch {}
       if (state === "OPEN") keep.push(p);
-      else if (state === "MERGED") await merged(p);
+      else if (state === "MERGED") await merged(p, st);
     }
     st.pending = keep;
     writeState(st);
@@ -650,11 +668,24 @@ export function createToolWatch(deps: ToolWatchDeps = {}) {
     await exec(path.join(import.meta.dirname, "..", "bin", "agent-console"), ["restart-when-idle"]);
   };
 
+  const recordTick = (error?: string) => {
+    const st = readState();
+    st.lastTick = { at: Date.now(), ...(error ? { error } : {}) };
+    writeState(st);
+  };
+
   let running: Promise<{ acted: boolean }> | null = null;
   /** Poll once. Disabled = fetch for display only; no gh, git or tool-install call is made. */
   function tick(): Promise<{ acted: boolean }> {
     running ||= (async () => {
-      const l = await latest(true);
+      let l: Latest;
+      try {
+        l = await latest(true);
+      } catch (e: any) {
+        recordTick(String(e.message).slice(0, 200));
+        throw e;
+      }
+      recordTick();
       if (!enabled()) return { acted: false };
       const st = readState();
       for (const r of l.records)
@@ -691,6 +722,18 @@ export function createToolWatch(deps: ToolWatchDeps = {}) {
           pr: st.pending.find((p) => p.key === r.key)?.pr ?? null,
           failed: st.failed[r.key] ? true : undefined,
         })),
+      };
+    },
+    /** Patch-bridge health for the automation dashboard: last poll, open/merged/rejected/failed patch PRs. */
+    bridgeView: () => {
+      const st = readState();
+      return {
+        enabled: enabled(),
+        lastTick: st.lastTick ?? null,
+        open: st.pending.length,
+        merged: st.merged,
+        rejected: st.rejected,
+        failed: Object.keys(st.failed).length,
       };
     },
     /** Ask the VPS to check now; the answer shows on the next poll. */

@@ -600,3 +600,68 @@ body.auto {
     min-width: 0;
   }
 }
+
+/* security automations: the same rows as the other panels, with a state dot and a chip that turns red when something fails */
+.sdot {
+  display: inline-block;
+  inline-size: 0.6rem;
+  block-size: 0.6rem;
+  margin-inline-end: var(--sp-2);
+  border-radius: var(--r-full);
+  background: var(--t3);
+}
+.sdot.ok {
+  background: var(--ok);
+}
+.sdot.warn {
+  background: var(--warn);
+}
+.sdot.bad {
+  background: var(--bad);
+}
+.rows .st.ok {
+  color: var(--ok);
+}
+.rows .st.warn {
+  color: var(--warn);
+}
+.rows .st.bad {
+  color: var(--bad);
+  font-weight: var(--fw-med);
+}
+.sec-row {
+  padding-inline-start: var(--sp-2);
+}
+.sec-row.bad {
+  box-shadow: inset 3px 0 0 var(--bad);
+}
+.sec-row.warn {
+  box-shadow: inset 3px 0 0 var(--warn);
+}
+#sec-auto {
+  scroll-margin-top: 4.5rem;
+}
+.sec-row .a a {
+  text-decoration: none;
+}
+.sec-row .a a:hover {
+  text-decoration: underline;
+}
+.chip-s.sec-ok {
+  background: var(--accent-tint);
+  color: var(--ok);
+}
+.chip-s.sec-warn {
+  background: var(--warn-tint);
+  color: var(--warn);
+}
+.chip-s.sec-bad {
+  background: var(--bad-tint);
+  color: var(--bad);
+}
+#sec-auto .head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp-3);
+}
