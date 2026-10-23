@@ -1,4 +1,10 @@
 /* Benchmark comparisons share the console's palette and control vocabulary. */
+.subscription-overview{display:grid;gap:var(--sp-3);padding-bottom:var(--sp-5);border-bottom:1px solid var(--edge)}
+.subscription-plans{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:var(--sp-4)}
+.subscription-plans h3{font:var(--fw-semi) var(--f-sm);color:var(--t1)}
+.subscription-fees{display:flex;flex-wrap:wrap;align-items:end;gap:var(--sp-3);padding:var(--sp-3) 0}.subscription-fees label{flex:1 1 12rem}
+.subscription-overview summary{cursor:pointer;min-height:44px;display:flex;align-items:center;color:var(--accent)}
+@media(max-width:700px){.subscription-plans{grid-template-columns:minmax(0,1fr);gap:var(--sp-3)}}
 .benchmarks #benchmark-main{display:grid;grid-template-columns:minmax(0,1fr);gap:var(--sp-5);width:min(78rem,100%);margin:0 auto;padding:var(--sp-5) max(var(--sp-4),env(safe-area-inset-left)) var(--sp-8);background:transparent;border-radius:0;overflow:visible}
 .benchmarks #benchmark-main>*{min-width:0}.benchmarks .panel .head{flex-wrap:wrap}
 .benchmarks .dh{backdrop-filter:none;background:var(--s0)}

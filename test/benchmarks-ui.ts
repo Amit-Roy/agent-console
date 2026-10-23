@@ -21,6 +21,11 @@ try {
     await page.waitForFunction(() => document.querySelector("#benchmark-main")?.getAttribute("aria-busy") === "false");
     const data = await page.evaluate(async () => (await fetch("/api/benchmarks")).json());
     assert.ok(data.snapshot.models.length > 0, "The QA server needs a cached benchmark snapshot.");
+    assert.equal(data.subscriptions.totalMonthly, 60, "Seed three $20 subscription fees in the QA data directory.");
+    assert.match(await page.locator("#subscription-cost").innerText(), /\$60\/month fixed across 3 subscriptions/);
+    assert.equal(await page.locator("#subscription-plans h3").count(), 3);
+    assert.match(await page.locator("#subscription-capacity").innerText(), /112 productive hours\/week is not established/);
+    assert.match(await page.locator("#subscription-overflow").innerText(), /unknown/);
     assert.ok(await page.locator("#models tr").count() > 0);
     assert.ok(await page.locator("#comparison-chart").isVisible());
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
@@ -37,6 +42,20 @@ try {
       return { ...m, monthly: hourly === null ? null : hourly * 16 * 7 * 52 / 12 };
     }).filter((m: any, _: number, all: any[]) => m.monthly !== null && m.intelligence >= Math.max(...all.map(x => x.intelligence)) * .9).sort((a: any, b: any) => a.monthly - b.monthly || b.intelligence - a.intelligence)[0];
     assert.equal(await page.locator("#recommendation-title").innerText(), expected.name);
+    await page.fill("#overflow", "10");
+    const combined = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(60 + expected.monthly * .1);
+    assert.ok((await page.locator("#subscription-overflow").innerText()).includes(`${combined}/month combined`));
+    await page.fill("#overflow", "0");
+    assert.match(await page.locator("#subscription-overflow").innerText(), /\$60\/month combined/);
+    await page.fill("#overflow", "");
+    assert.match(await page.locator("#subscription-overflow").innerText(), /unknown/);
+    await page.locator(".subscription-overview summary").click();
+    await page.fill("#fee-codex", "25");
+    await page.click("#save-fees");
+    await page.waitForFunction(() => document.querySelector('#subscription-cost')?.textContent?.includes('$65/month'));
+    await page.fill("#fee-codex", "20"); await page.click("#save-fees");
+    await page.waitForFunction(() => document.querySelector('#subscription-cost')?.textContent?.includes('$60/month'));
+    await page.locator(".subscription-overview summary").click();
     await page.fill("#budget", "0");
     assert.match(await page.locator("#recommendation-title").innerText(), /No priced model|More usage/);
     await page.fill("#budget", "");
@@ -58,9 +77,17 @@ try {
       return { rejected: rejected.status, weekly: body.weekly, next: body.nextRefreshAt };
     });
     assert.deepEqual(settingsResponse, { rejected: 400, weekly: false, next: null });
+    await page.route('**/api/benchmarks', route => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ...data, subscriptions: { ...data.subscriptions, configured: false, totalMonthly: null, plans: data.subscriptions.plans.map((p: any) => ({ ...p, monthly: null, windows: [], updatedAt: null })) } }) }));
+    await page.reload();
+    await page.waitForFunction(() => document.querySelector('#benchmark-main')?.getAttribute('aria-busy') === 'false');
+    assert.match(await page.locator('#subscription-cost').innerText(), /not configured/);
+    assert.equal((await page.locator('#subscription-plans').innerText()).match(/quota unknown/g)?.length, 6);
+    await page.fill('#overflow', '0');
+    assert.match(await page.locator('#subscription-overflow').innerText(), /Set subscription fees/);
     console.log(`PASS ${name}: real cached data, projection, cache scenario, budget, invalid settings, selection, responsive layout, first-party only`);
     await context.close();
   }
   assert.equal((await fetch(`${BASE}/api/benchmarks`)).status, 401, 'Benchmark data requires authentication.');
   assert.equal((await fetch(`${BASE}/api/benchmarks/refresh`, { method: 'POST', headers: { Cookie: `ac_session=${makeToken()}`, Origin: 'https://other.example' } })).status, 403, 'Cross-origin refreshes are rejected before upstream work.');
+  assert.equal((await fetch(`${BASE}/api/benchmarks/subscriptions`, { method: 'POST', headers: { Cookie: `ac_session=${makeToken()}`, Origin: 'https://other.example', 'Content-Type': 'application/json' }, body: JSON.stringify({ fees: { claude: 20, 'claude:nefro': 20, codex: 20 } }) })).status, 403);
 } finally { await browser.close(); }
