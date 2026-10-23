@@ -4,10 +4,11 @@ import path from "node:path";
 import type express from "express";
 
 // Security scans run on the VPS host (clamav, falco, trivy, nmap). This workspace only reads their
-// results over SSH with a forced-command key: the remote side accepts latest | history | get <id> | status | run.
+// results over SSH with a forced-command key: the remote side accepts latest | history | get <id> | status | run [quick|full].
 const LATEST_TTL = 30_000;
 const SSH_TIMEOUT = 20_000;
 const ID = /^[0-9A-Za-z_-]{6,40}$/;
+const MODES = new Set(["quick", "full"]);
 const SCAN_ID = /^[0-9]{8}T[0-9]{6}Z$/;
 
 const target = () => process.env.SECSCAN_SSH_TARGET || "root@206.51.227.101";
@@ -138,8 +139,15 @@ export function mountSecurity(app: express.Express, sameOrigin: express.RequestH
   app.post(
     "/api/security/run",
     sameOrigin,
-    guard(async () => {
-      const out = await remote("run");
+    (req, res, next) => {
+      const mode = req.query.mode === undefined ? "full" : req.query.mode;
+      if (typeof mode !== "string" || !MODES.has(mode))
+        return void res.status(400).json({ error: "Invalid scan mode." });
+      res.locals.mode = mode;
+      next();
+    },
+    guard(async (req) => {
+      const out = await remote(`run ${req.res?.locals.mode}`);
       resetSecurityCache();
       return out;
     }),

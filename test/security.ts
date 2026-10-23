@@ -33,7 +33,8 @@ J
   "log ${LOG_ID} "*) after="\${last##* }"; echo '${JSON.stringify(logPage(0))}' | node -e 'const d=JSON.parse(require("fs").readFileSync(0,"utf8")),a=Number(process.argv[1]);d.from=Math.min(a,d.total);d.lines=d.lines.slice(a);console.log(JSON.stringify(d))' "$after" ;;
   "log "*) echo '{"error":"not found"}'; exit 1 ;;
   status) echo '{"running":true,"startedAt":"2026-10-23T01:00:00Z","currentTool":"trivy"}' ;;
-  run) echo '{"started":true}' ;;
+  "run quick") echo '{"started":true,"mode":"quick"}' ;;
+  "run full") echo '{"started":true,"mode":"full"}' ;;
   *) echo boom >&2; exit 255 ;;
 esac
 `,
@@ -125,7 +126,25 @@ try {
     "run refuses cross-site",
   );
   r = await fetch(`${base}/api/security/run`, { method: "POST" });
-  assert.deepEqual(await r.json(), { started: true });
+  assert.deepEqual(await r.json(), { started: true, mode: "full" });
+  assert.ok(calls().at(-1)?.endsWith(" run full"), "default mode is full");
+  r = await fetch(`${base}/api/security/run?mode=quick`, { method: "POST" });
+  assert.deepEqual(await r.json(), { started: true, mode: "quick" });
+  assert.ok(calls().at(-1)?.endsWith(" run quick"), "quick passes through");
+  const beforeRun = calls().length;
+  for (const bad of ["slow", "quick;id", "", "quick&mode=full"])
+    assert.equal(
+      (await fetch(`${base}/api/security/run?mode=${encodeURIComponent(bad)}`, { method: "POST" }))
+        .status,
+      400,
+      `bad mode ${bad}`,
+    );
+  assert.equal(
+    (await fetch(`${base}/api/security/run?mode=quick&mode=full`, { method: "POST" })).status,
+    400,
+    "repeated mode",
+  );
+  assert.equal(calls().length, beforeRun, "bad modes never reach ssh");
   await fetch(`${base}/api/security/latest`);
   assert.equal(
     calls().filter((c) => c.endsWith(" latest")).length,

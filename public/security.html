@@ -13,9 +13,15 @@
   <h1>Security</h1>
   <a class="btn sm ghost" href="/host">Host</a>
   <a class="btn sm ghost" href="/vault">Vault</a>
-  <button type="button" class="btn sm primary" id="run">Run scan</button>
 </header>
 <main id="hm" aria-busy="true">
+  <section class="scanbar" aria-label="Start a scan">
+    <div class="scanbtns">
+      <button type="button" class="btn primary" id="run-quick">Quick scan</button>
+      <button type="button" class="btn" id="run-full">Full scan</button>
+    </div>
+    <p class="note">Quick = malware check on files changed since the last scan, about 5 min. Full = everything, about 80 min.</p>
+  </section>
   <section id="verdict" class="verdict" aria-label="Overall result" aria-live="polite"></section>
   <section id="running" class="panel running" aria-label="Scan in progress" aria-live="polite" hidden></section>
   <section class="panel" id="findings" aria-label="Findings" hidden></section>

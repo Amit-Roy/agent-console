@@ -1,7 +1,7 @@
 // Security page: real browser, phone + desktop, mocked /api/security, no console errors, first-party only.
 import { chromium } from "playwright";
 import { makeToken } from "../server/auth.ts";
-import { HISTORY, LATEST, LOG_ID, LOG_LINES } from "./security-mock.ts";
+import { HISTORY, LATEST, LOG_ID, LOG_LINES, QUICK } from "./security-mock.ts";
 
 const BASE = process.env.BASE || "http://127.0.0.1:7070";
 const OUT = process.env.OUT || "/tmp";
@@ -63,12 +63,16 @@ async function open(
   });
   return { ctx, page, errors, external, hits };
 }
+const runModes: string[] = [];
 const findings = {
   latest: () => ({ result: LATEST }),
   history: () => ({ scans: HISTORY }),
   status: () => ({ running: false, startedAt: null, currentTool: null }),
   scans: () => LATEST,
-  run: () => ({ started: true }),
+  run: (_n, url) => {
+    runModes.push(url.searchParams.get("mode") || "");
+    return { started: true, mode: url.searchParams.get("mode") };
+  },
 };
 
 for (const [name, viewport, scheme] of [
@@ -149,23 +153,53 @@ for (const [name, viewport, scheme] of [
   check(
     "run: banner shows current tool",
     (await page.locator("#running").innerText()).includes("ClamAV") &&
-      (await page.locator("#run").isDisabled()),
+      (await page.locator("#run-quick").isDisabled()) &&
+      (await page.locator("#run-full").isDisabled()),
   );
   check(
-    "run: states duration",
-    (await page.locator("#running").innerText()).includes("10 to 40 minutes"),
+    "run: states duration for both modes",
+    (await page.locator("#running").innerText()).includes("about 80 minutes"),
   );
   await shoot(page, "running");
   await page.waitForSelector("#running", { state: "hidden", timeout: 20000 });
   check(
     "run: polls then refreshes",
-    status0 === 1 && hits.latest >= 2 && (await page.locator("#run").isEnabled()),
+    status0 === 1 && hits.latest >= 2 && (await page.locator("#run-quick").isEnabled()),
     JSON.stringify(hits),
   );
   check("run: no console errors", errors.length === 0, errors.join(" | ").slice(0, 200));
-  await page.click("#run");
+  await page.click("#run-quick");
   await page.waitForSelector("#running:not([hidden])");
   check("run: click starts and shows banner", hits.run === 1);
+  check("run: quick sends mode=quick", runModes[0] === "quick", runModes.join());
+  check(
+    "run: banner states quick duration",
+    (await page.locator("#running").innerText()).includes("quick scan takes a few minutes"),
+  );
+  await ctx.close();
+}
+// mode display: quick result shows mode in verdict, ClamAV card, history
+{
+  const { ctx, page } = await open({ width: 390, height: 844 }, "light", {
+    ...findings,
+    latest: () => ({ result: QUICK }),
+    history: () => ({ scans: [{ ...HISTORY[1], id: QUICK.id, mode: "quick" }, HISTORY[0]] }),
+  });
+  await page.goto(`${BASE}/security`);
+  await page.waitForSelector(".tool");
+  check(
+    "mode: verdict says Quick scan",
+    (await page.locator("#verdict").innerText()).includes("Quick scan"),
+  );
+  check(
+    "mode: clamav card says files changed since",
+    /Checked 312 files changed since/.test(await page.locator(".tool").first().innerText()),
+  );
+  check(
+    "mode: history labels quick",
+    (await page.locator("#strip .tick").last().getAttribute("title"))?.includes("Quick scan") &&
+      (await page.locator("#strip .tick").first().getAttribute("title"))?.includes("Full scan"),
+  );
   await ctx.close();
 }
 // scan log sheet

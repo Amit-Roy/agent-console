@@ -106,6 +106,9 @@ function totals(r) {
   return c;
 }
 
+/* Results without a mode predate quick scans: they were full. */
+const modeLabel = (m) => (m === "quick" ? "Quick scan" : "Full scan");
+
 /* ---------- verdict ---------- */
 function renderVerdict() {
   const v = $("verdict");
@@ -132,6 +135,7 @@ function renderVerdict() {
           : "Scan finished with errors";
     const bits = [
       `${state.viewing ? "Scan from" : "Last scan"} ${when(r.finishedAt)} (${ago(r.finishedAt)})`,
+      modeLabel(r.mode),
       r.trigger === "manual" ? "started by hand" : "scheduled",
     ];
     sub = bits.join(" · ");
@@ -188,8 +192,7 @@ function renderRunning() {
   const box = $("running"),
     s = state.running;
   box.hidden = !s?.running;
-  $("run").disabled = !!s?.running;
-  $("run").textContent = s?.running ? "Scanning…" : "Run scan";
+  for (const id of ["run-quick", "run-full"]) $(id).disabled = !!s?.running;
   if (!s?.running) return;
   const tool = TOOLS.find((t) => t[0] === s.currentTool);
   box.replaceChildren();
@@ -205,7 +208,13 @@ function renderRunning() {
     el(
       "p",
       "note",
-      "A full scan takes 10 to 40 minutes. You can leave this page; results appear here when it finishes.",
+      `${
+        s.mode === "quick"
+          ? "A quick scan takes a few minutes."
+          : s.mode === "full"
+            ? "A full scan takes about 80 minutes."
+            : "Quick scans take a few minutes; full scans about 80 minutes."
+      } You can leave this page; results appear here when it finishes.`,
     ),
   );
   if (s.id) box.append(logButton(s.id, "View live log"));
@@ -237,7 +246,12 @@ function renderFindings() {
 function toolFacts(key, t) {
   if (key === "clamav")
     return [
-      ["Files", t.scannedFiles?.toLocaleString()],
+      [
+        "Files",
+        t.mode === "quick"
+          ? `Checked ${(t.scannedFiles ?? 0).toLocaleString()} files changed since ${t.since ? when(t.since) : "the previous scan"}`
+          : t.scannedFiles?.toLocaleString(),
+      ],
       ["Paths", (t.scannedPaths || []).join(", ")],
       ["Database", t.dbDate],
     ];
@@ -520,9 +534,9 @@ function renderHistory() {
     const c = s.counts || {};
     b.setAttribute(
       "aria-label",
-      `${when(s.finishedAt)}, ${STATUS[s.status] || s.status}, ${plural(c.critical || 0, "critical")}, ${plural(c.high || 0, "high")}`,
+      `${when(s.finishedAt)}, ${modeLabel(s.mode)}, ${STATUS[s.status] || s.status}, ${plural(c.critical || 0, "critical")}, ${plural(c.high || 0, "high")}`,
     );
-    b.title = `${when(s.finishedAt)} · ${STATUS[s.status] || s.status}`;
+    b.title = `${when(s.finishedAt)} · ${modeLabel(s.mode)} · ${STATUS[s.status] || s.status}`;
     if (s.id === cur) b.setAttribute("aria-current", "true");
     const h = Math.min(
       100,
@@ -734,24 +748,36 @@ function startPoll() {
   }, POLL);
 }
 
-$("run").addEventListener("click", async () => {
-  $("run").disabled = true;
-  try {
-    const r = await fetch("/api/security/run", { method: "POST" });
-    const j = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
-    toast(
-      j.started ? "Scan started. It takes 10 to 40 minutes." : "A scan is already running.",
-      j.started ? "ok" : "",
-    );
-    state.running = { running: true, startedAt: new Date().toISOString(), currentTool: null };
-    renderRunning();
-    startPoll();
-  } catch (e) {
-    $("run").disabled = false;
-    toast(`Could not start a scan: ${e.message}`, "bad");
-  }
-});
+for (const [id, mode] of [
+  ["run-quick", "quick"],
+  ["run-full", "full"],
+]) {
+  $(id).addEventListener("click", async () => {
+    for (const b of ["run-quick", "run-full"]) $(b).disabled = true;
+    try {
+      const r = await fetch(`/api/security/run?mode=${mode}`, { method: "POST" });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      toast(
+        j.started
+          ? `${modeLabel(j.mode || mode)} started. It takes ${(j.mode || mode) === "quick" ? "a few minutes" : "about 80 minutes"}.`
+          : "A scan is already running.",
+        j.started ? "ok" : "",
+      );
+      state.running = {
+        running: true,
+        startedAt: new Date().toISOString(),
+        currentTool: null,
+        mode: j.mode || mode,
+      };
+      renderRunning();
+      startPoll();
+    } catch (e) {
+      for (const b of ["run-quick", "run-full"]) $(b).disabled = false;
+      toast(`Could not start a scan: ${e.message}`, "bad");
+    }
+  });
+}
 document.addEventListener("visibilitychange", () => {
   if (!document.hidden && state.loaded) void load();
 });
