@@ -1,0 +1,69 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>Vault · Agent Console</title>
+<link rel="icon" href="/icon.svg"><link rel="apple-touch-icon" href="/icon-192.png">
+<meta name="theme-color" content="#eeeef2" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0b0b0d" media="(prefers-color-scheme: dark)">
+<link rel="preload" href="/fonts/inter-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/dashboard.css"><link rel="stylesheet" href="/host.css"><link rel="stylesheet" href="/vault.css"></head>
+<body class="host vlt">
+<header class="dh">
+  <a class="btn ghost back" href="/" aria-label="Back to the console"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M10 3.5 5.5 8l4.5 4.5"/></svg><span>Console</span></a>
+  <h1>Vault</h1>
+  <a class="btn sm ghost" href="/security">Security</a>
+  <button type="button" class="btn sm ghost" id="refresh">Refresh</button>
+</header>
+<main id="hm" aria-busy="true">
+  <p class="restart" id="restart-note" role="status" hidden>Restart agent-console to apply.</p>
+  <p class="vmsg" id="vmsg" role="status" hidden></p>
+  <div id="groups"></div>
+  <section class="panel" id="passkeys" aria-label="Passkeys">
+    <div class="head"><h2>Passkeys</h2><button type="button" class="btn sm" id="pk-add">Set up passkey</button></div>
+    <p class="note" id="pk-note"></p>
+    <div class="rows" id="pk-rows"></div>
+  </section>
+  <p class="note vfoot">Values are write-only: they never leave the server.</p>
+</main>
+<dialog id="edit" class="vdlg" aria-labelledby="edit-title">
+  <form id="edit-form" autocomplete="off">
+    <h2 id="edit-title">Replace key</h2>
+    <p class="sub" id="edit-sub"></p>
+    <label class="fld" id="name-wrap" hidden><span>Key name</span>
+      <input class="input" id="name" type="text" autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false" maxlength="128" placeholder="OPENAI_API_KEY"></label>
+    <label class="fld"><span>Value</span>
+      <span class="pw"><input class="input" id="value" type="password" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" inputmode="text" maxlength="8192" required>
+        <button type="button" class="btn sm ghost" id="reveal" aria-pressed="false" aria-label="Show what you typed">Show</button></span></label>
+    <p class="err" id="edit-err" role="alert" hidden></p>
+    <p class="wait" id="edit-wait" role="status" hidden>Confirm with your fingerprint or face.</p>
+    <div class="row"><button type="button" class="btn" id="edit-cancel">Cancel</button><button type="submit" class="btn primary" id="edit-save">Save</button></div>
+  </form>
+</dialog>
+<dialog id="del" class="vdlg" aria-labelledby="del-title">
+  <form id="del-form" autocomplete="off">
+    <h2 id="del-title">Delete key</h2>
+    <p class="sub" id="del-sub"></p>
+    <label class="fld"><span id="del-prompt">Type the key name to confirm</span>
+      <input class="input" id="del-name" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"></label>
+    <p class="err" id="del-err" role="alert" hidden></p>
+    <p class="wait" id="del-wait" role="status" hidden>Confirm with your fingerprint or face.</p>
+    <div class="row"><button type="button" class="btn" id="del-cancel">Cancel</button><button type="submit" class="btn danger" id="del-go" disabled>Delete</button></div>
+  </form>
+</dialog>
+<dialog id="enroll" class="vdlg" aria-labelledby="enroll-title">
+  <form id="enroll-form" autocomplete="off">
+    <h2 id="enroll-title">Set up passkey</h2>
+    <p class="sub" id="enroll-sub"></p>
+    <label class="fld" id="code-wrap"><span>One-time code</span>
+      <input class="input" id="code" type="text" inputmode="numeric" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" maxlength="16"></label>
+    <label class="fld"><span>Name</span>
+      <input class="input" id="pk-name" type="text" autocomplete="off" autocapitalize="sentences" spellcheck="false" maxlength="40" placeholder="My phone"></label>
+    <p class="err" id="enroll-err" role="alert" hidden></p>
+    <p class="wait" id="enroll-wait" role="status" hidden>Confirm with your fingerprint or face.</p>
+    <div class="row"><button type="button" class="btn" id="enroll-cancel">Cancel</button><button type="submit" class="btn primary" id="enroll-go">Continue</button></div>
+  </form>
+</dialog>
+<div id="toast" role="status" aria-live="polite"></div>
+<script src="/vendor/simplewebauthn-browser.js"></script>
+<script type="module" src="/vault.js"></script>
+</body></html>

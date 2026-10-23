@@ -3106,6 +3106,7 @@ createMenu({
     { value: "automation", label: "Automation dashboard", icon: "play" },
     { value: "host", label: "Host dashboard", icon: "terminal" },
     { value: "security", label: "Security scans", desc: "Malware, CVEs, open ports", icon: "shield" },
+    { value: "vault", label: "Vault", desc: "API tokens, write-only", icon: "key" },
     { value: "doctor", label: "Doctor", desc: "Check and repair the setup", icon: "alert" },
     { value: "ideas", label: "App ideas", icon: "sparkle" },
     { value: "reload", label: "Reload page", icon: "refresh" },
@@ -3117,6 +3118,7 @@ createMenu({
     else if (v === "automation") location.href = $("auto-link").href;
     else if (v === "host") location.href = $("host-link").href;
     else if (v === "security") location.href = $("security-link").href;
+    else if (v === "vault") location.href = $("vault-link").href;
     else if (v === "doctor") location.href = "/doctor";
     else if (v === "ideas") location.href = $("ideas-link").href;
     else if (v === "task") { setLane("tasks"); openTaskDialog(); }

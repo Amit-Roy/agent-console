@@ -52,6 +52,7 @@ import { contextAllocation } from "./context-allocation.ts";
 import { headroom } from "./headroom.ts";
 import { createDoctor } from "./doctor.ts";
 import { mountSecurity } from "./security.ts";
+import { mountVault } from "./vault.ts";
 import { LatencyStore } from "./latency.ts";
 import { fileMedia, fileTree, fileViewer } from "./files.ts";
 import { createAcodeBridge } from "./acode.ts";
@@ -296,6 +297,7 @@ app.get("/api/sessions/:thread", async (req, res) => {
 });
 app.get("/sessions", (_req, res) => res.sendFile(path.join(ROOT, "public", "sessions.html")));
 app.get("/vendor/marked.js", (_req, res) => res.sendFile(path.join(ROOT, "node_modules/marked/lib/marked.esm.js")));
+app.get("/vendor/simplewebauthn-browser.js", (_req, res) => res.sendFile(path.join(ROOT, "node_modules/@simplewebauthn/browser/dist/bundle/index.umd.min.js")));
 app.get("/vendor/purify.js", (_req, res) => res.sendFile(path.join(ROOT, "node_modules/dompurify/dist/purify.es.mjs")));
 
 // ---- attachments: upload (raw bytes), download, discard. State-changing, so cookie auth alone is not enough: same-origin only.
@@ -543,6 +545,8 @@ app.post("/api/host/du/rescan", sameOrigin, hostDuRescan);
 app.post("/api/host/processes/:pid/kill", express.json({ limit: "1kb" }), sameOrigin, hostKill);
 // Security scan results from the VPS host (read over SSH; "Run scan" is same-origin only).
 mountSecurity(app, sameOrigin);
+// Vault: write-only API token management (metadata out, values in; writes are same-origin only).
+mountVault(app, sameOrigin);
 // App ideas: index.md + one markdown file per idea in a private git repo (server/ideas.ts). Adding commits, so same-origin only.
 const ideaError = (res: express.Response, e: any) => res.status(e instanceof IdeaError ? e.status : 500).json({ error: e instanceof IdeaError ? e.message : "App ideas are unavailable." });
 app.get("/api/ideas", (_req, res) => {
