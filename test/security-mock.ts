@@ -116,6 +116,22 @@ export const LATEST = {
             ),
           ],
         },
+        {
+          name: "third-party repos",
+          type: "repo",
+          thirdParty: true,
+          counts: { CRITICAL: 2, HIGH: 5, MEDIUM: 9, LOW: 4 },
+          vulns: [
+            vuln(
+              "CVE-2026-5005",
+              "lodash",
+              "4.17.10",
+              null,
+              "CRITICAL",
+              "lodash: prototype pollution",
+            ),
+          ],
+        },
       ],
       error: null,
     },
@@ -159,8 +175,12 @@ const sum = (r: any, status: string) => ({
   counts: {
     infected: r.tools.clamav.infected.length,
     runtimeAlerts: r.tools.falco.alerts.length,
-    critical: r.tools.trivy.targets.reduce((a: number, t: any) => a + t.counts.CRITICAL, 0),
-    high: r.tools.trivy.targets.reduce((a: number, t: any) => a + t.counts.HIGH, 0),
+    critical: r.tools.trivy.targets
+      .filter((t: any) => !t.thirdParty)
+      .reduce((a: number, t: any) => a + t.counts.CRITICAL, 0),
+    high: r.tools.trivy.targets
+      .filter((t: any) => !t.thirdParty)
+      .reduce((a: number, t: any) => a + t.counts.HIGH, 0),
     openPorts: r.tools.nmap.openPorts.filter((p: any) => p.exposed !== false).length,
   },
 });
