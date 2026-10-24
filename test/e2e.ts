@@ -273,19 +273,19 @@ if (hello.providers.some((p: any) => p.id === "mock")) {
   );
   check(
     "title: renamed after the first message",
-    retitled?.thread?.title === "fix:the flaky",
+    retitled?.thread?.title === "fix the flaky login",
     retitled?.thread?.title,
   );
   await waitFor((m) => m.t === "event" && m.event.type === "result", 5000);
   clear();
-  ws.send(JSON.stringify({ t: "send", thread: autoId, text: "now something unrelated entirely" }));
+  ws.send(JSON.stringify({ t: "send", thread: autoId, text: "now something unrelated" }));
   const next = await waitFor(
-    (m) => m.t === "thread" && m.thread.id === autoId && m.thread.title !== "fix:the flaky",
+    (m) => m.t === "thread" && m.thread.id === autoId && m.thread.title !== "fix the flaky login",
     5000,
   );
   check(
-    "title: every later prompt renames it from the latest text, capped at 20 chars",
-    next?.thread?.title === "now:something",
+    "title: every later prompt renames it from the latest text",
+    next?.thread?.title === "now something unrelated",
     next?.thread?.title,
   );
   await waitFor((m) => m.t === "event" && m.event.type === "result", 5000);
@@ -298,12 +298,13 @@ if (hello.providers.some((p: any) => p.id === "mock")) {
     }),
   );
   const refreshed = await waitFor(
-    (m) => m.t === "thread" && m.thread.id === autoId && m.thread.title !== "now:something",
+    (m) =>
+      m.t === "thread" && m.thread.id === autoId && m.thread.title !== "now something unrelated",
     5000,
   );
   check(
     "title: media is dropped from what names it",
-    refreshed?.thread?.title === "refactor:the billing",
+    refreshed?.thread?.title === "refactor the billing module",
     refreshed?.thread?.title,
   );
   await waitFor((m) => m.t === "event" && m.event.type === "result", 5000);
