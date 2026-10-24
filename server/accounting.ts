@@ -57,6 +57,33 @@ export function claudeTotals(ev: any) {
     models,
   };
 }
+function modelDeltas(
+  nowModels: ModelUsage[],
+  before: ReturnType<typeof claudeTotals> | undefined,
+): ModelUsage[] {
+  return nowModels.map((current) => {
+    const old = before?.models.find((candidate) => candidate.model === current.model);
+    const row: ModelUsage = { model: current.model, role: "unattributed" };
+    for (const field of ["fresh", "cacheWrite", "cacheRead", "output", "cost"] as const)
+      if (current[field] != null) row[field] = delta(current[field]!, old?.[field]);
+    return row;
+  });
+}
+function mergedSnapshots(
+  nowModels: ModelUsage[],
+  before: ReturnType<typeof claudeTotals> | undefined,
+): ModelUsage[] {
+  const snapshots = nowModels.map(
+    (current) =>
+      ({
+        ...before?.models.find((candidate) => candidate.model === current.model),
+        ...Object.fromEntries(Object.entries(current).filter(([, value]) => value != null)),
+      }) as ModelUsage,
+  );
+  for (const old of before?.models || [])
+    if (!snapshots.some((current) => current.model === old.model)) snapshots.push(old);
+  return snapshots;
+}
 // Rebuilt from durable result logs at startup, preserving native-session counters across process/server restarts.
 export class SessionAccounting {
   private snapshots = new Map<string, ReturnType<typeof claudeTotals>>();
@@ -79,22 +106,8 @@ export class SessionAccounting {
       previous = this.snapshots.get(session);
     const reset = now.cost != null && previous?.cost != null && now.cost < previous.cost;
     const before = reset ? undefined : previous;
-    const models = now.models.map((m) => {
-      const old = before?.models.find((x) => x.model === m.model);
-      const row: ModelUsage = { model: m.model, role: "unattributed" };
-      for (const field of ["fresh", "cacheWrite", "cacheRead", "output", "cost"] as const)
-        if (m[field] != null) row[field] = delta(m[field]!, old?.[field]);
-      return row;
-    });
-    const snapshots = now.models.map(
-      (m) =>
-        ({
-          ...before?.models.find((x) => x.model === m.model),
-          ...Object.fromEntries(Object.entries(m).filter(([, v]) => v != null)),
-        }) as ModelUsage,
-    );
-    for (const old of before?.models || [])
-      if (!snapshots.some((m) => m.model === old.model)) snapshots.push(old);
+    const models = modelDeltas(now.models, before);
+    const snapshots = mergedSnapshots(now.models, before);
     this.snapshots.set(session, { ...now, cost: now.cost ?? before?.cost, models: snapshots });
     const fresh = sum(models, "fresh"),
       write = sum(models, "cacheWrite"),

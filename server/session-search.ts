@@ -13,54 +13,57 @@ const bounded = (value: unknown, fallback: number, max: number) =>
     : fallback;
 const safeId = (id: unknown): id is string => typeof id === "string" && /^[\w-]{1,200}$/.test(id);
 
+type TextCollector = { parts: string[]; length: number };
+const SECRET_KEY = /^(data|image|source|signature|api_key|token|authorization|password|secret)$/i;
+function addText(collector: TextCollector, value: unknown) {
+  if (typeof value === "string" && collector.length < MAX_TEXT) {
+    const text = value.slice(0, MAX_TEXT - collector.length);
+    collector.parts.push(text);
+    collector.length += text.length;
+  }
+}
+function addToolObject(collector: TextCollector, value: any, depth: number) {
+  if (value.type === "image" || value.type === "image_url") return;
+  for (const [key, child] of Object.entries(value))
+    if (!SECRET_KEY.test(key)) addToolValue(collector, child, depth + 1);
+}
+function addToolValue(collector: TextCollector, value: any, depth = 0) {
+  if (depth > 8 || collector.length >= MAX_TEXT) return;
+  if (typeof value === "string") addText(collector, value);
+  else if (Array.isArray(value)) for (const item of value) addToolValue(collector, item, depth + 1);
+  else if (value && typeof value === "object") addToolObject(collector, value, depth);
+}
+// Returns "tool" when the block belongs to a tool call, otherwise undefined.
+function addBlock(collector: TextCollector, block: any) {
+  if (block?.type === "text") addText(collector, block.text);
+  else if (block?.type === "tool_use") {
+    addText(collector, block.name);
+    addToolValue(collector, block.input);
+    return "tool";
+  } else if (block?.type === "tool_result") {
+    addToolValue(collector, block.content);
+    return "tool";
+  }
+  return undefined;
+}
+
 // Index displayed conversation content, not credentials, images, provider packets, or token accounting.
-function eventText(e: any): { role: string; text: string } | null {
-  if (!e || typeof e !== "object") return null;
-  if (e.type === "user_input" && typeof e.text === "string")
-    return { role: "user", text: e.text.slice(0, MAX_TEXT) };
-  if (e.type !== "assistant" && e.type !== "user") return null;
-  const parts: string[] = [];
-  let length = 0;
-  const add = (s: unknown) => {
-    if (typeof s === "string" && length < MAX_TEXT) {
-      const text = s.slice(0, MAX_TEXT - length);
-      parts.push(text);
-      length += text.length;
-    }
-  };
-  const toolValue = (v: any, depth = 0) => {
-    if (depth > 8 || length >= MAX_TEXT) return;
-    if (typeof v === "string") add(v);
-    else if (Array.isArray(v)) for (const x of v) toolValue(x, depth + 1);
-    else if (v && typeof v === "object")
-      for (const [key, value] of Object.entries(v)) {
-        if (
-          /^(data|image|source|signature|api_key|token|authorization|password|secret)$/i.test(key)
-        )
-          continue;
-        if (v.type === "image" || v.type === "image_url") continue;
-        toolValue(value, depth + 1);
-      }
-  };
-  let role = e.type === "assistant" ? "assistant" : "user";
-  const content = e.message?.content;
-  if (typeof content === "string") add(content);
+function eventText(event: any): { role: string; text: string } | null {
+  if (!event || typeof event !== "object") return null;
+  if (event.type === "user_input" && typeof event.text === "string")
+    return { role: "user", text: event.text.slice(0, MAX_TEXT) };
+  if (event.type !== "assistant" && event.type !== "user") return null;
+  const collector: TextCollector = { parts: [], length: 0 };
+  let role = event.type === "assistant" ? "assistant" : "user";
+  const content = event.message?.content;
+  if (typeof content === "string") addText(collector, content);
   else if (Array.isArray(content))
-    for (const block of content) {
-      if (block?.type === "text") add(block.text);
-      else if (block?.type === "tool_use") {
-        role = "tool";
-        add(block.name);
-        toolValue(block.input);
-      } else if (block?.type === "tool_result") {
-        role = "tool";
-        toolValue(block.content);
-      }
-    }
-  const text = parts.join("\n").trim();
+    for (const block of content) role = addBlock(collector, block) ?? role;
+  const text = collector.parts.join("\n").trim();
   return text ? { role, text } : null;
 }
 
+type LogScan = { bytes: number; lines: number; pending: Buffer; skipped: number };
 export type SessionSearchInput = { query: string; provider?: string; limit?: number };
 export type SessionReadInput = { thread: string; start?: number; limit?: number };
 
@@ -167,7 +170,7 @@ export class SessionSearch {
     }
   }
 
-  private async refresh() {
+  private async readCatalog(): Promise<any[]> {
     let threads: any;
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
@@ -184,120 +187,155 @@ export class SessionSearch {
       }
     }
     if (!Array.isArray(threads)) throw new Error("Session catalog must contain an array.");
-    const valid = threads.filter((t) => safeId(t?.id));
-    const ids = new Set(valid.map((t) => t.id));
-    this.archived = new Set(valid.filter((t) => t.archived).map((t) => t.id));
+    return threads;
+  }
+
+  private async refresh() {
+    const threads = await this.readCatalog();
+    const valid = threads.filter((entry) => safeId(entry?.id));
+    const ids = new Set(valid.map((entry) => entry.id));
+    this.archived = new Set(valid.filter((entry) => entry.archived).map((entry) => entry.id));
     for (const row of this.db.prepare("SELECT thread FROM sessions").all())
       if (!ids.has(row.thread)) this.remove(String(row.thread));
-    for (const t of valid) {
-      const file = path.join(this.dataDir, "logs", `${t.id}.jsonl`);
-      const title = String(t.title ?? "Untitled").slice(0, 500),
-        provider = String(t.provider ?? "unknown").slice(0, 100);
-      let old = this.db.prepare("SELECT * FROM sessions WHERE thread=?").get(t.id) as any;
-      let stat: fs.Stats | undefined;
-      try {
-        stat = await fsp.stat(file);
-      } catch (error: any) {
-        if (error.code !== "ENOENT") throw error;
-      }
-      let reset = !old;
-      if (old && stat) {
-        reset =
-          String(stat.ino) !== old.inode ||
-          stat.size < old.size ||
-          (stat.size === old.size && stat.mtimeMs !== old.mtime) ||
-          (stat.size > old.size && (await this.fingerprint(file, old.bytes)) !== old.tail);
-      } else if (old && !stat) reset = old.size !== 0;
-      if (reset && old) {
-        this.remove(t.id);
-        old = undefined;
-      }
-      if (!old) {
-        this.db
-          .prepare("INSERT INTO sessions(thread,title,provider) VALUES(?,?,?)")
-          .run(t.id, title, provider);
-        this.db
-          .prepare("INSERT INTO session_fts(title,text,thread,line,role) VALUES(?,'',?,0,'title')")
-          .run(title, t.id);
-      } else if (old.title !== title || old.provider !== provider) {
-        this.db
-          .prepare("UPDATE sessions SET title=?,provider=? WHERE thread=?")
-          .run(title, provider, t.id);
-        this.db.prepare("UPDATE session_fts SET title=? WHERE thread=?").run(title, t.id);
-      }
-      if (!stat || (old && stat.size === old.size && stat.mtimeMs === old.mtime)) continue;
-      let bytes = old?.bytes ?? 0,
-        lines = old?.lines ?? 0;
-      // Recover a process exit between a batch commit and the file checkpoint.
-      this.db.prepare("DELETE FROM events WHERE thread=? AND line>?").run(t.id, lines);
-      this.db.prepare("DELETE FROM session_fts WHERE thread=? AND line>?").run(t.id, lines);
-      if (stat.size === 0) {
-        this.db
-          .prepare("UPDATE sessions SET size=0,mtime=?,inode=? WHERE thread=?")
-          .run(stat.mtimeMs, String(stat.ino), t.id);
-        continue;
-      }
-      let pending = Buffer.alloc(0),
-        skipped = 0;
-      // Fixed-size stream chunks keep file I/O asynchronous and bound memory for malformed lines.
-      const stream = fs.createReadStream(file, {
-        start: bytes,
-        end: stat.size - 1,
-        highWaterMark: 64 * 1024,
-      });
-      for await (const chunk of stream) {
-        const data = pending.length ? Buffer.concat([pending, chunk]) : (chunk as Buffer);
-        let begin = 0,
-          newline: number;
-        const batch: { line: number; role: string; text: string }[] = [];
-        while ((newline = data.indexOf(10, begin)) >= 0) {
-          const raw = data.subarray(begin, newline);
-          bytes += skipped + raw.length + 1;
-          lines++;
-          if (!skipped && raw.length <= MAX_LINE) {
-            try {
-              const parsed = JSON.parse(raw.toString("utf8"));
-              const item = eventText(parsed);
-              if (item) batch.push({ line: lines, ...item });
-              this.trackPrs(t.id, lines, parsed);
-            } catch {
-              /* Ignore malformed complete lines; keep exact physical line references. */
-            }
-          }
-          skipped = 0;
-          begin = newline + 1;
-        }
-        pending = data.subarray(begin);
-        if (pending.length > MAX_LINE) {
-          skipped += pending.length;
-          pending = Buffer.alloc(0);
-        }
-        if (batch.length) {
-          this.db.exec("BEGIN");
-          try {
-            const event = this.db.prepare(
-              "INSERT OR REPLACE INTO events(thread,line,role,text) VALUES(?,?,?,?)",
-            );
-            const fts = this.db.prepare(
-              "INSERT INTO session_fts(title,text,thread,line,role) VALUES(?,?,?,?,?)",
-            );
-            for (const row of batch) {
-              event.run(t.id, row.line, row.role, row.text);
-              fts.run(title, row.text, t.id, row.line, row.role);
-            }
-            this.db.exec("COMMIT");
-          } catch (error) {
-            this.db.exec("ROLLBACK");
-            throw error;
-          }
-        }
-        await new Promise<void>((resolve) => setImmediate(resolve));
-      }
-      const tail = await this.fingerprint(file, bytes);
+    for (const entry of valid) await this.syncThread(entry);
+  }
+
+  private async logChanged(old: any, stat: fs.Stats | undefined, file: string) {
+    if (!old) return true;
+    if (!stat) return old.size !== 0;
+    return (
+      String(stat.ino) !== old.inode ||
+      stat.size < old.size ||
+      (stat.size === old.size && stat.mtimeMs !== old.mtime) ||
+      (stat.size > old.size && (await this.fingerprint(file, old.bytes)) !== old.tail)
+    );
+  }
+
+  private upsertSessionRow(id: string, title: string, provider: string, old: any) {
+    if (!old) {
       this.db
-        .prepare("UPDATE sessions SET bytes=?,lines=?,size=?,mtime=?,inode=?,tail=? WHERE thread=?")
-        .run(bytes, lines, stat.size, stat.mtimeMs, String(stat.ino), tail, t.id);
+        .prepare("INSERT INTO sessions(thread,title,provider) VALUES(?,?,?)")
+        .run(id, title, provider);
+      this.db
+        .prepare("INSERT INTO session_fts(title,text,thread,line,role) VALUES(?,'',?,0,'title')")
+        .run(title, id);
+    } else if (old.title !== title || old.provider !== provider) {
+      this.db
+        .prepare("UPDATE sessions SET title=?,provider=? WHERE thread=?")
+        .run(title, provider, id);
+      this.db.prepare("UPDATE session_fts SET title=? WHERE thread=?").run(title, id);
     }
+  }
+
+  private async syncThread(entry: any) {
+    const file = path.join(this.dataDir, "logs", `${entry.id}.jsonl`);
+    const title = String(entry.title ?? "Untitled").slice(0, 500),
+      provider = String(entry.provider ?? "unknown").slice(0, 100);
+    let old = this.db.prepare("SELECT * FROM sessions WHERE thread=?").get(entry.id) as any;
+    let stat: fs.Stats | undefined;
+    try {
+      stat = await fsp.stat(file);
+    } catch (error: any) {
+      if (error.code !== "ENOENT") throw error;
+    }
+    if (old && (await this.logChanged(old, stat, file))) {
+      this.remove(entry.id);
+      old = undefined;
+    }
+    this.upsertSessionRow(entry.id, title, provider, old);
+    if (!stat || (old && stat.size === old.size && stat.mtimeMs === old.mtime)) return;
+    await this.indexLog({ id: entry.id, title, file }, stat, old);
+  }
+
+  /** Parse complete lines in one chunk, advancing the scan counters and collecting indexable rows. */
+  private scanChunk(threadId: string, scan: LogScan, chunk: Buffer) {
+    const data = scan.pending.length ? Buffer.concat([scan.pending, chunk]) : chunk;
+    let begin = 0,
+      newline: number;
+    const batch: { line: number; role: string; text: string }[] = [];
+    while ((newline = data.indexOf(10, begin)) >= 0) {
+      const raw = data.subarray(begin, newline);
+      scan.bytes += scan.skipped + raw.length + 1;
+      scan.lines++;
+      if (!scan.skipped && raw.length <= MAX_LINE) {
+        try {
+          const parsed = JSON.parse(raw.toString("utf8"));
+          const item = eventText(parsed);
+          if (item) batch.push({ line: scan.lines, ...item });
+          this.trackPrs(threadId, scan.lines, parsed);
+        } catch {
+          /* Ignore malformed complete lines; keep exact physical line references. */
+        }
+      }
+      scan.skipped = 0;
+      begin = newline + 1;
+    }
+    scan.pending = data.subarray(begin);
+    if (scan.pending.length > MAX_LINE) {
+      scan.skipped += scan.pending.length;
+      scan.pending = Buffer.alloc(0);
+    }
+    return batch;
+  }
+
+  private writeBatch(
+    target: { id: string; title: string },
+    batch: { line: number; role: string; text: string }[],
+  ) {
+    this.db.exec("BEGIN");
+    try {
+      const event = this.db.prepare(
+        "INSERT OR REPLACE INTO events(thread,line,role,text) VALUES(?,?,?,?)",
+      );
+      const fts = this.db.prepare(
+        "INSERT INTO session_fts(title,text,thread,line,role) VALUES(?,?,?,?,?)",
+      );
+      for (const row of batch) {
+        event.run(target.id, row.line, row.role, row.text);
+        fts.run(target.title, row.text, target.id, row.line, row.role);
+      }
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  private async indexLog(
+    target: { id: string; title: string; file: string },
+    stat: fs.Stats,
+    old: any,
+  ) {
+    const scan: LogScan = {
+      bytes: old?.bytes ?? 0,
+      lines: old?.lines ?? 0,
+      pending: Buffer.alloc(0),
+      skipped: 0,
+    };
+    // Recover a process exit between a batch commit and the file checkpoint.
+    this.db.prepare("DELETE FROM events WHERE thread=? AND line>?").run(target.id, scan.lines);
+    this.db.prepare("DELETE FROM session_fts WHERE thread=? AND line>?").run(target.id, scan.lines);
+    if (stat.size === 0) {
+      this.db
+        .prepare("UPDATE sessions SET size=0,mtime=?,inode=? WHERE thread=?")
+        .run(stat.mtimeMs, String(stat.ino), target.id);
+      return;
+    }
+    // Fixed-size stream chunks keep file I/O asynchronous and bound memory for malformed lines.
+    const stream = fs.createReadStream(target.file, {
+      start: scan.bytes,
+      end: stat.size - 1,
+      highWaterMark: 64 * 1024,
+    });
+    for await (const chunk of stream) {
+      const batch = this.scanChunk(target.id, scan, chunk as Buffer);
+      if (batch.length) this.writeBatch(target, batch);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    const tail = await this.fingerprint(target.file, scan.bytes);
+    this.db
+      .prepare("UPDATE sessions SET bytes=?,lines=?,size=?,mtime=?,inode=?,tail=? WHERE thread=?")
+      .run(scan.bytes, scan.lines, stat.size, stat.mtimeMs, String(stat.ino), tail, target.id);
   }
 
   /** Start an initial background build before the first provider or browser query. */

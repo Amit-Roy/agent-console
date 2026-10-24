@@ -48,171 +48,176 @@ const stable = (v: any): string =>
           .map((k) => `${JSON.stringify(k)}:${stable(v[k])}`)
           .join(",")}}`
       : JSON.stringify(v);
-export function reconstructClaudeHistory(input: {
-  rows: UsageRepairRow[];
-  logs: Record<string, Event[]>;
-  threads: { id: string; claudeAccount?: string; createdAt?: number }[];
-}) {
-  const explicit = input.rows.filter(
-    (r) => (r.provider !== "claude" && r.provider !== "claude:nefro") || r.schemaVersion != null,
-  );
-  const threads = new Map(input.threads.map((t) => [t.id, t]));
-  const events: {
-    ev: Event;
-    turnTs?: number;
-    id: string;
-    account?: string;
-    eligible: boolean;
-    createdAt?: number;
-    prefix: string;
-  }[] = [];
-  for (const [id, list] of Object.entries(input.logs)) {
+type LogThread = { id: string; claudeAccount?: string; createdAt?: number };
+type LoggedEvent = {
+  event: Event;
+  turnTs?: number;
+  id: string;
+  account?: string;
+  eligible: boolean;
+  createdAt?: number;
+  prefix: string;
+};
+const isClaudeProvider = (provider: unknown) =>
+  provider === "claude" || provider === "claude:nefro";
+const hasNativeIds = (event: Event) =>
+  typeof event.session_id === "string" &&
+  event.session_id &&
+  typeof event.uuid === "string" &&
+  event.uuid;
+const nativeKey = (event: Event) =>
+  hasNativeIds(event) ? `native:${event.session_id}:${event.uuid}` : undefined;
+
+function eventTimestamp(event: Event, turnTs: number | undefined) {
+  if (Number.isFinite(event.observedAt)) return event.observedAt;
+  return Number.isFinite(event.ts) ? event.ts : turnTs;
+}
+
+function threadAccount(thread: LogThread | undefined) {
+  if (!thread) return undefined;
+  return thread.claudeAccount === undefined ? "claude" : accountKey(thread.claudeAccount);
+}
+
+function collectLoggedEvents(logs: Record<string, Event[]>, threads: Map<string, LogThread>) {
+  const events: LoggedEvent[] = [];
+  for (const [id, list] of Object.entries(logs)) {
     let turnTs: number | undefined;
     const thread = threads.get(id);
     const prefixHash = createHash("sha256");
-    for (let index = 0; index < list.length; index++) {
-      const ev = list[index];
-      const key =
-        typeof ev.session_id === "string" &&
-        ev.session_id &&
-        typeof ev.uuid === "string" &&
-        ev.uuid;
-      prefixHash.update(`${stable(ev)}\n`);
-      if (ev.type === "user_input" && Number.isFinite(ev.ts)) turnTs = ev.ts;
-      if (ev.type !== "rate_limit_event") continue;
-      const ts = Number.isFinite(ev.observedAt)
-        ? ev.observedAt
-        : Number.isFinite(ev.ts)
-          ? ev.ts
-          : turnTs;
-      const account = thread
-        ? thread.claudeAccount === undefined
-          ? "claude"
-          : accountKey(thread.claudeAccount)
-        : undefined;
+    for (const event of list) {
+      prefixHash.update(`${stable(event)}\n`);
+      if (event.type === "user_input" && Number.isFinite(event.ts)) turnTs = event.ts;
+      if (event.type !== "rate_limit_event") continue;
+      const ts = eventTimestamp(event, turnTs);
       events.push({
-        ev,
+        event,
         turnTs,
         id,
-        account,
+        account: threadAccount(thread),
         eligible:
           !!thread &&
           Number.isFinite(ts) &&
           Number.isFinite(thread.createdAt) &&
           thread.createdAt! <= ts!,
         createdAt: thread?.createdAt,
-        prefix: key ? "" : prefixHash.copy().digest("hex"),
+        prefix: hasNativeIds(event) ? "" : prefixHash.copy().digest("hex"),
       });
     }
   }
-  const nativeKey = (ev: Event) =>
-    typeof ev.session_id === "string" && ev.session_id && typeof ev.uuid === "string" && ev.uuid
-      ? `native:${ev.session_id}:${ev.uuid}`
-      : undefined;
+  return events;
+}
+
+function collectSessionOwners(events: LoggedEvent[]) {
   const sessionOwners = new Map<string, Set<string>>();
-  for (const event of events) {
-    const sessionId = event.ev.session_id;
-    if (!event.eligible || !event.account || typeof sessionId !== "string" || !sessionId) continue;
+  for (const entry of events) {
+    const sessionId = entry.event.session_id;
+    if (!entry.eligible || !entry.account || typeof sessionId !== "string" || !sessionId) continue;
     const owners = sessionOwners.get(sessionId) ?? new Set<string>();
-    owners.add(event.account);
+    owners.add(entry.account);
     sessionOwners.set(sessionId, owners);
   }
-  const identity = (e: (typeof events)[number]) => {
-    const key = nativeKey(e.ev);
-    if (key) return key;
-    const explicitProvider =
-      Number.isFinite(e.ev.observedAt) &&
-      (e.ev.usageProvider === "claude" || e.ev.usageProvider === "claude:nefro");
-    return `${explicitProvider ? "explicit" : "legacy"}:${e.ev.observedAt ?? e.ev.ts ?? e.turnTs ?? "unknown"}:${explicitProvider ? e.ev.usageProvider : ""}:${e.prefix}`;
-  };
-  const groups = new Map<string, typeof events>();
-  for (const e of events) {
-    const key = identity(e);
+  return sessionOwners;
+}
+
+const receivedProvider = (entry: LoggedEvent) =>
+  Number.isFinite(entry.event.observedAt) && isClaudeProvider(entry.event.usageProvider)
+    ? entry.event.usageProvider
+    : undefined;
+
+function eventIdentity(entry: LoggedEvent) {
+  const key = nativeKey(entry.event);
+  if (key) return key;
+  const explicitProvider = !!receivedProvider(entry);
+  const stamp = entry.event.observedAt ?? entry.event.ts ?? entry.turnTs ?? "unknown";
+  return `${explicitProvider ? "explicit" : "legacy"}:${stamp}:${explicitProvider ? entry.event.usageProvider : ""}:${entry.prefix}`;
+}
+
+function groupEvents(events: LoggedEvent[]) {
+  const groups = new Map<string, LoggedEvent[]>();
+  for (const entry of events) {
+    const key = eventIdentity(entry);
     const group = groups.get(key) ?? [];
-    group.push(e);
+    group.push(entry);
     groups.set(key, group);
   }
-  const rows: UsageRepairRow[] = [];
-  for (const group of groups.values()) {
-    const sample = group[0];
-    const explicitProvider = group
-      .map((x) =>
-        Number.isFinite(x.ev.observedAt) &&
-        (x.ev.usageProvider === "claude" || x.ev.usageProvider === "claude:nefro")
-          ? x.ev.usageProvider
-          : undefined,
-      )
-      .find(Boolean);
-    const received = !!explicitProvider && Number.isFinite(sample.ev.observedAt);
-    const native = !!nativeKey(sample.ev);
-    const owners = native
-      ? (sessionOwners.get(sample.ev.session_id) ?? new Set<string>())
-      : new Set(
-          group
-            .filter((x) => x.account && (x.eligible || !Number.isFinite(x.createdAt)))
-            .map((x) => x.account),
-        );
-    const accountConflict = owners.size > 1;
-    const unresolved = !explicitProvider && (accountConflict || owners.size !== 1);
-    const provider = explicitProvider || (unresolved ? "claude:unknown" : [...owners][0]);
-    const ts = received
-      ? sample.ev.observedAt
-      : Number.isFinite(sample.ev.ts)
-        ? sample.ev.ts
-        : sample.turnTs;
-    if (!Number.isFinite(ts)) continue;
-    const timestampSource = received
-      ? "received"
-      : Number.isFinite(sample.ev.ts)
-        ? "logged"
-        : "turn-start";
-    for (const w of winList(sample.ev))
-      rows.push({
-        ts: ts!,
-        provider: provider!,
-        ...w,
-        schemaVersion: 2,
-        provenance: "claude-log",
-        timestampSource,
-        ...(unresolved ? { accountUnresolved: true } : {}),
-        ...(native
-          ? {
-              sourceSessionId: sample.ev.session_id,
-              sourceEventUuid: sample.ev.uuid,
-              accountSource: explicitProvider ? "receipt" : "native-session",
-            }
-          : { sourcePrefixHash: sample.prefix }),
-      });
-  }
+  return groups;
+}
+
+function groupOwners(
+  group: LoggedEvent[],
+  native: boolean,
+  sessionOwners: Map<string, Set<string>>,
+) {
+  if (native) return sessionOwners.get(group[0].event.session_id) ?? new Set<string>();
+  return new Set(
+    group
+      .filter((entry) => entry.account && (entry.eligible || !Number.isFinite(entry.createdAt)))
+      .map((entry) => entry.account),
+  );
+}
+
+function groupRows(group: LoggedEvent[], sessionOwners: Map<string, Set<string>>) {
+  const sample = group[0];
+  const explicitProvider = group.map(receivedProvider).find(Boolean);
+  const received = !!explicitProvider && Number.isFinite(sample.event.observedAt);
+  const native = !!nativeKey(sample.event);
+  const owners = groupOwners(group, native, sessionOwners);
+  const unresolved = !explicitProvider && owners.size !== 1;
+  const provider = explicitProvider || (unresolved ? "claude:unknown" : [...owners][0]);
+  const loggedTs = Number.isFinite(sample.event.ts);
+  const ts = received ? sample.event.observedAt : loggedTs ? sample.event.ts : sample.turnTs;
+  if (!Number.isFinite(ts)) return [];
+  const timestampSource = received ? "received" : loggedTs ? "logged" : "turn-start";
+  return winList(sample.event).map(
+    (window): UsageRepairRow => ({
+      ts: ts!,
+      provider: provider!,
+      ...window,
+      schemaVersion: 2,
+      provenance: "claude-log",
+      timestampSource,
+      ...(unresolved ? { accountUnresolved: true } : {}),
+      ...(native
+        ? {
+            sourceSessionId: sample.event.session_id,
+            sourceEventUuid: sample.event.uuid,
+            accountSource: explicitProvider ? "receipt" : "native-session",
+          }
+        : { sourcePrefixHash: sample.prefix }),
+    }),
+  );
+}
+
+function orphanedLegacyRows(inputRows: UsageRepairRow[], rows: UsageRepairRow[]) {
   const represented = (row: UsageRepairRow) =>
     rows.some(
-      (r) =>
-        r.ts === row.ts &&
-        r.label === row.label &&
-        r.used === row.used &&
-        r.resetsAt === row.resetsAt,
+      (candidate) =>
+        candidate.ts === row.ts &&
+        candidate.label === row.label &&
+        candidate.used === row.used &&
+        candidate.resetsAt === row.resetsAt,
     );
-  const orphaned = input.rows
+  return inputRows
     .filter(
-      (r) =>
-        (r.provider === "claude" || r.provider === "claude:nefro") &&
-        r.schemaVersion == null &&
-        !represented(r),
+      (row) => isClaudeProvider(row.provider) && row.schemaVersion == null && !represented(row),
     )
-    .map((r) => ({
-      ...r,
+    .map((row) => ({
+      ...row,
       provider: "claude:unknown",
       schemaVersion: 2,
       provenance: "legacy-history",
       timestampSource: "unknown",
       accountUnresolved: true,
     }));
+}
+
+function reconcileExplicitRows(explicit: UsageRepairRow[], rows: UsageRepairRow[]) {
   const canonicalRows = rows.filter(
-    (r) => (r.sourceSessionId && r.sourceEventUuid) || r.sourcePrefixHash,
+    (row) => (row.sourceSessionId && row.sourceEventUuid) || row.sourcePrefixHash,
   );
-  const reconciledExplicit = explicit.filter((row) => {
+  return explicit.filter((row) => {
     if (
-      (row.provider !== "claude" && row.provider !== "claude:nefro") ||
+      !isClaudeProvider(row.provider) ||
       row.schemaVersion == null ||
       row.sourceSessionId ||
       row.sourceEventUuid
@@ -229,14 +234,16 @@ export function reconstructClaudeHistory(input: {
         canonical.unit === row.unit,
     );
   });
+}
+
+const rowRank = (row: UsageRepairRow) => {
+  if (row.timestampSource === "received" || row.provenance === "received") return 3;
+  return row.schemaVersion != null ? 2 : 1;
+};
+
+function uniqueRows(candidates: UsageRepairRow[]) {
   const unique = new Map<string, UsageRepairRow>();
-  const rank = (row: UsageRepairRow) =>
-    row.timestampSource === "received" || row.provenance === "received"
-      ? 3
-      : row.schemaVersion != null
-        ? 2
-        : 1;
-  for (const row of [...reconciledExplicit, ...rows, ...orphaned]) {
+  for (const row of candidates) {
     const key = [
       row.provider,
       row.ts,
@@ -249,7 +256,29 @@ export function reconstructClaudeHistory(input: {
       row.sourceEventUuid ?? "",
       row.sourcePrefixHash ?? "",
     ].join("|");
-    if (!unique.has(key) || rank(row) > rank(unique.get(key)!)) unique.set(key, row);
+    if (!unique.has(key) || rowRank(row) > rowRank(unique.get(key)!)) unique.set(key, row);
   }
-  return { rows: [...unique.values()].sort((a, b) => a.ts - b.ts) };
+  return [...unique.values()];
+}
+
+export function reconstructClaudeHistory(input: {
+  rows: UsageRepairRow[];
+  logs: Record<string, Event[]>;
+  threads: LogThread[];
+}) {
+  const explicit = input.rows.filter(
+    (row) => !isClaudeProvider(row.provider) || row.schemaVersion != null,
+  );
+  const threads = new Map(input.threads.map((thread) => [thread.id, thread]));
+  const events = collectLoggedEvents(input.logs, threads);
+  const sessionOwners = collectSessionOwners(events);
+  const rows: UsageRepairRow[] = [];
+  for (const group of groupEvents(events).values()) rows.push(...groupRows(group, sessionOwners));
+  const orphaned = orphanedLegacyRows(input.rows, rows);
+  const reconciledExplicit = reconcileExplicitRows(explicit, rows);
+  return {
+    rows: uniqueRows([...reconciledExplicit, ...rows, ...orphaned]).sort(
+      (left, right) => left.ts - right.ts,
+    ),
+  };
 }

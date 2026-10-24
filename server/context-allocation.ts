@@ -70,78 +70,130 @@ function addMessage(counts: Record<string, number>, message: any) {
   } else counts[category] += contentSize(blocks);
 }
 
+type ClaudeRequestIndex = {
+  blobs: Map<string, any>;
+  shapes: Map<string, any>;
+  requests: Map<string, any>;
+  latest: any;
+};
+function indexClaudeRequests(rows: any[]): ClaudeRequestIndex {
+  const index: ClaudeRequestIndex = {
+    blobs: new Map<string, any>(),
+    shapes: new Map<string, any>(),
+    requests: new Map<string, any>(),
+    latest: undefined,
+  };
+  for (const row of rows) {
+    if (row.type === "api-request-blob") index.blobs.set(row.hash, row.message);
+    if (row.type === "api-request-shape") index.shapes.set(row.shapeHash, row.shape);
+    if (row.type === "api-request") {
+      index.requests.set(row.id, row);
+      index.latest = row;
+    }
+  }
+  return index;
+}
+// Resolve only the latest request. Walk backwards through retained prefixes, collecting
+// disjoint tail segments instead of copying every historical request's full hash list.
+function claudeTailSegments(index: ClaudeRequestIndex): string[][] | undefined {
+  const segments: string[][] = [],
+    seen = new Set<any>();
+  let row = index.latest,
+    needed = Infinity;
+  for (let depth = 0; ; depth++) {
+    if (!row || seen.has(row) || depth >= 4096 || !Array.isArray(row.tail)) return undefined;
+    seen.add(row);
+    const keep = row.base ? Number(row.keep) : 0;
+    if (!Number.isSafeInteger(keep) || keep < 0) return undefined;
+    if (Number.isFinite(needed) && needed > keep + row.tail.length) return undefined;
+    const tailCount = Math.max(0, Math.min(row.tail.length, needed - keep));
+    segments.push(row.tail.slice(0, tailCount));
+    needed = Math.min(needed, keep);
+    if (needed === 0) break;
+    row = index.requests.get(row.base);
+  }
+  return segments;
+}
+function claudeAllocationCounts(rows: any[]): Record<string, number> | undefined {
+  const counts = { system: 0, tools: 0, messages: 0, tool_results: 0 };
+  const index = indexClaudeRequests(rows);
+  if (!index.latest) return undefined;
+  const segments = claudeTailSegments(index);
+  if (!segments) return undefined;
+  const shape = index.shapes.get(index.latest.shapeHash);
+  if (shape) {
+    counts.system = contentSize(shape.system);
+    counts.tools = Array.isArray(shape.tools) && shape.tools.length ? estimate(shape.tools) : 0;
+  }
+  for (let position = segments.length - 1; position >= 0; position--) {
+    for (const hash of segments[position]) addMessage(counts, index.blobs.get(hash));
+  }
+  return counts;
+}
+function codexAllocationCounts(rows: any[]): Record<string, number> | undefined {
+  const counts = { system: 0, tools: 0, messages: 0, tool_results: 0 };
+  let active: any[] = [],
+    seenStart = false,
+    base: any;
+  for (const row of rows) {
+    if (row.type === "session_meta") {
+      seenStart = true;
+      base = row.payload?.base_instructions;
+    }
+    if (row.type === "compacted") {
+      // Missing replacement history means the retained state is opaque. Never reuse old rows.
+      active = Array.isArray(row.payload?.replacement_history)
+        ? [...row.payload.replacement_history]
+        : [];
+      seenStart = true;
+    }
+    if (row.type === "response_item") active.push(row.payload);
+  }
+  if (!seenStart) return undefined;
+  if (base) counts.system = contentSize(typeof base === "string" ? base : base.text);
+  for (const item of active) addMessage(counts, item);
+  return counts;
+}
+
 /** Extract only retained native request contents, never the cumulative visible transcript. */
 export function nativeAllocationCounts(
   provider: string,
   rows: any[],
 ): Record<string, number> | undefined {
-  const counts = { system: 0, tools: 0, messages: 0, tool_results: 0 };
-  if (provider === "claude") {
-    const blobs = new Map<string, any>(),
-      shapes = new Map<string, any>(),
-      requests = new Map<string, any>();
-    let latest: any;
-    for (const row of rows) {
-      if (row.type === "api-request-blob") blobs.set(row.hash, row.message);
-      if (row.type === "api-request-shape") shapes.set(row.shapeHash, row.shape);
-      if (row.type === "api-request") {
-        requests.set(row.id, row);
-        latest = row;
-      }
-    }
-    if (!latest) return undefined;
-    // Resolve only the latest request. Walk backwards through retained prefixes, collecting
-    // disjoint tail segments instead of copying every historical request's full hash list.
-    const segments: string[][] = [],
-      seen = new Set<any>();
-    let row = latest,
-      needed = Infinity;
-    for (let depth = 0; ; depth++) {
-      if (!row || seen.has(row) || depth >= 4096 || !Array.isArray(row.tail)) return undefined;
-      seen.add(row);
-      const keep = row.base ? Number(row.keep) : 0;
-      if (!Number.isSafeInteger(keep) || keep < 0) return undefined;
-      if (Number.isFinite(needed) && needed > keep + row.tail.length) return undefined;
-      const tailCount = Math.max(0, Math.min(row.tail.length, needed - keep));
-      segments.push(row.tail.slice(0, tailCount));
-      needed = Math.min(needed, keep);
-      if (needed === 0) break;
-      row = requests.get(row.base);
-    }
-    const shape = shapes.get(latest.shapeHash);
-    if (shape) {
-      counts.system = contentSize(shape.system);
-      counts.tools = Array.isArray(shape.tools) && shape.tools.length ? estimate(shape.tools) : 0;
-    }
-    for (let i = segments.length - 1; i >= 0; i--) {
-      for (const hash of segments[i]) addMessage(counts, blobs.get(hash));
-    }
-    return counts;
-  }
-  if (provider === "codex") {
-    let active: any[] = [],
-      seenStart = false,
-      base: any;
-    for (const row of rows) {
-      if (row.type === "session_meta") {
-        seenStart = true;
-        base = row.payload?.base_instructions;
-      }
-      if (row.type === "compacted") {
-        // Missing replacement history means the retained state is opaque. Never reuse old rows.
-        active = Array.isArray(row.payload?.replacement_history)
-          ? [...row.payload.replacement_history]
-          : [];
-        seenStart = true;
-      }
-      if (row.type === "response_item") active.push(row.payload);
-    }
-    if (!seenStart) return undefined;
-    if (base) counts.system = contentSize(typeof base === "string" ? base : base.text);
-    for (const item of active) addMessage(counts, item);
-    return counts;
-  }
+  if (provider === "claude") return claudeAllocationCounts(rows);
+  if (provider === "codex") return codexAllocationCounts(rows);
   return undefined;
+}
+
+function allocationCategories(
+  used: number,
+  max: number | null,
+  counts?: Record<string, number>,
+): AllocationCategory[] {
+  const categories: AllocationCategory[] = [];
+  const entries = Object.entries(counts || {}).filter(
+    ([id, count]) => labels[id] && finite(count) && count > 0,
+  );
+  const total = entries.reduce((sum, [, count]) => sum + count, 0);
+  // Character estimates may exceed measured usage. Scale down only, preserving an honest
+  // unknown remainder when native system context or opaque compaction is unavailable.
+  const scale = total > used ? used / total : 1;
+  let allocated = 0;
+  for (const [id, count] of entries) {
+    const tokens = Math.floor(count * scale);
+    allocated += tokens;
+    if (tokens) categories.push({ id, label: labels[id], tokens, estimated: true });
+  }
+  if (used > allocated)
+    categories.push({
+      id: "unknown",
+      label: labels.unknown,
+      tokens: used - allocated,
+      estimated: true,
+    });
+  if (max !== null && max > used)
+    categories.push({ id: "free", label: labels.free, tokens: max - used, estimated: false });
+  return categories;
 }
 
 export function buildContextAllocation(
@@ -151,31 +203,7 @@ export function buildContextAllocation(
   const used = finite(thread.context?.used) ? Math.round(thread.context.used) : null;
   const max =
     finite(thread.context?.max) && thread.context.max > 0 ? Math.round(thread.context.max) : null;
-  const categories: AllocationCategory[] = [];
-  if (used !== null) {
-    const entries = Object.entries(counts || {}).filter(
-      ([id, n]) => labels[id] && finite(n) && n > 0,
-    );
-    const total = entries.reduce((sum, [, n]) => sum + n, 0);
-    // Character estimates may exceed measured usage. Scale down only, preserving an honest
-    // unknown remainder when native system context or opaque compaction is unavailable.
-    const scale = total > used ? used / total : 1;
-    let allocated = 0;
-    for (const [id, n] of entries) {
-      const tokens = Math.floor(n * scale);
-      allocated += tokens;
-      if (tokens) categories.push({ id, label: labels[id], tokens, estimated: true });
-    }
-    if (used > allocated)
-      categories.push({
-        id: "unknown",
-        label: labels.unknown,
-        tokens: used - allocated,
-        estimated: true,
-      });
-    if (max !== null && max > used)
-      categories.push({ id: "free", label: labels.free, tokens: max - used, estimated: false });
-  }
+  const categories = used !== null ? allocationCategories(used, max, counts) : [];
   return {
     used,
     max,

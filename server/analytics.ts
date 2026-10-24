@@ -64,25 +64,30 @@ export function readTurns(from: number, to: number, max = 50_000): Turn[] {
     .slice(-max);
 }
 
+function replayClaudeLog(accounting: SessionAccounting, threadId: string) {
+  let session = threadId;
+  let raw: Buffer;
+  try {
+    raw = fs.readFileSync(path.join(LOG_DIR, `${threadId}.jsonl`));
+  } catch {
+    return;
+  }
+  for (const line of linesWith(raw, ['"modelUsage"', '"init"'])) {
+    try {
+      const event = JSON.parse(line);
+      if (event.type === "system" && event.subtype === "init" && event.session_id)
+        session = event.session_id;
+      if (event.type === "result" && event.modelUsage)
+        accounting.consume(event.session_id || session, event);
+    } catch {}
+  }
+}
+
 // Restore baselines from every persisted result, including results with no user_input (e.g. compact).
 export function restoreAccounting(threads: { id: string; provider: string; sessionId?: string }[]) {
   const accounting = new SessionAccounting();
-  for (const th of threads.filter((t) => t.provider === "claude")) {
-    let session = th.id;
-    let raw: Buffer;
-    try {
-      raw = fs.readFileSync(path.join(LOG_DIR, `${th.id}.jsonl`));
-    } catch {
-      continue;
-    }
-    for (const line of linesWith(raw, ['"modelUsage"', '"init"'])) {
-      try {
-        const ev = JSON.parse(line);
-        if (ev.type === "system" && ev.subtype === "init" && ev.session_id) session = ev.session_id;
-        if (ev.type === "result" && ev.modelUsage) accounting.consume(ev.session_id || session, ev);
-      } catch {}
-    }
-  }
+  for (const thread of threads.filter((entry) => entry.provider === "claude"))
+    replayClaudeLog(accounting, thread.id);
   // The ledger is written before the display result log. Recover even if the process died between those writes.
   for (const row of readTurns(0, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER).sort(
     (a, b) => a.ts - b.ts,
