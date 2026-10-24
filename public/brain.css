@@ -136,12 +136,24 @@ body.brain {
 #graphView {
   min-width: 0;
 }
-#cy {
-  height: clamp(20rem, calc(100dvh - 19rem), 56rem);
-  border-radius: var(--r-lg);
+.graph-wrap {
+  position: relative;
+  height: max(22rem, calc(100dvh - 16rem));
+  margin-inline: calc(-1 * max(var(--sp-4), env(safe-area-inset-left)));
   background: var(--s1);
-  box-shadow: var(--shadow-card);
   overflow: hidden;
+}
+#cy {
+  position: absolute;
+  inset: 0;
+}
+@media (min-width: 600px) {
+  .graph-wrap {
+    margin-inline: 0;
+    height: max(26rem, calc(100dvh - 15rem));
+    border: 1px solid var(--edge);
+    border-radius: 12px;
+  }
 }
 #scrim {
   position: fixed;
@@ -225,18 +237,57 @@ body.brain {
   min-height: 44px;
   gap: var(--sp-2);
 }
-.graph-tools {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: var(--sp-2) var(--sp-4);
-  margin-bottom: var(--sp-3);
+.graph-legend-card {
+  position: absolute;
+  inset: auto auto var(--sp-3) var(--sp-3);
+  max-width: calc(100% - 2 * var(--sp-3));
+  background: var(--s1);
+  border: 1px solid var(--edge-strong);
+  border-radius: 12px;
+  box-shadow: var(--shadow-card);
+  color: var(--t2);
+}
+.legend-toggle {
+  display: block;
+  min-height: 44px;
+  padding: 0 var(--sp-4);
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: var(--fw-semi) var(--f-sm);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: default;
+}
+.legend-toggle:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+  border-radius: 12px;
+}
+#legendBody {
+  padding: 0 var(--sp-4) var(--sp-3);
+}
+#legendBody[hidden] {
+  display: none;
+}
+.legend-note {
+  margin: var(--sp-2) 0 0;
+  color: var(--t3);
+  font: var(--fw-reg) var(--f-sm);
+}
+@media (max-width: 599px) {
+  .legend-toggle {
+    cursor: pointer;
+  }
+}
+@media (min-width: 600px) {
+  .legend-toggle {
+    pointer-events: none;
+  }
 }
 .graph-legend {
-  display: flex;
-  flex: 1 1 20rem;
-  flex-wrap: wrap;
-  gap: var(--sp-2) var(--sp-4);
+  display: grid;
+  gap: var(--sp-2);
   padding: 0;
   margin: 0;
   list-style: none;
@@ -261,8 +312,7 @@ body.brain {
   clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
 }
 .legend-node.tag-node {
-  background: var(--s3);
-  border: 2px solid var(--viz-2);
+  background: var(--viz-2);
   border-radius: 4px;
 }
 .legend-line {
@@ -272,14 +322,26 @@ body.brain {
 .legend-line.page-link {
   border-top-style: dashed;
 }
-.graph-controls {
+.graph-toolbar {
+  position: absolute;
+  inset: var(--sp-3) var(--sp-3) auto auto;
   display: flex;
-  margin-inline-start: auto;
+  max-width: calc(100% - 2 * var(--sp-3));
+  padding: var(--sp-1);
   gap: var(--sp-1);
+  background: var(--s1);
+  border: 1px solid var(--edge-strong);
+  border-radius: var(--r-full);
+  box-shadow: var(--shadow-card);
 }
-.graph-controls .btn {
+.graph-toolbar .btn {
   min-width: 44px;
   min-height: 44px;
+  border-radius: var(--r-full);
+}
+.graph-toolbar .tog[aria-pressed="true"] {
+  background: var(--accent-tint);
+  color: var(--accent);
 }
 
 .brain .menu [role="option"] {
@@ -288,9 +350,4 @@ body.brain {
 .brain .menu .m-label {
   overflow-wrap: anywhere;
   white-space: normal;
-}
-
-#bm .graph-hint {
-  margin-bottom: var(--sp-3);
-  font: var(--fw-reg) var(--f-sm);
 }

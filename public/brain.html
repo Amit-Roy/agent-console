@@ -34,7 +34,6 @@
       <button type="button" id="tabPages" aria-pressed="true">Pages</button>
       <button type="button" id="tabTags" aria-pressed="false">Tags</button>
     </div>
-    <button type="button" class="chip tog" id="linksToggle" aria-pressed="false" hidden>Page links</button>
     <span class="muted" id="count" aria-live="polite"></span>
   </div>
   <p class="muted" id="status" aria-live="polite">Loading the brain…</p>
@@ -43,22 +42,28 @@
     <ul class="group" id="tagList" hidden></ul>
   </section>
   <section id="graphView" aria-label="Brain graph" hidden>
-    <div class="graph-tools">
-      <ul class="graph-legend" aria-label="Graph legend">
-        <li><i class="legend-node wiki" aria-hidden="true"></i>Wiki page</li>
-        <li><i class="legend-node ops" aria-hidden="true"></i>Operating note</li>
-        <li><i class="legend-node tag-node" aria-hidden="true"></i>Tag</li>
-        <li><i class="legend-line" aria-hidden="true"></i>Tagged with</li>
-        <li><i class="legend-line page-link" aria-hidden="true"></i>Page link</li>
-      </ul>
-      <div class="graph-controls">
+    <div class="graph-wrap">
+      <div id="cy" role="img" aria-label="Graph of brain pages and tags. Use List view for a text version."></div>
+      <div class="graph-toolbar" role="toolbar" aria-label="Graph controls">
         <button type="button" class="btn ghost icon" id="zoomOut" aria-label="Zoom out"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8h10"/></svg></button>
         <button type="button" class="btn ghost icon" id="zoomIn" aria-label="Zoom in"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8h10M8 3v10"/></svg></button>
         <button type="button" class="btn ghost" id="fitGraph">Fit</button>
+        <button type="button" class="btn ghost tog" id="linksToggle" aria-pressed="false">Page links</button>
+      </div>
+      <div class="graph-legend-card">
+        <button type="button" class="legend-toggle" id="legendToggle" aria-expanded="true" aria-controls="legendBody">Legend</button>
+        <div id="legendBody">
+          <ul class="graph-legend" aria-label="Graph legend">
+            <li><i class="legend-node wiki" aria-hidden="true"></i>Wiki page</li>
+            <li><i class="legend-node ops" aria-hidden="true"></i>Operating note</li>
+            <li><i class="legend-node tag-node" aria-hidden="true"></i>Tag</li>
+            <li><i class="legend-line" aria-hidden="true"></i>Tagged with</li>
+            <li><i class="legend-line page-link" aria-hidden="true"></i>Page link</li>
+          </ul>
+          <p class="legend-note">Zoom for labels. Select a node for details.</p>
+        </div>
       </div>
     </div>
-    <p class="muted graph-hint">Zoom for labels. Select a node for details.</p>
-    <div id="cy" role="img" aria-label="Graph of brain pages and tags. Use List view for a text version."></div>
   </section>
   <p class="muted foot" id="stamp"></p>
 </main>
