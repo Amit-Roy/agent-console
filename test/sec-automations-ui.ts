@@ -134,7 +134,11 @@ async function crashLog(
   await page.screenshot({ path: `${OUT}/sec-crash-log-${name}.png` });
 
   const before = fetches;
+  const expectSoon = async (ok: () => boolean) => {
+    for (let tries = 0; tries < 40 && !ok(); tries++) await page.waitForTimeout(50);
+  };
   await dialog.getByRole("button", { name: "Refresh" }).click();
+  await expectSoon(() => fetches === before + 1);
   check(`${name}: Refresh refetches`, fetches === before + 1, `${before} -> ${fetches}`);
   await page.clock.runFor(10_000);
   await page.waitForTimeout(150);
