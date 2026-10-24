@@ -133,3 +133,32 @@ With `--champion`, the fit stores `validation.quantileModel.champion.pairedDelta
 `promotionDecision` checks coverage against the champion. Without a scoreable champion or its coverage it uses the absolute bounds: P80 0.75-0.92, P95 at least 0.90. With champion coverage, a challenger outside those bounds still passes unless its distance from nominal (0.80, 0.95) exceeds the champion's by more than 2 standard errors, `sqrt(q(1-q)/n)` over the shared held-out rows. Reason like `p80 coverage 0.963 is above 0.92 and 0.036 further from 0.80 than champion (limit 0.077)`. Hard sanity bounds always apply: P80 0.60-0.98, P95 at least 0.80. The metrics also carry `championP80Coverage` and `championP95Coverage`. For pinball, when `pairedDelta` is present it rejects if `lower90 > 0` (challenger clearly worse, reason like `pinball worse: delta 0.07 [0.05,0.10]`) or if the challenger mean pinball is above 1.10 times the champion (hard cap). Without `pairedDelta` it keeps the older 1.02 ratio rule.
 
 Each head carries a conformal offset in log1p space. The runtime adds it to `baseline` before the tree sum, then applies the ceiling cap and the monotone rearrangement. The fit computes it from training rows only (conformalized quantile regression): thread groups are dealt round-robin into 5 folds, the five heads are refit without each fold, and the offset for quantile q is the q-th empirical quantile of `log1p(total) - out_of_fold_prediction`, clamped to +/-1.0. Held-out rows never touch it. The held-out score, the paired delta and the stability probe all apply the offsets; the champion is still scored with its own stored offsets. `validation.quantileModel` records `offsetSource: "oof-cqr"`, `offsetFolds` and `oofCoverage` = per-quantile `{nominal, offset, clamped, before, after}` (out-of-fold coverage before and after the shift, ignoring the cap and rearrangement). On the 2026-10-24 dataset the offsets moved held-out P80 coverage from 0.923, which the gate rejected as above 0.92, to 0.875, and mean pinball from 0.452 to 0.445 against the champion's 0.496.
+
+## CLI
+
+`bin/effort-model` is the agent-facing entry point. Each command prints facts on success, failures print `effort-model: <stage>: <msg>` on stderr with exit 1, and bad arguments print one usage line with exit 2. `--json` gives machine output.
+
+```sh
+bin/effort-model status
+bin/effort-model bench --dataset /tmp/effort-e2e/x/dataset.json --external swe-chat --out /tmp/effort-bench
+bin/effort-model data fetch
+```
+
+- `status` reads the live artifact, the optional challenger, `calibration-state.json` and the `effort-model.json` toggles in at most 300 bytes. Missing files print `none`.
+
+  ```
+  live 2026-10-24 pinball 0.479 p80 0.84 p95 0.97 rows 410/101 nodes 5282
+  last 2026-10-24 rejected: p80 coverage 0.93 is above 0.92.
+  next 2026-10-31 | toggles all on
+  ```
+
+- `bench` scores `current` (the live artifact's recorded `parameters`, else the depth-3 legacy ones), `stable` (`TREE_PARAMS`) and, with `--external swe-chat`, `stable+swe-chat-prior` on the same frozen held-out block. The default dataset is the installed `triage-effort-training.json` beside the artifact. The prior pools the external rows at weight 0.2 after moving their median onto ours. External rows are train-only: never held out, never part of the `workloadCeiling`. Their request features come from `scripts/effort-data-features.ts` (the runtime `requestFeatures`), cached as `features.jsonl` beside `rows.jsonl`; `--external-rows PATH` overrides the default `~/.cache/agent-console/effort-data/swe-chat`. The gap is the mean over 6 rolling cut-points of the pinball change when the newest 14 training rows are dropped. It writes `summary.json` under `--out` (default `~/.cache/agent-console/effort-bench/<timestamp>/`). `stable` applies the fitter's out-of-fold conformal offsets (`conformal_offsets`), `stable+swe-chat-prior` computes its offsets from out-of-fold residuals on our training rows only (external rows join the fits, never the residuals), and `current` and `qrf` use none. Offsets are in `summary.json` per candidate. They are applied on the final split only: the rolling gap uses raw heads, because offsets would cost about 6x per cut-point. `qrf` is a bench-only quantile regression forest (`quantile-forest`, 300 trees) on the same features, split and log1p target; `min_samples_leaf` in {5, 10, 20} and `max_features` in {0.5, 1.0} are picked on the older 80% of the training rows and scored on the newest 20%. It reports `nodes n/a` and its pickled size in `kb`; there is no Node export. Every line ends with the serialized model size and fit time, and `--candidates a,b` runs a subset.
+
+  ```
+  stable pinball 0.463 cov 0.92/0.99 gap 0.013 nodes 2518 kb 99 fit 2.1s
+  best stable out /tmp/effort-bench/summary.json
+  ```
+
+- `data fetch [--dir DIR] [--raw-dir DIR] [--keep-raw]` runs `scripts/effort-data.py` and passes its line through, for example `swe-chat up to date rev 1a2b3c4d rows 13830`. Only the fetch needs pyarrow; `bench` reads jsonl.
+
+`AGENT_CONSOLE_TRIAGE_PYTHON` selects the Python. Tests: `npm run test:effort-model` and `npm run test:effort-bench`.
