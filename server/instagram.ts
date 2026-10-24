@@ -14,6 +14,9 @@ export const BLOCKED_MESSAGE =
   "Instagram blocked anonymous download. Cookie fallback is not set up yet.";
 const DEDUPE_MS = 60_000;
 const TIMEOUT_MS = 120_000;
+export const MAX_ITEMS = 10;
+export const MAX_TOTAL_BYTES = 100 << 20;
+const MEDIA_RE = /^(\d+)\.(mp4|webm|mkv|mov|m4v|jpe?g|png|webp)$/i;
 
 export interface InstagramLink {
   kind: "reel" | "p" | "tv";
@@ -55,8 +58,9 @@ export function buildArgs(url: string, outDir: string): string[] {
   return [
     "--ignore-config",
     "--no-cookies",
-    "--no-playlist",
     "--no-progress",
+    "--playlist-end",
+    String(MAX_ITEMS),
     "--max-filesize",
     "100M",
     "-f",
@@ -65,7 +69,7 @@ export function buildArgs(url: string, outDir: string): string[] {
     "mp4",
     "--write-info-json",
     "-o",
-    path.join(outDir, "video.%(ext)s"),
+    path.join(outDir, "%(playlist_index|1)s.%(ext)s"),
     "--",
     url,
   ];
@@ -111,19 +115,25 @@ function runYtDlp(args: string[], signal?: AbortSignal): Promise<void> {
   });
 }
 
-function captionText(info: any, url: string): string {
+function captionText(info: any, url: string, itemCount: number): string {
   const lines = [
     `caption: ${String(info?.description ?? info?.title ?? "").slice(0, 4000)}`,
     `uploader: ${String(info?.uploader ?? info?.channel ?? "")}`,
     `upload_date: ${String(info?.upload_date ?? "")}`,
     `duration: ${String(info?.duration ?? "")}`,
+    `items: ${itemCount}`,
     `url: ${url}`,
   ];
   return lines.join("\n") + "\n";
 }
 
+export interface DownloadedItem {
+  path: string;
+  name: string;
+}
+
 export interface Downloaded {
-  videoPath: string;
+  items: DownloadedItem[];
   captionPath: string;
   cleanup: () => void;
 }
@@ -153,17 +163,35 @@ async function downloadNow(link: InstagramLink, signal?: AbortSignal): Promise<D
   const cleanup = () => fs.rmSync(stage, { recursive: true, force: true });
   try {
     await runYtDlp(buildArgs(link.url, stage), signal);
-    const videoName = fs
+    const found = fs
       .readdirSync(stage)
-      .find((name) => /^video\.(?!info\.json$)[^.]+$/.test(name));
-    if (!videoName) throw new ShareError("Instagram download failed.");
+      .map((name) => ({ name, match: MEDIA_RE.exec(name) }))
+      .filter((entry) => entry.match)
+      .sort((left, right) => Number(left.match![1]) - Number(right.match![1]))
+      .slice(0, MAX_ITEMS);
+    if (!found.length) throw new ShareError("Instagram download failed.");
+    const total = found.reduce(
+      (sum, entry) => sum + fs.statSync(path.join(stage, entry.name)).size,
+      0,
+    );
+    if (total > MAX_TOTAL_BYTES) throw new ShareError("That post is too large (over 100 MB).");
+    const items = found.map((entry, index) => {
+      const ext = entry.match![2].toLowerCase();
+      const isVideo = /^(mp4|webm|mkv|mov|m4v)$/.test(ext);
+      const outExt = isVideo ? "mp4" : ext === "jpeg" ? "jpg" : ext;
+      const base = found.length > 1 ? `slide-${index + 1}` : isVideo ? "video" : "image";
+      return { path: path.join(stage, entry.name), name: `${base}.${outExt}` };
+    });
     let info: any = {};
+    const infoName = fs.existsSync(path.join(stage, "1.info.json"))
+      ? "1.info.json"
+      : fs.readdirSync(stage).find((name) => name.endsWith(".info.json"));
     try {
-      info = JSON.parse(fs.readFileSync(path.join(stage, "video.info.json"), "utf8"));
+      if (infoName) info = JSON.parse(fs.readFileSync(path.join(stage, infoName), "utf8"));
     } catch {}
     const captionPath = path.join(stage, "instagram.txt");
-    fs.writeFileSync(captionPath, captionText(info, link.url), { mode: 0o600 });
-    return { videoPath: path.join(stage, videoName), captionPath, cleanup };
+    fs.writeFileSync(captionPath, captionText(info, link.url, items.length), { mode: 0o600 });
+    return { items, captionPath, cleanup };
   } catch (error) {
     cleanup();
     recent.delete(link.url);

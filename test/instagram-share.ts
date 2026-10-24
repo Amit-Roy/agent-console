@@ -47,15 +47,12 @@ for (const [text, url, want] of table)
 const args = buildArgs("https://www.instagram.com/reel/ABCDE12345/", "/tmp/out");
 assert.equal(args.at(-1), "https://www.instagram.com/reel/ABCDE12345/");
 assert.equal(args.at(-2), "--");
-for (const flag of [
-  "--ignore-config",
-  "--no-cookies",
-  "--no-playlist",
-  "--no-progress",
-  "--write-info-json",
-])
+for (const flag of ["--ignore-config", "--no-cookies", "--no-progress", "--write-info-json"])
   assert.ok(args.includes(flag), flag);
+assert.ok(!args.includes("--no-playlist"), "carousels need the playlist");
 assert.equal(args[args.indexOf("--max-filesize") + 1], "100M");
+assert.equal(args[args.indexOf("--playlist-end") + 1], "10");
+assert.equal(args[args.indexOf("-o") + 1], "/tmp/out/%(playlist_index|1)s.%(ext)s");
 assert.equal(classifyError("ERROR: login required", 1), BLOCKED_MESSAGE);
 assert.equal(classifyError("HTTP Error 429: rate-limit reached", 1), BLOCKED_MESSAGE);
 assert.equal(classifyError("Video is not available", 1), BLOCKED_MESSAGE);
@@ -77,9 +74,13 @@ dir=$(dirname "$out")
 case "$(cat "$(dirname "$0")/mode" 2>/dev/null)" in
   blocked) echo "ERROR: [Instagram] login required" >&2; exit 1 ;;
   timeout) echo "ERROR: Read timed out" >&2; exit 1 ;;
+  carousel)
+    for i in 1 2 3; do printf "fakeslide$i" > "$dir/$i.mp4"; printf '{"description":"hello caption","uploader":"someone","secret":"RAWINFO"}' > "$dir/$i.info.json"; done
+    printf 'fakeimage' > "$dir/4.jpg"
+    exit 0 ;;
 esac
-printf 'fakevideo' > "$dir/video.mp4"
-printf '{"description":"hello caption","uploader":"someone","upload_date":"20260101","duration":12,"secret":"RAWINFO"}' > "$dir/video.info.json"
+printf 'fakevideo' > "$dir/1.mp4"
+printf '{"description":"hello caption","uploader":"someone","upload_date":"20260101","duration":12,"secret":"RAWINFO"}' > "$dir/1.info.json"
 `,
   { mode: 0o755 },
 );
@@ -93,15 +94,33 @@ const stageLeftovers = () => {
 
 setMode("ok");
 const good = await downloadInstagram(link("AAAAA11111"));
-assert.equal(fs.readFileSync(good.videoPath, "utf8"), "fakevideo");
+assert.deepEqual(
+  good.items.map((item) => item.name),
+  ["video.mp4"],
+);
+assert.equal(fs.readFileSync(good.items[0].path, "utf8"), "fakevideo");
 const caption = fs.readFileSync(good.captionPath, "utf8");
 assert.match(caption, /hello caption/);
 assert.match(caption, /uploader: someone/);
+assert.match(caption, /items: 1/);
 assert.ok(!caption.includes("RAWINFO"), "raw info json must not leak");
 good.cleanup();
 assert.deepEqual(stageLeftovers(), []);
 
 await assert.rejects(downloadInstagram(link("AAAAA11111")), /just requested/);
+
+setMode("carousel");
+const slides = await downloadInstagram(link("SLIDE11111"));
+assert.deepEqual(
+  slides.items.map((item) => item.name),
+  ["slide-1.mp4", "slide-2.mp4", "slide-3.mp4", "slide-4.jpg"],
+);
+assert.equal(fs.readFileSync(slides.items[2].path, "utf8"), "fakeslide3");
+const slideCaption = fs.readFileSync(slides.captionPath, "utf8");
+assert.equal(slideCaption.match(/caption:/g)?.length, 1, "caption once");
+assert.match(slideCaption, /items: 4/);
+assert.ok(!slideCaption.includes("RAWINFO"));
+slides.cleanup();
 
 setMode("blocked");
 await assert.rejects(downloadInstagram(link("BBBBB22222")), { message: BLOCKED_MESSAGE });
@@ -166,11 +185,25 @@ try {
     .readdirSync(uploads)
     .flatMap((uploadId) => fs.readdirSync(path.join(uploads, uploadId)));
   assert.deepEqual(names.sort(), ["instagram.txt", "video.mp4"]);
+  assert.match(body.prompt, /Instagram reel/);
+  assert.deepEqual(body.attachments.map((file: any) => file.name).sort(), [
+    "instagram.txt",
+    "video.mp4",
+  ]);
+  for (const file of body.attachments) {
+    assert.ok(fs.existsSync(path.join(uploads, file.id, file.name)), file.name);
+    assert.ok(file.size > 0 && file.kind && file.media_type);
+  }
   await new Promise((resolve) => setTimeout(resolve, 500));
   const saved = JSON.parse(fs.readFileSync(path.join(dataDir, "threads.json"), "utf8"));
   const thread = saved.find((entry: any) => entry.id === body.thread);
   assert.equal(thread.title, "Instagram reel EEEEE55555");
   assert.equal(thread.provider, "claude");
+  const logFile = path.join(dataDir, "logs", `${body.thread}.jsonl`);
+  assert.ok(
+    !fs.existsSync(logFile) || !fs.readFileSync(logFile, "utf8").includes('"user_input"'),
+    "share must not send a message",
+  );
   const savedBefore = JSON.parse(fs.readFileSync(path.join(dataDir, "threads.json"), "utf8"));
   const intoExisting = await post(base, {
     url: "https://www.instagram.com/reel/GGGGG77777/",
@@ -186,6 +219,19 @@ try {
     savedBefore.length,
     "no new thread when sharing into an existing one",
   );
+  setMode("carousel");
+  const multi = await post(base, { url: "https://www.instagram.com/p/CARO1234567/" });
+  const multiBody: any = await multi.json();
+  assert.equal(multi.status, 200, JSON.stringify(multiBody));
+  assert.deepEqual(multiBody.attachments.map((file: any) => file.name).sort(), [
+    "instagram.txt",
+    "slide-1.mp4",
+    "slide-2.mp4",
+    "slide-3.mp4",
+    "slide-4.jpg",
+  ]);
+  assert.match(multiBody.prompt, /post \(4 slides\)/);
+  setMode("ok");
   for (const thread of ["nope", "00000000-0000-4000-8000-000000000000", 7]) {
     const unknown = await post(base, { url: "https://www.instagram.com/reel/HHHHH88888/", thread });
     assert.equal(unknown.status, 404, `thread ${thread}`);
@@ -196,7 +242,7 @@ try {
   assert.equal(((await blocked.json()) as any).error, BLOCKED_MESSAGE);
   assert.equal(
     JSON.parse(fs.readFileSync(path.join(dataDir, "threads.json"), "utf8")).length,
-    1,
+    2,
     "no thread on failure",
   );
   console.log("instagram-share: ok");
