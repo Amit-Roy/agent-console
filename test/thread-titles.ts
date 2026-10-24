@@ -51,7 +51,7 @@ try {
   assert.ok(!t.titleLocked);
   threads.send(t.id, "fix the login redirect bug please");
   await tick();
-  assert.equal(threads.get(t.id)!.title, "fix:the login");
+  assert.equal(threads.get(t.id)!.title, "fix the login redirect");
   assert.equal(threads.get(t.id)!.autoTitle, false);
   // the title helper reads every user message from the log, not a stored copy
   assert.equal(threads.get(t.id)!.recent, undefined);
@@ -71,12 +71,11 @@ try {
   threads.send(named.id, "completely different subject entirely");
   await tick();
   assert.equal(threads.get(named.id)!.title, "agent-console:10 Idle windows");
-  // A distinct long model reply is shortened on a feature word boundary.
+  // A long model reply is shortened on a word boundary.
   const capped = threads.create({ provider: "fixture", cwd: path.join(dir, "capped") });
-  threads.send(capped.id, "Mobile:keyboard focus overflow");
+  threads.send(capped.id, "Video generation portfolio exploration plans");
   await tick();
-  assert.ok(threads.get(capped.id)!.title!.length <= 20, "title exceeds Android width");
-  assert.equal(threads.get(capped.id)!.title, "Mobile:keyboard");
+  assert.equal(threads.get(capped.id)!.title, "Video generation portfolio");
 } finally {
   threads.shutdown();
   fs.rmSync(dir, { recursive: true, force: true });

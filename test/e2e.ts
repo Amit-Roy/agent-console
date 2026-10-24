@@ -278,14 +278,14 @@ if (hello.providers.some((p: any) => p.id === "mock")) {
   );
   await waitFor((m) => m.t === "event" && m.event.type === "result", 5000);
   clear();
-  ws.send(JSON.stringify({ t: "send", thread: autoId, text: "now something unrelated entirely" }));
+  ws.send(JSON.stringify({ t: "send", thread: autoId, text: "now something unrelated" }));
   const next = await waitFor(
     (m) => m.t === "thread" && m.thread.id === autoId && m.thread.title !== "fix the flaky login",
     5000,
   );
   check(
     "title: every later prompt renames it from the latest text",
-    next?.thread?.title === "now something unrelated entirely",
+    next?.thread?.title === "now something unrelated",
     next?.thread?.title,
   );
   await waitFor((m) => m.t === "event" && m.event.type === "result", 5000);
@@ -299,9 +299,7 @@ if (hello.providers.some((p: any) => p.id === "mock")) {
   );
   const refreshed = await waitFor(
     (m) =>
-      m.t === "thread" &&
-      m.thread.id === autoId &&
-      m.thread.title !== "now something unrelated entirely",
+      m.t === "thread" && m.thread.id === autoId && m.thread.title !== "now something unrelated",
     5000,
   );
   check(
