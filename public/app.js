@@ -4769,6 +4769,7 @@ createMenu({
     { value: "vault", label: "Vault", desc: "API tokens, write-only", icon: "key" },
     { value: "doctor", label: "Doctor", desc: "Check and repair the setup", icon: "alert" },
     { value: "ideas", label: "App ideas", icon: "sparkle" },
+    { value: "brain", label: "Brain", desc: "Search the shared memory", icon: "search" },
     { value: "reload", label: "Reload page", icon: "refresh" },
     {
       value: "restart",
@@ -4785,6 +4786,7 @@ createMenu({
     else if (v === "vault") location.href = $("vault-link").href;
     else if (v === "doctor") location.href = "/doctor";
     else if (v === "ideas") location.href = $("ideas-link").href;
+    else if (v === "brain") location.href = $("brain-link").href;
     else if (v === "task") {
       setLane("tasks");
       openTaskDialog();

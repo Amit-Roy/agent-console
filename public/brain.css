@@ -1,0 +1,217 @@
+/* Brain graph: searchable list + Cytoscape graph of the shared wiki. Reuses ideas.css groups and the --sp-* / --viz-* tokens. */
+body.brain {
+  --wiki: var(--viz-1);
+  --ops: var(--viz-3);
+}
+.brain .range button {
+  min-height: 44px;
+  min-width: 4.5rem;
+}
+.brain .range button[aria-pressed="true"] {
+  background: var(--s1);
+  color: var(--accent);
+  box-shadow: var(--shadow-card);
+}
+#bm {
+  background: transparent;
+  box-shadow: none;
+  border: 0;
+  border-radius: 0;
+  display: grid;
+  gap: var(--sp-4);
+  width: min(72rem, 100%);
+  margin: 0 auto;
+  padding: var(--sp-5) max(var(--sp-4), env(safe-area-inset-left)) var(--sp-8);
+}
+#bm .muted {
+  margin: 0;
+}
+.search input {
+  width: 100%;
+  min-height: 44px;
+  padding: 0 var(--sp-4);
+  border: 1px solid var(--edge-strong);
+  border-radius: var(--r-full);
+  background: var(--s1);
+  color: var(--t1);
+  font: var(--fw-reg) var(--f-md);
+}
+.search input:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+.chips {
+  display: flex;
+  gap: var(--sp-2);
+  overflow-x: auto;
+  padding-bottom: var(--sp-1);
+  scrollbar-width: thin;
+}
+.chips:empty {
+  display: none;
+}
+.chip {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  min-height: 44px;
+  padding: 0 var(--sp-3);
+  border: 1px solid var(--edge-strong);
+  border-radius: var(--r-full);
+  background: var(--s1);
+  color: var(--t2);
+  font: var(--fw-med) var(--f-sm);
+  cursor: pointer;
+  text-decoration: none;
+}
+.chip:hover {
+  color: var(--t1);
+}
+.chip:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+.chip[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--accent-tint);
+  color: var(--accent);
+}
+.chip small {
+  color: var(--t3);
+  font: var(--fw-reg) var(--f-sm);
+}
+.subbar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+.subbar .muted {
+  margin-inline-start: auto;
+}
+.tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+}
+.tag {
+  padding: 1px var(--sp-2);
+  border-radius: var(--r-full);
+  background: var(--s3);
+  color: var(--t2);
+  font: var(--fw-med) var(--f-sm);
+}
+.layer {
+  display: inline-block;
+  width: 0.625rem;
+  height: 0.625rem;
+  margin-inline-end: var(--sp-2);
+  border-radius: 50%;
+  background: var(--wiki);
+  flex: none;
+}
+.layer.ops {
+  background: var(--ops);
+}
+.group .n {
+  display: flex;
+  align-items: center;
+}
+.group .l.wrap {
+  white-space: normal;
+}
+.group .meta {
+  color: var(--t3);
+  font: var(--fw-reg) var(--f-sm);
+}
+.group .snip {
+  color: var(--t2);
+  font: var(--fw-reg) var(--f-sm);
+  white-space: normal;
+}
+.group a.row {
+  align-items: flex-start;
+}
+#cy {
+  height: clamp(20rem, calc(100dvh - 19rem), 56rem);
+  border-radius: var(--r-lg);
+  background: var(--s1);
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+}
+#scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  background: var(--scrim);
+}
+.sidesheet {
+  position: fixed;
+  z-index: 21;
+  inset: auto 0 0 0;
+  max-height: 82dvh;
+  display: flex;
+  flex-direction: column;
+  background: var(--pop);
+  color: var(--t1);
+  border-radius: var(--r-lg) var(--r-lg) 0 0;
+  box-shadow: var(--shadow-pop);
+}
+.sidesheet[hidden] {
+  display: none;
+}
+.sheethead {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4);
+  border-bottom: 1px solid var(--edge);
+}
+.sheethead h2 {
+  flex: 1;
+  min-width: 0;
+  font: var(--fw-semi) var(--f-lg);
+  overflow-wrap: anywhere;
+}
+.sheethead .btn.icon {
+  padding: 0;
+}
+.sheetbody {
+  display: grid;
+  gap: var(--sp-4);
+  padding: var(--sp-4) var(--sp-4) max(var(--sp-6), env(safe-area-inset-bottom));
+  overflow-y: auto;
+}
+.sheetbody h3 {
+  margin: 0 0 var(--sp-2);
+  color: var(--t2);
+  font: var(--fw-semi) var(--f-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.sheetbody .group {
+  background: var(--s2);
+  box-shadow: none;
+}
+.sheetbody .prose {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+@media (min-width: 900px) {
+  #scrim {
+    display: none;
+  }
+  .sidesheet {
+    inset: 0 0 0 auto;
+    width: min(28rem, 40vw);
+    max-height: none;
+    border-radius: var(--r-lg) 0 0 var(--r-lg);
+  }
+}
+#bm .foot {
+  margin-top: var(--sp-3);
+}
+.sheetbody .chips {
+  flex-wrap: wrap;
+  overflow: visible;
+}

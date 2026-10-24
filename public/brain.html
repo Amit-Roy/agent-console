@@ -1,0 +1,57 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>Brain · Agent Console</title>
+<link rel="icon" href="/icon.svg"><link rel="apple-touch-icon" href="/icon-192.png">
+<meta name="theme-color" content="#eeeef2" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0b0b0d" media="(prefers-color-scheme: dark)">
+<link rel="preload" href="/fonts/inter-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/dashboard.css"><link rel="stylesheet" href="/ideas.css"><link rel="stylesheet" href="/brain.css"></head>
+<body class="ideas brain">
+<header class="dh">
+  <a class="btn ghost back" id="back" href="/" aria-label="Back to the console"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M10 3.5 5.5 8l4.5 4.5"/></svg><span>Console</span></a>
+  <h1 id="title">Brain</h1>
+  <!-- biome-ignore lint/a11y/useSemanticElements: role=group on a div styled by .range; fieldset would change the layout -->
+  <div class="range" id="viewToggle" role="group" aria-label="View">
+    <button type="button" id="viewList" aria-pressed="true">List</button>
+    <button type="button" id="viewGraph" aria-pressed="false">Graph</button>
+  </div>
+</header>
+<main id="bm" aria-busy="true">
+  <search>
+  <form id="searchForm" class="search" autocomplete="off">
+    <input id="q" type="search" enterkeyhint="search" placeholder="Search pages, tags, descriptions" aria-label="Search the brain" maxlength="200">
+  </form>
+  </search>
+  <!-- biome-ignore lint/a11y/useSemanticElements: role=group on a scrolling chip row; fieldset would change the layout -->
+  <div class="chips" id="tagChips" role="group" aria-label="Filter by tag"></div>
+  <div class="subbar">
+    <!-- biome-ignore lint/a11y/useSemanticElements: role=group on a div styled by .range; fieldset would change the layout -->
+    <div class="range" id="listTabs" role="group" aria-label="List">
+      <button type="button" id="tabPages" aria-pressed="true">Pages</button>
+      <button type="button" id="tabTags" aria-pressed="false">Tags</button>
+    </div>
+    <button type="button" class="chip tog" id="linksToggle" aria-pressed="false" hidden>Links</button>
+    <span class="muted" id="count" aria-live="polite"></span>
+  </div>
+  <p class="muted" id="status" aria-live="polite">Loading the brain…</p>
+  <section id="listView" aria-label="Brain pages">
+    <ul class="group" id="pageList"></ul>
+    <ul class="group" id="tagList" hidden></ul>
+  </section>
+  <section id="graphView" aria-label="Brain graph" hidden>
+    <div id="cy" role="img" aria-label="Graph of brain pages and tags. Use List view for a text version."></div>
+  </section>
+  <p class="muted foot" id="stamp"></p>
+</main>
+<div id="scrim" hidden></div>
+<aside id="sheet" class="sidesheet" role="dialog" aria-modal="false" aria-labelledby="sheetTitle" hidden>
+  <div class="sheethead">
+    <!-- biome-ignore lint/a11y/useHeadingContent: the sheet title is filled in by brain.js -->
+    <h2 id="sheetTitle"></h2>
+    <button type="button" class="btn ghost icon" id="sheetClose" aria-label="Close details"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg></button>
+  </div>
+  <div id="sheetBody" class="sheetbody"></div>
+</aside>
+<script type="module" src="/brain.js"></script>
+</body></html>
