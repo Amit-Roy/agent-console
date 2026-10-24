@@ -75,6 +75,7 @@ import { providerInfo, refreshPiModels } from "./providers/index.ts";
 import { effortModelPath } from "./providers/triage-effort.ts";
 import { describe, Schedules } from "./schedules.ts";
 import { mountSecurity } from "./security.ts";
+import { CliSearch } from "./cli-search.ts";
 import { SessionSearch } from "./session-search.ts";
 import { isSandboxedShareProvider, sharePrompt, shareTitle } from "./share/prompt.ts";
 import { resolveShare } from "./share/registry.ts";
@@ -587,6 +588,7 @@ async function piResearch(input: any, thread?: string): Promise<string> {
   return researchToolText(res);
 }
 
+const cliSearch = new CliSearch();
 app.post("/api/agent-tools/:name", express.json({ limit: "1mb" }), async (req, res) => {
   const given = Buffer.from(String(req.headers["x-agent-console-tool"] || ""));
   if (given.length !== TOOL_TOKEN.length || !crypto.timingSafeEqual(given, Buffer.from(TOOL_TOKEN)))
@@ -599,19 +601,21 @@ app.post("/api/agent-tools/:name", express.json({ limit: "1mb" }), async (req, r
     if (
       thread &&
       threads.get(thread)?.issueRun &&
-      !["session_search", "session_read"].includes(req.params.name)
+      !["session_search", "session_read", "cli_search"].includes(req.params.name)
     ) {
       throw new Error("Unattended issue runs may only use read-only session tools.");
     }
     const input = req.body ?? {};
     const result =
-      req.params.name === "session_search"
-        ? await sessionSearch.search(input)
-        : req.params.name === "session_read"
-          ? await sessionSearch.read(input)
-          : req.params.name === "pi_research"
-            ? await piResearch(input, thread)
-            : schedules.tool(req.params.name, thread, input);
+      req.params.name === "cli_search"
+        ? cliSearch.search(input)
+        : req.params.name === "session_search"
+          ? await sessionSearch.search(input)
+          : req.params.name === "session_read"
+            ? await sessionSearch.read(input)
+            : req.params.name === "pi_research"
+              ? await piResearch(input, thread)
+              : schedules.tool(req.params.name, thread, input);
     res.setHeader("Cache-Control", "no-store");
     res.json(result);
   } catch (e: any) {

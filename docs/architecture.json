@@ -1,77 +1,94 @@
 {
- "title": "Effort model weekly retrain",
- "subtitle": "Triage worker refit, champion/challenger gate, install",
+ "title": "Agent tool discovery",
+ "subtitle": "MCP tools served by the Console",
  "items": [
   {
-   "group": "Triage worker",
-   "sub": "scripts/github-triage.ts",
-   "border": "dashed",
+   "group": "Agent session",
+   "sub": "Claude, Codex, Pi",
+   "border": "solid",
    "color": "blue",
-   "icon": "server",
+   "icon": "bot",
    "items": [
     {
-     "id": "sched",
-     "label": "Weekly calibrate",
-     "tech": "github-triage.ts",
-     "desc": "7-day interval, 6 h crash retry",
-     "icon": "calendar-clock",
+     "id": "agent",
+     "label": "Agent",
+     "tech": "claude / codex / pi",
+     "desc": "Discovers tools from MCP list",
+     "icon": "bot",
      "color": "blue"
     },
     {
-     "id": "fit",
-     "label": "Quantile fitter",
-     "tech": "triage-effort-fit.py",
-     "desc": "Depth 2, leaf 80; OOF conformal offsets per quantile; paired bootstrap",
-     "icon": "trees",
+     "id": "mcp",
+     "label": "MCP bridge",
+     "tech": "console-mcp.mjs",
+     "desc": "Exposes session_*, pi_research and cli_search over stdio",
+     "icon": "plug",
+     "color": "indigo"
+    }
+   ]
+  },
+  {
+   "group": "Agent Console server",
+   "sub": "server/index.ts",
+   "border": "solid",
+   "color": "slate",
+   "icon": "server",
+   "items": [
+    {
+     "id": "route",
+     "label": "Tool route",
+     "tech": "POST /api/agent-tools/:name",
+     "desc": "Token check; read-only allowlist for unattended runs; cli_search routed",
+     "icon": "route",
+     "color": "orange"
+    },
+    {
+     "id": "ss",
+     "label": "Session search",
+     "tech": "session-search.ts",
+     "desc": "FTS5 BM25 over past conversations",
+     "icon": "history",
      "color": "teal"
     },
     {
-     "id": "gate",
-     "label": "Promotion gate",
-     "tech": "triage-promotion.ts",
-     "desc": "Reject if paired lower90 > 0 or ratio > 1.10; coverage bounds",
-     "icon": "shield-check",
-     "color": "orange"
+     "id": "cs",
+     "label": "CLI search",
+     "tech": "cli-search.ts",
+     "desc": "In-memory FTS5; name 5, tags 3, description 2; rebuilt on manifest mtime",
+     "icon": "search",
+     "color": "teal"
     }
    ]
   },
   {
-   "group": "Local state",
-   "sub": "~/.config/agent-console",
-   "border": "solid",
+   "group": "CLI manifests",
+   "sub": "AGENT_CONSOLE_TOOL_MANIFESTS",
+   "border": "dashed",
    "color": "slate",
-   "icon": "hard-drive",
+   "icon": "files",
    "items": [
     {
-     "id": "champ",
-     "label": "Live model",
-     "tech": "triage-effort-model.json",
-     "desc": "Champion; scored on held-out rows",
-     "icon": "file-check",
-     "color": "indigo"
+     "id": "mb",
+     "label": "brain tools.json",
+     "tech": "brain/tools.json",
+     "desc": "name, path, description, usage, tags",
+     "icon": "file-json",
+     "color": "cyan"
     },
     {
-     "id": "chal",
-     "label": "Challenger",
-     "tech": "*.challenger.json",
-     "desc": "Kept when rejected",
-     "icon": "file-x",
-     "color": "slate"
-    }
-   ]
-  },
-  {
-   "group": "GitHub",
-   "border": "solid",
-   "color": "slate",
-   "icon": "globe",
-   "items": [
+     "id": "md",
+     "label": "dotfiles tools.json",
+     "tech": "dotfiles/tools.json",
+     "desc": "Same schema; internal entries hidden",
+     "icon": "file-json",
+     "color": "cyan"
+    },
     {
-     "id": "gh",
-     "label": "Issue quotes",
-     "tech": "triage comment",
-     "desc": "Repriced after promote",
-     "icon": "message-square",
+     "id": "mr",
+     "label": "console tools.json",
+     "tech": "agent-console/tools.json",
+     "desc": "bin/ CLIs of this repo",
+     "icon": "file-json",
      "color": "cyan"
     }
    ]
@@ -79,34 +96,38 @@
  ],
  "edges": [
   {
-   "from": "sched",
-   "to": "fit",
-   "label": "Sessions + features"
+   "from": "agent",
+   "to": "mcp",
+   "label": "tools/call"
   },
   {
-   "from": "champ",
-   "to": "fit",
-   "label": "--champion"
+   "from": "mcp",
+   "to": "route",
+   "label": "HTTP + tool token"
   },
   {
-   "from": "fit",
-   "to": "gate",
-   "label": "Artifact + validation"
+   "from": "route",
+   "to": "ss",
+   "label": "session_search"
   },
   {
-   "from": "gate",
-   "to": "champ",
-   "label": "Promote"
+   "from": "route",
+   "to": "cs"
   },
   {
-   "from": "gate",
-   "to": "chal",
-   "label": "Reject"
+   "from": "cs",
+   "to": "mb",
+   "label": "read"
   },
   {
-   "from": "champ",
-   "to": "gh",
-   "label": "Reprice"
+   "from": "cs",
+   "to": "md",
+   "label": "read"
+  },
+  {
+   "from": "cs",
+   "to": "mr",
+   "label": "read"
   }
  ]
 }
