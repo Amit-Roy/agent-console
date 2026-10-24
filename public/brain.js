@@ -395,7 +395,6 @@ async function openPage(slug) {
   body.replaceChildren(meta);
   if (page?.description) body.append(el("p", "", page.description));
   if (page?.tags?.length) body.append(chipLinks(page.tags));
-  body.append(doc);
   const related = page ? relatedPages(page) : [];
   if (related.length) {
     const byPage = new Map(related.map((r) => [r.page.slug, r.shared]));
@@ -409,6 +408,7 @@ async function openPage(slug) {
       ),
     );
   }
+  body.append(doc);
   try {
     const data = await api(`/api/brain/page/${encodeURIComponent(slug)}`);
     if (seq === sheetSeq) renderMarkdown(wikiLinks(data.markdown), doc);

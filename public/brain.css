@@ -211,3 +211,7 @@ body.brain {
 #bm .foot {
   margin-top: var(--sp-3);
 }
+.sheetbody .chips {
+  flex-wrap: wrap;
+  overflow: visible;
+}

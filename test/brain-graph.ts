@@ -218,7 +218,7 @@ try {
   };
   let origin = "";
   const password = randomBytes(24).toString("base64url");
-  const serveOnce = async (bin: string) => {
+  const serve = async (bin: string) => {
     const port = await freePort();
     origin = `http://127.0.0.1:${port}`;
     const child = spawn(process.execPath, ["server/index.ts"], {
@@ -264,16 +264,6 @@ try {
     await once(child, "exit");
   };
 
-  // A boot slower than 5 s (loaded CI host) makes the server exit before it listens; retry that, nothing else.
-  const serve = async (bin: string) => {
-    for (let attempt = 1; ; attempt++) {
-      try {
-        return await serveOnce(bin);
-      } catch (failure) {
-        if (attempt >= 3 || !/Scratch server exited/.test(String(failure))) throw failure;
-      }
-    }
-  };
   let server = await serve(good.bin);
   try {
     const get = (route: string, cookie: string | undefined = server.cookie) =>
