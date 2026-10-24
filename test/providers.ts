@@ -77,25 +77,26 @@ check("env: quotes + export handled", env.FOO === "bar baz" && env.Q === "x");
 
 // ---- thread titles
 check(
-  "title: structured title keeps the word budget",
-  cleanTitle("Login:fix flaky test") === "Login:fix flaky",
+  "title: natural title kept in full within the word budget",
+  cleanTitle("Playwright Alternative") === "Playwright Alternative",
 );
 check(
   "title: quotes, markdown and trailing punctuation stripped",
-  cleanTitle('**"Chat:image paste".**') === "Chat:image paste",
+  cleanTitle('**"Chat image paste".**') === "Chat image paste",
 );
 check(
   "title: 'Title:' prefix and extra lines dropped",
-  cleanTitle("Title: UI:dark mode\n\nThis title captures...") === "UI:dark mode",
+  cleanTitle("Title: Dark mode toggle\n\nThis title captures...") === "Dark mode toggle",
 );
 check(
-  "title: long features are cut to two words",
-  cleanTitle("Count:one two three four five six seven") === "Count:one two",
+  "title: long titles are cut to five words",
+  cleanTitle("one two three four five six seven") === "one two three four five",
 );
 check(
-  "title: capped at 20 chars on a word boundary",
-  cleanTitle("Mobile:keyboard focus") === "Mobile:keyboard" &&
-    cleanTitle("Mobile:keyboard focus")!.length <= 20,
+  "title: capped at 30 chars on a word boundary, never mid-word",
+  cleanTitle("Video generation portfolio exploration") === "Video generation portfolio" &&
+    cleanTitle("Video generation portfolio exploration")!.length <= 30 &&
+    cleanTitle("x".repeat(40)) === undefined,
 );
 check(
   "title: a whole sentence is not a title",

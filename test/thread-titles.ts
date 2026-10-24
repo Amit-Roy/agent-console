@@ -34,44 +34,17 @@ PROVIDERS.set("fixture", {
 const tick = () => new Promise((r) => setTimeout(r, 50));
 const { cleanTitle } = await import("../server/providers/title.ts");
 assert.equal(fontLoads, 0, "font parser must stay unloaded until a title needs measuring");
-assert.equal(cleanTitle("Auth:fix redirect"), "Auth:fix redirect", "Topic:feat survives cleanup");
+assert.equal(cleanTitle("Auth fix redirect"), "Auth fix redirect", "natural title survives cleanup");
 assert.equal(fontLoads, 0, "naming must not require a newly installed runtime font parser");
 hooks.deregister();
 execFileSync(process.execPath, ["scripts/title-metrics.mjs", "--check"], { stdio: "pipe" });
+assert.equal(cleanTitle(""), undefined, "empty replies must be rejected");
 assert.equal(
-  cleanTitle("unstructured title"),
-  undefined,
-  "malformed model replies must be rejected",
+  cleanTitle("Orchestrator GitHub issue triage queue worker"),
+  "Orchestrator GitHub issue triage",
+  "whole words only, within the 30-char budget",
 );
-assert.equal(
-  cleanTitle("Auth:fix login redirect"),
-  "Auth:fix login",
-  "feature keeps whole words inside the budget",
-);
-assert.equal(cleanTitle("Auth:"), undefined, "empty features must be rejected");
-assert.equal(
-  cleanTitle("Title:rename chats"),
-  "Title:rename chats",
-  "Title is also a valid subject",
-);
-const examples = [
-  ["Auth:fix redirect", "Auth:fix redirect"],
-  ["Chat:image paste", "Chat:image paste"],
-  ["UI:dark mode", "UI:dark mode"],
-  ["Mobile:keyboard focus", "Mobile:keyboard"],
-  ["Build:cache assets", "Build:cache assets"],
-  ["Tests:flaky login", "Tests:flaky login"],
-  ["Search:index logs", "Search:index logs"],
-  ["Costs:show usage", "Costs:show usage"],
-  ["Threads:rename chats", "Threads:rename chats"],
-  ["Android:sidebar width", "Android:sidebar"],
-  ["Notifications:push alerts", "Notifica:push alerts"],
-  ["資料:検索を修正", "資料:検索を修"],
-];
-for (const [raw, expected] of examples) {
-  assert.equal(cleanTitle(raw), expected, raw);
-  assert.ok(expected.length <= 20, raw);
-}
+assert.equal(cleanTitle("Social multi-platform"), "Social multi-platform", "no mid-word cut");
 const threads = new Threads(() => {});
 try {
   // an unnamed thread is named by its prompts

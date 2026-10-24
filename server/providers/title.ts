@@ -1,14 +1,14 @@
 import { completeLabel } from "./small-model.ts";
 import metrics from "./title-metrics.json" with { type: "json" };
 
-// A new thread is titled after its folder. After each prompt with substance, Nemotron (via NVIDIA, a free model; never Haiku or
+// Chat titles are natural phrases; auto-mode issue titles use fitTitle. A new thread is titled after its folder. After each prompt with substance, Nemotron (via NVIDIA, a free model; never Haiku or
 // Luna) names it after what is being discussed: all user messages, text only, oldest first within a character budget.
 // One small call: no tools, no MCP, no hooks.
 
 export const MAX_INPUT = 100_000; // chars of user text per call; the oldest messages fall off first
-const MAX_WORDS = 3;
-const MAX_TOPIC = 8;
-export const MAX_TITLE = 20;
+const MAX_WORDS = 5; // chat titles: natural words, shown in full by the thread menu
+const MAX_CHARS = 30;
+export const MAX_TITLE = 20; // auto-mode issue titles (fitTitle, window-dispatch): Topic:123 desc, narrow row
 const MAX_TITLE_WIDTH = 174; // px: 180px running desktop row, with 6px reserve; Android has 220px
 const advances: Record<string, number> = metrics.advances;
 
@@ -37,7 +37,7 @@ export function fitTitle(input: { prefix: string; text: string }): { title: stri
 }
 
 const PROMPT = (messages: string[]) =>
-  `Write a title in Topic:feat format, at most ${MAX_WORDS} words total and ${MAX_TITLE} characters including the colon. Topic is one short subject (at most ${MAX_TOPIC} characters); feat means the specific feature or task, not the literal word "feat". Examples: Auth:fix redirect, Chat:image paste. For a chat from its user messages below, oldest first. Later messages matter more: name what the chat is about now. Reply with ONLY the title: no quotes, no trailing punctuation, no explanation.\n\nMessages:\n${messages.map((m) => `- ${m}`).join("\n")}`;
+  `Write a natural title of 2 to ${MAX_WORDS} words, at most ${MAX_CHARS} characters, for a chat from its user messages below, oldest first. Later messages matter more: name what the chat is about now. Reply with ONLY the title: no quotes, no trailing punctuation, no explanation.\n\nMessages:\n${messages.map((message) => `- ${message}`).join("\n")}`;
 
 /** One user message as plain text for naming: media references dropped, whitespace collapsed. */
 export function titleText(message: unknown): string {
@@ -64,7 +64,7 @@ export function titleInput(messages: unknown[], budget = MAX_INPUT): string[] {
   return kept.reverse();
 }
 
-/** Model output -> a tidy thread title, or undefined when it does not look like one. */
+/** Model output -> a tidy thread title, or undefined when it does not look like one. Whole words only, never cut mid-word. */
 export function cleanTitle(raw: unknown): string | undefined {
   let t =
     String(raw ?? "")
@@ -72,29 +72,19 @@ export function cleanTitle(raw: unknown): string | undefined {
       .map((l) => l.trim())
       .find(Boolean) ?? "";
   t = t
-    .replace(/^(?:title|name)\s*:\s*(?=[^:]*:)/i, "")
+    .replace(/^(?:title|name)\s*:\s*/i, "")
     .replace(/^[#>*\-\s"'“”‘’`]+|[\s"'“”‘’`*.!:;,]+$/g, "")
     .replace(/\s+/g, " ");
-  const match = /^([^\s:]+)\s*:\s*([^:]+)$/.exec(t);
-  if (!match) return undefined;
-  const words = match[2].trim().split(" ");
-  if (words.length > MAX_WORDS + 4) return undefined; // a sentence, not a title
-  let topic = Array.from(match[1]).slice(0, MAX_TOPIC).join("");
-  while (Array.from(topic).length > 1 && titleWidth(`${topic}:`) > MAX_TITLE_WIDTH / 2)
-    topic = Array.from(topic).slice(0, -1).join("");
-  const kept = words.slice(0, MAX_WORDS - 1);
-  const prefix = `${topic}:`;
-  const { title } = fitTitle({ prefix, text: kept.join(" ") });
-  return title.length > prefix.length ? title : undefined;
+  const words = t.split(" ");
+  if (!t || words.length > MAX_WORDS + 4) return undefined; // a sentence, not a title
+  const kept = words.slice(0, MAX_WORDS);
+  while (kept.length > 1 && kept.join(" ").length > MAX_CHARS) kept.pop();
+  return kept.join(" ").length <= MAX_CHARS ? kept.join(" ") : undefined; // one huge word: keep the current title
 }
 
-/** Deterministic stand-in for tests (AGENT_CONSOLE_MOCK=1), using the same format and validator. */
-const fake = (messages: string[]) => {
-  const text = messages[messages.length - 1];
-  if (text.includes(":")) return cleanTitle(text);
-  const [topic, ...feature] = text.split(" ");
-  return cleanTitle(`${topic}:${feature.slice(0, MAX_WORDS - 1).join(" ")}`);
-};
+/** Deterministic stand-in for tests (AGENT_CONSOLE_MOCK=1): the first few words of the latest message. */
+const fake = (messages: string[]) =>
+  cleanTitle(messages[messages.length - 1].split(" ").slice(0, 4).join(" "));
 
 export async function suggestTitle(messages: string | string[]): Promise<string | undefined> {
   const input = titleInput([messages].flat());
