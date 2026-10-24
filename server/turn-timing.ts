@@ -191,68 +191,98 @@ export class TurnClock {
     }
     this.stepSpans[this.stepSpans.length - 1].last = now;
   }
-  event(ev: any, now = Date.now()) {
-    if (!ev || typeof ev !== "object") return;
-    if (fromProcess(ev)) this.firstEvent ??= now;
-    if (ev.type === "system" && ev.subtype === "api_retry") {
-      this.retryCount++;
-      const s = httpStatus(ev.error_status),
-        c = errorClass(ev.error);
-      if (this.retries.length < MAX_RETRIES) this.retries.push({ s, c });
-      const delay = Number(ev.retry_delay_ms);
-      this.retrySegs.push({
-        a: now,
-        d: Number.isFinite(delay) && delay > 0 ? Math.min(delay, 3_600_000) : 0,
-        s,
-        c,
-        i: this.inModel ? this.steps : this.steps + 1,
-        q: ++this.seq,
-      });
-      return;
-    }
-    if (ev.type === "rate_limit_event") {
-      const status = ev.rate_limit_info?.status;
-      if (typeof status === "string" && status !== "allowed") this.rateLimits++;
-      return;
-    }
-    if (ev.type === "run_settings" && typeof ev.model === "string" && ev.model !== "default")
-      this.model ||= ev.model;
-    if (ev.type === "system" && ev.subtype === "init" && typeof ev.model === "string")
-      this.model = ev.model;
-    if (ev.parent_tool_use_id) return;
-    if (ev.type === "stream_event" && ev.event?.type === "content_block_delta") this.output(now);
-    else if (ev.type === "assistant") {
-      if (typeof ev.message?.model === "string" && !this.model) this.model = ev.message.model;
-      for (const b of ev.message?.content ?? []) {
-        if (b?.type === "text" || b?.type === "thinking" || b?.type === "redacted_thinking")
-          this.output(now);
-        else if (b?.type === "tool_use") {
-          this.output(now);
-          if (
-            typeof b.id === "string" &&
-            !this.tools.has(b.id) &&
-            this.tools.size < MAX_TIMED_TOOLS
-          )
-            this.tools.set(b.id, { n: toolName(b.name), a: now, i: this.steps, q: ++this.seq });
-        }
+  private noteRetry(event: any, now: number) {
+    this.retryCount++;
+    const status = httpStatus(event.error_status),
+      errorKind = errorClass(event.error);
+    if (this.retries.length < MAX_RETRIES) this.retries.push({ s: status, c: errorKind });
+    const delay = Number(event.retry_delay_ms);
+    this.retrySegs.push({
+      a: now,
+      d: Number.isFinite(delay) && delay > 0 ? Math.min(delay, 3_600_000) : 0,
+      s: status,
+      c: errorKind,
+      i: this.inModel ? this.steps : this.steps + 1,
+      q: ++this.seq,
+    });
+  }
+  private noteModel(event: any) {
+    if (
+      event.type === "run_settings" &&
+      typeof event.model === "string" &&
+      event.model !== "default"
+    )
+      this.model ||= event.model;
+    if (event.type === "system" && event.subtype === "init" && typeof event.model === "string")
+      this.model = event.model;
+  }
+  private noteAssistant(event: any, now: number) {
+    if (typeof event.message?.model === "string" && !this.model) this.model = event.message.model;
+    for (const block of event.message?.content ?? []) {
+      if (
+        block?.type === "text" ||
+        block?.type === "thinking" ||
+        block?.type === "redacted_thinking"
+      )
+        this.output(now);
+      else if (block?.type === "tool_use") {
+        this.output(now);
+        if (
+          typeof block.id === "string" &&
+          !this.tools.has(block.id) &&
+          this.tools.size < MAX_TIMED_TOOLS
+        )
+          this.tools.set(block.id, {
+            n: toolName(block.name),
+            a: now,
+            i: this.steps,
+            q: ++this.seq,
+          });
       }
-    } else if (ev.type === "user") {
-      for (const b of ev.message?.content ?? []) {
-        if (b?.type !== "tool_result") continue;
-        const tool = this.tools.get(b.tool_use_id);
-        if (tool && tool.b == null) {
-          tool.b = now;
-          if (b.is_error) tool.e = 1;
-        }
-        this.inModel = false; // the next output is a new model request
-        this.lastResult = now;
-      }
-    } else if (ev.type === "question" && typeof ev.id === "string")
-      this.waits.set(ev.id, { a: now, q: ++this.seq });
-    else if (ev.type === "question_answer") {
-      const w = this.waits.get(ev.id);
-      if (w && w.b == null) w.b = now;
     }
+  }
+  private noteToolResults(event: any, now: number) {
+    for (const block of event.message?.content ?? []) {
+      if (block?.type !== "tool_result") continue;
+      const tool = this.tools.get(block.tool_use_id);
+      if (tool && tool.b == null) {
+        tool.b = now;
+        if (block.is_error) tool.e = 1;
+      }
+      this.inModel = false; // the next output is a new model request
+      this.lastResult = now;
+    }
+  }
+  private noteQuestion(event: any, now: number) {
+    if (event.type === "question" && typeof event.id === "string")
+      this.waits.set(event.id, { a: now, q: ++this.seq });
+    else if (event.type === "question_answer") {
+      const wait = this.waits.get(event.id);
+      if (wait && wait.b == null) wait.b = now;
+    }
+  }
+  // Retry and rate-limit notices carry no output; true when the event was one of them.
+  private noteNotice(event: any, now: number) {
+    if (event.type === "system" && event.subtype === "api_retry") {
+      this.noteRetry(event, now);
+      return true;
+    }
+    if (event.type !== "rate_limit_event") return false;
+    const status = event.rate_limit_info?.status;
+    if (typeof status === "string" && status !== "allowed") this.rateLimits++;
+    return true;
+  }
+  event(event: any, now = Date.now()) {
+    if (!event || typeof event !== "object") return;
+    if (fromProcess(event)) this.firstEvent ??= now;
+    if (this.noteNotice(event, now)) return;
+    this.noteModel(event);
+    if (event.parent_tool_use_id) return;
+    if (event.type === "stream_event" && event.event?.type === "content_block_delta")
+      this.output(now);
+    else if (event.type === "assistant") this.noteAssistant(event, now);
+    else if (event.type === "user") this.noteToolResults(event, now);
+    else this.noteQuestion(event, now);
   }
   finish(ev: any, now = Date.now(), spawnMs?: number | null): TurnTiming {
     const start = this.o.start,
@@ -404,6 +434,97 @@ const pcts = (values: number[]) => {
   return { count: s.length, p50_ms: nearestRank(s, 50), p95_ms: nearestRank(s, 95) };
 };
 const round = (n: number | null) => (n == null ? null : Math.round(n));
+
+const sumField = (rows: any[], key: string) =>
+  Math.round(rows.reduce((total, row) => total + (row[key] || 0), 0));
+const rowsOf = (rows: any[], provider: string) => rows.filter((row) => row.provider === provider);
+function ttftRows(rows: any[], providers: string[]) {
+  return [
+    ...providers.map((provider) => ({
+      provider,
+      ...pcts(rowsOf(rows, provider).map((row) => row.first_ms)),
+    })),
+    ...(providers.length > 1
+      ? [{ provider: "all", ...pcts(rows.map((row) => row.first_ms)) }]
+      : []),
+  ];
+}
+function phoneTtftRows(phone: { provider: string; total_ms: number }[]) {
+  return [...new Set(phone.map((sample) => sample.provider))].sort().map((provider) => ({
+    provider,
+    ...pcts(
+      phone.filter((sample) => sample.provider === provider).map((sample) => sample.total_ms),
+    ),
+  }));
+}
+function splitRows(rows: any[], providers: string[]) {
+  return providers.map((provider) => {
+    const own = rowsOf(rows, provider);
+    return {
+      provider,
+      turns: own.length,
+      model_ms: sumField(own, "model_ms"),
+      tool_ms: sumField(own, "tool_ms"),
+      other_ms: sumField(own, "startup_ms") + sumField(own, "wait_ms"),
+      total_ms: sumField(own, "total_ms"),
+    };
+  });
+}
+function topToolRows(rows: any[]) {
+  const tools = new Map<string, { ms: number[]; errors: number }>();
+  for (const row of rows)
+    for (const tool of row.tools) {
+      const entry = tools.get(tool.n) || { ms: [], errors: 0 };
+      entry.ms.push(tool.ms);
+      if (tool.e) entry.errors++;
+      tools.set(tool.n, entry);
+    }
+  return [...tools]
+    .map(([name, entry]) => ({
+      name,
+      count: entry.ms.length,
+      total_ms: Math.round(entry.ms.reduce((left, right) => left + right, 0)),
+      ...pcts(entry.ms),
+      errors: entry.errors,
+    }))
+    .sort((left, right) => right.total_ms - left.total_ms)
+    .slice(0, 5);
+}
+function retryHistogram(rows: any[]) {
+  const classes: Record<string, number> = {},
+    statuses: Record<string, number> = {};
+  for (const row of rows)
+    for (const detail of row.retry_detail) {
+      classes[detail.c] = (classes[detail.c] || 0) + 1;
+      if (detail.s != null) statuses[detail.s] = (statuses[detail.s] || 0) + 1;
+    }
+  return { classes, statuses };
+}
+function modelCounts(rows: any[]) {
+  const models: Record<string, number> = {};
+  for (const row of rows)
+    models[`${row.provider}/${row.model}`] = (models[`${row.provider}/${row.model}`] || 0) + 1;
+  return models;
+}
+function recentRows(rows: any[]) {
+  return rows
+    .slice(-20)
+    .reverse()
+    .map((row) => ({
+      turn_ts: row.turn_ts,
+      thread: row.thread,
+      provider: row.provider,
+      model: row.model,
+      cold: row.cold,
+      first_ms: round(row.first_ms),
+      total_ms: round(row.total_ms),
+      model_ms: round(row.model_ms),
+      tool_ms: round(row.tool_ms),
+      steps: row.steps,
+      retries: row.retries,
+      outcome: row.outcome,
+    }));
+}
 
 export class TurnTimingStore {
   private db: DatabaseSync;
@@ -564,6 +685,24 @@ export class TurnTimingStore {
       timeline: parse(r.timeline, null),
     }));
   }
+  private exitCounts(from: number, to: number, thread?: string) {
+    const exits: Record<string, number> = {};
+    const procs = (
+      thread
+        ? this.db
+            .prepare(
+              "SELECT reason, COUNT(*) n FROM agent_process WHERE kind = 'exit' AND at BETWEEN ? AND ? AND thread = ? GROUP BY reason",
+            )
+            .all(from, to, thread)
+        : this.db
+            .prepare(
+              "SELECT reason, COUNT(*) n FROM agent_process WHERE kind = 'exit' AND at BETWEEN ? AND ? GROUP BY reason",
+            )
+            .all(from, to)
+    ) as any[];
+    for (const proc of procs) exits[proc.reason || "unknown"] = proc.n;
+    return exits;
+  }
   // `phone`: browser-measured send -> first token painted samples (latency kind first_token), same window.
   summary(
     from: number,
@@ -571,114 +710,41 @@ export class TurnTimingStore {
     opts: { thread?: string; phone?: { provider: string; total_ms: number }[] } = {},
   ) {
     const rows = this.turns(from, to, opts.thread);
-    const providers = [...new Set(rows.map((r) => r.provider))].sort();
-    const by = (p: string) => rows.filter((r) => r.provider === p);
-    const tools = new Map<string, { ms: number[]; errors: number }>();
-    for (const r of rows)
-      for (const t of r.tools) {
-        const x = tools.get(t.n) || { ms: [], errors: 0 };
-        x.ms.push(t.ms);
-        if (t.e) x.errors++;
-        tools.set(t.n, x);
-      }
-    const classes: Record<string, number> = {},
-      statuses: Record<string, number> = {};
-    for (const r of rows)
-      for (const d of r.retry_detail) {
-        classes[d.c] = (classes[d.c] || 0) + 1;
-        if (d.s != null) statuses[d.s] = (statuses[d.s] || 0) + 1;
-      }
-    const cold = rows.filter((r) => r.cold);
-    const exits: Record<string, number> = {};
-    const procs = (
-      opts.thread
-        ? this.db
-            .prepare(
-              "SELECT reason, COUNT(*) n FROM agent_process WHERE kind = 'exit' AND at BETWEEN ? AND ? AND thread = ? GROUP BY reason",
-            )
-            .all(from, to, opts.thread)
-        : this.db
-            .prepare(
-              "SELECT reason, COUNT(*) n FROM agent_process WHERE kind = 'exit' AND at BETWEEN ? AND ? GROUP BY reason",
-            )
-            .all(from, to)
-    ) as any[];
-    for (const p of procs) exits[p.reason || "unknown"] = p.n;
-    const models: Record<string, number> = {};
-    for (const r of rows)
-      models[`${r.provider}/${r.model}`] = (models[`${r.provider}/${r.model}`] || 0) + 1;
-    const sum = (xs: any[], k: string) => Math.round(xs.reduce((n, r) => n + (r[k] || 0), 0));
-    const phone = opts.phone || [];
+    const providers = [...new Set(rows.map((row) => row.provider))].sort();
+    const cold = rows.filter((row) => row.cold);
+    const retryKinds = retryHistogram(rows);
     return {
       from,
       to,
       retention_days: this.days,
       turns: rows.length,
-      ttft: [
-        ...providers.map((p) => ({ provider: p, ...pcts(by(p).map((r) => r.first_ms)) })),
-        ...(providers.length > 1
-          ? [{ provider: "all", ...pcts(rows.map((r) => r.first_ms)) }]
-          : []),
-      ],
-      phone_ttft: [...new Set(phone.map((s) => s.provider))].sort().map((p) => ({
-        provider: p,
-        ...pcts(phone.filter((s) => s.provider === p).map((s) => s.total_ms)),
-      })),
-      split: providers.map((p) => ({
-        provider: p,
-        turns: by(p).length,
-        model_ms: sum(by(p), "model_ms"),
-        tool_ms: sum(by(p), "tool_ms"),
-        other_ms: sum(by(p), "startup_ms") + sum(by(p), "wait_ms"),
-        total_ms: sum(by(p), "total_ms"),
-      })),
-      tools: [...tools]
-        .map(([name, x]) => ({
-          name,
-          count: x.ms.length,
-          total_ms: Math.round(x.ms.reduce((a, b) => a + b, 0)),
-          ...pcts(x.ms),
-          errors: x.errors,
-        }))
-        .sort((a, b) => b.total_ms - a.total_ms)
-        .slice(0, 5),
+      ttft: ttftRows(rows, providers),
+      phone_ttft: phoneTtftRows(opts.phone || []),
+      split: splitRows(rows, providers),
+      tools: topToolRows(rows),
       cold: {
         turns: rows.length,
         cold: cold.length,
         share: rows.length ? cold.length / rows.length : null,
-        spawn: pcts(cold.map((r) => r.spawn_ms).filter((n) => n != null)),
+        spawn: pcts(cold.map((row) => row.spawn_ms).filter((value) => value != null)),
       },
       retries: {
-        retries: rows.reduce((n, r) => n + r.retries, 0),
-        rate_limits: rows.reduce((n, r) => n + r.rate_limits, 0),
-        turns_affected: rows.filter((r) => r.retries || r.rate_limits).length,
-        by_class: classes,
-        by_status: statuses,
+        retries: rows.reduce((total, row) => total + row.retries, 0),
+        rate_limits: rows.reduce((total, row) => total + row.rate_limits, 0),
+        turns_affected: rows.filter((row) => row.retries || row.rate_limits).length,
+        by_class: retryKinds.classes,
+        by_status: retryKinds.statuses,
       },
       outcomes: rows.reduce(
-        (m: Record<string, number>, r) => ((m[r.outcome] = (m[r.outcome] || 0) + 1), m),
+        (counts: Record<string, number>, row) => (
+          (counts[row.outcome] = (counts[row.outcome] || 0) + 1), counts
+        ),
         {},
       ),
-      exits,
-      models,
-      steps: pcts(rows.map((r) => r.steps)),
-      recent: rows
-        .slice(-20)
-        .reverse()
-        .map((r) => ({
-          turn_ts: r.turn_ts,
-          thread: r.thread,
-          provider: r.provider,
-          model: r.model,
-          cold: r.cold,
-          first_ms: round(r.first_ms),
-          total_ms: round(r.total_ms),
-          model_ms: round(r.model_ms),
-          tool_ms: round(r.tool_ms),
-          steps: r.steps,
-          retries: r.retries,
-          outcome: r.outcome,
-        })),
+      exits: this.exitCounts(from, to, opts.thread),
+      models: modelCounts(rows),
+      steps: pcts(rows.map((row) => row.steps)),
+      recent: recentRows(rows),
     };
   }
   close() {

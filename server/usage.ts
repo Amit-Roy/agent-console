@@ -91,32 +91,37 @@ export function routerUsage(d: any): Omit<ProviderUsage, "updatedAt"> {
       : "OpenRouter does not report a request allowance for this key.",
   };
 }
+function deepseekAmount(value: unknown): number | undefined {
+  if (typeof value !== "number" && (typeof value !== "string" || !/^\d+(?:\.\d+)?$/.test(value)))
+    return;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+}
+function deepseekBalance(item: any): UsageBalance | undefined {
+  if (!item || typeof item !== "object") return;
+  const { currency, total_balance, granted_balance, topped_up_balance } = item;
+  if (currency !== "USD" && currency !== "CNY") return;
+  const total = deepseekAmount(total_balance),
+    granted = deepseekAmount(granted_balance),
+    toppedUp = deepseekAmount(topped_up_balance);
+  if (total === undefined || granted === undefined || toppedUp === undefined) return;
+  return { currency, total, granted, toppedUp };
+}
 /** Invalid responses leave the previous account balance intact. */
-export function deepseekUsage(d: unknown): Omit<ProviderUsage, "updatedAt"> | undefined {
-  if (!d || typeof d !== "object") return;
-  const payload = d as Record<string, unknown>;
+export function deepseekUsage(body: unknown): Omit<ProviderUsage, "updatedAt"> | undefined {
+  if (!body || typeof body !== "object") return;
+  const payload = body as Record<string, unknown>;
   if (
     typeof payload.is_available !== "boolean" ||
     !Array.isArray(payload.balance_infos) ||
     !payload.balance_infos.length
   )
     return;
-  const amount = (value: unknown): number | undefined => {
-    if (typeof value !== "number" && (typeof value !== "string" || !/^\d+(?:\.\d+)?$/.test(value)))
-      return;
-    const n = Number(value);
-    return Number.isFinite(n) && n >= 0 ? n : undefined;
-  };
   const balances: UsageBalance[] = [];
   for (const item of payload.balance_infos) {
-    if (!item || typeof item !== "object") return;
-    const { currency, total_balance, granted_balance, topped_up_balance } = item;
-    if (currency !== "USD" && currency !== "CNY") return;
-    const total = amount(total_balance),
-      granted = amount(granted_balance),
-      toppedUp = amount(topped_up_balance);
-    if (total === undefined || granted === undefined || toppedUp === undefined) return;
-    balances.push({ currency, total, granted, toppedUp });
+    const balance = deepseekBalance(item);
+    if (!balance) return;
+    balances.push(balance);
   }
   return { windows: [], balances, available: payload.is_available };
 }
@@ -159,69 +164,38 @@ export function historyRows(
 const file = path.join(DATA_DIR, "usage.json");
 const historyFile = path.join(DATA_DIR, "usage-history.jsonl");
 const repairMarker = path.join(DATA_DIR, "usage-history.schema-v2");
-function migrateUsageHistory() {
-  if (fs.existsSync(repairMarker)) return;
-  fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
-  const historyBackup = `${historyFile}.repair-v2.original`,
-    usageBackup = `${file}.repair-v2.original`;
-  const initialHistory = fs.existsSync(historyFile)
-    ? fs.readFileSync(historyFile)
-    : Buffer.from("");
-  const initialUsage = fs.existsSync(file) ? fs.readFileSync(file) : Buffer.from("{}");
-  const historySource = fs.existsSync(historyBackup)
-    ? fs.readFileSync(historyBackup)
-    : initialHistory;
-  const usageSource = fs.existsSync(usageBackup) ? fs.readFileSync(usageBackup) : initialUsage;
-  const parseRows = (buf: Buffer) =>
-    buf
-      .toString("utf8")
-      .split(/\r?\n/)
-      .filter(Boolean)
-      .map((line) => {
-        const row = JSON.parse(line);
-        if (!row || !Number.isFinite(row.ts) || typeof row.provider !== "string")
-          throw Error("Malformed usage history row");
-        return row as UsageRepairRow;
-      });
-  const sourceRows = parseRows(historySource);
-  const currentRows = fs.existsSync(historyFile) ? parseRows(initialHistory) : [];
-  const snapshots = JSON.parse(usageSource.toString("utf8"));
-  const currentSnapshots = JSON.parse(initialUsage.toString("utf8"));
-  if (
-    !snapshots ||
-    typeof snapshots !== "object" ||
-    Array.isArray(snapshots) ||
-    !currentSnapshots ||
-    typeof currentSnapshots !== "object" ||
-    Array.isArray(currentSnapshots)
-  )
-    throw Error("Malformed usage snapshot");
-  const threadsFile = path.join(DATA_DIR, "threads.json");
-  const threads = fs.existsSync(threadsFile)
-    ? JSON.parse(fs.readFileSync(threadsFile, "utf8"))
-    : [];
-  if (!Array.isArray(threads)) throw Error("Malformed threads metadata");
+function parseUsageRows(buffer: Buffer) {
+  return buffer
+    .toString("utf8")
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map((line) => {
+      const row = JSON.parse(line);
+      if (!row || !Number.isFinite(row.ts) || typeof row.provider !== "string")
+        throw Error("Malformed usage history row");
+      return row as UsageRepairRow;
+    });
+}
+function isSnapshotObject(value: unknown) {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+function readClaudeThreadLogs(threads: any[]) {
   const logsDir = path.join(DATA_DIR, "logs"),
     logs: Record<string, any[]> = {};
-  if (fs.existsSync(logsDir))
-    for (const t of threads) {
-      if (t?.provider !== "claude" || typeof t.id !== "string") continue;
-      const logFile = path.join(logsDir, `${t.id}.jsonl`);
-      if (!fs.existsSync(logFile)) continue;
-      logs[t.id] = fs
-        .readFileSync(logFile, "utf8")
-        .split(/\r?\n/)
-        .filter(Boolean)
-        .map((line) => JSON.parse(line));
-    }
-  const preservedCurrentRows = currentRows.filter(
-    (r) => !["claude", "claude:nefro"].includes(r.provider) || r.schemaVersion != null,
-  );
-  const restored = reconstructClaudeHistory({
-    rows: [...sourceRows, ...preservedCurrentRows],
-    logs,
-    threads,
-  });
+  if (!fs.existsSync(logsDir)) return logs;
+  for (const thread of threads) {
+    if (thread?.provider !== "claude" || typeof thread.id !== "string") continue;
+    const logFile = path.join(logsDir, `${thread.id}.jsonl`);
+    if (!fs.existsSync(logFile)) continue;
+    logs[thread.id] = fs
+      .readFileSync(logFile, "utf8")
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+  }
+  return logs;
+}
+function mergeClaudeSnapshots(snapshots: any, currentSnapshots: any) {
   const nextUsage = {
     ...snapshots,
     ...Object.fromEntries(
@@ -242,35 +216,68 @@ function migrateUsageHistory() {
   for (const key of ["claude", "claude:nefro"])
     if (!Number.isFinite(nextUsage[key]?.observedAt) || nextUsage[key]?.usageProvider !== key)
       delete nextUsage[key];
+  return nextUsage;
+}
+function ensureMigrationBackup(target: string, original: Buffer) {
+  if (!fs.existsSync(target)) fs.writeFileSync(target, original, { flag: "wx", mode: 0o600 });
+}
+function replaceMigrated(target: string, original: Buffer, body: string) {
+  if (fs.existsSync(target) && !fs.readFileSync(target).equals(original))
+    throw Error("Usage files changed during migration");
+  const temp = `${target}.repair-v2.tmp`;
+  fs.writeFileSync(temp, body, { mode: 0o600 });
+  if (fs.existsSync(target) && !fs.readFileSync(target).equals(original)) {
+    fs.unlinkSync(temp);
+    throw Error("Usage files changed during migration");
+  }
+  fs.renameSync(temp, target);
+}
+function readFileOr(target: string, fallback: Buffer) {
+  return fs.existsSync(target) ? fs.readFileSync(target) : fallback;
+}
+function migrateUsageHistory() {
+  if (fs.existsSync(repairMarker)) return;
+  fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
+  const historyBackup = `${historyFile}.repair-v2.original`,
+    usageBackup = `${file}.repair-v2.original`;
+  const initialHistory = readFileOr(historyFile, Buffer.from(""));
+  const initialUsage = readFileOr(file, Buffer.from("{}"));
+  const historySource = readFileOr(historyBackup, initialHistory);
+  const usageSource = readFileOr(usageBackup, initialUsage);
+  const sourceRows = parseUsageRows(historySource);
+  const currentRows = fs.existsSync(historyFile) ? parseUsageRows(initialHistory) : [];
+  const snapshots = JSON.parse(usageSource.toString("utf8"));
+  const currentSnapshots = JSON.parse(initialUsage.toString("utf8"));
+  if (!isSnapshotObject(snapshots) || !isSnapshotObject(currentSnapshots))
+    throw Error("Malformed usage snapshot");
+  const threadsFile = path.join(DATA_DIR, "threads.json");
+  const threads = fs.existsSync(threadsFile)
+    ? JSON.parse(fs.readFileSync(threadsFile, "utf8"))
+    : [];
+  if (!Array.isArray(threads)) throw Error("Malformed threads metadata");
+  const logs = readClaudeThreadLogs(threads);
+  const preservedCurrentRows = currentRows.filter(
+    (row) => !["claude", "claude:nefro"].includes(row.provider) || row.schemaVersion != null,
+  );
+  const restored = reconstructClaudeHistory({
+    rows: [...sourceRows, ...preservedCurrentRows],
+    logs,
+    threads,
+  });
+  const nextUsage = mergeClaudeSnapshots(snapshots, currentSnapshots);
   if (
-    !(fs.existsSync(file) ? fs.readFileSync(file) : Buffer.from("{}")).equals(initialUsage) ||
-    !(fs.existsSync(historyFile) ? fs.readFileSync(historyFile) : Buffer.from("")).equals(
-      initialHistory,
-    )
+    !readFileOr(file, Buffer.from("{}")).equals(initialUsage) ||
+    !readFileOr(historyFile, Buffer.from("")).equals(initialHistory)
   )
     throw Error("Usage files changed during migration");
-  const ensureBackup = (target: string, original: Buffer) => {
-    if (!fs.existsSync(target)) fs.writeFileSync(target, original, { flag: "wx", mode: 0o600 });
-  };
-  ensureBackup(historyBackup, initialHistory);
-  ensureBackup(usageBackup, initialUsage);
-  const replace = (target: string, original: Buffer, body: string) => {
-    if (fs.existsSync(target) && !fs.readFileSync(target).equals(original))
-      throw Error("Usage files changed during migration");
-    const temp = `${target}.repair-v2.tmp`;
-    fs.writeFileSync(temp, body, { mode: 0o600 });
-    if (fs.existsSync(target) && !fs.readFileSync(target).equals(original)) {
-      fs.unlinkSync(temp);
-      throw Error("Usage files changed during migration");
-    }
-    fs.renameSync(temp, target);
-  };
-  replace(
+  ensureMigrationBackup(historyBackup, initialHistory);
+  ensureMigrationBackup(usageBackup, initialUsage);
+  replaceMigrated(
     historyFile,
     initialHistory,
-    restored.rows.map((r) => JSON.stringify(r)).join("\n") + (restored.rows.length ? "\n" : ""),
+    restored.rows.map((row) => JSON.stringify(row)).join("\n") + (restored.rows.length ? "\n" : ""),
   );
-  replace(file, initialUsage, JSON.stringify(nextUsage));
+  replaceMigrated(file, initialUsage, JSON.stringify(nextUsage));
   const markerTemp = `${repairMarker}.tmp`;
   fs.writeFileSync(markerTemp, "2\n", { mode: 0o600 });
   fs.renameSync(markerTemp, repairMarker);
@@ -401,13 +408,43 @@ async function readDeepSeekUsage() {
   } catch {} // retain the last successful sample, with its timestamp
 }
 
+function normalizeCodexWindow(window: any) {
+  return (
+    window && {
+      used_percent: window.usedPercent,
+      window_minutes: window.windowDurationMins,
+      resets_at: window.resetsAt,
+    }
+  );
+}
+type CodexProbe = { send: (payload: object) => void; finish: () => void };
+function handleCodexMessage(probe: CodexProbe, line: string) {
+  let message: any;
+  try {
+    message = JSON.parse(line);
+  } catch {
+    return;
+  }
+  if (message.id === 1) {
+    probe.send({ method: "initialized", params: {} });
+    probe.send({ id: 2, method: "account/rateLimits/read" });
+  } else if (message.id === 2) {
+    const limits = message.result?.rateLimits;
+    const windows = codexWindows({
+      primary: normalizeCodexWindow(limits?.primary),
+      secondary: normalizeCodexWindow(limits?.secondary),
+    });
+    if (windows.length) usage.record("codex", { windows });
+    probe.finish();
+  }
+}
 // Codex only reports quota while a turn runs; ask a short-lived app-server for the current figures instead.
 export function readCodexUsage(): Promise<void> {
   if (process.env.AGENT_CONSOLE_MOCK === "1") return Promise.resolve();
   return new Promise((resolve) => {
-    let out = "",
+    let buffered = "",
       done = false;
-    const p = spawn(
+    const child = spawn(
       "codex",
       ["app-server", "-c", "analytics.enabled=false", "-c", "feedback.enabled=false"],
       { env: childEnv(), stdio: ["pipe", "pipe", "ignore"] },
@@ -416,43 +453,21 @@ export function readCodexUsage(): Promise<void> {
       if (done) return;
       done = true;
       clearTimeout(timer);
-      p.kill();
+      child.kill();
       resolve();
     };
     const timer = setTimeout(end, 10_000);
-    const write = (o: object) => p.stdin.write(JSON.stringify(o) + "\n");
-    p.on("error", end);
-    p.on("exit", end);
-    p.stdin.on("error", () => {});
-    p.stdout.on("data", (d) => {
-      out += d;
-      for (let i: number; (i = out.indexOf("\n")) >= 0; ) {
-        const line = out.slice(0, i);
-        out = out.slice(i + 1);
-        let m: any;
-        try {
-          m = JSON.parse(line);
-        } catch {
-          continue;
-        }
-        if (m.id === 1) {
-          write({ method: "initialized", params: {} });
-          write({ id: 2, method: "account/rateLimits/read" });
-        } else if (m.id === 2) {
-          const r = m.result?.rateLimits;
-          const norm = (w: any) =>
-            w && {
-              used_percent: w.usedPercent,
-              window_minutes: w.windowDurationMins,
-              resets_at: w.resetsAt,
-            };
-          const windows = codexWindows({
-            primary: norm(r?.primary),
-            secondary: norm(r?.secondary),
-          });
-          if (windows.length) usage.record("codex", { windows });
-          end();
-        }
+    const write = (payload: object) => child.stdin.write(JSON.stringify(payload) + "\n");
+    const probe: CodexProbe = { send: write, finish: end };
+    child.on("error", end);
+    child.on("exit", end);
+    child.stdin.on("error", () => {});
+    child.stdout.on("data", (chunk) => {
+      buffered += chunk;
+      for (let index: number; (index = buffered.indexOf("\n")) >= 0; ) {
+        const line = buffered.slice(0, index);
+        buffered = buffered.slice(index + 1);
+        handleCodexMessage(probe, line);
       }
     });
     write({

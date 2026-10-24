@@ -38,6 +38,54 @@ export type LinkResponse = {
 
 const NOT_A_FEATURE_BRANCH = new Set(["main", "master", "HEAD", "develop"]);
 
+type LinkVia = LinkResponse["items"][number]["via"];
+type LinkCollector = { allowed: Set<string>; items: LinkResponse["items"] };
+const GITHUB_URL_REF =
+  /https:\/\/github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\/(?:issues|pull)\/(\d{1,9})(?![\d])/g;
+const BARE_REF = /(?<![\w/&#])#(\d{1,9})(?!\w)/g;
+
+function addLinkItem(collector: LinkCollector, repo: unknown, number: unknown, via: LinkVia) {
+  if (
+    typeof repo !== "string" ||
+    !collector.allowed.has(repo) ||
+    !Number.isSafeInteger(number) ||
+    (number as number) <= 0
+  )
+    return;
+  if (!collector.items.some((entry) => entry.repo === repo && entry.number === number))
+    collector.items.push({ repo, number: number as number, via });
+}
+
+function referencesIn(facts: ThreadFacts) {
+  const refs: { repo: string; number: number }[] = [];
+  const texts = Array.isArray(facts.texts)
+    ? facts.texts.filter((text) => typeof text === "string")
+    : [];
+  for (const text of texts) {
+    for (const match of text.matchAll(GITHUB_URL_REF))
+      refs.push({ repo: match[1], number: Number(match[2]) });
+    if (typeof facts.defaultRepo === "string")
+      for (const match of text.matchAll(BARE_REF))
+        refs.push({ repo: facts.defaultRepo, number: Number(match[1]) });
+  }
+  return refs;
+}
+
+function itemLinked(
+  collector: LinkCollector,
+  item: LinkItem | undefined,
+  branch: string | undefined,
+) {
+  if (!item || !collector.allowed.has(item.repo)) return false;
+  return (
+    collector.items.some((entry) => entry.repo === item.repo && entry.number === item.number) ||
+    (typeof item.head === "string" &&
+      !!branch &&
+      !NOT_A_FEATURE_BRANCH.has(branch) &&
+      item.head === branch)
+  );
+}
+
 /**
  * Rules, in order: (1) automation IssueRun gives its issue and PR; (2) `#n` (default repo) or a github.com issue/pull URL in
  * user messages, at most five, allowlisted repos only; (3) with `item` given, a thread branch equal to the PR head ref (never
@@ -46,54 +94,26 @@ const NOT_A_FEATURE_BRANCH = new Set(["main", "master", "HEAD", "develop"]);
 export function linkThread(req: LinkRequest): LinkResponse {
   const allowed = new Set(
     (Array.isArray(req?.repos) ? req.repos : []).filter(
-      (r) => typeof r === "string" && REPO.test(r),
+      (repo) => typeof repo === "string" && REPO.test(repo),
     ),
   );
-  const t = req?.thread ?? ({} as ThreadFacts);
-  const items: LinkResponse["items"] = [];
-  const add = (repo: unknown, number: unknown, via: LinkResponse["items"][number]["via"]) => {
-    if (
-      typeof repo !== "string" ||
-      !allowed.has(repo) ||
-      !Number.isSafeInteger(number) ||
-      (number as number) <= 0
-    )
-      return;
-    if (!items.some((i) => i.repo === repo && i.number === number))
-      items.push({ repo, number: number as number, via });
-  };
-  const run = t.issueRun;
+  const facts = req?.thread ?? ({} as ThreadFacts);
+  const collector: LinkCollector = { allowed, items: [] };
+  const run = facts.issueRun;
   if (run) {
-    add(run.repo, run.number, "issue-run");
-    add(run.repo, run.pr, "pr-run");
+    addLinkItem(collector, run.repo, run.number, "issue-run");
+    addLinkItem(collector, run.repo, run.pr, "pr-run");
   }
-  const refs: { repo: string; number: number }[] = [];
-  const texts = Array.isArray(t.texts) ? t.texts.filter((x) => typeof x === "string") : [];
-  for (const text of texts) {
-    for (const m of text.matchAll(
-      /https:\/\/github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\/(?:issues|pull)\/(\d{1,9})(?![\d])/g,
-    ))
-      refs.push({ repo: m[1], number: Number(m[2]) });
-    if (typeof t.defaultRepo === "string")
-      for (const m of text.matchAll(/(?<![\w/&#])#(\d{1,9})(?!\w)/g))
-        refs.push({ repo: t.defaultRepo, number: Number(m[1]) });
-  }
-  for (const ref of refs.slice(0, MAX_REFS)) add(ref.repo, ref.number, "reference");
-  for (const pr of Array.isArray(t.raised) ? t.raised.slice(0, 20) : [])
-    add(pr?.repo, pr?.number, "raised");
+  for (const ref of referencesIn(facts).slice(0, MAX_REFS))
+    addLinkItem(collector, ref.repo, ref.number, "reference");
+  for (const pr of Array.isArray(facts.raised) ? facts.raised.slice(0, 20) : [])
+    addLinkItem(collector, pr?.repo, pr?.number, "raised");
   const branch =
-    typeof t.branch === "string" && !NOT_A_FEATURE_BRANCH.has(t.branch) ? t.branch : run?.branch;
-  const item = req?.item;
-  let linked = false;
-  if (item && allowed.has(item.repo)) {
-    linked =
-      items.some((i) => i.repo === item.repo && i.number === item.number) ||
-      (typeof item.head === "string" &&
-        !!branch &&
-        !NOT_A_FEATURE_BRANCH.has(branch) &&
-        item.head === branch);
-  }
-  return { version: 1, items, linked, ...(branch ? { branch } : {}) };
+    typeof facts.branch === "string" && !NOT_A_FEATURE_BRANCH.has(facts.branch)
+      ? facts.branch
+      : run?.branch;
+  const linked = itemLinked(collector, req?.item, branch);
+  return { version: 1, items: collector.items, linked, ...(branch ? { branch } : {}) };
 }
 
 // ---- Rendering ----
@@ -211,340 +231,412 @@ export function parseRemote(url: string): string | undefined {
 const why = (e: unknown) =>
   (e as any)?.status ? `http ${(e as any).status}` : String((e as any)?.name ?? "Error");
 
-export function createTelemetryService(options: TelemetryOptions) {
-  const github = options.github ?? githubRequest;
-  const git = options.git ?? defaultGit;
-  const delay = options.debounceMs ?? 20_000;
-  const log = (event: string, fields: Record<string, unknown> = {}) => {
-    try {
-      options.log?.(event, fields);
-    } catch {}
+type TelemetryThread = ReturnType<NonNullable<TelemetryOptions["threads"]>>[number];
+type LogScan = {
+  size: number;
+  mtimeMs: number;
+  texts: string[];
+  raised: ThreadFacts["raised"];
+  samples?: ReturnType<typeof accountingSamples>;
+};
+type GitInfo = { branch: string; defaultRepo?: string };
+type TelemetryContext = {
+  options: TelemetryOptions;
+  github: GithubRequest;
+  git: (cwd: string, ...args: string[]) => Promise<string>;
+  delay: number;
+  threads: () => TelemetryThread[];
+  // Logs are append-only: a log whose size and mtime are unchanged yields the same facts and samples, so scan it once.
+  scans: Map<string, LogScan>;
+  actor: Promise<string> | undefined;
+  gitInfo: Map<string, { at: number; info: Promise<GitInfo | undefined> }>;
+  timers: Map<string, ReturnType<typeof setTimeout>>;
+  pending: Set<Promise<unknown>>;
+};
+
+function telemetryLog(
+  context: TelemetryContext,
+  event: string,
+  fields: Record<string, unknown> = {},
+) {
+  try {
+    context.options.log?.(event, fields);
+  } catch {}
+}
+function readThreadLog(context: TelemetryContext, id: string) {
+  try {
+    return fs.readFileSync(path.join(context.options.dataDir, "logs", `${id}.jsonl`), "utf8");
+  } catch {
+    return null;
+  }
+}
+function ledgerSample(row: any): Sample | undefined {
+  if (
+    row.accounting !== 2 ||
+    row.provider !== "codex" ||
+    typeof row.thread !== "string" ||
+    !Number.isFinite(row.ts)
+  )
+    return undefined;
+  return {
+    ts: row.ts,
+    accounting: 2,
+    in: counter(row.in),
+    out: counter(row.out),
+    cache: counter(row.cache),
   };
-  const threadsFile = path.join(options.dataDir, "threads.json");
-  const threads = options.threads ?? (() => JSON.parse(fs.readFileSync(threadsFile, "utf8")));
-  const logFile = (id: string) => path.join(options.dataDir, "logs", `${id}.jsonl`);
-  const readLog = (id: string) => {
-    try {
-      return fs.readFileSync(logFile(id), "utf8");
-    } catch {
-      return null;
-    }
-  };
-  // App-server usage reaches the turn ledger without being written to the conversation log.
-  function codexLedger() {
-    const ledger = new Map<string, Map<number, Sample>>();
-    let raw: string;
-    try {
-      raw = fs.readFileSync(path.join(options.dataDir, "turns.jsonl"), "utf8");
-    } catch {
-      return ledger;
-    }
-    for (const line of raw.split("\n")) {
-      try {
-        const row = JSON.parse(line);
-        if (
-          row.accounting !== 2 ||
-          row.provider !== "codex" ||
-          typeof row.thread !== "string" ||
-          !Number.isFinite(row.ts)
-        )
-          continue;
-        const sample: Sample = {
-          ts: row.ts,
-          accounting: 2,
-          in: counter(row.in),
-          out: counter(row.out),
-          cache: counter(row.cache),
-        };
-        const turns = ledger.get(row.thread) ?? new Map<number, Sample>();
-        if (hasTokens(sample) || !hasTokens(turns.get(row.ts))) turns.set(row.ts, sample);
-        ledger.set(row.thread, turns);
-      } catch {} // An incomplete append must not hide earlier completed turns.
-    }
+}
+// App-server usage reaches the turn ledger without being written to the conversation log.
+function codexLedger(context: TelemetryContext) {
+  const ledger = new Map<string, Map<number, Sample>>();
+  let raw: string;
+  try {
+    raw = fs.readFileSync(path.join(context.options.dataDir, "turns.jsonl"), "utf8");
+  } catch {
     return ledger;
   }
-  // Logs are append-only: a log whose size and mtime are unchanged yields the same facts and samples, so scan it once.
-  type LogScan = {
-    size: number;
-    mtimeMs: number;
-    texts: string[];
-    raised: ThreadFacts["raised"];
-    samples?: ReturnType<typeof accountingSamples>;
+  for (const line of raw.split("\n")) {
+    try {
+      const row = JSON.parse(line);
+      const sample = ledgerSample(row);
+      if (!sample) continue;
+      const turns = ledger.get(row.thread) ?? new Map<number, Sample>();
+      if (hasTokens(sample) || !hasTokens(turns.get(row.ts))) turns.set(row.ts, sample);
+      ledger.set(row.thread, turns);
+    } catch {} // An incomplete append must not hide earlier completed turns.
+  }
+  return ledger;
+}
+function userTexts(raw: string) {
+  const texts: string[] = [];
+  for (const line of raw.split("\n")) {
+    if (!line.includes('"user_input"')) continue;
+    try {
+      const event = JSON.parse(line);
+      if (event.type === "user_input" && typeof event.text === "string")
+        texts.push(event.text.slice(0, 4000));
+    } catch {}
+  }
+  return texts;
+}
+function scanLog(context: TelemetryContext, id: string): LogScan | null {
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(path.join(context.options.dataDir, "logs", `${id}.jsonl`));
+  } catch {
+    context.scans.delete(id);
+    return null;
+  }
+  const hit = context.scans.get(id);
+  if (hit && hit.size === stat.size && hit.mtimeMs === stat.mtimeMs) return hit;
+  const raw = readThreadLog(context, id);
+  if (raw == null) {
+    context.scans.delete(id);
+    return null;
+  }
+  const scan = {
+    size: stat.size,
+    mtimeMs: stat.mtimeMs,
+    texts: userTexts(raw),
+    raised: raisedItems(raw),
   };
-  const scans = new Map<string, LogScan>();
-  function scanLog(id: string): LogScan | null {
-    let st: fs.Stats;
-    try {
-      st = fs.statSync(logFile(id));
-    } catch {
-      scans.delete(id);
-      return null;
-    }
-    const hit = scans.get(id);
-    if (hit && hit.size === st.size && hit.mtimeMs === st.mtimeMs) return hit;
-    const raw = readLog(id);
-    if (raw == null) {
-      scans.delete(id);
-      return null;
-    }
-    const texts: string[] = [];
-    for (const line of raw.split("\n")) {
-      if (!line.includes('"user_input"')) continue;
-      try {
-        const ev = JSON.parse(line);
-        if (ev.type === "user_input" && typeof ev.text === "string")
-          texts.push(ev.text.slice(0, 4000));
-      } catch {}
-    }
-    const scan = { size: st.size, mtimeMs: st.mtimeMs, texts, raised: raisedItems(raw) };
-    scans.set(id, scan);
-    return scan;
+  context.scans.set(id, scan);
+  return scan;
+}
+function githubLogin(context: TelemetryContext) {
+  context.actor ??= context
+    .github("GET", "user")
+    .then((user) => {
+      if (typeof user?.login !== "string" || !user.login) throw new Error("Missing GitHub actor");
+      return user.login;
+    })
+    .catch((error) => {
+      context.actor = undefined;
+      throw error;
+    });
+  return context.actor;
+}
+async function findComment(context: TelemetryContext, repo: string, number: number) {
+  const me = await githubLogin(context);
+  for (let page = 1; page <= 20; page++) {
+    const comments = await context.github(
+      "GET",
+      `repos/${repo}/issues/${number}/comments?per_page=100&page=${page}`,
+    );
+    if (!Array.isArray(comments)) throw new Error("Invalid GitHub comments response");
+    const hit = comments.find(
+      (comment) =>
+        comment.user?.login === me &&
+        typeof comment.body === "string" &&
+        comment.body.split("\n")[0] === TELEMETRY_MARKER &&
+        Number.isSafeInteger(comment.id),
+    );
+    if (hit) return hit;
+    if (comments.length < 100) return undefined;
   }
-  let actor: Promise<string> | undefined;
-  const login = () =>
-    (actor ??= github("GET", "user")
-      .then((u) => {
-        if (typeof u?.login !== "string" || !u.login) throw new Error("Missing GitHub actor");
-        return u.login;
-      })
-      .catch((e) => {
-        actor = undefined;
-        throw e;
-      }));
-
-  async function findComment(repo: string, number: number) {
-    const me = await login();
-    for (let page = 1; page <= 20; page++) {
-      const comments = await github(
-        "GET",
-        `repos/${repo}/issues/${number}/comments?per_page=100&page=${page}`,
-      );
-      if (!Array.isArray(comments)) throw new Error("Invalid GitHub comments response");
-      const hit = comments.find(
-        (c) =>
-          c.user?.login === me &&
-          typeof c.body === "string" &&
-          c.body.split("\n")[0] === TELEMETRY_MARKER &&
-          Number.isSafeInteger(c.id),
-      );
-      if (hit) return hit;
-      if (comments.length < 100) return undefined;
-    }
-    throw new Error("Too many comments to locate telemetry comment");
-  }
-
-  function factsOf(t: ReturnType<NonNullable<typeof options.threads>>[number]): ThreadFacts {
-    const scan = scanLog(t.id);
-    return {
-      id: t.id,
-      issueRun: t.issueRun,
-      branch: t.branch,
-      defaultRepo: t.defaultRepo,
-      texts: scan?.texts ?? [],
-      raised: scan?.raised ?? [],
+  throw new Error("Too many comments to locate telemetry comment");
+}
+function factsOf(context: TelemetryContext, thread: TelemetryThread): ThreadFacts {
+  const scan = scanLog(context, thread.id);
+  return {
+    id: thread.id,
+    issueRun: thread.issueRun,
+    branch: thread.branch,
+    defaultRepo: thread.defaultRepo,
+    texts: scan?.texts ?? [],
+    raised: scan?.raised ?? [],
+  };
+}
+// Branch and origin repo come from git in the thread's cwd; both are best effort.
+// Many threads share a cwd, and forking git from this process is costly: cache per cwd, refresh when a turn ends there.
+async function enrich(context: TelemetryContext, thread: TelemetryThread, fresh = false) {
+  if (!thread.cwd || thread.issueRun) return thread;
+  const { cwd } = thread;
+  let hit = context.gitInfo.get(cwd);
+  if (fresh || !hit || Date.now() - hit.at >= 10 * 60_000) {
+    hit = {
+      at: Date.now(),
+      info: Promise.all([
+        context.git(cwd, "rev-parse", "--abbrev-ref", "HEAD"),
+        context.git(cwd, "remote", "get-url", "origin"),
+      ]).then(
+        ([branch, remote]) => ({ branch, defaultRepo: parseRemote(remote) }),
+        () => undefined,
+      ),
     };
+    context.gitInfo.set(cwd, hit);
   }
-
-  // Branch and origin repo come from git in the thread's cwd; both are best effort.
-  // Many threads share a cwd, and forking git from this process is costly: cache per cwd, refresh when a turn ends there.
-  const gitInfo = new Map<
-    string,
-    { at: number; info: Promise<{ branch: string; defaultRepo?: string } | undefined> }
-  >();
-  async function enrich(t: ReturnType<NonNullable<typeof options.threads>>[number], fresh = false) {
-    if (!t.cwd || t.issueRun) return t;
-    let hit = gitInfo.get(t.cwd);
-    if (fresh || !hit || Date.now() - hit.at >= 10 * 60_000) {
-      hit = {
-        at: Date.now(),
-        info: Promise.all([
-          git(t.cwd, "rev-parse", "--abbrev-ref", "HEAD"),
-          git(t.cwd, "remote", "get-url", "origin"),
-        ]).then(
-          ([branch, remote]) => ({ branch, defaultRepo: parseRemote(remote) }),
-          () => undefined,
-        ),
-      };
-      gitInfo.set(t.cwd, hit);
-    }
-    const info = await hit.info;
-    return info ? { ...t, ...info } : t;
-  }
-
-  async function prepared(
-    raw: ReturnType<NonNullable<typeof options.threads>>[number],
-    fresh = false,
-  ) {
-    const t = await enrich(raw, fresh);
-    return { t, facts: factsOf(t) };
-  }
-
-  /** Render and upsert the one telemetry comment for an issue or PR. Threads are matched by linkThread. */
-  async function syncItem(req: {
-    repo: string;
-    number: number;
-    head?: string;
-    createOnly?: boolean;
-  }) {
-    const repos = options.repos(); // read once: the production source re-reads its config file on every call
-    if (!repos.includes(req.repo)) return { status: "skipped" as const };
-    const existing = await findComment(req.repo, req.number);
-    if (existing && req.createOnly) return { status: "unchanged" as const };
-    const runs: TelemetryRun[] = [];
-    const ledger = codexLedger();
-    for (const raw of threads()) {
-      const { t, facts } = await prepared(raw);
-      if (!linkThread({ thread: facts, repos, item: req }).linked) continue;
-      const scan = scanLog(t.id);
-      if (scan && !scan.samples) {
-        const log = readLog(t.id);
-        if (log != null)
-          scan.samples = accountingSamples(log, {
-            id: t.id,
-            provider: t.provider,
-            model: t.model,
-            createdAt: t.createdAt,
-          });
-      }
-      let samples = scan?.samples ?? null;
-      const stored = t.provider === "codex" ? ledger.get(t.id) : undefined;
-      if (stored) {
-        const turns = new Map(samples?.map((sample) => [sample.ts, sample]));
-        for (const [ts, sample] of stored) {
-          if (ts < (t.createdAt ?? 0)) continue;
-          if (hasTokens(sample) || !hasTokens(turns.get(ts))) turns.set(ts, sample);
-        }
-        samples = [...turns.values()];
-      }
-      runs.push({
-        thread: t.id,
-        title: t.title,
-        provider: t.provider,
-        model: t.model,
-        createdAt: t.createdAt,
-        samples,
+  const info = await hit.info;
+  return info ? { ...thread, ...info } : thread;
+}
+async function prepared(context: TelemetryContext, raw: TelemetryThread, fresh = false) {
+  const thread = await enrich(context, raw, fresh);
+  return { thread, facts: factsOf(context, thread) };
+}
+function threadSamples(
+  context: TelemetryContext,
+  thread: TelemetryThread,
+  ledger: Map<string, Map<number, Sample>>,
+) {
+  const scan = scanLog(context, thread.id);
+  if (scan && !scan.samples) {
+    const log = readThreadLog(context, thread.id);
+    if (log != null)
+      scan.samples = accountingSamples(log, {
+        id: thread.id,
+        provider: thread.provider,
+        model: thread.model,
+        createdAt: thread.createdAt,
       });
-    }
-    const { body } = renderTelemetry({ repo: req.repo, number: req.number, runs });
-    if (body.length > 60_000) throw new Error("Telemetry comment exceeds size limit");
-    if (existing) {
-      if (existing.body === body) return { status: "unchanged" as const };
-      await github("PATCH", `repos/${req.repo}/issues/comments/${existing.id}`, { body });
-      return { status: "updated" as const };
-    }
-    await github("POST", `repos/${req.repo}/issues/${req.number}/comments`, { body });
-    return { status: "created" as const };
   }
+  let samples = scan?.samples ?? null;
+  const stored = thread.provider === "codex" ? ledger.get(thread.id) : undefined;
+  if (stored) {
+    const turns = new Map(samples?.map((sample) => [sample.ts, sample]));
+    for (const [ts, sample] of stored) {
+      if (ts < (thread.createdAt ?? 0)) continue;
+      if (hasTokens(sample) || !hasTokens(turns.get(ts))) turns.set(ts, sample);
+    }
+    samples = [...turns.values()];
+  }
+  return samples;
+}
+async function upsertComment(
+  context: TelemetryContext,
+  target: { repo: string; number: number },
+  existing: any,
+  body: string,
+) {
+  if (existing) {
+    if (existing.body === body) return { status: "unchanged" as const };
+    await context.github("PATCH", `repos/${target.repo}/issues/comments/${existing.id}`, { body });
+    return { status: "updated" as const };
+  }
+  await context.github("POST", `repos/${target.repo}/issues/${target.number}/comments`, { body });
+  return { status: "created" as const };
+}
+type SyncRequest = { repo: string; number: number; head?: string; createOnly?: boolean };
+/** Render and upsert the one telemetry comment for an issue or PR. Threads are matched by linkThread. */
+async function syncItem(context: TelemetryContext, req: SyncRequest) {
+  const repos = context.options.repos(); // read once: the production source re-reads its config file on every call
+  if (!repos.includes(req.repo)) return { status: "skipped" as const };
+  const existing = await findComment(context, req.repo, req.number);
+  if (existing && req.createOnly) return { status: "unchanged" as const };
+  const runs: TelemetryRun[] = [];
+  const ledger = codexLedger(context);
+  for (const raw of context.threads()) {
+    const { thread, facts } = await prepared(context, raw);
+    if (!linkThread({ thread: facts, repos, item: req }).linked) continue;
+    runs.push({
+      thread: thread.id,
+      title: thread.title,
+      provider: thread.provider,
+      model: thread.model,
+      createdAt: thread.createdAt,
+      samples: threadSamples(context, thread, ledger),
+    });
+  }
+  const { body } = renderTelemetry({ repo: req.repo, number: req.number, runs });
+  if (body.length > 60_000) throw new Error("Telemetry comment exceeds size limit");
+  return upsertComment(context, req, existing, body);
+}
+/** Issues, plus PR head ref when the item is a PR. */
+async function syncByNumber(
+  context: TelemetryContext,
+  repo: string,
+  number: number,
+  createOnly = false,
+) {
+  let head: string | undefined;
+  try {
+    const pr = await context.github("GET", `repos/${repo}/pulls/${number}`);
+    head = typeof pr?.head?.ref === "string" ? pr.head.ref : undefined;
+  } catch (error) {
+    if ((error as any)?.status !== 404) throw error;
+  }
+  return syncItem(context, { repo, number, head, createOnly });
+}
+// Debounced, coalesced per item; failures are logged, never thrown.
+function scheduleSync(context: TelemetryContext, repo: string, number: number) {
+  const key = `${repo}#${number}`;
+  clearTimeout(context.timers.get(key));
+  const timer = setTimeout(() => {
+    context.timers.delete(key);
+    const job = syncByNumber(context, repo, number)
+      .then(
+        (result) =>
+          telemetryLog(context, "telemetry_sync", { repo, number, status: result.status }),
+        (error) => telemetryLog(context, "telemetry_failed", { repo, number, error: why(error) }),
+      )
+      .finally(() => context.pending.delete(job));
+    context.pending.add(job);
+  }, context.delay);
+  timer.unref?.();
+  context.timers.set(key, timer);
+}
+async function addBranchTargets(
+  context: TelemetryContext,
+  found: LinkResponse,
+  defaultRepo: string | undefined,
+  repos: string[],
+  targets: Map<string, LinkResponse["items"][number]>,
+) {
+  const repo = found.items[0]?.repo ?? defaultRepo;
+  if (!found.branch || !repo || !repos.includes(repo)) return;
+  const owner = repo.split("/")[0];
+  const prs = await context.github(
+    "GET",
+    `repos/${repo}/pulls?state=all&head=${encodeURIComponent(`${owner}:${found.branch}`)}`,
+  );
+  for (const pr of Array.isArray(prs) ? prs : [])
+    if (Number.isSafeInteger(pr?.number))
+      targets.set(`${repo}#${pr.number}`, { repo, number: pr.number, via: "pr-run" });
+}
+/** A turn finished on this thread: schedule an upsert for every item it links to. Never throws. */
+async function threadTurnEnded(context: TelemetryContext, source: TelemetryThread) {
+  try {
+    const { thread, facts } = await prepared(context, source, true);
+    const repos = context.options.repos();
+    const found = linkThread({ thread: facts, repos });
+    const targets = new Map(found.items.map((entry) => [`${entry.repo}#${entry.number}`, entry]));
+    await addBranchTargets(context, found, thread.defaultRepo, repos, targets);
+    for (const target of targets.values()) scheduleSync(context, target.repo, target.number);
+  } catch (error) {
+    telemetryLog(context, "telemetry_link_failed", { thread: source.id, error: why(error) });
+  }
+}
+/** Webhook: post "No agent usage recorded." (or the real table) once if no telemetry comment exists. */
+async function ensureComment(context: TelemetryContext, repo: string, number: number) {
+  try {
+    return await syncByNumber(context, repo, number, true);
+  } catch (error) {
+    telemetryLog(context, "telemetry_failed", { repo, number, error: why(error) });
+    return { status: "failed" as const };
+  }
+}
+type BackfillCounts = {
+  scanned: number;
+  created: number;
+  updated: number;
+  unchanged: number;
+  failed: number;
+};
+async function backfillItem(
+  context: TelemetryContext,
+  repo: string,
+  number: number,
+  counts: BackfillCounts,
+) {
+  try {
+    const result = await syncByNumber(context, repo, number);
+    if (result.status in counts) counts[result.status as "created" | "updated" | "unchanged"]++;
+  } catch (error) {
+    counts.failed++;
+    telemetryLog(context, "telemetry_failed", { repo, number, error: why(error) });
+  }
+}
+/** One-time backfill: sync every open issue and PR. Returns counts. */
+async function backfill(context: TelemetryContext, repo: string, opts: { dryRun?: boolean } = {}) {
+  if (!context.options.repos().includes(repo)) throw new Error("Repository not allowed");
+  const counts: BackfillCounts = { scanned: 0, created: 0, updated: 0, unchanged: 0, failed: 0 };
+  for (let page = 1; page <= 100; page++) {
+    const items = await context.github(
+      "GET",
+      `repos/${repo}/issues?state=open&per_page=100&page=${page}`,
+    );
+    if (!Array.isArray(items)) throw new Error("Invalid GitHub issues response");
+    for (const item of items) {
+      if (!Number.isSafeInteger(item?.number)) continue;
+      counts.scanned++;
+      if (!opts.dryRun) await backfillItem(context, repo, item.number, counts);
+    }
+    if (items.length < 100) break;
+  }
+  return counts;
+}
+async function flushTelemetry(context: TelemetryContext) {
+  for (const [key, timer] of context.timers) {
+    clearTimeout(timer);
+    context.timers.delete(key);
+    const [repo, number] = [
+      key.slice(0, key.indexOf("#")),
+      Number(key.slice(key.indexOf("#") + 1)),
+    ];
+    await syncByNumber(context, repo, number).catch((error) =>
+      telemetryLog(context, "telemetry_failed", { repo, number, error: why(error) }),
+    );
+  }
+  await Promise.all(context.pending);
+}
+function closeTelemetry(context: TelemetryContext) {
+  context.scans.clear();
+  context.gitInfo.clear();
+  for (const timer of context.timers.values()) clearTimeout(timer);
+  context.timers.clear();
+}
 
-  /** Issues, plus PR head ref when the item is a PR. */
-  async function syncByNumber(repo: string, number: number, createOnly = false) {
-    let head: string | undefined;
-    try {
-      const pr = await github("GET", `repos/${repo}/pulls/${number}`);
-      head = typeof pr?.head?.ref === "string" ? pr.head.ref : undefined;
-    } catch (e) {
-      if ((e as any)?.status !== 404) throw e;
-    }
-    return syncItem({ repo, number, head, createOnly });
-  }
-
-  // Debounced, coalesced per item; failures are logged, never thrown.
-  const timers = new Map<string, ReturnType<typeof setTimeout>>();
-  const pending = new Set<Promise<unknown>>();
-  function schedule(repo: string, number: number) {
-    const key = `${repo}#${number}`;
-    clearTimeout(timers.get(key));
-    const timer = setTimeout(() => {
-      timers.delete(key);
-      const job = syncByNumber(repo, number)
-        .then(
-          (r) => log("telemetry_sync", { repo, number, status: r.status }),
-          (e) => log("telemetry_failed", { repo, number, error: why(e) }),
-        )
-        .finally(() => pending.delete(job));
-      pending.add(job);
-    }, delay);
-    timer.unref?.();
-    timers.set(key, timer);
-  }
-
-  /** A turn finished on this thread: schedule an upsert for every item it links to. Never throws. */
-  async function threadTurnEnded(thread: ReturnType<NonNullable<typeof options.threads>>[number]) {
-    try {
-      const { t, facts } = await prepared(thread, true);
-      const repos = options.repos();
-      const found = linkThread({ thread: facts, repos });
-      const targets = new Map(found.items.map((i) => [`${i.repo}#${i.number}`, i]));
-      const repo = found.items[0]?.repo ?? t.defaultRepo;
-      if (found.branch && repo && repos.includes(repo)) {
-        const owner = repo.split("/")[0];
-        const prs = await github(
-          "GET",
-          `repos/${repo}/pulls?state=all&head=${encodeURIComponent(`${owner}:${found.branch}`)}`,
-        );
-        for (const pr of Array.isArray(prs) ? prs : [])
-          if (Number.isSafeInteger(pr?.number))
-            targets.set(`${repo}#${pr.number}`, { repo, number: pr.number, via: "pr-run" });
-      }
-      for (const i of targets.values()) schedule(i.repo, i.number);
-    } catch (e) {
-      log("telemetry_link_failed", { thread: thread.id, error: why(e) });
-    }
-  }
-
-  /** Webhook: post "No agent usage recorded." (or the real table) once if no telemetry comment exists. */
-  async function ensureComment(repo: string, number: number) {
-    try {
-      return await syncByNumber(repo, number, true);
-    } catch (e) {
-      log("telemetry_failed", { repo, number, error: why(e) });
-      return { status: "failed" as const };
-    }
-  }
-
-  /** One-time backfill: sync every open issue and PR. Returns counts. */
-  async function backfill(repo: string, opts: { dryRun?: boolean } = {}) {
-    if (!options.repos().includes(repo)) throw new Error("Repository not allowed");
-    const counts = { scanned: 0, created: 0, updated: 0, unchanged: 0, failed: 0 };
-    for (let page = 1; page <= 100; page++) {
-      const items = await github(
-        "GET",
-        `repos/${repo}/issues?state=open&per_page=100&page=${page}`,
-      );
-      if (!Array.isArray(items)) throw new Error("Invalid GitHub issues response");
-      for (const item of items) {
-        if (!Number.isSafeInteger(item?.number)) continue;
-        counts.scanned++;
-        if (opts.dryRun) continue;
-        try {
-          const r = await syncByNumber(repo, item.number);
-          if (r.status in counts) counts[r.status as "created" | "updated" | "unchanged"]++;
-        } catch (e) {
-          counts.failed++;
-          log("telemetry_failed", { repo, number: item.number, error: why(e) });
-        }
-      }
-      if (items.length < 100) break;
-    }
-    return counts;
-  }
-
-  async function flush() {
-    for (const [k, t] of timers) {
-      clearTimeout(t);
-      timers.delete(k);
-      const [repo, n] = [k.slice(0, k.indexOf("#")), Number(k.slice(k.indexOf("#") + 1))];
-      await syncByNumber(repo, n).catch((e) =>
-        log("telemetry_failed", { repo, number: n, error: why(e) }),
-      );
-    }
-    await Promise.all(pending);
-  }
-  function close() {
-    scans.clear();
-    gitInfo.clear();
-    for (const t of timers.values()) clearTimeout(t);
-    timers.clear();
-  }
-  return { syncItem, syncByNumber, threadTurnEnded, ensureComment, backfill, flush, close };
+export function createTelemetryService(options: TelemetryOptions) {
+  const threadsFile = path.join(options.dataDir, "threads.json");
+  const context: TelemetryContext = {
+    options,
+    github: options.github ?? githubRequest,
+    git: options.git ?? defaultGit,
+    delay: options.debounceMs ?? 20_000,
+    threads: options.threads ?? (() => JSON.parse(fs.readFileSync(threadsFile, "utf8"))),
+    scans: new Map<string, LogScan>(),
+    actor: undefined,
+    gitInfo: new Map(),
+    timers: new Map(),
+    pending: new Set(),
+  };
+  return {
+    syncItem: (req: SyncRequest) => syncItem(context, req),
+    syncByNumber: (repo: string, number: number, createOnly = false) =>
+      syncByNumber(context, repo, number, createOnly),
+    threadTurnEnded: (thread: TelemetryThread) => threadTurnEnded(context, thread),
+    ensureComment: (repo: string, number: number) => ensureComment(context, repo, number),
+    backfill: (repo: string, opts: { dryRun?: boolean } = {}) => backfill(context, repo, opts),
+    flush: () => flushTelemetry(context),
+    close: () => closeTelemetry(context),
+  };
 }

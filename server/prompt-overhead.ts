@@ -310,248 +310,345 @@ function tomlMeta(body: string): { name?: string; description?: string } {
   return { name: str("name"), description: str("description") };
 }
 
+type Draft = Omit<Source, "tokensEst" | "dupSections" | "id"> & { body?: string };
+type ProviderScan = {
+  req: Req;
+  home: string;
+  def: Def;
+  sources: Source[];
+  bodies: Map<string, string>;
+  seen: Set<string>;
+};
+type SectionGroup = { heading: string; bytes: number; ids: string[] };
+
+function addSource(scan: ProviderScan, draft: Draft): Source {
+  const { body, ...rest } = draft;
+  const source: Source = {
+    id: `${scan.def.id}-${scan.sources.length}`,
+    ...rest,
+    tokensEst: tokens(draft.bytes),
+    dupSections: [],
+  };
+  if (body !== undefined) scan.bodies.set(source.id, body);
+  scan.sources.push(source);
+  return source;
+}
+
+const displayPath = (home: string, file: string) =>
+  within(home, file) ? "~/" + path.relative(home, file) : file;
+
+async function walkImports(
+  scan: ProviderScan,
+  body: string,
+  real: string,
+  depth: number,
+  stack: string[],
+) {
+  for (const token of importsOf(body)) {
+    const target = token.startsWith("~/")
+      ? path.join(scan.home, token.slice(2))
+      : path.resolve(path.dirname(real), token);
+    if (sensitive(target)) {
+      skip(scan.req, target, "sensitive");
+      continue;
+    }
+    if (!target.endsWith(".md")) continue;
+    await walkInstructions(
+      scan,
+      { file: target, kind: "import", label: displayPath(scan.home, target) },
+      depth + 1,
+      [...stack, real],
+      false,
+    );
+  }
+}
+
+async function walkInstructions(
+  scan: ProviderScan,
+  target: { file: string; kind: Kind; label: string },
+  depth: number,
+  stack: string[],
+  root: boolean,
+) {
+  const { file, kind, label } = target;
+  if (depth > MAX_DEPTH) {
+    skip(scan.req, file, "limit");
+    return;
+  }
+  const gated = await gate(scan.req, file);
+  if (gated === null) return;
+  if (gated === "missing") {
+    if (root) addSource(scan, { kind, label, path: file, bytes: 0, missing: true });
+    return;
+  }
+  if (stack.includes(gated.real)) {
+    skip(scan.req, file, "cycle");
+    return;
+  }
+  if (scan.seen.has(gated.real)) return;
+  scan.seen.add(gated.real);
+  const body = await text(scan.req, gated.real);
+  addSource(scan, { kind, label, path: file, bytes: Buffer.byteLength(body), body });
+  if (!scan.def.imports) return;
+  await walkImports(scan, body, gated.real, depth, stack);
+}
+
+async function addBrainIndex(scan: ProviderScan, indexFile: string) {
+  const gated = await gate(scan.req, indexFile);
+  if (gated && gated !== "missing") {
+    const body = (await text(scan.req, gated.real)).trim();
+    addSource(scan, {
+      kind: "brain-index",
+      label: "Brain index",
+      path: indexFile,
+      bytes: Buffer.byteLength(body),
+      body,
+    });
+  } else if (gated === "missing")
+    addSource(scan, {
+      kind: "brain-index",
+      label: "Brain index",
+      path: indexFile,
+      bytes: 0,
+      missing: true,
+    });
+}
+
+async function addHarnessSources(
+  scan: ProviderScan,
+  harnessText: { style: string; contract: string; indexFile: string },
+) {
+  const { harness } = scan.def;
+  const { style, contract } = harnessText;
+  if (harness.includes("style"))
+    addSource(scan, {
+      kind: "style",
+      label: "Style preamble",
+      path: STYLE_FILE,
+      bytes: Buffer.byteLength(style),
+      body: style,
+      ...(style ? {} : { missing: true as const }),
+    });
+  if (harness.includes("contract"))
+    addSource(scan, {
+      kind: "brain-contract",
+      label: "Brain save contract",
+      path: null,
+      bytes: Buffer.byteLength(contract),
+      body: contract,
+    });
+  if (harness.includes("session"))
+    addSource(scan, {
+      kind: "session",
+      label: "Session instructions",
+      path: null,
+      bytes: Buffer.byteLength(SESSION_INSTRUCTIONS),
+      body: SESSION_INSTRUCTIONS,
+    });
+  if (harness.includes("index")) await addBrainIndex(scan, harnessText.indexFile);
+}
+
+async function hiddenSkillOverrides(scan: ProviderScan) {
+  let hiddenOverrides = new Set<string>();
+  if (!scan.def.overrides) return hiddenOverrides;
+  try {
+    const gated = await gate(scan.req, scan.def.overrides);
+    if (gated && gated !== "missing") {
+      const overrides = JSON.parse(await text(scan.req, gated.real))?.skillOverrides ?? {};
+      hiddenOverrides = new Set(
+        Object.entries(overrides)
+          .filter(([, mode]) => mode === "user-invocable-only" || mode === "off")
+          .map(([name]) => name),
+      );
+    }
+  } catch {
+    /* unreadable settings: nothing hidden */
+  }
+  return hiddenOverrides;
+}
+
+// Returns the listed skill, "hidden" when settings or frontmatter keep it out of the prompt, or undefined when absent.
+async function skillEntry(
+  scan: ProviderScan,
+  dir: string,
+  entry: { name: string },
+  state: { hiddenOverrides: Set<string>; skillSeen: Set<string> },
+): Promise<{ name: string; bytes: number } | "hidden" | undefined> {
+  const gated = await gate(scan.req, path.join(dir, entry.name, "SKILL.md"));
+  if (!gated || gated === "missing" || state.skillSeen.has(gated.real)) return undefined;
+  state.skillSeen.add(gated.real);
+  const meta = frontmatter(await head(gated.real)),
+    name = meta.name || entry.name;
+  if (
+    state.hiddenOverrides.has(name) ||
+    state.hiddenOverrides.has(entry.name) ||
+    /^true$/i.test(meta["disable-model-invocation"] ?? "")
+  )
+    return "hidden";
+  return { name, bytes: name.length + (meta.description ?? "").length };
+}
+
+async function scanSkillDir(
+  scan: ProviderScan,
+  dir: string,
+  state: { hiddenOverrides: Set<string>; skillSeen: Set<string> },
+  found: { items: { name: string; bytes: number }[]; hidden: number },
+) {
+  const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
+  for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+    if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
+    const skill = await skillEntry(scan, dir, entry, state);
+    if (skill === "hidden") found.hidden++;
+    else if (skill) found.items.push(skill);
+  }
+}
+
+// skills: only name + description reach the prompt; hidden ones are not listed
+async function addSkills(scan: ProviderScan) {
+  const state = { hiddenOverrides: await hiddenSkillOverrides(scan), skillSeen: new Set<string>() };
+  const found = { items: [] as { name: string; bytes: number }[], hidden: 0 };
+  for (const dir of scan.def.skillDirs) await scanSkillDir(scan, dir, state, found);
+  const { items, hidden } = found;
+  if (items.length || hidden)
+    addSource(scan, {
+      kind: "skills",
+      label: "Skills",
+      path: scan.def.skillDirs[0],
+      bytes: items.reduce((total, item) => total + item.bytes, 0),
+      count: items.length,
+      hidden,
+      items: [...items].sort((left, right) => right.bytes - left.bytes).slice(0, 10),
+    });
+}
+
+async function addAgents(scan: ProviderScan) {
+  const { agentsDir, agentExt } = scan.def;
+  if (!agentsDir || !agentExt) return;
+  const list: { name: string; bytes: number }[] = [];
+  const entries = await readdir(agentsDir, { withFileTypes: true }).catch(() => []);
+  for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+    if (!entry.name.endsWith(agentExt)) continue;
+    const gated = await gate(scan.req, path.join(agentsDir, entry.name));
+    if (!gated || gated === "missing") continue;
+    const body = await head(gated.real),
+      meta = agentExt === ".toml" ? tomlMeta(body) : frontmatter(body);
+    const name = meta.name || entry.name.slice(0, -agentExt.length);
+    list.push({ name, bytes: name.length + (meta.description ?? "").length });
+  }
+  if (list.length)
+    addSource(scan, {
+      kind: "agents",
+      label: "Agents",
+      path: agentsDir,
+      bytes: list.reduce((total, item) => total + item.bytes, 0),
+      count: list.length,
+      items: [...list].sort((left, right) => right.bytes - left.bytes).slice(0, 10),
+    });
+}
+
+function addSectionGroups(groups: Map<string, SectionGroup>, body: string, sourceId: string) {
+  const seenHere = new Set<string>();
+  for (const chunk of body.split(/^(?=## )/m)) {
+    if (!chunk.startsWith("## ")) continue;
+    const norm = squash(chunk);
+    if (norm.length < 24) continue;
+    const hash = sha1(norm);
+    if (seenHere.has(hash)) continue;
+    seenHere.add(hash);
+    const group = groups.get(hash) ?? {
+      heading: squash(chunk.split("\n")[0].slice(3)).slice(0, 80),
+      bytes: Buffer.byteLength(chunk.trimEnd()),
+      ids: [],
+    };
+    group.ids.push(sourceId);
+    groups.set(hash, group);
+  }
+}
+
+// duplicates: identical whole files, then identical `## ` sections across different sources
+function findDuplicates(scan: ProviderScan, duplicates: Overhead["duplicates"]) {
+  const { sources, bodies } = scan;
+  const wholes = new Map<string, string>(),
+    groups = new Map<string, SectionGroup>();
+  for (const source of sources) {
+    const body = bodies.get(source.id);
+    if (body === undefined || !body.trim()) continue;
+    const whole = sha1(squash(body));
+    if (wholes.has(whole)) {
+      source.dupOf = wholes.get(whole);
+      continue;
+    }
+    wholes.set(whole, source.id);
+    addSectionGroups(groups, body, source.id);
+  }
+  for (const group of groups.values()) {
+    if (group.ids.length < 2) continue;
+    duplicates.push({
+      provider: scan.def.id,
+      heading: group.heading,
+      bytes: group.bytes,
+      sources: group.ids,
+    });
+    for (const id of group.ids)
+      sources
+        .find((source) => source.id === id)!
+        .dupSections.push({
+          heading: group.heading,
+          bytes: group.bytes,
+          alsoIn: group.ids.filter((other) => other !== id),
+        });
+  }
+}
+
+async function scanProvider(
+  req: Req,
+  home: string,
+  def: Def,
+  harnessText: { style: string; contract: string; indexFile: string },
+  duplicates: Overhead["duplicates"],
+): Promise<Provider> {
+  const scan: ProviderScan = {
+    req,
+    home,
+    def,
+    sources: [],
+    bodies: new Map<string, string>(),
+    seen: new Set<string>(),
+  };
+  for (const entry of def.instructions)
+    await walkInstructions(
+      scan,
+      { file: entry.file, kind: "instructions", label: entry.label },
+      0,
+      [],
+      true,
+    );
+  await addHarnessSources(scan, harnessText);
+  await addSkills(scan);
+  await addAgents(scan);
+  findDuplicates(scan, duplicates);
+  const totalBytes = scan.sources.reduce((total, source) => total + source.bytes, 0);
+  return {
+    id: def.id,
+    label: def.label,
+    totalBytes,
+    tokensEst: tokens(totalBytes),
+    sources: scan.sources,
+  };
+}
+
 async function build(home: string, cwd: string): Promise<Overhead> {
   const realHome = await realpath(home).catch(() => home);
   const req: Req = { home, realHome, files: 0, skipped: [], texts: new Map() };
   const providers: Provider[] = [],
     duplicates: Overhead["duplicates"] = [];
-  const indexFile = path.join(home, "repos", "brain", "wiki", "index.md");
-  const display = (p: string) => (within(home, p) ? "~/" + path.relative(home, p) : p);
-  const style = stylePreamble(),
-    contract = brainInstructions();
-
-  for (const def of await layout(home, cwd)) {
-    const sources: Source[] = [],
-      bodies = new Map<string, string>(),
-      seen = new Set<string>();
-    const add = (
-      s: Omit<Source, "tokensEst" | "dupSections" | "id"> & { body?: string },
-    ): Source => {
-      const { body, ...rest } = s;
-      const src: Source = {
-        id: `${def.id}-${sources.length}`,
-        ...rest,
-        tokensEst: tokens(s.bytes),
-        dupSections: [],
-      };
-      if (body !== undefined) bodies.set(src.id, body);
-      sources.push(src);
-      return src;
-    };
-
-    const walk = async (
-      file: string,
-      kind: Kind,
-      label: string,
-      depth: number,
-      stack: string[],
-      root: boolean,
-    ) => {
-      if (depth > MAX_DEPTH) {
-        skip(req, file, "limit");
-        return;
-      }
-      const g = await gate(req, file);
-      if (g === null) return;
-      if (g === "missing") {
-        if (root) add({ kind, label, path: file, bytes: 0, missing: true });
-        return;
-      }
-      if (stack.includes(g.real)) {
-        skip(req, file, "cycle");
-        return;
-      }
-      if (seen.has(g.real)) return;
-      seen.add(g.real);
-      const body = await text(req, g.real);
-      add({ kind, label, path: file, bytes: Buffer.byteLength(body), body });
-      if (!def.imports) return;
-      for (const token of importsOf(body)) {
-        const target = token.startsWith("~/")
-          ? path.join(home, token.slice(2))
-          : path.resolve(path.dirname(g.real), token);
-        if (sensitive(target)) {
-          skip(req, target, "sensitive");
-          continue;
-        }
-        if (!target.endsWith(".md")) continue;
-        await walk(target, "import", display(target), depth + 1, [...stack, g.real], false);
-      }
-    };
-
-    for (const i of def.instructions) await walk(i.file, "instructions", i.label, 0, [], true);
-
-    if (def.harness.includes("style"))
-      add({
-        kind: "style",
-        label: "Style preamble",
-        path: STYLE_FILE,
-        bytes: Buffer.byteLength(style),
-        body: style,
-        ...(style ? {} : { missing: true as const }),
-      });
-    if (def.harness.includes("contract"))
-      add({
-        kind: "brain-contract",
-        label: "Brain save contract",
-        path: null,
-        bytes: Buffer.byteLength(contract),
-        body: contract,
-      });
-    if (def.harness.includes("session"))
-      add({
-        kind: "session",
-        label: "Session instructions",
-        path: null,
-        bytes: Buffer.byteLength(SESSION_INSTRUCTIONS),
-        body: SESSION_INSTRUCTIONS,
-      });
-    if (def.harness.includes("index")) {
-      const g = await gate(req, indexFile);
-      if (g && g !== "missing") {
-        const body = (await text(req, g.real)).trim();
-        add({
-          kind: "brain-index",
-          label: "Brain index",
-          path: indexFile,
-          bytes: Buffer.byteLength(body),
-          body,
-        });
-      } else if (g === "missing")
-        add({
-          kind: "brain-index",
-          label: "Brain index",
-          path: indexFile,
-          bytes: 0,
-          missing: true,
-        });
-    }
-
-    // skills: only name + description reach the prompt; hidden ones are not listed
-    let hiddenOverrides = new Set<string>();
-    if (def.overrides) {
-      try {
-        const g = await gate(req, def.overrides);
-        if (g && g !== "missing") {
-          const o = JSON.parse(await text(req, g.real))?.skillOverrides ?? {};
-          hiddenOverrides = new Set(
-            Object.entries(o)
-              .filter(([, v]) => v === "user-invocable-only" || v === "off")
-              .map(([k]) => k),
-          );
-        }
-      } catch {
-        /* unreadable settings: nothing hidden */
-      }
-    }
-    const items: { name: string; bytes: number }[] = [],
-      skillSeen = new Set<string>();
-    let hidden = 0;
-    for (const dir of def.skillDirs) {
-      const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
-      for (const e of entries.sort((a, b) => a.name.localeCompare(b.name))) {
-        if (!e.isDirectory() && !e.isSymbolicLink()) continue;
-        const g = await gate(req, path.join(dir, e.name, "SKILL.md"));
-        if (!g || g === "missing" || skillSeen.has(g.real)) continue;
-        skillSeen.add(g.real);
-        const fm = frontmatter(await head(g.real)),
-          name = fm.name || e.name;
-        if (
-          hiddenOverrides.has(name) ||
-          hiddenOverrides.has(e.name) ||
-          /^true$/i.test(fm["disable-model-invocation"] ?? "")
-        ) {
-          hidden++;
-          continue;
-        }
-        items.push({ name, bytes: name.length + (fm.description ?? "").length });
-      }
-    }
-    if (items.length || hidden)
-      add({
-        kind: "skills",
-        label: "Skills",
-        path: def.skillDirs[0],
-        bytes: items.reduce((n, i) => n + i.bytes, 0),
-        count: items.length,
-        hidden,
-        items: [...items].sort((a, b) => b.bytes - a.bytes).slice(0, 10),
-      });
-
-    if (def.agentsDir && def.agentExt) {
-      const list: { name: string; bytes: number }[] = [];
-      const entries = await readdir(def.agentsDir, { withFileTypes: true }).catch(() => []);
-      for (const e of entries.sort((a, b) => a.name.localeCompare(b.name))) {
-        if (!e.name.endsWith(def.agentExt)) continue;
-        const g = await gate(req, path.join(def.agentsDir, e.name));
-        if (!g || g === "missing") continue;
-        const body = await head(g.real),
-          meta = def.agentExt === ".toml" ? tomlMeta(body) : frontmatter(body);
-        const name = meta.name || e.name.slice(0, -def.agentExt.length);
-        list.push({ name, bytes: name.length + (meta.description ?? "").length });
-      }
-      if (list.length)
-        add({
-          kind: "agents",
-          label: "Agents",
-          path: def.agentsDir,
-          bytes: list.reduce((n, i) => n + i.bytes, 0),
-          count: list.length,
-          items: [...list].sort((a, b) => b.bytes - a.bytes).slice(0, 10),
-        });
-    }
-
-    // duplicates: identical whole files, then identical `## ` sections across different sources
-    const wholes = new Map<string, string>(),
-      groups = new Map<string, { heading: string; bytes: number; ids: string[] }>();
-    for (const src of sources) {
-      const body = bodies.get(src.id);
-      if (body === undefined || !body.trim()) continue;
-      const whole = sha1(squash(body));
-      if (wholes.has(whole)) {
-        src.dupOf = wholes.get(whole);
-        continue;
-      }
-      wholes.set(whole, src.id);
-      const seenHere = new Set<string>();
-      for (const chunk of body.split(/^(?=## )/m)) {
-        if (!chunk.startsWith("## ")) continue;
-        const norm = squash(chunk);
-        if (norm.length < 24) continue;
-        const h = sha1(norm);
-        if (seenHere.has(h)) continue;
-        seenHere.add(h);
-        const g = groups.get(h) ?? {
-          heading: squash(chunk.split("\n")[0].slice(3)).slice(0, 80),
-          bytes: Buffer.byteLength(chunk.trimEnd()),
-          ids: [],
-        };
-        g.ids.push(src.id);
-        groups.set(h, g);
-      }
-    }
-    for (const g of groups.values()) {
-      if (g.ids.length < 2) continue;
-      duplicates.push({ provider: def.id, heading: g.heading, bytes: g.bytes, sources: g.ids });
-      for (const id of g.ids)
-        sources
-          .find((s) => s.id === id)!
-          .dupSections.push({
-            heading: g.heading,
-            bytes: g.bytes,
-            alsoIn: g.ids.filter((x) => x !== id),
-          });
-    }
-
-    const totalBytes = sources.reduce((n, s) => n + s.bytes, 0);
-    providers.push({
-      id: def.id,
-      label: def.label,
-      totalBytes,
-      tokensEst: tokens(totalBytes),
-      sources,
-    });
-  }
+  const harnessText = {
+    indexFile: path.join(home, "repos", "brain", "wiki", "index.md"),
+    style: stylePreamble(),
+    contract: brainInstructions(),
+  };
+  for (const def of await layout(home, cwd))
+    providers.push(await scanProvider(req, home, def, harnessText, duplicates));
   return {
     generatedAt: new Date().toISOString(),
     cwd,
