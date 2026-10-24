@@ -488,10 +488,7 @@ def fit_quantile_model(train, heldout, ceiling):
         # The artifact must be walkable by the runtime: compare exported arrays with sklearn.
         rows = matrix[: min(3, len(matrix))]
 
-        def exported_log(row):
-            return base + sum(score_tree(tree, row, 0.0) for tree in exported)
-
-        check = [exported_log(row) for row in rows]
+        check = [base + sum(score_tree(tree, row, 0.0) for tree in exported) for row in rows]
         if not np.allclose(np.array(check), fitted.predict(rows), atol=1e-9):
             raise ValueError("Exported quantile trees do not reproduce the fitted estimator")
         trees[name] = exported

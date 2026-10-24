@@ -617,7 +617,6 @@ class EffortFitTests(unittest.TestCase):
         self.assertIsNotNone(result["cachedInputTokens"])
         self.assertIsNotNone(result["outputTokens"])
 
-
     def test_quantile_trees_price_sessions_and_stay_monotone(self):
         fixture = dataset()
         fixture["scope"] = "completed-session"
@@ -636,7 +635,7 @@ class EffortFitTests(unittest.TestCase):
         trees = [tree for head in model["trees"].values() for tree in head]
         for tree in trees[:40]:
             self.assertEqual(len(tree["f"]), len(tree["l"]))
-            for left, right in zip(tree["l"], tree["r"]):
+            for left, right in zip(tree["l"], tree["r"], strict=True):
                 self.assertTrue(-1 <= left < len(tree["f"]))
                 self.assertTrue(-1 <= right < len(tree["f"]))
                 self.assertEqual(left == -1, right == -1)
@@ -654,6 +653,7 @@ class EffortFitTests(unittest.TestCase):
         artifact, report = fit.build_artifact(fixture)
         self.assertIsNone(artifact["quantileModel"])
         self.assertIsNone(report["quantileModel"])
+
 
 if __name__ == "__main__":
     unittest.main()
