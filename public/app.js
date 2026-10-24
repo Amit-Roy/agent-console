@@ -4561,12 +4561,54 @@ async function maybeShareInstagram() {
     });
     const body = await response.json().catch(() => ({}));
     if (!response.ok || !body.thread) return void toast(body.error || "Could not fetch that reel.");
-    openThread(body.thread);
+    await fillShareDraft(body);
   } catch (error) {
     toast(error.message || "Could not fetch that reel.");
   } finally {
     sharingInstagram = false;
   }
+}
+// The thread can reach the client over the WebSocket slightly after the POST resolves.
+async function waitForThread(id) {
+  for (let tries = 0; tries < 50 && !state.threads.has(id); tries++)
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  return state.threads.has(id);
+}
+// Put the share prompt and its already-uploaded files into the composer as a draft; the user edits and sends.
+async function fillShareDraft(body) {
+  const thread = body.thread;
+  if (!(await waitForThread(thread))) return void toast("Shared, but the thread did not load.");
+  openThread(thread);
+  const box = $("input");
+  box.value = box.value.trim() ? `${box.value}\n${body.prompt || ""}` : body.prompt || "";
+  const list = attachmentDrafts.get(thread) || [];
+  attachmentDrafts.set(thread, list);
+  const saved = [];
+  for (const file of body.attachments || []) {
+    const p = {
+      key: crypto.randomUUID(),
+      thread,
+      id: file.id,
+      name: file.name,
+      kind: file.kind,
+      size: file.size,
+      n: 0,
+      prepared: true,
+      order: (attachmentOrder = Math.max(Date.now(), attachmentOrder + 1)),
+      url: `/uploads/${thread}/${file.id}/${encodeURIComponent(file.name)}`,
+      ready: Promise.resolve(),
+    };
+    list.push(p);
+    saved.push(attachmentStorage.save(p));
+  }
+  if (state.current === thread) {
+    pending = list;
+    renderThumbs();
+  }
+  saveDraft();
+  sizeInput();
+  box.focus();
+  await Promise.all(saved);
 }
 // Share mode: the left drawer doubles as the target picker. Resolves "" for a new thread, a thread id, or null when cancelled.
 function finishShare(value) {
