@@ -4546,19 +4546,61 @@ async function maybeShareInstagram() {
   for (const key of ["share_text", "share_url", "share_title"]) params.delete(key);
   const query = params.toString();
   history.replaceState(null, "", `${location.pathname}${query ? `?${query}` : ""}${location.hash}`);
-  toast("Fetching Instagram reel…");
   try {
+    const choice = await pickShareTarget();
+    if (choice === null) return void toast("Share cancelled");
+    toast("Fetching Instagram reel…");
     const response = await apiFetch("/api/share/instagram", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ text, url, title }),
+      body: JSON.stringify(choice ? { text, url, title, thread: choice } : { text, url, title }),
     });
     const body = await response.json().catch(() => ({}));
     if (!response.ok || !body.thread) return void toast(body.error || "Could not fetch that reel.");
     openThread(body.thread);
   } catch (error) {
     toast(error.message || "Could not fetch that reel.");
+  } finally {
+    sharingInstagram = false;
   }
+}
+// Resolves "" for a new thread, a thread id, or null when cancelled.
+function pickShareTarget() {
+  const dialog = $("share-picker"),
+    list = $("share-picker-list");
+  const recent = [...state.threads.values()]
+    .filter((t) => !t.archived && !(t.schedule && state.tasks.has(t.schedule.task)) && !t.issueRun)
+    .sort((a, b) => b.updatedAt - a.updatedAt)
+    .slice(0, 8);
+  const options = [{ id: "", title: "New thread", sub: "Fresh Claude thread in ~/repos" }].concat(
+    recent.map((t) => ({
+      id: t.id,
+      title: t.title,
+      sub: `${provLabel(t.provider || "claude")} · ${base(t.cwd)}`,
+    })),
+  );
+  list.replaceChildren(
+    ...options.map((o) => {
+      const btn = el("button", "share-opt");
+      btn.type = "button";
+      btn.dataset.id = o.id;
+      btn.append(el("span", "share-opt-title", o.title), el("span", "share-opt-sub", o.sub));
+      return btn;
+    }),
+  );
+  return new Promise((resolve) => {
+    let picked = null;
+    list.onclick = (e) => {
+      const btn = e.target.closest(".share-opt");
+      if (!btn) return;
+      picked = btn.dataset.id;
+      dialog.close();
+    };
+    $("share-picker-cancel").onclick = () => dialog.close();
+    dialog.onclose = () => resolve(picked);
+    dialog.showModal();
+    list.querySelector(".share-opt").focus();
+  });
 }
 function openTaskDialog(task) {
   setNav(false);

@@ -4337,6 +4337,50 @@ body.login {
   font: var(--fw-reg) var(--f-sm);
   color: var(--bad);
 }
+#share-picker {
+  max-height: calc(var(--viewport-height, 100dvh) - var(--sp-4));
+  overflow-y: auto;
+}
+.share-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin: var(--sp-4) 0;
+}
+.share-opt {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  min-height: 44px;
+  padding: var(--sp-3);
+  text-align: left;
+  color: var(--t1);
+  background: var(--s2);
+  border: 1px solid var(--edge-strong);
+  border-radius: var(--r-sm);
+  font: inherit;
+  cursor: pointer;
+}
+.share-opt:first-child {
+  border-color: var(--accent);
+}
+.share-opt:hover,
+.share-opt:focus-visible {
+  border-color: var(--accent);
+}
+.share-opt-title {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+.share-opt-sub {
+  font: var(--fw-reg) var(--f-sm);
+  color: var(--t3);
+}
 #queue-editor {
   max-height: calc(var(--viewport-height, 100dvh) - var(--sp-4));
   overflow-y: auto;
