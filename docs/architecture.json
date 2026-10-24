@@ -23,7 +23,7 @@
      "tech": "triage-effort-fit.py",
      "desc": "Depth 2, leaf 80, l2 10, lr 0.03; 1 thread; paired bootstrap + stability",
      "icon": "trees",
-     "color": "green"
+     "color": "teal"
     },
     {
      "id": "gate",
@@ -31,7 +31,7 @@
      "tech": "triage-promotion.ts",
      "desc": "Reject if paired lower90 > 0 or ratio > 1.10; coverage bounds",
      "icon": "shield-check",
-     "color": "amber"
+     "color": "orange"
     }
    ]
   },
