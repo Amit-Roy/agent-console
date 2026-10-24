@@ -35,7 +35,14 @@ export type StepId =
   | "status_check"
   | "dream_gather"
   | "dream_run"
-  | "dream_verify";
+  | "dream_verify"
+  | "effort_schedule"
+  | "effort_sessions"
+  | "effort_features"
+  | "effort_fit"
+  | "effort_gate"
+  | "effort_promote"
+  | "effort_reprice";
 export type StepState = "idle" | "active" | "ok" | "failed" | "abandoned" | "disabled";
 export type EventKind = "start" | "ok" | "fail" | "info" | "abandoned";
 
@@ -284,6 +291,55 @@ export const FLOW: { nodes: FlowNode[]; edges: FlowEdge[]; pipelines: Pipeline[]
       kind: "gate",
       hint: "brain lint must pass and only wiki/, ops/ and tags/ may change; the cost, tokens and pages changed are recorded",
     },
+    {
+      id: "effort_schedule",
+      label: "Weekly schedule",
+      icon: "clock",
+      kind: "trigger",
+      hint: "Starts a retrain when the effort model is 7 days old, or at once on Run now",
+    },
+    {
+      id: "effort_sessions",
+      label: "Collect sessions",
+      icon: "database",
+      kind: "source",
+      hint: "Reads Console, Claude and Codex session history for the training rows. Off: reuse the last history",
+    },
+    {
+      id: "effort_features",
+      label: "Build features",
+      icon: "layers",
+      kind: "action",
+      hint: "Turns sessions into the feature dataset. Off: reuse the last dataset",
+    },
+    {
+      id: "effort_fit",
+      label: "Fit challenger",
+      icon: "chart",
+      kind: "action",
+      hint: "Fits the boosted quantile trees as a challenger. Off: the run stops after the data steps",
+    },
+    {
+      id: "effort_gate",
+      label: "Promotion gate",
+      icon: "scale",
+      kind: "gate",
+      hint: "p80 coverage 0.75 to 0.92, p95 coverage at least 0.90, beats the pinball baseline, mean pinball at most 1.02 times the champion on the same held-out rows (bootstrap when the champion cannot be scored). Rejected: the current model stays. Off: absolute bounds only",
+    },
+    {
+      id: "effort_promote",
+      label: "Promote",
+      icon: "rocket",
+      kind: "action",
+      hint: "Replaces the live model with the challenger. Off: shadow mode, the challenger files are written but not promoted",
+    },
+    {
+      id: "effort_reprice",
+      label: "Reprice sessions",
+      icon: "gauge",
+      kind: "action",
+      hint: "Reprices session effort quotes on the new model revision. Off: wait for the 5-minute reconcile",
+    },
   ],
   edges: [
     { from: "triage", to: "dispatcher" },
@@ -316,6 +372,12 @@ export const FLOW: { nodes: FlowNode[]; edges: FlowEdge[]; pipelines: Pipeline[]
     { from: "status_check", to: "transport", label: "failed or overdue" },
     { from: "dream_gather", to: "dream_run", label: "signal file written" },
     { from: "dream_run", to: "dream_verify", label: "run ended" },
+    { from: "effort_schedule", to: "effort_sessions", label: "model 7 days old or Run now" },
+    { from: "effort_sessions", to: "effort_features" },
+    { from: "effort_features", to: "effort_fit" },
+    { from: "effort_fit", to: "effort_gate" },
+    { from: "effort_gate", to: "effort_promote", label: "challenger not worse" },
+    { from: "effort_promote", to: "effort_reprice", label: "new revision" },
   ],
   pipelines: [
     {
@@ -369,6 +431,19 @@ export const FLOW: { nodes: FlowNode[]; edges: FlowEdge[]; pipelines: Pipeline[]
         { label: "Signal", steps: ["dream_gather"] },
         { label: "Consolidate", steps: ["dream_run"] },
         { label: "Check", steps: ["dream_verify"] },
+      ],
+    },
+    {
+      id: "effort",
+      label: "Effort model",
+      group: "workflow",
+      icon: "scale",
+      hint: "Weekly retrain of the triage effort quantile model: the challenger replaces the live model only if it is not worse",
+      phases: [
+        { label: "Schedule", steps: ["effort_schedule"] },
+        { label: "Data", steps: ["effort_sessions", "effort_features"] },
+        { label: "Train", steps: ["effort_fit", "effort_gate"] },
+        { label: "Ship", steps: ["effort_promote", "effort_reprice"] },
       ],
     },
     {
@@ -489,6 +564,8 @@ export interface Snapshot {
   config: {
     dispatch: Record<string, unknown> & { enabled: boolean; dryRun: boolean };
     opener: Record<string, unknown> & { enabled: boolean; dryRun: boolean };
+    /** Effort model workflow: `enabled` is the weekly auto-start, `steps` the per-step switches (sessions to reprice). */
+    effort?: { enabled: boolean; steps: Record<string, boolean> };
   };
 }
 

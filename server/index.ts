@@ -33,6 +33,7 @@ import {
 } from "./auth.ts";
 import { createAutomationArchiver } from "./automation/archive.ts";
 import { canonicalIssue, createPremiumAssigner } from "./automation/assign.ts";
+import { createCalibrationBridge } from "./automation/calibration-bridge.ts";
 import { watchClosed } from "./automation/closed-signal.ts";
 import { startDebug } from "./automation/debug.ts";
 import { createDream, DREAM_TASK_ID } from "./automation/dream.ts";
@@ -70,6 +71,7 @@ import { promptOverhead } from "./prompt-overhead.ts";
 import { BRAIN_BIN } from "./providers/brain.ts";
 import { claudeAccounts, claudeUsageKey } from "./providers/claude-accounts.ts";
 import { providerInfo, refreshPiModels } from "./providers/index.ts";
+import { effortModelPath } from "./providers/triage-effort.ts";
 import { describe, Schedules } from "./schedules.ts";
 import { mountSecurity } from "./security.ts";
 import { SessionSearch } from "./session-search.ts";
@@ -81,6 +83,12 @@ import { Threads, turnTiming } from "./threads.ts";
 import { createTelemetryService } from "./token-telemetry.ts";
 import { startToolPriority } from "./tool-priority.ts";
 import { createToolWatch } from "./tool-watch.ts";
+import {
+  EFFORT_STEPS,
+  type EffortStep,
+  readEffortConfig,
+  writeEffortConfig,
+} from "./triage-promotion.ts";
 import {
   adoptUpload,
   isId,
@@ -212,9 +220,26 @@ const triageBridge = createTriageBridge({
   events: automationLog,
 });
 setInterval(() => triageBridge.poll(), 30_000).unref();
+// The weekly effort calibration is another process; it appends events beside the model and the Console reads them.
+// Mock servers never read the real home directory unless a test points them at a model file.
+const effortModelFile =
+  process.env.AGENT_CONSOLE_MOCK === "1" && !process.env.AGENT_CONSOLE_TRIAGE_EFFORT_MODEL
+    ? path.join(DATA_DIR, "triage-effort-model.json")
+    : effortModelPath();
+const calibrationBridge = createCalibrationBridge({
+  file: path.join(path.dirname(effortModelFile), "triage-calibration-events.jsonl"),
+  events: automationLog,
+  notify: (n) => notifications?.notify({ kind: "failed", thread: n.thread, title: n.title }),
+});
+calibrationBridge.poll(); // lines written while the Console was down
+setInterval(() => calibrationBridge.poll(), 30_000).unref();
 const automation = automationApi({
   log: automationLog,
-  config: () => ({ dispatch: loadDispatchConfig(), opener: loadOpenerConfig() }),
+  config: () => ({
+    dispatch: loadDispatchConfig(),
+    opener: loadOpenerConfig(),
+    effort: readEffortConfig(),
+  }),
   hooks: () => scanHooks(defaultDirs().worktrees),
   runs: () =>
     threads
@@ -1084,11 +1109,23 @@ if (process.env.AGENT_CONSOLE_MOCK === "1") {
     }
   });
 }
+const EFFORT_TOGGLES = ["effort_schedule", ...EFFORT_STEPS.map((step) => `effort_${step}`)];
 app.post("/api/automation/toggle", sameOrigin, express.json({ limit: "1kb" }), (req, res) => {
   try {
     const { target, enabled } = req.body ?? {};
-    if (!["dispatcher", "opener"].includes(target) || typeof enabled !== "boolean")
-      throw new Error("Expected target dispatcher or opener and a boolean enabled.");
+    if (typeof enabled !== "boolean") throw new Error("Expected a boolean enabled.");
+    if (EFFORT_TOGGLES.includes(target)) {
+      // effort_schedule is the weekly auto-start; every other effort_* target is the step of that name
+      const effort = readEffortConfig();
+      if (target === "effort_schedule") effort.enabled = enabled;
+      else effort.steps[target.slice("effort_".length) as EffortStep] = enabled;
+      writeEffortConfig(effort);
+      return void res.json(automation.snapshot());
+    }
+    if (!["dispatcher", "opener"].includes(target))
+      throw new Error(
+        "Expected target dispatcher, opener or an effort_ step and a boolean enabled.",
+      );
     const file = path.join(DATA_DIR, "window-dispatch.json");
     let raw: any = {};
     try {
@@ -1101,6 +1138,33 @@ app.post("/api/automation/toggle", sameOrigin, express.json({ limit: "1kb" }), (
   } catch (e: any) {
     res.status(400).json({ error: String(e?.message ?? e) });
   }
+});
+// Run now: the Effort model retrain starts in the triage worker's script, detached, so a Console restart does not stop it.
+app.post("/api/automation/run", sameOrigin, express.json({ limit: "1kb" }), (req, res) => {
+  if (req.body?.pipeline !== "effort")
+    return void res.status(400).json({ error: 'Expected pipeline "effort".' });
+  const mock = process.env.AGENT_CONSOLE_MOCK === "1";
+  automationLog.record({
+    step: "effort_schedule",
+    kind: "info",
+    msg: mock ? "Run now requested (mock: not started)" : "Run now requested",
+  });
+  if (!mock) {
+    const child = spawn(
+      process.execPath,
+      [path.join(ROOT, "scripts", "github-triage.ts"), "calibrate", "--background"],
+      { cwd: ROOT, detached: true, stdio: "ignore" },
+    );
+    child.on("error", (e) =>
+      automationLog.record({
+        step: "effort_schedule",
+        kind: "fail",
+        msg: `Run now could not start: ${e.message}`,
+      }),
+    );
+    child.unref();
+  }
+  res.status(202).json({ v: 1, pipeline: "effort", started: !mock });
 });
 app.get("/api/automation/job", (req, res) => {
   res.setHeader("Cache-Control", "no-store");

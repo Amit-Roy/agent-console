@@ -40,7 +40,7 @@ Every stage writes to `automation-events.jsonl` in the Console data directory (m
 
 ## The dashboard
 
-`/automation` (link in the Auto lane and the sidebar menu). Its left panel groups the workflows: Window dispatch, Window opener and Workspace monitor under **Workflows**; CVE alerts, Runtime guard, Scheduled scans and Dead-man switch under **Security**. Selecting one opens only that workflow (`#pr`, `#cve`, and so on). Scheduled prompts stay in the Scheduled lane, not here; the header Debug button remains the one manual entry point. The steps are boxes with icons: the working step pulses, a failed step is red with a count, a disabled one is dashed. Click a step for its log, newest first. Panels list that workflow's triggers, failures, security units, runs, git hooks and settings where they apply. Window dispatch carries the dispatcher settings and its issue runs; Window opener carries the opener settings, so neither hides on a detached console page. It refreshes every 5 seconds. On a phone the panel becomes a full-width workflow field that opens the console's popover menu, the New workflow button sits below it, and each phase becomes a vertical list.
+`/automation` (link in the Auto lane and the sidebar menu). Its left panel groups the workflows: Window dispatch, Window opener, Workspace monitor, Dream and Effort model under **Workflows**; CVE alerts, Runtime guard, Scheduled scans and Dead-man switch under **Security**. Selecting one opens only that workflow (`#pr`, `#cve`, and so on). Scheduled prompts stay in the Scheduled lane, not here; the header Debug button remains the one manual entry point. The steps are boxes with icons: the working step pulses, a failed step is red with a count, a disabled one is dashed. Click a step for its log, newest first. Panels list that workflow's triggers, failures, security units, runs, git hooks and settings where they apply. Window dispatch carries the dispatcher settings and its issue runs; Window opener carries the opener settings, so neither hides on a detached console page. It refreshes every 5 seconds. On a phone the panel becomes a full-width workflow field that opens the console's popover menu, the New workflow button sits below it, and each phase becomes a vertical list.
 
 The security workflows draw their architecture, not one status row per unit: OpenCVE sync → authenticated webhook receiver → tool watch → patch bridge → daily digest → phone alert, plus the runtime guard, scan and dead-man paths. Each step carries the verdict of the VPS units behind it; the full unit list with schedule, last and next run is below the diagram, and the agents' event log still supplies every other step.
 
@@ -58,7 +58,47 @@ API (all behind the normal sign-in; every envelope has `v: 1`, unknown fields ar
 | --- | --- | --- |
 | `GET /api/automation` | `?limit` | `Snapshot`: flow, step states, triggers, runs, failures, hooks, settings |
 | `GET /api/automation/log` | `?step&limit&before` | `StepLogResponse`: events newest first, `next` to page |
+| `POST /api/automation/toggle` | `{target, enabled}` (same origin only); target is `dispatcher`, `opener`, `effort_schedule` or `effort_sessions` to `effort_reprice` | `Snapshot` |
+| `POST /api/automation/run` | `{pipeline: "effort"}` (same origin only) | `202 {v, pipeline, started}`; other pipelines get 400 |
 | `POST /api/automation/debug` | `{v, focus?, note?}` (same origin only) | `{thread, cwd, branch, route, why}` |
+
+## Effort model
+
+Weekly retrain of the triage effort quantile model (the model behind session effort quotes). The workflow `#effort` has four phases, left to right:
+
+```
+Effort model
+  1. Schedule   weekly schedule
+  2. Data       collect sessions ─► build features
+  3. Train      fit challenger ─► promotion gate
+  4. Ship       promote ─► reprice sessions
+```
+
+Cadence: weekly. The triage worker retrains when the model is 7 days old; **Run now** on the workflow page (`POST /api/automation/run` with `{"pipeline": "effort"}`) starts one at once by launching `scripts/github-triage.ts calibrate --background`, detached, so a Console restart does not stop it. A second Run now while one is running does nothing.
+
+Steps:
+
+1. **Weekly schedule**: starts a run (model 7 days old, or Run now).
+2. **Collect sessions**: reads Console, Claude and Codex session history.
+3. **Build features**: turns the sessions into the feature dataset.
+4. **Fit challenger**: fits the boosted quantile trees as a challenger beside the live model.
+5. **Promotion gate**: the challenger must pass every rule: p80 coverage between 0.75 and 0.92; p95 coverage at least 0.90; it beats the pinball baseline; its mean pinball is at most 1.02 times the champion's on the same held-out rows. When the champion cannot be scored (bootstrap), the comparison is skipped and only the absolute bounds apply. A rejected challenger leaves the current model in place and shows as a failure with the reasons.
+6. **Promote**: the challenger replaces the live model.
+7. **Reprice sessions**: reprices on the new model revision.
+
+Switches (`~/.config/agent-console/effort-model.json`, `enabled` plus `steps`; toggled on the page or with `POST /api/automation/toggle`). A step switched off is dashed and reads Off; the weekly switch is the `effort-weekly` trigger and `effort_schedule` step:
+
+| Switch | Off means |
+| --- | --- |
+| Weekly schedule (`enabled`) | No automatic weekly start; Run now still works |
+| Collect sessions | Reuse the last session history |
+| Build features | Reuse the last dataset |
+| Fit challenger | The run stops after the data steps |
+| Promotion gate | Absolute bounds only: no champion comparison |
+| Promote | Shadow mode: the challenger files are written, nothing is promoted |
+| Reprice sessions | Wait for the 5-minute reconcile instead of repricing at once |
+
+Events: the triage worker appends one JSON line per step event to `triage-calibration-events.jsonl`, in the same directory as the model file (`AGENT_CONSOLE_TRIAGE_EFFORT_MODEL`, default `~/.config/agent-console/triage-effort-model.json`): `{"ts": <ms>, "run": "<id>", "step": "effort_*", "kind": "start|ok|fail|info", "msg"?, "data"?}`. The Console reads it at start-up and every 30 seconds (`server/automation/calibration-bridge.ts`), ignores unknown steps, kinds and garbage lines, skips lines it already recorded (also across restarts), and records the rest as automation events with the producer's time in `data.at`. A `fail` line also sends a web push (thread `effort-model`); web push is the only alert channel for this workflow.
 
 ## Debug
 
