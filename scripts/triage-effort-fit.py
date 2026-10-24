@@ -87,6 +87,11 @@ BOOTSTRAP_RESAMPLES = 2000
 BOOTSTRAP_SEED = 7
 # Report-only stability probe: refit without the newest training rows.
 STABILITY_DROPPED = 14
+# Conformalized quantile regression: per-head offsets are the q-th quantile of out-of-fold
+# residuals (log1p space) on training rows only, clamped to a sane shift.
+OFFSET_FOLDS = 5
+OFFSET_LIMIT = 1.0
+OFFSET_SOURCE = "oof-cqr"
 
 
 def dataset_scope(dataset):
@@ -495,19 +500,20 @@ def quantile_cap(ceiling):
     return math.inf
 
 
-def stacked_logs(model, rows, cap):
-    """Monotone log1p quantile predictions (rows x levels), as the runtime would price them."""
+def head_logs(model, rows, offsets=True):
+    """Raw log1p head outputs (rows x levels): baseline, optional offset, then the tree sum."""
     features = [quantile_text(sample) for sample in rows]
     logs = []
     for name in QUANTILE_LEVELS:
-        start = model["baseline"][name] + model["offsets"][name]
-        logs.append(
-            [
-                min(cap, start + sum(score_tree(tree, row, 0.0) for tree in model["trees"][name]))
-                for row in features
-            ]
-        )
-    return np.maximum.accumulate(np.column_stack(logs), axis=1)
+        start = model["baseline"][name] + (model["offsets"][name] if offsets else 0.0)
+        trees = model["trees"][name]
+        logs.append([start + sum(score_tree(tree, row, 0.0) for tree in trees) for row in features])
+    return np.column_stack(logs)
+
+
+def stacked_logs(model, rows, cap):
+    """Monotone log1p quantile predictions (rows x levels), as the runtime would price them."""
+    return np.maximum.accumulate(np.minimum(cap, head_logs(model, rows)), axis=1)
 
 
 def pinball_loss(level, delta):
@@ -646,7 +652,7 @@ def fit_quantile_heads(train, ceiling):
         "quantiles": QUANTILE_LEVELS,
         "baseline": baseline,
         "trees": trees,
-        # Conformal offsets are not applied today; the runtime still adds these zeros.
+        # Zero here; fit_calibrated_heads replaces them with out-of-fold conformal offsets.
         "offsets": {name: 0.0 for name in QUANTILE_LEVELS},
         "ceiling": ceiling,
         "nodeCount": params,
@@ -655,12 +661,58 @@ def fit_quantile_heads(train, ceiling):
     return model, float(np.median(target))
 
 
+def fold_assignment(rows, count):
+    """Deterministic grouped K-fold: whole thread groups, oldest first, dealt round-robin."""
+    fold_of = {}
+    for index, group in enumerate(groups(rows)):
+        fold_of[group[0]["groupId"]] = index % count
+    return [fold_of[row["groupId"]] for row in rows]
+
+
+def oof_head_logs(train, ceiling):
+    """Out-of-fold raw head outputs for every training row; each fold is fit without its groups."""
+    count = min(OFFSET_FOLDS, len(groups(train)))
+    assigned = np.array(fold_assignment(train, count))
+    oof = np.zeros((len(train), len(QUANTILE_LEVELS)))
+    for fold in range(count):
+        inside = [row for row, which in zip(train, assigned, strict=True) if which != fold]
+        model, _ = fit_quantile_heads(inside, ceiling)
+        held = np.flatnonzero(assigned == fold)
+        oof[held] = head_logs(model, [train[position] for position in held], offsets=False)
+    return oof
+
+
+def conformal_offsets(train, ceiling):
+    """CQR offsets from training-only out-of-fold residuals, with before/after OOF coverage."""
+    actual = np.log1p([observed_work(sample, "totalTokens") for sample in train])
+    oof = oof_head_logs(train, ceiling)
+    offsets, coverage = {}, {}
+    for index, (name, level) in enumerate(QUANTILE_LEVELS.items()):
+        raw = float(np.quantile(actual - oof[:, index], level))
+        offsets[name] = float(np.clip(raw, -OFFSET_LIMIT, OFFSET_LIMIT))
+        coverage[name] = {
+            "nominal": level,
+            "offset": offsets[name],
+            "clamped": offsets[name] != raw,
+            "before": float(np.mean(actual <= oof[:, index])),
+            "after": float(np.mean(actual <= oof[:, index] + offsets[name])),
+        }
+    return offsets, coverage
+
+
+def fit_calibrated_heads(train, ceiling):
+    """Fit the heads, then store offsets computed from training rows alone."""
+    model, median_log = fit_quantile_heads(train, ceiling)
+    model["offsets"], coverage = conformal_offsets(train, ceiling)
+    return model, median_log, coverage
+
+
 def stability_probe(train, heldout, ceiling, cap, full_pinball):
     """Report-only: refit without the newest training rows and score the same held-out rows."""
     older = sorted(train, key=lambda sample: sample["_start"])[:-STABILITY_DROPPED]
     if len(older) < 2:
         return None
-    model, _ = fit_quantile_heads(older, ceiling)
+    model, _, _ = fit_calibrated_heads(older, ceiling)
     pinball = mean_pinball(score_quantile_model(model, heldout, cap))
     return {
         "droppedNewest": STABILITY_DROPPED,
@@ -671,7 +723,7 @@ def stability_probe(train, heldout, ceiling, cap, full_pinball):
 
 def fit_quantile_model(train, heldout, ceiling):
     """Fit quantile tree heads, then score them on the held-out block."""
-    model, median_log = fit_quantile_heads(train, ceiling)
+    model, median_log, oof_coverage = fit_calibrated_heads(train, ceiling)
     params = model["nodeCount"]
     actual = np.array([observed_work(s, "totalTokens") for s in heldout])
     cap = math.log1p(ceiling) if ceiling is not None else 30.0
@@ -694,10 +746,14 @@ def fit_quantile_model(train, heldout, ceiling):
         "baselinePinball": baseline_pinball,
         "beatsPinballBaseline": improves,
         "nodeCount": params,
+        "offsetSource": OFFSET_SOURCE,
+        "offsetFolds": min(OFFSET_FOLDS, len(groups(train))),
+        "oofCoverage": oof_coverage,
         "fit": TREE_PARAMS,
         "stability": stability_probe(train, heldout, ceiling, cap, mean_pinball(metrics)),
         "limitations": [
             "Independent quantile heads are rearranged, so fitted head values are not a density.",
+            "Offsets are conformal shifts from training-only out-of-fold residuals; oofCoverage ignores the ceiling cap and rearrangement.",
             "Coverage is the held-out block that also selected artifacts; it is not an independent test.",
         ],
     }
