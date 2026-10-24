@@ -276,7 +276,43 @@ try {
     });
     assert.equal(reloaded.get("builtin")!.limitMin, 90, "the limit survives a restart");
     reloaded.shutdown();
+    // deleting a built-in leaves a tombstone: it is not made again, even after a restart
     schedules.remove("builtin");
+    assert.equal(
+      schedules.ensureTask("builtin", {
+        title: "Built in",
+        prompt: "x",
+        provider: "fixture",
+        cwd: dir,
+      }),
+      undefined,
+    );
+    const afterDelete = new Schedules(new Threads(() => {}), () => {}, {
+      file,
+      outputs,
+      catchUp: false,
+    });
+    assert.equal(
+      afterDelete.ensureTask("builtin", {
+        title: "Built in",
+        prompt: "x",
+        provider: "fixture",
+        cwd: dir,
+      }),
+      undefined,
+    );
+    assert.equal(afterDelete.get("builtin"), undefined);
+    afterDelete.shutdown();
+    // a user-made task is not a built-in: deleting it leaves no tombstone
+    const mine = schedules.create({
+      title: "Mine",
+      prompt: "x",
+      provider: "fixture",
+      cwd: dir,
+      repeat: "manual",
+    });
+    schedules.remove(mine.id);
+    assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")).removedBuiltins, ["builtin"]);
   }
   // hooks: onRunStart runs before the thread exists, onRunEnd after cost and tokens are recorded
   {

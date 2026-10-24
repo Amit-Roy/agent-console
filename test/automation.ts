@@ -149,6 +149,10 @@ try {
     FLOW.edges.some((e) => e.from === "redo" && e.to === "review"),
     "redo loops back to review",
   );
+  // every step the server records by name is a real step: an unknown one throws, which once crashed a slow boot
+  const indexSource = fs.readFileSync(new URL("../server/index.ts", import.meta.url), "utf8");
+  for (const [, recorded] of indexSource.matchAll(/automationLog\.record\(\{\s*step:\s*"([^"]+)"/g))
+    assert.ok(ids.has(recorded as any), `server/index.ts records unknown step "${recorded}"`);
   // failures with step and (already redacted) message
   assert.equal(snap.failures[0].step, "worktree");
   assert.ok(!snap.failures[0].msg.includes("SEKRET"));

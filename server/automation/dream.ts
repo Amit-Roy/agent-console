@@ -94,6 +94,12 @@ function note(
   ctx.events.record({ step, kind, run: run.id, ref: DREAM_TASK_ID, msg, data });
 }
 
+/** Earlier dreams are not input for the next one: matched by the task's own run threads, or by the run thread title. */
+function isDreamSession(task: Task, session: RecentSession): boolean {
+  const own = task.runs.some((past) => past.thread === session.id);
+  return own || session.title.startsWith(`${task.title} · `);
+}
+
 /** Where this dream's window starts: the last successful run, else 24 hours ago. */
 function windowStart(ctx: DreamContext, task: Task, run: Run): number {
   const last = task.runs.findLast((past) => past.id !== run.id && past.status === "done");
@@ -137,7 +143,9 @@ async function gather(ctx: DreamContext, task: Task, run: Run): Promise<void> {
   const head = gitIn(ctx, "rev-parse", "HEAD");
   if (head.status !== 0)
     throw new Error(`The brain repository has no HEAD: ${head.text || head.failed}`);
-  const sessions = await ctx.sessions.recent({ since, limit: SESSION_CAP });
+  const sessions = (await ctx.sessions.recent({ since, limit: SESSION_CAP + 50 }))
+    .filter((session) => !isDreamSession(task, session))
+    .slice(0, SESSION_CAP);
   const commits = gitIn(
     ctx,
     "log",
@@ -222,7 +230,8 @@ function verifyProblems(ctx: DreamContext, begin: Started | undefined) {
   return { problems, paths, outside };
 }
 
-function verify(ctx: DreamContext, run: Run): void {
+/** Returns the problems found; empty when the run's changes are clean. */
+function verify(ctx: DreamContext, run: Run): string[] {
   const begin = ctx.started.get(run.id);
   ctx.started.delete(run.id);
   note(ctx, "dream_verify", "start", run);
@@ -241,6 +250,7 @@ function verify(ctx: DreamContext, run: Run): void {
   if (problems.length) note(ctx, "dream_verify", "fail", run, problems.join("; "), data);
   else
     note(ctx, "dream_verify", "ok", run, `${pagesChanged} pages, ${tagsChanged} tag files`, data);
+  return problems;
 }
 
 /** Schedules.onRunEnd: close the agent step with its cost, then verify what it changed. */
@@ -248,7 +258,12 @@ function end(ctx: DreamContext, run: Run): void {
   const detail = { cost: run.cost, tokens: run.tokens, ms: run.ms };
   if (run.status === "done") note(ctx, "dream_run", "ok", run, "agent finished", detail);
   else note(ctx, "dream_run", "fail", run, run.reason || "the run did not finish", detail);
-  verify(ctx, run);
+  const problems = verify(ctx, run);
+  // a failed check turns a finished run red in the schedule history; a run that already failed keeps its own reason
+  if (problems.length && run.status === "done") {
+    run.status = "failed";
+    run.reason = `Verification failed: ${problems.join("; ")}`;
+  }
 }
 
 export function createDream(deps: DreamDeps) {

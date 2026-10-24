@@ -78,6 +78,20 @@ const dream = createDream({
           lines: 42,
         },
         { id: "thr-old", provider: "pi", title: "Older chat", mtime: clock - 7200_000, lines: 7 },
+        {
+          id: "thr-dream",
+          provider: "claude",
+          title: "Renamed by the user",
+          mtime: clock - 600_000,
+          lines: 90,
+        },
+        {
+          id: "thr-titled",
+          provider: "claude",
+          title: "Dream · Oct 23 04:30",
+          mtime: clock - 500_000,
+          lines: 80,
+        },
       ];
     },
   },
@@ -149,13 +163,19 @@ try {
   // gather: no earlier success, so the window is 24 hours
   lintExit(3);
   const first = run();
-  await dream.onRunStart(task(), first);
-  assert.deepEqual(asked.at(-1), { since: clock - DAY, limit: 200 });
+  await dream.onRunStart(
+    task([{ id: "prev", at: clock - 2 * DAY, status: "failed", thread: "thr-dream" }]),
+    first,
+  );
+  assert.deepEqual(asked.at(-1), { since: clock - DAY, limit: 250 });
   const signal = fs.readFileSync(dream.signalFile, "utf8");
   assert.equal(fs.statSync(dream.signalFile).mode & 0o777, 0o600);
   assert.ok(signal.includes(`Starting HEAD: ${startHead}`));
   assert.ok(signal.includes("- thr-new | claude | Fix the thing |"), "sessions are listed");
   assert.ok(signal.includes("42 lines"));
+  assert.ok(!signal.includes("thr-dream"), "an earlier dream run's thread is left out");
+  assert.ok(!signal.includes("thr-titled"), "a thread titled like the dream task is left out");
+  assert.ok(signal.includes("## Sessions since") && signal.includes("(2, newest first)"));
   assert.ok(
     signal.includes("fresh thing") && !signal.includes("old thing"),
     "log entries since the window date only",
@@ -188,6 +208,7 @@ try {
   first.cost = 0.5;
   first.tokens = { input: 10, output: 2, cached: 8 };
   dream.onRunEnd(task(), first);
+  assert.equal(first.status, "done", "a clean verify leaves the run done");
   const done = events.all().filter((e) => e.run === first.id);
   assert.deepEqual(kinds(first.id).slice(3), [
     "dream_run:ok",
@@ -215,6 +236,8 @@ try {
     .all()
     .filter((e) => e.run === second.id)
     .at(-1)!;
+  assert.equal(second.status, "failed", "a failed verify turns the run red in the history");
+  assert.match(second.reason!, /^Verification failed: .*README\.md/);
   assert.equal(bad.step, "dream_verify");
   assert.equal(bad.kind, "fail");
   assert.ok(bad.msg!.includes("README.md") && bad.msg!.includes("config/stray.md"), bad.msg);
@@ -236,6 +259,11 @@ try {
     ["dream_run:fail", "dream_verify:start", "dream_verify:fail"],
   );
   assert.match(rows.at(-1)!.msg!, /brain lint exit 1/);
+  assert.equal(
+    third.reason,
+    "stopped after 90 minutes without finishing",
+    "a run that already failed keeps its reason",
+  );
   assert.match(rows.at(-3)!.msg!, /stopped after 90 minutes/);
 
   // gather failure: no repository means no run, and the step says why

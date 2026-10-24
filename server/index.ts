@@ -121,8 +121,7 @@ const boot = createBootTiming({
   onSlow: (r) => {
     const slowest = [...r.phases].sort((a, b) => b.ms - a.ms)[0]?.name;
     const msg = `slow boot: listening after ${r.totalMs} ms (limit 5000 ms); slowest phase ${slowest}`;
-    console.warn(msg);
-    automationLog.record({ step: "boot", kind: "info", msg, data: { phases: r.phases } });
+    console.warn(msg); // not an automation step: recording one under an unknown id throws and would crash a slow boot
   },
 });
 boot.mark("modules");

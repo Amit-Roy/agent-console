@@ -45,6 +45,7 @@ export interface Task {
   tz: string;
   enabled: boolean;
   saveOutput: boolean;
+  builtin?: boolean; // made by ensureTask: deleting it leaves a tombstone so it is not made again
   limitMin?: number; // this task's own run limit in minutes, instead of RUN_LIMIT_MS
   createdAt: number;
   updatedAt: number;
@@ -180,6 +181,7 @@ type Emit = (msg: unknown) => void;
 
 export class Schedules {
   private tasks = new Map<string, Task>();
+  private removedBuiltins = new Set<string>(); // ids of built-in tasks the user deleted
   private crons = new Map<string, Cron>();
   private tz: string; // the zone the user last scheduled in: the default for tasks agents create
   private file: string;
@@ -210,6 +212,7 @@ export class Schedules {
     try {
       const saved = JSON.parse(fs.readFileSync(this.file, "utf8"));
       this.tz = validZone(saved.tz) ?? this.tz;
+      for (const id of saved.removedBuiltins ?? []) this.removedBuiltins.add(String(id));
       for (const t of saved.tasks ?? []) {
         // nothing survives a restart: a run still marked running lost its turn with the old process
         for (const r of t.runs ?? [])
@@ -236,9 +239,17 @@ export class Schedules {
   }
 
   private persist() {
-    fs.writeFileSync(this.file, JSON.stringify({ tz: this.tz, tasks: this.list() }, null, 1), {
-      mode: 0o600,
-    });
+    fs.writeFileSync(
+      this.file,
+      JSON.stringify(
+        { tz: this.tz, tasks: this.list(), removedBuiltins: [...this.removedBuiltins] },
+        null,
+        1,
+      ),
+      {
+        mode: 0o600,
+      },
+    );
   }
   private changed() {
     this.persist();
@@ -363,9 +374,16 @@ export class Schedules {
   }
 
   /** A built-in task under a fixed id: created once, never touched again, so the user's edits and run history survive a restart.
-   *  createdAt is now, so catch-up does not run it for a time that passed before it existed. */
-  ensureTask(id: string, input: TaskInput): Task {
-    return this.tasks.get(id) ?? this.create(input, id);
+   *  createdAt is now, so catch-up does not run it for a time that passed before it existed.
+   *  A built-in the user deleted stays deleted (undefined); disabling it is the way to keep it around. */
+  ensureTask(id: string, input: TaskInput): Task | undefined {
+    const existing = this.tasks.get(id);
+    if (existing) return existing;
+    if (this.removedBuiltins.has(id)) return undefined;
+    const made = this.create(input, id);
+    made.builtin = true;
+    this.changed();
+    return made;
   }
 
   update(id: string, input: TaskInput): Task {
@@ -385,6 +403,7 @@ export class Schedules {
     this.crons.get(id)?.stop();
     this.crons.delete(id);
     this.tasks.delete(id);
+    if (t.builtin) this.removedBuiltins.add(id);
     for (const r of t.runs)
       if (r.thread && this.threads.get(r.thread)) {
         try {
