@@ -11,13 +11,20 @@ import concurrent.futures
 import importlib.util
 import json
 import math
+import os
 import pickle
 import sys
 import time
 from pathlib import Path
 
-import numpy
-from sklearn.ensemble import HistGradientBoostingRegressor
+# Forced, not defaulted, and before numpy/sklearn load: OpenMP reads this once at load time. With
+# the default thread count, each forked candidate worker spawns a full OpenMP pool, the pools
+# oversubscribe the cores and busy-wait against each other, so a run takes minutes instead of seconds.
+for variable in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"):
+    os.environ[variable] = "1"
+
+import numpy  # noqa: E402
+from sklearn.ensemble import HistGradientBoostingRegressor  # noqa: E402
 
 sys.dont_write_bytecode = True
 
