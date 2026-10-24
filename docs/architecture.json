@@ -87,7 +87,7 @@
      "id": "cli",
      "label": "effort-model",
      "tech": "scripts/effort-model.ts",
-     "desc": "status (4 lines), bench, data fetch",
+     "desc": "status, bench, data fetch",
      "icon": "terminal",
      "color": "purple"
     },
@@ -95,23 +95,15 @@
      "id": "bench",
      "label": "Bench",
      "tech": "triage-effort-bench.py",
-     "desc": "current, stable, SWE-chat prior, qrf; summary.json",
+     "desc": "4 candidates; summary.json",
      "icon": "chart-column",
      "color": "teal"
-    }
-   ]
-  },
-  {
-   "group": "Hugging Face",
-   "border": "solid",
-   "color": "slate",
-   "icon": "globe",
-   "items": [
+    },
     {
      "id": "hf",
      "label": "SALT-NLP/SWE-chat",
      "tech": "odc-by parquet",
-     "desc": "Cached rows, train-only, per revision",
+     "desc": "Train-only rows, cached per revision",
      "icon": "database",
      "color": "orange"
     }
