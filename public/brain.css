@@ -83,6 +83,7 @@ body.brain {
 }
 .subbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--sp-3);
 }
@@ -131,6 +132,9 @@ body.brain {
 }
 .group a.row {
   align-items: flex-start;
+}
+#graphView {
+  min-width: 0;
 }
 #cy {
   height: clamp(20rem, calc(100dvh - 19rem), 56rem);
@@ -214,4 +218,79 @@ body.brain {
 .sheetbody .chips {
   flex-wrap: wrap;
   overflow: visible;
+}
+
+#tagFilter {
+  width: auto;
+  min-height: 44px;
+  gap: var(--sp-2);
+}
+.graph-tools {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-2) var(--sp-4);
+  margin-bottom: var(--sp-3);
+}
+.graph-legend {
+  display: flex;
+  flex: 1 1 20rem;
+  flex-wrap: wrap;
+  gap: var(--sp-2) var(--sp-4);
+  padding: 0;
+  margin: 0;
+  list-style: none;
+  color: var(--t2);
+  font: var(--fw-reg) var(--f-sm);
+}
+.graph-legend li {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.legend-node {
+  width: 12px;
+  height: 12px;
+  flex: none;
+  background: var(--wiki);
+  border-radius: 50%;
+}
+.legend-node.ops {
+  background: var(--ops);
+  border-radius: 0;
+  clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
+}
+.legend-node.tag-node {
+  background: var(--s3);
+  border: 2px solid var(--viz-2);
+  border-radius: 4px;
+}
+.legend-line {
+  width: 20px;
+  border-top: 1px solid var(--t2);
+}
+.legend-line.page-link {
+  border-top-style: dashed;
+}
+.graph-controls {
+  display: flex;
+  margin-inline-start: auto;
+  gap: var(--sp-1);
+}
+.graph-controls .btn {
+  min-width: 44px;
+  min-height: 44px;
+}
+
+.brain .menu [role="option"] {
+  min-height: 44px;
+}
+.brain .menu .m-label {
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+#bm .graph-hint {
+  margin-bottom: var(--sp-3);
+  font: var(--fw-reg) var(--f-sm);
 }

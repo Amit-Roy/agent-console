@@ -1,0 +1,54 @@
+{
+  "title": "Brain graph exploration",
+  "subtitle": "The browser filters and explores the existing Brain graph.",
+  "items": [
+    {
+      "group": "Brain data",
+      "sub": "Existing read-only graph API",
+      "icon": "database",
+      "items": [
+        {
+          "id": "graph-data",
+          "label": "Pages and tags",
+          "tech": "server/brain-graph.ts",
+          "desc": "The API provides pages, tags, and relationships.",
+          "icon": "database"
+        }
+      ]
+    },
+    {
+      "group": "Browser",
+      "sub": "Brain page",
+      "icon": "monitor",
+      "items": [
+        {
+          "id": "filters",
+          "label": "Tag dropdown",
+          "tech": "brain.js + menu.js",
+          "desc": "The shared menu preserves multiple-tag filtering.",
+          "icon": "list-filter"
+        },
+        {
+          "id": "graph",
+          "label": "Graph exploration",
+          "tech": "Cytoscape + brain.css",
+          "desc": "Equal-size symbols, a legend, zoom controls, and detail labels clarify the graph.",
+          "icon": "network"
+        },
+        {
+          "id": "details",
+          "label": "List and details",
+          "tech": "brain.js",
+          "desc": "The list and detail sheet expose page information.",
+          "icon": "file-text"
+        }
+      ]
+    }
+  ],
+  "edges": [
+    { "from": "graph-data", "to": "filters", "label": "Graph payload" },
+    { "from": "filters", "to": "graph", "label": "Filtered elements" },
+    { "from": "filters", "to": "details", "label": "Filtered pages" },
+    { "from": "graph", "to": "details", "label": "Selected page" }
+  ]
+}

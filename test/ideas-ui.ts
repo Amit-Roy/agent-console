@@ -306,13 +306,35 @@ for (const [name, viewport, scheme] of [
     (await rows()).join(),
   );
   await page.fill("#q", "");
-  await page.locator("#tagChips .chip", { hasText: "pwa" }).click();
+  await page.click("#tagFilter");
+  await page.locator('.menu [data-value="pwa"]').click();
   check(
-    `brain ${name}: tag chip filters pages`,
+    `brain ${name}: tag menu filters pages`,
     (await rows()).join() === "agent-console,agent-console-ui",
     (await rows()).join(),
   );
-  await page.locator("#tagChips .chip", { hasText: "pwa" }).click();
+  await page.click("#tagFilter");
+  check(
+    `brain ${name}: menu exposes selected tags`,
+    (await page.locator('.menu [data-value="pwa"]').getAttribute("aria-selected")) === "true" &&
+      (await page.locator(".menu").getAttribute("aria-multiselectable")) === "true",
+  );
+  await page.locator('.menu [data-value="agents"]').click();
+  check(`brain ${name}: multiple tags use AND matching`, (await rows()).join() === "agent-console");
+  await page.click("#tagFilter");
+  await page.keyboard.press("Escape");
+  check(
+    `brain ${name}: Escape closes menu and returns focus`,
+    (await page.locator(".menu").count()) === 0 &&
+      (await page.locator("#tagFilter").evaluate((node) => node === document.activeElement)),
+  );
+  await page.click("#tagFilter");
+  await page.locator('.menu [data-value="null"]').click();
+  check(
+    `brain ${name}: Clear tags restores all pages`,
+    (await rows()).length === 3 &&
+      (await page.locator("#tagFilterLabel").innerText()) === "All tags",
+  );
   await page.fill("#q", "ui topics");
   await page.press("#q", "Enter");
   await page.waitForSelector("#pageList .snip");
@@ -365,6 +387,42 @@ for (const [name, viewport, scheme] of [
       (await counts()).n === "5" &&
       (await counts()).e === "4",
     JSON.stringify(await counts()),
+  );
+  check(
+    `brain ${name}: legend identifies node categories and connections`,
+    (await page.locator(".graph-legend li").count()) === 5,
+  );
+  const graphBefore = await page.evaluate(() => {
+    const graph = (document.getElementById("cy") as any).__cy;
+    return {
+      zoom: graph.zoom(),
+      positions: graph.nodes().map((node: any) => node.position()),
+      uniform: graph.nodes().every((node: any) => node.width() === 24 && node.height() === 24),
+      shapes: graph.nodes().map((node: any) => node.style("shape")),
+    };
+  });
+  check(
+    `brain ${name}: nodes have equal size and distinct category shapes`,
+    graphBefore.uniform &&
+      ["ellipse", "diamond", "round-rectangle"].every((shape) =>
+        graphBefore.shapes.includes(shape),
+      ),
+  );
+  await page.click("#zoomIn");
+  check(
+    `brain ${name}: zoom in increases viewport scale`,
+    (await page.evaluate(() => (document.getElementById("cy") as any).__cy.zoom())) >
+      graphBefore.zoom,
+  );
+  await page.click("#zoomOut");
+  await page.click("#fitGraph");
+  check(
+    `brain ${name}: viewport controls preserve node positions`,
+    JSON.stringify(
+      await page.evaluate(() =>
+        (document.getElementById("cy") as any).__cy.nodes().map((node: any) => node.position()),
+      ),
+    ) === JSON.stringify(graphBefore.positions),
   );
   await page.click("#linksToggle");
   await page.waitForFunction(() => document.getElementById("cy")!.dataset.edges === "5");

@@ -1,5 +1,7 @@
 // Brain graph screen: searchable list of wiki/ops pages and tags, plus a Cytoscape graph loaded only when the Graph view opens.
 // Hash routes: "" nothing open, "#/page/<slug>" page sheet, "#/tag/<name>" tag sheet. Everything comes from /api/brain/*.
+
+import { createMenu } from "/menu.js";
 import { $, el, renderMarkdown } from "/render.js";
 
 const PHONE = matchMedia("(max-width: 700px)");
@@ -124,25 +126,45 @@ function tagRow(t) {
   return item;
 }
 
-// ---------- tag filter chips ----------
-function renderChips() {
-  const top = [...state.tags].sort(
-    (a, button) => button.count - a.count || a.name.localeCompare(button.name),
-  );
-  $("tagChips").replaceChildren(
-    ...top.map((t) => {
-      const button = el("button", "chip", t.name);
-      button.type = "button";
-      button.setAttribute("aria-pressed", String(state.picked.has(t.name)));
-      button.append(el("small", "", String(t.count)));
-      button.onclick = () => togglePick(t.name);
-      return button;
-    }),
-  );
+// ---------- tag filter menu ----------
+function renderTagFilter() {
+  $("tagFilterLabel").textContent = state.picked.size ? `Tags · ${state.picked.size}` : "All tags";
 }
+function tagFilterItems() {
+  return [
+    { value: null, label: "Clear tags", keep: true, disabled: !state.picked.size },
+    ...[...state.tags]
+      .sort((left, right) => right.count - left.count || left.name.localeCompare(right.name))
+      .map((tag) => ({
+        value: tag.name,
+        label: `${tag.name} · ${tag.count}`,
+        keep: true,
+        checked: state.picked.has(tag.name),
+      })),
+  ];
+}
+createMenu({
+  trigger: $("tagFilter"),
+  label: "Filter by tags",
+  header: "Pages must match every selected tag",
+  getItems: tagFilterItems,
+  renderTrigger: renderTagFilter,
+  onOpen() {
+    document
+      .getElementById($("tagFilter").getAttribute("aria-controls"))
+      ?.setAttribute("aria-multiselectable", "true");
+  },
+  onSelect(name) {
+    if (name !== null) return togglePick(name);
+    state.picked.clear();
+    renderTagFilter();
+    render();
+    if (!$("sheet").hidden) route();
+  },
+});
 function togglePick(name) {
   if (!state.picked.delete(name)) state.picked.add(name);
-  renderChips();
+  renderTagFilter();
   render();
   if (!$("sheet").hidden) route();
 }
@@ -184,7 +206,7 @@ function graphStyle() {
   const label = {
     "font-family": css("--font-ui") || "sans-serif",
     color: text,
-    "min-zoomed-font-size": 7,
+    "min-zoomed-font-size": 11,
   };
   return [
     {
@@ -192,7 +214,9 @@ function graphStyle() {
       style: {
         ...label,
         label: "data(label)",
-        "font-size": 10,
+        width: 24,
+        height: 24,
+        "font-size": 12,
         "text-valign": "bottom",
         "text-margin-y": 4,
         "text-wrap": "ellipsis",
@@ -201,15 +225,17 @@ function graphStyle() {
     },
     {
       selector: "node[kind='page']",
-      style: { width: 16, height: 16, "background-color": css("--viz-1") },
+      // Page labels wait for closer zoom so tag hubs stay readable in the overview.
+      style: { shape: "ellipse", "background-color": css("--viz-1"), "min-zoomed-font-size": 16 },
     },
-    { selector: "node[kind='page'][layer='ops']", style: { "background-color": css("--viz-3") } },
+    {
+      selector: "node[kind='page'][layer='ops']",
+      style: { shape: "diamond", "background-color": css("--viz-3") },
+    },
     {
       selector: "node[kind='tag']",
       style: {
         shape: "round-rectangle",
-        width: "data(size)",
-        height: "data(size)",
         "background-color": css("--s3"),
         "border-width": 2,
         "border-color": css("--viz-2"),
@@ -222,7 +248,7 @@ function graphStyle() {
         width: 1,
         "line-color": css("--edge-strong"),
         "curve-style": "haystack",
-        opacity: 0.8,
+        opacity: 0.35,
       },
     },
     {
@@ -236,6 +262,17 @@ function graphStyle() {
         "arrow-scale": 0.7,
       },
     },
+    {
+      selector: "node.neighbor, node.picked",
+      style: {
+        "min-zoomed-font-size": 0,
+        "text-background-color": css("--s1"),
+        "text-background-opacity": 0.9,
+        "text-background-padding": 3,
+        "text-background-shape": "roundrectangle",
+      },
+    },
+    { selector: "edge.neighbor", style: { opacity: 0.9, width: 2 } },
     { selector: ".faded", style: { opacity: 0.15 } },
     { selector: "node.picked", style: { "border-width": 3, "border-color": css("--accent") } },
   ];
@@ -253,7 +290,6 @@ function graphElements(pages, tags) {
           id: `tag:${t.name}`,
           kind: "tag",
           label: t.name,
-          size: 20 + Math.min(t.count, 30) * 1.4,
         },
       })),
   ];
@@ -311,8 +347,8 @@ async function drawGraph(pages, tags) {
     fit: true,
     padding: 24,
     randomize: true,
-    nodeRepulsion: () => 16000,
-    idealEdgeLength: () => 90,
+    nodeRepulsion: () => 40000,
+    idealEdgeLength: () => 110,
     numIter: 800,
   });
   layout.run();
@@ -322,11 +358,12 @@ async function drawGraph(pages, tags) {
 }
 function highlightNode() {
   if (!net) return;
-  net.elements().removeClass("faded picked");
+  net.elements().removeClass("faded picked neighbor");
   const nodeId = currentNodeId();
   const node = nodeId && net.getElementById(nodeId);
   if (!node || node.empty()) return;
   net.elements().not(node.closedNeighborhood()).addClass("faded");
+  node.closedNeighborhood().addClass("neighbor");
   node.addClass("picked");
 }
 
@@ -482,6 +519,16 @@ $("linksToggle").onclick = () => {
   $("linksToggle").setAttribute("aria-pressed", String(state.links));
   render();
 };
+function zoomGraph(factor) {
+  if (!net) return;
+  net.zoom({
+    level: Math.max(net.minZoom(), Math.min(net.maxZoom(), net.zoom() * factor)),
+    renderedPosition: { x: net.width() / 2, y: net.height() / 2 },
+  });
+}
+$("zoomIn").onclick = () => zoomGraph(1.25);
+$("zoomOut").onclick = () => zoomGraph(0.8);
+$("fitGraph").onclick = () => net?.fit(undefined, 24);
 $("sheetClose").onclick = closeSheet;
 $("scrim").onclick = closeSheet;
 addEventListener("keydown", (e) => e.key === "Escape" && !$("sheet").hidden && closeSheet());
@@ -493,7 +540,7 @@ addEventListener("hashchange", route);
     indexGraph(data);
     $("stamp").textContent =
       `${data.pages.length} pages, ${data.tags.length} tags · generated ${new Date(data.generatedAt).toLocaleString()}`;
-    renderChips();
+    renderTagFilter();
     setView(state.view);
     route();
   } catch (failure) {
