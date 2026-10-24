@@ -67,6 +67,7 @@ import { LatencyStore } from "./latency.ts";
 import { createWorkspaceMonitor } from "./monitor-wire.ts";
 import { Notifications } from "./notifications.ts";
 import { researchToolText, runPiResearch } from "./pi-subagent-worker.ts";
+import { mountPromptImprove } from "./prompt-improve.ts";
 import { promptOverhead } from "./prompt-overhead.ts";
 import { BRAIN_BIN } from "./providers/brain.ts";
 import { claudeAccounts, claudeUsageKey } from "./providers/claude-accounts.ts";
@@ -1310,6 +1311,8 @@ if (process.env.AGENT_CONSOLE_MOCK !== "1") toolWatch.start();
 mountSecurity(app, sameOrigin, toolWatch);
 // Vault: write-only API token management (metadata out, values in; writes are same-origin only).
 mountVault(app, sameOrigin);
+// Improve prompt: Haiku rewrite + before/after effort quotes (same-origin only; capped Haiku spend).
+mountPromptImprove(app, sameOrigin);
 // App ideas: index.md + one markdown file per idea in a private git repo (server/ideas.ts). Adding commits, so same-origin only.
 const ideaError = (res: express.Response, e: any) =>
   res

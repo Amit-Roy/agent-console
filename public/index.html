@@ -19,6 +19,7 @@
   <symbol id="i-send" viewBox="0 0 16 16"><path d="M8 13V3.5M3.75 7.5 8 3.25l4.25 4.25"/></symbol>
   <symbol id="i-stop" viewBox="0 0 16 16"><rect x="4.5" y="4.5" width="7" height="7" rx="1.5" fill="currentColor" stroke="none"/></symbol>
   <symbol id="i-paperclip" viewBox="0 0 16 16"><path d="m13.75 7.6-5.6 5.6a3.9 3.9 0 0 1-5.5-5.5l5.85-5.85a2.6 2.6 0 0 1 3.68 3.68L6.4 11.3a1.3 1.3 0 0 1-1.84-1.84L9.9 4.1"/></symbol>
+  <symbol id="i-wand" viewBox="0 0 16 16"><path d="m2.75 13.25 6-6M9.25 5.25l1.5 1.5M11.5 1.75v3M10 3.25h3M13.25 7.5v2M12.25 8.5h2"/></symbol>
   <symbol id="i-fork" viewBox="0 0 16 16"><circle cx="4.5" cy="3.5" r="1.5"/><circle cx="11.5" cy="3.5" r="1.5"/><circle cx="8" cy="12.5" r="1.5"/><path d="M4.5 5v1a2 2 0 0 0 2 2h3a2 2 0 0 0 2-2V5M8 8v3"/></symbol>
   <symbol id="i-download" viewBox="0 0 16 16"><path d="M8 2.5v7M5 7l3 3 3-3M3 13h10"/></symbol>
   <symbol id="i-share" viewBox="0 0 16 16"><path d="M8 10V2.5M5.25 5.25 8 2.5l2.75 2.75M4 7.5H3.75A1.25 1.25 0 0 0 2.5 8.75v3.5a1.25 1.25 0 0 0 1.25 1.25h8.5a1.25 1.25 0 0 0 1.25-1.25v-3.5A1.25 1.25 0 0 0 12.25 7.5H12"/></symbol>
@@ -163,6 +164,9 @@
             <button id="attach" class="btn icon ghost round" type="button" title="Attach files (or paste / drop them)" aria-label="Attach files" disabled>
               <svg class="ico" aria-hidden="true"><use href="#i-paperclip"/></svg>
             </button>
+            <button id="improve" class="btn icon ghost round" type="button" title="Improve prompt" aria-label="Improve prompt" aria-haspopup="dialog" disabled>
+              <svg class="ico" aria-hidden="true"><use href="#i-wand"/></svg>
+            </button>
             <button id="model" class="btn chip" type="button" title="Model" disabled><span></span></button>
             <button id="effort" class="btn chip" type="button" title="Reasoning effort" hidden><span></span></button>
             <button id="mode" class="btn chip" type="button" title="Permission mode" disabled><span></span></button>
@@ -215,6 +219,29 @@
   <p id="queue-edit-error" role="alert"></p>
   <div class="row"><button id="queue-cancel" class="btn" type="button">Cancel</button><button id="queue-save" class="btn primary" type="submit">Save</button></div>
 </form></dialog>
+<dialog id="prompt-improve" aria-labelledby="pi-title">
+  <h2 id="pi-title">Improve prompt</h2>
+  <div class="pi-scroll">
+    <section id="pi-wait" aria-label="Your draft">
+      <p class="pi-working" role="status"><span class="spin" aria-hidden="true"></span>Rewriting your draft. This can take up to a minute.</p>
+      <p class="pi-lbl">Your draft</p>
+      <pre id="pi-old" class="pi-old"></pre>
+    </section>
+    <section id="pi-result" hidden>
+      <label class="pi-lbl" for="pi-text">Improved prompt (editable)</label>
+      <div class="pi-edit"><div id="pi-back" aria-hidden="true"></div><textarea id="pi-text" spellcheck="true" maxlength="20000"></textarea></div>
+      <ul id="pi-chips" class="pi-chips" aria-label="Placeholders to fill" hidden></ul>
+    </section>
+    <section class="pi-quote" aria-labelledby="pi-quote-title">
+      <h3 id="pi-quote-title">Effort estimate (rough guide)</h3>
+      <div class="pi-cards"><div id="pi-before" class="pi-card"></div><div id="pi-after" class="pi-card"></div></div>
+      <p id="pi-diff" class="pi-diff" role="status"></p>
+      <p id="pi-note" class="pi-note"></p>
+    </section>
+    <p id="pi-error" role="alert" hidden></p>
+  </div>
+  <div class="row pi-actions"><button id="pi-cancel" class="btn" type="button">Cancel</button><button id="pi-check" class="btn" type="button" hidden>Check</button><button id="pi-use" class="btn primary" type="button" hidden>Use</button></div>
+</dialog>
 <dialog id="dlg" aria-labelledby="dlg-title"><form method="dialog" id="dform">
   <h2 id="dlg-title">New thread</h2>
   <p class="sub" id="dlg-sub">Run a coding agent in one of your folders.</p>
