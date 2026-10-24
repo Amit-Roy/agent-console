@@ -240,6 +240,146 @@ try {
     assert.notEqual(threads.get(hung.thread!)!.status, "running");
     quick.shutdown();
   }
+  // built-in tasks: ensureTask creates once by fixed id and never overwrites a user's edit
+  {
+    const builtin = schedules.ensureTask("builtin", {
+      title: "Built in",
+      prompt: "Do the thing.",
+      provider: "fixture",
+      cwd: dir,
+      repeat: "daily",
+      time: "04:30",
+      tz: "Asia/Kolkata",
+      limitMin: 90,
+    });
+    assert.equal(builtin.id, "builtin");
+    assert.equal(builtin.limitMin, 90);
+    assert.ok(
+      Math.abs(builtin.createdAt - Date.now()) < 5000,
+      "createdAt is now: no catch-up at deploy",
+    );
+    schedules.update("builtin", { title: "Edited by the user", enabled: false });
+    const again = schedules.ensureTask("builtin", {
+      title: "Built in",
+      prompt: "Other.",
+      provider: "fixture",
+      cwd: dir,
+    });
+    assert.equal(again.title, "Edited by the user", "an existing task is left alone");
+    assert.equal(again.enabled, false);
+    assert.equal(again.limitMin, 90, "an edit keeps the run limit");
+    assert.equal(schedules.list().filter((x) => x.id === "builtin").length, 1);
+    const reloaded = new Schedules(new Threads(() => {}), () => {}, {
+      file,
+      outputs,
+      catchUp: false,
+    });
+    assert.equal(reloaded.get("builtin")!.limitMin, 90, "the limit survives a restart");
+    reloaded.shutdown();
+    schedules.remove("builtin");
+  }
+  // hooks: onRunStart runs before the thread exists, onRunEnd after cost and tokens are recorded
+  {
+    const hookSchedules = new Schedules(threads, () => {}, {
+      file: path.join(dir, "hooks.json"),
+      outputs,
+      catchUp: false,
+    });
+    const calls: string[] = [];
+    const hooked = hookSchedules.create({
+      title: "Hooked",
+      prompt: "Go.",
+      provider: "fixture",
+      cwd: dir,
+      repeat: "manual",
+    });
+    hookSchedules.onRunStart = (_task, hookRun) => {
+      calls.push(`start:${hookRun.status}:${hookRun.thread ?? "no-thread"}`);
+    };
+    hookSchedules.onRunEnd = (_task, hookRun) => {
+      calls.push(
+        `end:${hookRun.status}:${hookRun.tokens ? JSON.stringify(hookRun.tokens) : "none"}`,
+      );
+    };
+    const first = hookSchedules.run(hooked.id);
+    assert.deepEqual(calls, ["start:running:no-thread"]);
+    assert.ok(first.thread, "a synchronous hook does not delay the thread");
+    ctxs.get(first.thread!).event({
+      type: "token_usage",
+      input_tokens: 100,
+      output_tokens: 20,
+      cached_input_tokens: 70,
+    });
+    reply(first.thread!, "Report one.");
+    await tick();
+    assert.deepEqual(calls.slice(1), ['end:done:{"input":100,"output":20,"cached":70}']);
+    assert.deepEqual(hookSchedules.get(hooked.id)!.runs[0].tokens, {
+      input: 100,
+      output: 20,
+      cached: 70,
+    });
+    // an async hook holds the thread back, shows the run as running, and blocks an overlapping run
+    let release!: () => void;
+    hookSchedules.onRunStart = () => new Promise<void>((resolve) => (release = resolve));
+    const second = hookSchedules.run(hooked.id);
+    assert.equal(second.status, "running");
+    assert.equal(second.thread, undefined, "no thread until the hook finishes");
+    assert.equal(hookSchedules.run(hooked.id).status, "skipped", "a preparing run counts as busy");
+    release();
+    await tick();
+    assert.ok(second.thread, "the thread starts once the hook resolves");
+    reply(second.thread!, "Report two.");
+    await tick();
+    assert.equal(second.tokens, undefined, "no usage reported, no tokens");
+    // a hook that rejects fails the run and starts nothing; onRunEnd is not called for a run that never began
+    calls.length = 0;
+    hookSchedules.onRunStart = async () => {
+      throw new Error("signal file missing");
+    };
+    const threadsBefore = threads.list().length;
+    const failed = hookSchedules.run(hooked.id);
+    await tick();
+    assert.equal(failed.status, "failed");
+    assert.equal(failed.reason, "signal file missing");
+    assert.equal(failed.thread, undefined);
+    assert.equal(threads.list().length, threadsBefore);
+    assert.deepEqual(calls, []);
+    hookSchedules.onRunStart = undefined;
+    hookSchedules.onRunEnd = undefined;
+    hookSchedules.remove(hooked.id);
+    hookSchedules.shutdown();
+  }
+  // a task's own limitMin replaces the default watchdog
+  {
+    const lenient = new Schedules(threads, () => {}, {
+      file: path.join(dir, "limit.json"),
+      outputs,
+      catchUp: false,
+      runLimitMs: 40,
+    });
+    const slow = lenient.create({
+      title: "Slow",
+      prompt: "x",
+      provider: "fixture",
+      cwd: dir,
+      repeat: "manual",
+      limitMin: 90,
+    });
+    const quickTask = lenient.create({
+      title: "Fast",
+      prompt: "x",
+      provider: "fixture",
+      cwd: dir,
+      repeat: "manual",
+    });
+    const slowRun = lenient.run(slow.id);
+    const quickRun = lenient.run(quickTask.id);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    assert.equal(slowRun.status, "running", "limitMin 90 outlasts the 40 ms default");
+    assert.equal(quickRun.status, "failed");
+    for (const r of [slowRun, quickRun]) if (r.thread) threads.abort(r.thread);
+    lenient.shutdown();
+  }
   // deleting a task deletes its run threads
   const runThreads = schedules
     .get(task.id)!
