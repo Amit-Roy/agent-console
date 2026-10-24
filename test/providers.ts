@@ -80,7 +80,10 @@ check(
   "title: natural title kept in full within the word budget",
   cleanTitle("Playwright Alternative") === "Playwright Alternative",
 );
-check("title: quotes and markdown stripped", cleanTitle('**"Chat image paste".**') === "Chat image paste");
+check(
+  "title: quotes and markdown stripped",
+  cleanTitle('**"Chat image paste".**') === "Chat image paste",
+);
 check(
   "title: 'Title:' prefix and extra lines dropped",
   cleanTitle("Title: Dark mode toggle\n\nThis title captures...") === "Dark mode toggle",

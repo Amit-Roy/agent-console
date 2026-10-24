@@ -34,7 +34,11 @@ PROVIDERS.set("fixture", {
 const tick = () => new Promise((r) => setTimeout(r, 50));
 const { cleanTitle } = await import("../server/providers/title.ts");
 assert.equal(fontLoads, 0, "font parser must stay unloaded until a title needs measuring");
-assert.equal(cleanTitle("Auth fix redirect"), "Auth fix redirect", "natural title survives cleanup");
+assert.equal(
+  cleanTitle("Auth fix redirect"),
+  "Auth fix redirect",
+  "natural title survives cleanup",
+);
 assert.equal(fontLoads, 0, "naming must not require a newly installed runtime font parser");
 hooks.deregister();
 execFileSync(process.execPath, ["scripts/title-metrics.mjs", "--check"], { stdio: "pipe" });
