@@ -847,7 +847,7 @@ if (hello.providers.some((p: any) => p.id === "mock")) {
     )?.message?.includes("expired"),
   );
   const many = await Promise.all(
-    Array.from({ length: 9 }, (_, i) =>
+    Array.from({ length: 21 }, (_, i) =>
       up(id, `f${i}.txt`, "x", "text/plain").then((r) => r.json()),
     ),
   );
@@ -859,7 +859,7 @@ if (hello.providers.some((p: any) => p.id === "mock")) {
         many.map((m) => ({ id: m.id })),
         "error",
       )
-    )?.message?.includes("At most 8"),
+    )?.message?.includes("At most 20"),
   );
   check(
     "send: a rejected send leaves the thread idle",

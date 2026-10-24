@@ -3769,7 +3769,7 @@ $("stop").onclick = () => sendReliable({ t: "abort", thread: state.current });
 // ---------- attachments (paste, drop, or the attach button) ----------
 // Each file is uploaded as soon as it is attached (raw bytes over HTTP); a message then just names the uploads.
 // Big screenshots are downscaled in the browser first: the model's image limits and the thread log both prefer small.
-const MAX_ATTACH = 8;
+const MAX_ATTACH = 20;
 const MAX_EDGE = 2000;
 const KEEP_AS_IS = 1.5 * 1024 * 1024;
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
