@@ -1,0 +1,54 @@
+{
+  "tools": [
+    {
+      "name": "agent-console",
+      "path": "bin/agent-console",
+      "description": "Start, stop, restart or inspect the Agent Console server; restart-when-idle deploys after the last running thread finishes.",
+      "usage": ["agent-console restart-when-idle", "agent-console status", "agent-console url"],
+      "tags": ["deploy", "restart", "server", "console", "service", "status"]
+    },
+    {
+      "name": "claude-account",
+      "path": "bin/claude-account",
+      "description": "Set up, log in or check one of the two isolated Claude accounts.",
+      "usage": ["claude-account <sunny|nefro> [setup|login|status]"],
+      "tags": ["claude", "login", "account", "auth"]
+    },
+    {
+      "name": "github-triage",
+      "path": "bin/github-triage",
+      "description": "Configure and run the GitHub issue triage service: sync, backfill, reconcile, calibrate.",
+      "usage": ["github-triage status", "github-triage sync", "github-triage calibrate"],
+      "tags": ["github", "issues", "triage", "effort", "automation"]
+    },
+    {
+      "name": "share-fetch",
+      "path": "bin/share-fetch",
+      "description": "Download a shared social media post (Instagram and similar) with its frames and metadata.",
+      "usage": ["share-fetch <url> [--out DIR] [--items 1,8]"],
+      "tags": ["instagram", "download", "video", "reel", "social"]
+    },
+    {
+      "name": "instagram-fetch",
+      "path": "bin/instagram-fetch",
+      "description": "Wrapper over share-fetch that accepts only Instagram links.",
+      "usage": ["instagram-fetch <url> [--out DIR] [--items 1,8]"],
+      "tags": ["instagram", "download", "reel", "social"]
+    },
+    {
+      "name": "share-trace",
+      "path": "bin/share-trace",
+      "description": "Trace what a share-fetch agent did, by agent id.",
+      "usage": ["share-trace <agentId>"],
+      "tags": ["debug", "trace", "share", "log"]
+    },
+    {
+      "name": "token-telemetry",
+      "path": "bin/token-telemetry",
+      "description": "Backfill token telemetry for repositories.",
+      "usage": ["token-telemetry backfill [--dry-run] [owner/name ...]"],
+      "tags": ["tokens", "usage", "cost", "backfill", "stats"]
+    }
+  ],
+  "internal": []
+}
