@@ -46,6 +46,8 @@ Open the URL, sign in, create a thread. You're running.
 
 **[CI cost and local hook](docs/ci.md).** Measured CI minutes, keep/move/remove decision per step, and the opt-in `.githooks/pre-commit` that runs `npm test` before a commit.
 
+**Share any link.** On Android, share a link to the installed app (Instagram, X, Reddit, YouTube or any web page). Pick or create a thread; the server downloads the media and a note file (`post.md`) anonymously, attaches them, and fills the composer with a prompt. Nothing is sent until you tap Send. Agents can fetch the same way with `bin/share-fetch <url> [--out DIR] [--items 1,8]` (prints one `path size` line per file); `bin/instagram-fetch` is the Instagram-only wrapper.
+
 **[Automatic GitHub triage](docs/github-triage.md).** Labels issues and PRs by effort and priority via a signed webhook. Token telemetry comments per issue/PR; the `telemetry-comment` CI check fails a PR without one. Backfill with `bin/token-telemetry backfill`.
 
 **Usage & savings** (`/dashboard`). Today / 7 / 30 / 90 days, previous-period comparison. Turns, tokens, API-equivalent cost, RTK and Headroom savings, per-day charts, model/tool/thread breakdowns, weekday-by-hour heatmap.
