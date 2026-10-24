@@ -79,6 +79,8 @@ export interface EffortModel {
   };
   scenarios: EffortScenario[];
   workCutoffs: { trivialMax: number; deepMin: number };
+  /** Training maximum of the fitted target. Session pricing never exceeds it. */
+  workloadCeiling?: number | null;
   validation: { status: "experimental" | "validated"; [key: string]: unknown };
   training: { sampleIds: string[]; [key: string]: unknown };
 }
@@ -283,6 +285,9 @@ export function validateEffortModel(value: unknown): LoadedEffortModel {
     !record(value.workCutoffs) ||
     !finite(value.workCutoffs.trivialMax, 0, 1e9) ||
     !finite(value.workCutoffs.deepMin, value.workCutoffs.trivialMax, 1e9) ||
+    (value.workloadCeiling !== undefined &&
+      value.workloadCeiling !== null &&
+      !finite(value.workloadCeiling, 1, 1e15)) ||
     !record(value.validation) ||
     !["experimental", "validated"].includes(value.validation.status as string) ||
     !boundedMetadata(value.validation) ||
@@ -433,11 +438,17 @@ export function quoteEffort(
   const roundValues: number[] = [];
   // Match the offline fitter's numerical bounds before applying paired residuals.
   const predictedLogWork = Math.max(0, Math.min(30, logWork));
+  // A residual tail must not price more session usage than training ever observed.
+  const ceiling =
+    tokenYieldBasis === "workload" && typeof model.workloadCeiling === "number"
+      ? model.workloadCeiling
+      : null;
   for (const scenario of model.scenarios) {
-    const activity =
+    const raw =
       scenario.zeroWork === true
         ? 0
         : Math.max(0, Math.expm1(Math.min(30, predictedLogWork + scenario.logResidual)));
+    const activity = ceiling === null ? raw : Math.min(ceiling, raw);
     // Session usage can be positive with zero logged actions. The fitted denominator
     // is explicit so legacy per-action artifacts keep their original arithmetic.
     const yieldWork = activity + (tokenYieldBasis === "actions-plus-one" ? 1 : 0);
