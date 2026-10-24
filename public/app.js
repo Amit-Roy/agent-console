@@ -3056,52 +3056,56 @@ function subRow(kind) {
   return li;
 }
 // one line per thing the subagent says or does, indented under its card; nested subagents nest again
+function subToolRow(block) {
+  const row = subRow("tool pending");
+  const status = el("span", "st");
+  status.append(el("i", "spin"));
+  const why = describedAs(block.name, block.input);
+  const subagent = isAgent(block.name);
+  const fallback = subagent
+    ? block.input?.description || "Subagent"
+    : summarize(block.name, block.input);
+  row.append(
+    icon(TOOL_ICON[block.name] || "code", "tool"),
+    el("span", "name", subagent ? "Agent" : toolName(block.name, block.input)),
+    el("span", why || subagent ? "sum human" : "sum", why || fallback),
+    ...fileView(block.name, block.input),
+    status,
+  );
+  row.title = summarize(block.name, block.input);
+  state.subTools.set(block.id, row);
+  if (subagent) {
+    const inner = el("ol", "sub-log");
+    row.append(inner);
+    state.subs.set(block.id, inner);
+  }
+  return row;
+}
+function subAssistant(log, blocks) {
+  for (const block of blocks) {
+    if (block.type === "text" && block.text?.trim()) {
+      const row = subRow("text");
+      row.textContent = block.text;
+      log.append(row);
+    } else if (block.type === "tool_use") log.append(subToolRow(block));
+  }
+}
+function subToolResults(blocks) {
+  for (const block of blocks) {
+    const row = block.type === "tool_result" ? state.subTools.get(block.tool_use_id) : null;
+    if (!row) continue;
+    row.classList.remove("pending");
+    row.classList.add(block.is_error ? "err" : "done");
+    row.querySelector(":scope > .st")?.replaceChildren(icon(block.is_error ? "x" : "check"));
+  }
+}
 function subEvent(e, live) {
   if (e.type === "stream_event") return; // partial text of a subagent is not shown live; the finished message is
   const log = state.subs.get(e.parent_tool_use_id);
   if (!log) return;
-  if (e.type === "assistant") {
-    for (const b of e.message?.content ?? []) {
-      if (b.type === "text" && b.text?.trim()) {
-        const li = subRow("text");
-        li.textContent = b.text.length > 280 ? `${b.text.slice(0, 279)}…` : b.text;
-        log.append(li);
-      } else if (b.type === "tool_use") {
-        const li = subRow("tool pending");
-        const st = el("span", "st");
-        st.append(el("i", "spin"));
-        const why = describedAs(b.name, b.input);
-        li.append(
-          icon(TOOL_ICON[b.name] || "code", "tool"),
-          el("span", "name", isAgent(b.name) ? "Agent" : toolName(b.name, b.input)),
-          el(
-            "span",
-            why || isAgent(b.name) ? "sum human" : "sum",
-            why ||
-              (isAgent(b.name) ? b.input?.description || "Subagent" : summarize(b.name, b.input)),
-          ),
-          ...fileView(b.name, b.input),
-          st,
-        );
-        li.title = summarize(b.name, b.input);
-        state.subTools.set(b.id, li);
-        if (isAgent(b.name)) {
-          const inner = el("ol", "sub-log");
-          li.append(inner);
-          state.subs.set(b.id, inner);
-        }
-        log.append(li);
-      }
-    }
-  } else if (e.type === "user") {
-    for (const c of e.message?.content ?? []) {
-      const li = c.type === "tool_result" ? state.subTools.get(c.tool_use_id) : null;
-      if (!li) continue;
-      li.classList.remove("pending");
-      li.classList.add(c.is_error ? "err" : "done");
-      li.querySelector(":scope > .st")?.replaceChildren(icon(c.is_error ? "x" : "check"));
-    }
-  }
+  const blocks = e.message?.content ?? [];
+  if (e.type === "assistant") subAssistant(log, blocks);
+  else if (e.type === "user") subToolResults(blocks);
   if (live && following()) scrollDown(false);
 }
 // task_started / task_progress / task_notification: live stats on the card, and a status chip for work that outlives the call
