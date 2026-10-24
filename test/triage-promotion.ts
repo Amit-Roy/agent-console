@@ -114,6 +114,32 @@ assert.equal(
   true,
 );
 
+// Statistical gate: pairedDelta present.
+const paired = (lower90: number, upper90: number, mean = (lower90 + upper90) / 2) =>
+  champion({ pairedDelta: { mean, lower90, upper90, resamples: 2000 } });
+const worse = promotionDecision(artifact({ meanPinball: 1.05 }, paired(0.05, 0.1, 0.07)));
+assert.equal(worse.promote, false);
+assert.deepEqual(worse.reasons, ["pinball worse: delta 0.07 [0.05,0.10]"]);
+const noisy = promotionDecision(artifact({ meanPinball: 1.05 }, paired(-0.02, 0.1, 0.04)));
+assert.equal(noisy.promote, true);
+assert.deepEqual(noisy.reasons, []);
+assert.equal(promotionDecision(artifact({ meanPinball: 1.05 }, paired(0, 0.1))).promote, true);
+const capped = promotionDecision(artifact({ meanPinball: 1.12 }, paired(-0.02, 0.1)));
+assert.equal(capped.promote, false);
+assert.deepEqual(capped.reasons, ["pinball ratio 1.12 above cap 1.10"]);
+assert.equal(promotionDecision(artifact({ meanPinball: 1.1 }, paired(-0.02, 0.1))).promote, true);
+const strict = promotionDecision(artifact({ meanPinball: 0.9 }, paired(-0.2, -0.05)));
+assert.equal(strict.promote, true);
+// Malformed pairedDelta falls back to the 1.02 ratio.
+const malformed = promotionDecision(
+  artifact({ meanPinball: 1.05 }, champion({ pairedDelta: { mean: "x", lower90: -1 } })),
+);
+assert.equal(malformed.promote, false);
+assert.match(malformed.reasons[0], /1\.02 times champion/);
+// Missing pairedDelta keeps the 1.02 rule.
+assert.equal(promotionDecision(artifact({ meanPinball: 1.05 })).promote, false);
+assert.equal(promotionDecision(artifact({ meanPinball: 1.02 })).promote, true);
+
 // Bootstrap cases promote when other rules pass.
 const bootstraps: [string, Json | null, RegExp][] = [
   ["missing champion", null, /champion unscoreable: no champion/],

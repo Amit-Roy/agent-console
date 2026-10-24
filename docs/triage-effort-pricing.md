@@ -123,3 +123,13 @@ Independent heads can cross. They are rearranged into a monotone set before pric
 The comment reports the best guess as P50, then P75, P80, P95 and P99. Input, generated and cached channels keep the median observed share of the priced total, so a printed input plus output budget still matches the total. Holding out the newest 20% of thread groups gives pinball 0.365 with coverage 0.31 at P50, 0.88 at P80 and 0.96 at P95. P50 coverage below nominal is why the budget still uses P80 for complete requests and P95 for incomplete ones.
 
 The ridge equation stays in the artifact for structure pricing, cost-driver text and the legacy path. Artifacts without text features load unchanged and quote with the ridge equation.
+
+## Stable heads and statistical gate
+
+The first depth-3 heads (leaf 20, L2 1.0, learning rate 0.05) moved noticeably when the newest dozen training rows changed. The heads are now `max_depth` 2, `min_samples_leaf` 80, `l2_regularization` 10, `learning_rate` 0.03 and `max_iter` 100, held in the single `TREE_PARAMS` constant of `scripts/triage-effort-fit.py`. On the real dataset this scored held-out mean pinball 0.461 against 0.479 for the installed champion. The fit pins `OMP_NUM_THREADS` to 1 before importing numpy and sklearn: these tiny trees take about 2 s single-threaded, but thread contention once stretched one fit to 2 min 47 s.
+
+With `--champion`, the fit stores `validation.quantileModel.champion.pairedDelta` = `{mean, lower90, upper90, resamples}`. It is the paired bootstrap (2000 resamples, fixed seed) of per-row mean pinball, challenger minus champion, on the shared held-out rows. Negative means the challenger is better. The fit also stores a report-only `validation.quantileModel.stability` = `{droppedNewest: 14, meanPinball, gap}`: the same heads refit without the 14 newest training rows and scored on the same held-out rows. The gap does not gate promotion.
+
+`promotionDecision` keeps the coverage rules. When `pairedDelta` is present it rejects if `lower90 > 0` (challenger clearly worse, reason like `pinball worse: delta 0.07 [0.05,0.10]`) or if the challenger mean pinball is above 1.10 times the champion (hard cap). Without `pairedDelta` it keeps the older 1.02 ratio rule.
+
+Conformal offsets are not applied today: every artifact stores `offsets` of 0 for all five heads. The runtime still adds the offsets, so a future calibration step can fill them without a format change.
