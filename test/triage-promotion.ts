@@ -85,13 +85,13 @@ assert.equal(promotionDecision(artifact({ quantiles: quantiles(0.92) })).promote
 assert.equal(promotionDecision(artifact({ quantiles: quantiles(0.9, 0.9) })).promote, true);
 const low = promotionDecision(artifact({ quantiles: quantiles(0.7) }));
 assert.equal(low.promote, false);
-assert.deepEqual(low.reasons, ["p80 coverage 0.70 is below 0.75."]);
+assert.deepEqual(low.reasons, ["p80 coverage 0.700 is below 0.75."]);
 const high = promotionDecision(artifact({ quantiles: quantiles(0.95) }));
 assert.equal(high.promote, false);
-assert.deepEqual(high.reasons, ["p80 coverage 0.95 is above 0.92."]);
+assert.deepEqual(high.reasons, ["p80 coverage 0.950 is above 0.92."]);
 const thin = promotionDecision(artifact({ quantiles: quantiles(0.8, 0.85) }));
 assert.equal(thin.promote, false);
-assert.deepEqual(thin.reasons, ["p95 coverage 0.85 is below 0.90."]);
+assert.deepEqual(thin.reasons, ["p95 coverage 0.850 is below 0.90."]);
 const both = promotionDecision(artifact({ quantiles: quantiles(0.5, 0.5) }));
 assert.equal(both.reasons.length, 2);
 

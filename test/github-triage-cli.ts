@@ -530,7 +530,7 @@ try {
   assert.equal(fs.existsSync(path.join(rejectedDir, "triage-session-history.json")), false);
   const rejectedState = stateOf(rejected.run);
   assert.equal(rejectedState.lastOutcome, "rejected");
-  assert.match(rejectedState.reasons.join(" "), /p80 coverage 0\.50 is below/);
+  assert.match(rejectedState.reasons.join(" "), /p80 coverage 0\.500 is below/);
   const rejectedEvents = eventsOf(rejected.model);
   assert.deepEqual(stepKinds(rejectedEvents, "effort_gate"), ["fail"]);
   assert.deepEqual(stepKinds(rejectedEvents, "effort_promote"), []);

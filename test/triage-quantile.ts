@@ -120,6 +120,26 @@ test("tree walk takes the split branch and predicts tokens", () => {
   assert.equal(predictQuantiles(model, large).p50, Math.ceil(Math.expm1(Math.log1p(5000))));
 });
 
+test("offsets shift every head in log space before the cap and the rearrangement", () => {
+  const model = validateQuantileModel({
+    ...base(),
+    baseline: levels(1, 1, 1, 1, 1),
+    offsets: levels(-0.25, 0.5, 0.75, -2, 0.125),
+    ceiling: 1000,
+  });
+  assert.ok(model);
+  const logs = predictQuantileLogs(model, shape("fix typo"));
+  const leafLog = Math.log1p(10);
+  assert.equal(logs.p50, 1 - 0.25 + leafLog);
+  assert.equal(logs.p75, 1 + 0.5 + leafLog);
+  assert.equal(logs.p80, 1 + 0.75 + leafLog);
+  assert.equal(logs.p95, 1 - 2 + leafLog);
+  assert.equal(logs.p99, 1 + 0.125 + leafLog);
+  const tokens = predictQuantiles(model, shape("fix typo"));
+  assert.equal(tokens.p95, tokens.p80);
+  assert.equal(tokens.p99, Math.ceil(Math.expm1(logs.p80)));
+});
+
 test("validation rejects split indices outside the feature list", () => {
   const model = base();
   const value = Math.log1p(42);

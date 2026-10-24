@@ -52,11 +52,11 @@ function readChallenger(
 function coverageReasons(value: Challenger): string[] {
   const reasons: string[] = [];
   if (value.p80Coverage < P80_MIN)
-    reasons.push(`p80 coverage ${fixed(value.p80Coverage)} is below ${fixed(P80_MIN)}.`);
+    reasons.push(`p80 coverage ${value.p80Coverage.toFixed(3)} is below ${fixed(P80_MIN)}.`);
   if (value.p80Coverage > P80_MAX)
-    reasons.push(`p80 coverage ${fixed(value.p80Coverage)} is above ${fixed(P80_MAX)}.`);
+    reasons.push(`p80 coverage ${value.p80Coverage.toFixed(3)} is above ${fixed(P80_MAX)}.`);
   if (value.p95Coverage < P95_MIN)
-    reasons.push(`p95 coverage ${fixed(value.p95Coverage)} is below ${fixed(P95_MIN)}.`);
+    reasons.push(`p95 coverage ${value.p95Coverage.toFixed(3)} is below ${fixed(P95_MIN)}.`);
   return reasons;
 }
 
