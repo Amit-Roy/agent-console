@@ -51,6 +51,8 @@ const rates = {
   "gpt-6.1": scenario.rate,
   "gpt-6.1-sol": scenario.rate,
   "claude-sonnet-5-5": scenario.rate,
+  "deepseek-flash": scenario.rate,
+  "deepseek-v4-pro": scenario.rate,
 };
 assert.deepEqual(
   forecastModel({ model: "default", resolvedModel: "gpt-6.1-sol" }, rates).rate,
@@ -68,6 +70,8 @@ assert.equal(
 );
 assert.equal(forecastModel({ model: "gpt-6.1-sol-2026-10-17" }, rates).rate, scenario.rate);
 assert.equal(forecastModel({ model: "gpt-5.5-codex" }, rates).rate, scenario.rate);
+assert.equal(forecastModel({ model: "deepseek/deepseek-flash" }, rates).rate, scenario.rate);
+assert.equal(forecastModel({ model: "deepseek/deepseek-v4-pro" }, rates).rate, scenario.rate);
 assert.equal(
   forecastModel({ model: "gpt-6.1", resolvedModel: "gpt-6.1-codex" }, rates).rate,
   scenario.rate,
