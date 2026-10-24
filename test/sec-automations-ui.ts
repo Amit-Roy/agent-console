@@ -7,7 +7,8 @@ import os from "node:os";
 import path from "node:path";
 import { chromium } from "playwright";
 import { createSecAutomations } from "../server/sec-automations.ts";
-import { AMBER, BRIDGE, GREEN, NOW, RED } from "./sec-automations-mock.ts";
+import { parseCrashes } from "../server/sec-crashes.ts";
+import { AMBER, BRIDGE, CRASHES, GREEN, NOW, RED } from "./sec-automations-mock.ts";
 
 const OUT = process.env.OUT || "/tmp";
 fs.mkdirSync(OUT, { recursive: true });
@@ -48,6 +49,8 @@ const VIEWS = {
   red: await view(RED),
   down: await view(new Error("Could not reach the scan host over SSH.")),
 };
+// the page gets what the route would send: the mock VPS answer after the server's own parse and redaction
+const CRASH_VIEW = parseCrashes(CRASHES);
 const json = (body: unknown, status = 200) => ({
   status,
   contentType: "application/json",
@@ -59,6 +62,131 @@ const check = (n: string, ok: boolean, x = "") => {
   if (!ok) failed++;
 };
 const cookie = { name: "ac_session", value: makeToken(), url: base };
+
+// The crash log dialog on the runtime workflow, on its own page so page.clock can drive the 10 s auto-refresh.
+async function crashLog(
+  ctx: Awaited<ReturnType<Awaited<ReturnType<typeof chromium.launch>>["newContext"]>>,
+  name: string,
+) {
+  const page = await ctx.newPage();
+  const errors: string[] = [];
+  let fetches = 0;
+  let mode: "list" | "empty" | "fail" = "list";
+  const debugBodies: string[] = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  await page.clock.install({ time: NOW });
+  await page.route("**/api/security/automations", (r) => r.fulfill(json(VIEWS.green)));
+  await page.route("**/api/security/tools", (r) =>
+    r.fulfill(json({ records: [], mismatches: [], errors: [], enabled: true })),
+  );
+  await page.route("**/api/security/crashes", (r) => {
+    fetches++;
+    if (mode === "fail")
+      return r.fulfill(json({ error: "The scan host did not answer in time." }, 502));
+    return r.fulfill(
+      json(mode === "empty" ? { ...CRASH_VIEW, total: 0, crashes: [] } : CRASH_VIEW),
+    );
+  });
+  await page.route("**/api/automation/debug", (r) => {
+    debugBodies.push(r.request().postData() ?? "");
+    return r.fulfill(json({ v: 1, thread: "T-crash" }));
+  });
+  await page.goto(`${base}/automation#runtime`);
+  await page.waitForSelector('[data-sec="crashes"]');
+  check(
+    `${name}: Log button only on the crashes row`,
+    (await page.locator(".crash-log-btn").count()) === 1 &&
+      (await page.locator('[data-sec="crashes"] .crash-log-btn').count()) === 1,
+  );
+  const trigger = page.locator(".crash-log-btn");
+  await trigger.click();
+  const dialog = page.locator("dialog#sec-crash-log");
+  await dialog.locator(".crash-card").first().waitFor();
+  check(
+    `${name}: crash dialog title`,
+    /Process crashes · last 24 h/.test(await dialog.locator("h2").innerText()),
+  );
+  check(`${name}: two crash cards`, (await dialog.locator(".crash-card").count()) === 2);
+  const summary = await dialog.locator(".crash-card summary").first().innerText();
+  check(
+    `${name}: summary has signal, comm and scope`,
+    /SIGSEGV/.test(summary) && /node/.test(summary) && /workspace 0123456789ab/.test(summary),
+    summary,
+  );
+  await dialog.locator(".crash-card summary").first().click();
+  await dialog.locator(".crash-card").nth(1).locator("summary").click();
+  const text = await dialog.innerText();
+  check(
+    `${name}: secrets are redacted`,
+    !/hunter2secret|ghp_abcdef/.test(text) && /\[redacted\]/.test(text),
+  );
+  check(
+    `${name}: frames in a pre`,
+    (await dialog.locator("pre").first().innerText()).includes("uv_run"),
+  );
+  check(`${name}: missing stack trace says so`, /No stack trace recorded/.test(text));
+  check(
+    `${name}: updated stamp`,
+    /Updated \d\d:\d\d:\d\d/.test(await dialog.locator(".crash-updated").innerText()),
+  );
+  const wide = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+  check(`${name}: crash dialog no horizontal overflow`, wide <= 0, String(wide));
+  await page.screenshot({ path: `${OUT}/sec-crash-log-${name}.png` });
+
+  const before = fetches;
+  await dialog.getByRole("button", { name: "Refresh" }).click();
+  check(`${name}: Refresh refetches`, fetches === before + 1, `${before} -> ${fetches}`);
+  await page.clock.runFor(10_000);
+  await page.waitForTimeout(150);
+  check(`${name}: 10 s auto-refresh`, fetches === before + 2, `${fetches}`);
+
+  mode = "empty";
+  await dialog.getByRole("button", { name: "Refresh" }).click();
+  await dialog.getByText("No crashes in the last 24 h").waitFor();
+  await page.screenshot({ path: `${OUT}/sec-crash-log-${name}-empty.png` });
+  mode = "fail";
+  await dialog.getByRole("button", { name: "Refresh" }).click();
+  await dialog.locator(".job-debug-error").waitFor();
+  const retry = dialog.getByRole("button", { name: "Retry" });
+  check(`${name}: error state with Retry`, (await retry.count()) === 1);
+  mode = "list";
+  await retry.click();
+  await dialog.locator(".crash-card").first().waitFor();
+
+  await dialog.getByRole("button", { name: "Investigate with agent" }).click();
+  await page.waitForURL(/#thread=T-crash/);
+  check(
+    `${name}: investigate posts focus crashes`,
+    debugBodies.length === 1 && JSON.parse(debugBodies[0]).focus === "crashes",
+    debugBodies.join(),
+  );
+  await page.goto(`${base}/automation#runtime`);
+  await page.waitForSelector('[data-sec="crashes"]');
+
+  await page.locator(".crash-log-btn").click();
+  await dialog.locator(".crash-card").first().waitFor();
+  await page.keyboard.press("Escape");
+  await dialog.waitFor({ state: "detached" });
+  check(
+    `${name}: Escape returns focus`,
+    await page.evaluate(() => document.activeElement?.classList.contains("crash-log-btn")),
+  );
+  const closed = fetches;
+  await page.clock.runFor(30_000);
+  await page.waitForTimeout(150);
+  check(`${name}: no auto-refresh after close`, fetches === closed, `${closed} -> ${fetches}`);
+  await page.locator(".crash-log-btn").click();
+  await dialog.locator(".crash-card").first().waitFor();
+  await dialog.getByRole("button", { name: "Close" }).click();
+  await dialog.waitFor({ state: "detached" });
+  check(
+    `${name}: Close returns focus`,
+    await page.evaluate(() => document.activeElement?.classList.contains("crash-log-btn")),
+  );
+  check(`${name}: crash log no page errors`, errors.length === 0, errors.join(" | "));
+  await page.close();
+}
+
 let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
 try {
   for (let i = 0; i < 100; i++) {
@@ -236,6 +364,7 @@ try {
         (await page.locator("#sec-status").getAttribute("data-tone")) === tone,
       );
     }
+    await crashLog(ctx, name);
     check(`${name}: no console errors`, errors.length === 0, errors.join(" | "));
     await ctx.close();
   }

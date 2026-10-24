@@ -5426,3 +5426,27 @@ body.login {
 .auto-list .tag.role-review {
   color: var(--accent);
 }
+.crash-card {
+  border-bottom: 1px solid var(--edge);
+  padding: var(--sp-2) 0;
+}
+.crash-card summary {
+  cursor: pointer;
+  min-height: 44px;
+  padding: var(--sp-2) 0;
+}
+.crash-card > p,
+.crash-card > code,
+.crash-card > pre {
+  display: block;
+  margin: var(--sp-2) 0;
+}
+.crash-card pre {
+  overflow-x: auto;
+}
+.crash-updated {
+  margin-top: var(--sp-1);
+}
+.crash-log .job-debug-actions {
+  flex-wrap: wrap;
+}
