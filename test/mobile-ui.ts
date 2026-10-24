@@ -86,7 +86,7 @@ fs.writeFileSync(
 );
 process.env.AGENT_CONSOLE_DATA = data;
 const { makeToken } = await import("../server/auth.ts");
-const { cleanTitle } = await import("../server/providers/title.ts");
+const { fitTitle } = await import("../server/providers/title.ts");
 const { threadTitle } = await import("../server/window-dispatch.ts");
 const server = spawn(process.execPath, ["server/index.ts"], {
   env: {
@@ -127,7 +127,10 @@ try {
       "Repo:clean worktree",
       "Tests:run checks",
       "UI:compact sidebar",
-    ].map((raw) => cleanTitle(raw)!);
+    ].map((raw) => {
+      const [topic, feature] = raw.split(":");
+      return fitTitle({ prefix: `${topic}:`, text: feature }).title;
+    });
     titles.splice(
       1,
       0,
