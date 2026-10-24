@@ -11,7 +11,7 @@ import type { Attachment } from "./providers/types.ts";
 // listed by absolute path in the prompt so the agent can open it with its own tools.
 
 export const UPLOAD_DIR = path.join(DATA_DIR, "uploads");
-export const MAX_ATTACHMENTS = 8;
+export const MAX_ATTACHMENTS = 20;
 export const MAX_IMAGE_BYTES = 5 << 20;
 export const MAX_FILE_BYTES = 25 << 20;
 
