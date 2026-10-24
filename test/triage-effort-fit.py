@@ -6,6 +6,7 @@ import importlib.util
 import json
 import math
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -653,6 +654,119 @@ class EffortFitTests(unittest.TestCase):
         artifact, report = fit.build_artifact(fixture)
         self.assertIsNone(artifact["quantileModel"])
         self.assertIsNone(report["quantileModel"])
+
+    def quantile_fixture(self):
+        fixture = dataset()
+        fixture["scope"] = "completed-session"
+        for index, sample in enumerate(fixture["samples"]):
+            sample["text"] = text_features(index)
+        with mock.patch.object(fit, "TREE_PARAMS", {**fit.TREE_PARAMS, "max_iter": 12}):
+            artifact, _ = fit.build_artifact(fixture)
+        return fixture, artifact
+
+    def champion_result(self, fixture, champion):
+        """Write a champion artifact to disk and rebuild the challenger against it."""
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "champion.json"
+            if champion is not None:
+                path.write_text(json.dumps(champion))
+            with mock.patch.object(fit, "TREE_PARAMS", {**fit.TREE_PARAMS, "max_iter": 12}):
+                artifact, report = fit.build_artifact(fixture, champion_path=str(path))
+        return artifact, report
+
+    def test_challenger_quantile_validation_reports_mean_pinball(self):
+        _, artifact = self.quantile_fixture()
+        validation = artifact["validation"]["quantileModel"]
+        pinballs = [entry["pinball"] for entry in validation["quantiles"].values()]
+        self.assertAlmostEqual(validation["meanPinball"], sum(pinballs) / 5, delta=1e-12)
+        self.assertNotIn("champion", validation)
+
+    def test_champion_equal_to_challenger_scores_identical_metrics(self):
+        fixture, first = self.quantile_fixture()
+        artifact, report = self.champion_result(fixture, first)
+        challenger = artifact["validation"]["quantileModel"]
+        champion = challenger["champion"]
+        self.assertEqual(
+            list(champion), ["scoreable", "reason", "sampleCount", "quantiles", "meanPinball"]
+        )
+        self.assertTrue(champion["scoreable"])
+        self.assertIsNone(champion["reason"])
+        self.assertEqual(champion["sampleCount"], challenger["sampleCount"])
+        for name, expected in challenger["quantiles"].items():
+            self.assertAlmostEqual(
+                champion["quantiles"][name]["pinball"], expected["pinball"], delta=1e-9
+            )
+            self.assertAlmostEqual(
+                champion["quantiles"][name]["coverage"], expected["coverage"], delta=1e-9
+            )
+        self.assertAlmostEqual(champion["meanPinball"], challenger["meanPinball"], delta=1e-9)
+        self.assertEqual(report["quantileModel"]["champion"], champion)
+        self.assertEqual(report["validation"]["quantileModel"]["champion"], champion)
+
+    def test_champion_with_other_features_is_unscoreable(self):
+        fixture, first = self.quantile_fixture()
+        first["quantileModel"]["features"] = first["quantileModel"]["features"][:-1]
+        artifact, _ = self.champion_result(fixture, first)
+        self.assertEqual(
+            artifact["validation"]["quantileModel"]["champion"],
+            {
+                "scoreable": False,
+                "reason": "champion features differ from QUANTILE_FEATURES",
+                "sampleCount": 0,
+                "quantiles": {},
+                "meanPinball": None,
+            },
+        )
+
+    def test_missing_or_unusable_champion_is_unscoreable(self):
+        fixture, first = self.quantile_fixture()
+        without_model = {**first, "quantileModel": None}
+        for champion in (None, without_model):
+            artifact, _ = self.champion_result(fixture, champion)
+            result = artifact["validation"]["quantileModel"]["champion"]
+            self.assertFalse(result["scoreable"])
+            self.assertTrue(result["reason"])
+            self.assertEqual(result["sampleCount"], 0)
+            self.assertEqual(result["quantiles"], {})
+            self.assertIsNone(result["meanPinball"])
+
+    def test_champion_skips_rows_it_trained_on(self):
+        fixture, first = self.quantile_fixture()
+        heldout_ids = first["validation"]["sampleIds"]
+        first["training"]["sampleIds"] = [*first["training"]["sampleIds"], *heldout_ids[:3]]
+        artifact, _ = self.champion_result(fixture, first)
+        champion = artifact["validation"]["quantileModel"]["champion"]
+        self.assertEqual(champion["sampleCount"], len(heldout_ids) - 3)
+        del first["training"]["sampleIds"]
+        artifact, _ = self.champion_result(fixture, first)
+        champion = artifact["validation"]["quantileModel"]["champion"]
+        self.assertEqual(champion["sampleCount"], len(heldout_ids))
+        self.assertEqual(champion["reason"], "no training ids")
+
+    def test_champion_offsets_shift_coverage(self):
+        fixture, first = self.quantile_fixture()
+        base, _ = self.champion_result(fixture, first)
+        shifted = copy.deepcopy(first)
+        shifted["quantileModel"]["offsets"] = {name: 50.0 for name in fit.QUANTILE_LEVELS}
+        shifted["quantileModel"]["ceiling"] = None
+        raised, _ = self.champion_result(fixture, shifted)
+        before = base["validation"]["quantileModel"]["champion"]["quantiles"]["p50"]
+        after = raised["validation"]["quantileModel"]["champion"]["quantiles"]["p50"]
+        self.assertEqual(after["coverage"], 1.0)
+        self.assertGreater(after["coverage"], before["coverage"])
+        capped = copy.deepcopy(shifted)
+        capped["quantileModel"]["ceiling"] = 10.0
+        limited, _ = self.champion_result(fixture, capped)
+        clipped = limited["validation"]["quantileModel"]["champion"]["quantiles"]["p50"]
+        self.assertLess(clipped["coverage"], 1.0)
+
+    def test_dropped_quantile_trees_leave_no_quantile_validation_even_with_champion(self):
+        fixture, first = self.quantile_fixture()
+        for sample in fixture["samples"]:
+            del sample["text"]
+        artifact, _ = self.champion_result(fixture, first)
+        self.assertIsNone(artifact["quantileModel"])
+        self.assertNotIn("quantileModel", artifact["validation"])
 
 
 if __name__ == "__main__":
