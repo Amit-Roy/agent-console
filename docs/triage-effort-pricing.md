@@ -62,6 +62,8 @@ When the model includes request-shape features, unknown model-extracted metrics 
 
 Quotes show P50, P80, and P95 model scenarios. The planning reserve is P80 total tokens minus P50 total tokens; generated-token reserve is also shown. Unknown or extrapolated scope prices the quote tier and the recommended budget through P95 by policy. Complete, in-range scope uses P50 and recommends P80. Neither sets the label.
 
+Every session scenario is capped at the largest total in the training split, recorded as `workloadCeiling`. A residual tail multiplied by a predicted median can otherwise price more usage than any session ever measured, and the missing-structure interpolation then turns that surplus into an absurd recommended budget. The cap applies to token channels together through the paired shares, so input plus generated output still equals the capped total. Legacy actions artifacts keep no ceiling. A capped quote is a bound on the observed distribution, not a forecast of unseen work.
+
 This resembles an uncertainty reserve in pricing. It is not an options-market valuation. Initial messages cannot fully explain later scope changes, so whole-session usage can have substantial unexplained variance. Percentile names do not establish completion probabilities.
 
 Newest thread groups remain held out. Training outcomes must be available before a target request starts; forks and related sessions share groups. Validation reports total-token, generated-token, and input-token error against a median baseline, plus observed interval coverage. Counts are derived from the audited cohort, not fixed at four held-out cases.
@@ -105,3 +107,9 @@ The refit on 122 training and 35 held-out sessions (33 thread groups) selected t
 Intervals still under-cover. Observed hit rates on the held-out block are 63% at P80 and 80% at P95. The newest sessions run longer than older ones, so older residuals understate them. Status stays `experimental`, and the comment says so. A prediction is still wide: residual P95 is about four log units. Treat P50 as a typical session and P95 as the budget to watch.
 
 Chronological rolling-origin checks on all 162 sessions agree with the held-out result: nonnegative shape features reduce log error from 4.18 to 3.50 against the running median.
+
+## Snapshot: usage ceiling refit (2026-10-24)
+
+Uncapped scenario quantiles had reached 394.0M total tokens, more than three times the largest recorded session in the cohort, and the missing-structure interpolation turned that surplus into a 149.0M recommended budget for almost every request. Scenarios now clamp to `workloadCeiling`, the training-split maximum, which is 119,894,832 total tokens for this artifact.
+
+The refit on 308 training and 89 held-out sessions keeps the complexity estimator, with RMSLE 2.64 against 3.57 for the training-median baseline. Active held-out coverage is 83.1% at P80 and 96.6% at P95 on the fitted target, so this artifact reports `validated` rather than `experimental`. Coverage is still validation-selection evidence, not an independent test. The ceiling bounds a quote by the observed distribution; it does not predict unseen work, and one missing structure item still moves a budget a third of the way from P80 to the capped P95.
