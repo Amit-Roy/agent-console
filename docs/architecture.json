@@ -1,9 +1,9 @@
 {
- "title": "Instagram share download",
- "subtitle": "Shared post to staged slides and caption",
+ "title": "Shares and prompt tools",
+ "subtitle": "Untrusted shares reach the agent via sandboxed subagents; drafts can be improved and quoted",
  "items": [
   {
-   "group": "Phone",
+   "group": "Phone PWA",
    "border": "solid",
    "color": "slate",
    "icon": "smartphone",
@@ -14,12 +14,20 @@
      "tech": "POST /api/share",
      "icon": "share-2",
      "color": "indigo"
+    },
+    {
+     "id": "composer",
+     "label": "Composer",
+     "tech": "public/app.js",
+     "desc": "Draft, attachments, Improve dialog",
+     "icon": "pen-line",
+     "color": "indigo"
     }
    ]
   },
   {
    "group": "Agent Console server",
-   "sub": "server/share",
+   "sub": "server/",
    "border": "dashed",
    "color": "blue",
    "icon": "server",
@@ -41,6 +49,63 @@
      "color": "pink"
     },
     {
+     "id": "prompt",
+     "label": "Share prompt + uploads",
+     "tech": "share/prompt.ts, uploads.ts",
+     "desc": "Social media flagged untrusted, sent as paths",
+     "icon": "file-lock",
+     "color": "teal"
+    },
+    {
+     "id": "improve",
+     "label": "Prompt improve API",
+     "tech": "prompt-improve.ts",
+     "desc": "Haiku rewrite, placeholders, quotes",
+     "icon": "wand-sparkles",
+     "color": "purple"
+    }
+   ]
+  },
+  {
+   "group": "Agents",
+   "sub": "Claude thread",
+   "border": "dashed",
+   "color": "indigo",
+   "icon": "bot",
+   "items": [
+    {
+     "id": "main",
+     "label": "Main agent",
+     "tech": "Claude thread",
+     "desc": "Never opens shared assets",
+     "icon": "bot",
+     "color": "orange"
+    },
+    {
+     "id": "analyzer",
+     "label": "share-analyzer",
+     "tech": "Sonnet, Read only",
+     "desc": "Reads listed paths, reports",
+     "icon": "scan-search",
+     "color": "cyan"
+    },
+    {
+     "id": "classifier",
+     "label": "share-safety-classifier",
+     "tech": "Sonnet, no tools",
+     "desc": "SAFE or UNSAFE from trace",
+     "icon": "shield-check",
+     "color": "teal"
+    }
+   ]
+  },
+  {
+   "group": "Downloaders and models",
+   "border": "solid",
+   "color": "slate",
+   "icon": "boxes",
+   "items": [
+    {
      "id": "ytdlp",
      "label": "yt-dlp runner",
      "tech": "share/ytdlp.ts",
@@ -55,6 +120,30 @@
      "desc": "Cookie file, image slides",
      "icon": "images",
      "color": "purple"
+    },
+    {
+     "id": "haiku",
+     "label": "Haiku",
+     "tech": "claude --print",
+     "desc": "No tools, 45 s timeout",
+     "icon": "sparkles",
+     "color": "orange"
+    },
+    {
+     "id": "effort",
+     "label": "Effort model",
+     "tech": "quantile tree",
+     "desc": "Text-only quote, mtime cache",
+     "icon": "gauge",
+     "color": "blue"
+    },
+    {
+     "id": "trace",
+     "label": "share-trace CLI",
+     "tech": "subagent JSONL",
+     "desc": "Tool calls + report only",
+     "icon": "file-search",
+     "color": "slate"
     }
    ]
   },
@@ -104,6 +193,46 @@
    "from": "gdl",
    "to": "insta",
    "label": "With cookies"
+  },
+  {
+   "from": "run",
+   "to": "prompt",
+   "label": "Draft + flags"
+  },
+  {
+   "from": "prompt",
+   "to": "main",
+   "label": "Paths, no vision"
+  },
+  {
+   "from": "main",
+   "to": "analyzer",
+   "label": "Exact paths"
+  },
+  {
+   "from": "main",
+   "to": "trace",
+   "label": "agentId"
+  },
+  {
+   "from": "trace",
+   "to": "classifier",
+   "label": "Calls + report"
+  },
+  {
+   "from": "composer",
+   "to": "improve",
+   "label": "Improve, Check"
+  },
+  {
+   "from": "improve",
+   "to": "haiku",
+   "label": "Rewrite"
+  },
+  {
+   "from": "improve",
+   "to": "effort",
+   "label": "Quote old/new"
   }
  ]
 }
