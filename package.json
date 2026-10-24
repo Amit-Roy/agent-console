@@ -4,6 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
+    "test:share": "node test/instagram-share.ts",
     "test:review-takeover": "node test/review-takeover.ts",
     "test:benchmarks": "node --test test/benchmarks.ts test/benchmark-subscriptions.ts",
     "test:security": "node test/security.ts && node test/security-ui.ts && node test/sec-automations.ts && node test/sec-automations-ui.ts",

@@ -472,6 +472,7 @@ function handle(m) {
         warmFileViewer();
       }
       maybeOpenWorkflowDialog();
+      void maybeShareInstagram();
       break;
     }
     case "thread":
@@ -4531,6 +4532,33 @@ function maybeOpenWorkflowDialog() {
   $("dlg-sub").textContent =
     "The brief already covers the drawing, atomic steps and alert limits. Choose an agent and folder.";
   $("d-ok").textContent = "Create thread";
+}
+// Android share sheet -> manifest share_target -> /?share_text=...&share_url=... . Strip the params first so a reload never re-shares.
+let sharingInstagram = false;
+async function maybeShareInstagram() {
+  const params = new URLSearchParams(location.search);
+  const text = params.get("share_text") || "";
+  const url = params.get("share_url") || "";
+  const title = params.get("share_title") || "";
+  if (!text && !url) return;
+  if (sharingInstagram) return;
+  sharingInstagram = true;
+  for (const key of ["share_text", "share_url", "share_title"]) params.delete(key);
+  const query = params.toString();
+  history.replaceState(null, "", `${location.pathname}${query ? `?${query}` : ""}${location.hash}`);
+  toast("Fetching Instagram reel…");
+  try {
+    const response = await apiFetch("/api/share/instagram", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text, url, title }),
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok || !body.thread) return void toast(body.error || "Could not fetch that reel.");
+    openThread(body.thread);
+  } catch (error) {
+    toast(error.message || "Could not fetch that reel.");
+  }
 }
 function openTaskDialog(task) {
   setNav(false);
