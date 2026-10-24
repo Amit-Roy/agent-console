@@ -61,7 +61,7 @@ import { hostKill, hostMetrics, hostPorts, hostProcessDetail, hostProcesses } fr
 import { hostDu, hostDuRescan, hostHistory, latestHost, startHostSampler } from "./host-history.ts";
 import { IdeaError, Ideas } from "./ideas.ts";
 import { createIssueDraft } from "./issue-draft.ts";
-import { createReviewer } from "./issue-review.ts";
+import { createReviewer, MAX_RECOVERIES } from "./issue-review.ts";
 import { LatencyStore } from "./latency.ts";
 import { createWorkspaceMonitor } from "./monitor-wire.ts";
 import { Notifications } from "./notifications.ts";
@@ -227,6 +227,18 @@ const automation = automationApi({
         effort: t.issueRun!.effort,
         state: t.status,
         title: t.title,
+        ...(t.issueRun!.role === "work"
+          ? {
+              retryAttempts: t.issueRun!.retryAttempts ?? 0,
+              recoveries: t.issueRun!.recoveries ?? 0,
+              retriesRemaining: Math.max(0, MAX_RECOVERIES - (t.issueRun!.recoveries ?? 0)),
+              premiumStatus: t.issueRun!.premiumThread
+                ? ("assigned" as const)
+                : t.issueRun!.premiumPending || t.issueRun!.stalled
+                  ? ("eligible" as const)
+                  : undefined,
+            }
+          : {}),
       })),
   schedules: () =>
     schedules
@@ -293,20 +305,58 @@ if (process.env.AGENT_CONSOLE_MOCK !== "1") {
     threads: () => threads.list(),
     dataDir: DATA_DIR,
     canReview: (t) => !assignedOwner(t),
+    rerouteWorker: (req) => threads.rerouteIssueWorker(req),
+    premium: async (req) => {
+      const cfg = loadDispatchConfig();
+      if (!cfg.enabled || cfg.dryRun || cfg.routing.mode !== "live") return;
+      // A persisted assignment also acts as a receipt if the process died before the worker was marked.
+      const previous = threads
+        .list()
+        .find(
+          (t) =>
+            t.issueRun?.premiumAssignment && canonicalIssue(t.issueRun) === canonicalIssue(req),
+        );
+      if (previous) return { thread: previous.id };
+      const answer = routeWork({
+        role: "work",
+        effort: "deep",
+        premium: true,
+        exclude: req.exclude,
+        usage: usage.all(),
+        active: activeRuns(),
+        now: Date.now(),
+      });
+      if (answer.decision !== "route" || !answer.route || answer.route.provider === "pi") return;
+      return assignPremium({ ...req, ...answer.route, mode: "bypassPermissions" });
+    },
     canResume: (t) => {
       const live = threads.get(t.id);
-      if (!live || live.archived || live.status === "running" || assignedOwner(live)) return false;
+      if (
+        !live ||
+        live.archived ||
+        live.status === "running" ||
+        live.background ||
+        live.quotaPaused ||
+        assignedOwner(live)
+      )
+        return false;
       const cfg = loadDispatchConfig();
       if (!cfg.enabled || cfg.dryRun || cfg.routing.mode !== "live") return false;
       const answer = routeWork({
         role: "work",
         effort: t.issueRun!.effort as any,
+        premium: t.provider !== "pi" && t.issueRun!.effort !== "deep",
         usage: usage.all(),
         active: activeRuns(),
         now: Date.now(),
         flags: { bauOnPi: cfg.routing.bauOnPi },
       });
-      return answer.decision === "route" && answer.route?.provider === t.provider;
+      return (
+        answer.decision === "route" &&
+        [answer.route, ...answer.alternatives.map((a) => a.route)].some(
+          (route) => route?.provider === t.provider,
+        )
+      );
     },
     runner: {
       create: (o) => threads.create(o),

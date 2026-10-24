@@ -532,6 +532,14 @@ function runsPanel(s, p) {
       el("span", "b", `${r.role} · ${r.effort} · ${r.state}`),
       el("span", "c", r.key),
     );
+    if (r.role === "work") {
+      const retry = [];
+      if (r.retryAttempts != null) retry.push(`Retries ${r.retryAttempts}`);
+      if (r.recoveries != null && r.retriesRemaining != null)
+        retry.push(`Task budget: ${r.recoveries} used, ${r.retriesRemaining} remaining`);
+      if (r.premiumStatus) retry.push(`Premium ${r.premiumStatus}`);
+      if (retry.length) li.append(el("span", "c", retry.join(" · ")));
+    }
     ul.append(li);
   }
   if (list.length) box.append(ul);

@@ -101,6 +101,8 @@ function threadReason(t: JobThread): string {
   if (active(t)) return t.background ? "Background work is still running." : "Thread is running.";
   if (t.quotaPaused) return "Thread is paused by the recorded provider quota window.";
   if (r.outcome === "merged") return "Reviewer recorded that the PR merged.";
+  if (r.premiumThread) return "Worker was handed to a premium owner.";
+  if (r.premiumPending) return "Worker is queued for premium re-dispatch.";
   if (r.stalled)
     return `Worker recovery limit reached (${r.recoveries ?? 0}/${MAX_RECOVERIES}); automatic recovery stopped.`;
   if (r.outcome === "approved")
@@ -167,7 +169,11 @@ export function diagnoseJob(req: JobRequest, deps: JobDeps) {
   ) {
     state = "completed";
     summary = "Retained evidence records a merged PR. Current GitHub state has not been refreshed.";
-  } else if (related.some((t) => t.issueRun?.stalled)) {
+  } else if (related.some((t) => t.issueRun?.premiumPending && !t.issueRun.premiumThread)) {
+    state = "paused";
+    summary =
+      "Worker recovery is queued for premium re-dispatch when an approved provider is available.";
+  } else if (related.some((t) => t.issueRun?.stalled && !t.issueRun.premiumThread)) {
     state = "blocked";
     summary =
       "Worker recovery limit reached; automatic recovery stopped. Inspect the recorded failure and thread before assigning a new owner.";

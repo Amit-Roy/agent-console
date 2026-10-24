@@ -173,6 +173,24 @@ assert.equal(
 assert.equal(pick({ effort: "trivial", usage: {}, failures: { pi: 1 } }), "pi/default/default");
 
 // --- contract: response carries the reasoning; unknown request fields and missing optionals are fine ---------------
+assert.equal(
+  pick({ effort: "deep", exclude: [{ provider: "codex", model: "gpt-6.1-sol" }] } as any).split(
+    "/",
+  )[0],
+  "claude",
+  "infrastructure escalation excludes the failed model",
+);
+assert.equal(
+  pick({
+    effort: "deep",
+    exclude: [
+      { provider: "codex", model: "gpt-6.1-sol" },
+      { provider: "claude", model: "opus" },
+    ],
+  } as any),
+  "defer",
+  "no approved alternative waits without selecting Pi",
+);
 const r = route({ ...req(), extra: "ignored" } as any);
 assert.equal(r.v, 1);
 assert.ok(r.why.length > 0);
