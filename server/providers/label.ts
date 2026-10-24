@@ -114,52 +114,63 @@ export interface Labeler {
   request(job: LabelJob): void;
 }
 
-export function createLabeler(onLabel: (job: LabelJob, label: string) => void): Labeler {
-  const queue: LabelJob[] = [];
-  let timer: NodeJS.Timeout | undefined;
-  let busy = false;
+interface LabelerState {
+  queue: LabelJob[];
+  timer: NodeJS.Timeout | undefined;
+  busy: boolean;
+  onLabel: (job: LabelJob, label: string) => void;
+}
 
-  const run = async () => {
-    if (busy || !queue.length) return;
-    busy = true;
-    try {
-      while (queue.length) {
-        const batch = queue.splice(0, MAX_BATCH);
-        let labels: string[] | undefined;
-        if (process.env.AGENT_CONSOLE_MOCK === "1") labels = batch.map((j) => fake(j));
-        else {
-          // jobs from different folders are rare; the first job's folder is context enough
-          labels = await completeLabel(
-            PROMPT(path.basename(batch[0].cwd) || batch[0].cwd, batch),
-            "You write short, plain-English labels.",
-            (raw) => parseLabels(raw, batch.length),
-          );
-        }
-        if (labels)
-          batch.forEach((j, i) => {
-            onLabel(j, labels![i]);
-          });
-      }
-    } finally {
-      busy = false;
+async function labelBatch(batch: LabelJob[]): Promise<string[] | undefined> {
+  // jobs from different folders are rare; the first job's folder is context enough
+  return await completeLabel(
+    PROMPT(path.basename(batch[0].cwd) || batch[0].cwd, batch),
+    "You write short, plain-English labels.",
+    (raw) => parseLabels(raw, batch.length),
+  );
+}
+
+async function runLabeler(state: LabelerState) {
+  if (state.busy || !state.queue.length) return;
+  state.busy = true;
+  try {
+    while (state.queue.length) {
+      const batch = state.queue.splice(0, MAX_BATCH);
+      const labels =
+        process.env.AGENT_CONSOLE_MOCK === "1"
+          ? batch.map((job) => fake(job))
+          : await labelBatch(batch);
+      if (labels)
+        batch.forEach((job, idx) => {
+          state.onLabel(job, labels[idx]);
+        });
     }
-  };
+  } finally {
+    state.busy = false;
+  }
+}
 
+function requestLabel(state: LabelerState, job: LabelJob) {
+  if (process.env.AGENT_CONSOLE_LABELS === "0") return;
+  state.queue.push(job);
+  if (state.queue.length >= MAX_BATCH) {
+    clearTimeout(state.timer);
+    state.timer = undefined;
+    void runLabeler(state);
+  } else if (!state.timer) {
+    state.timer = setTimeout(() => {
+      state.timer = undefined;
+      void runLabeler(state);
+    }, FLUSH_MS);
+    state.timer.unref();
+  }
+}
+
+export function createLabeler(onLabel: (job: LabelJob, label: string) => void): Labeler {
+  const state: LabelerState = { queue: [], timer: undefined, busy: false, onLabel };
   return {
     request(job) {
-      if (process.env.AGENT_CONSOLE_LABELS === "0") return;
-      queue.push(job);
-      if (queue.length >= MAX_BATCH) {
-        clearTimeout(timer);
-        timer = undefined;
-        void run();
-      } else if (!timer) {
-        timer = setTimeout(() => {
-          timer = undefined;
-          void run();
-        }, FLUSH_MS);
-        timer.unref();
-      }
+      requestLabel(state, job);
     },
   };
 }

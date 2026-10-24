@@ -192,6 +192,75 @@ function validPlanningEntry(
   };
 }
 
+const isJsonObject = (value: unknown): value is Record<string, any> =>
+  !!value && typeof value === "object" && !Array.isArray(value);
+
+// Quotes must be meaningful exact substrings, not invented supporting claims.
+function parseMetricEvidence(
+  name: MetricName,
+  metric: any,
+  sources: string[],
+): MetricEvidence | undefined {
+  if (metric.value === null && metric.evidence === null) return { value: null, evidence: null };
+  if (!Number.isInteger(metric.value) || metric.value < 0 || metric.value > METRIC_MAX[name])
+    return;
+  if (
+    !plainText(metric.evidence, 240) ||
+    metric.evidence.trim().length < 4 ||
+    !sources.some((source) => source.includes(metric.evidence))
+  )
+    return;
+  // A proposed safeguard cannot supply incident urgency, even if the extractor overstates it.
+  if (name === "urgency" && metric.value === 2 && !confirmedIncident(metric.evidence)) return;
+  return { value: metric.value, evidence: metric.evidence };
+}
+
+function parseMetrics(
+  rawMetrics: Record<string, any>,
+  sources: string[],
+): Record<MetricName, MetricEvidence> | undefined {
+  const metrics = {} as Record<MetricName, MetricEvidence>;
+  for (const name of Object.keys(METRIC_MAX) as MetricName[]) {
+    const metric = rawMetrics[name];
+    if (!isJsonObject(metric)) return;
+    const parsed = parseMetricEvidence(name, metric, sources);
+    if (!parsed) return;
+    metrics[name] = parsed;
+  }
+  return metrics;
+}
+
+// Planning entries are advisory: one that fails validation becomes unknown instead of voiding the whole answer.
+function parsePlanningMetrics(
+  rawPlanning: unknown,
+  input: AssessmentInput,
+  sources: string[],
+): ExtractedAssessment["planningMetrics"] {
+  if (!isJsonObject(rawPlanning)) return undefined;
+  const planningMetrics = {} as NonNullable<ExtractedAssessment["planningMetrics"]>;
+  for (const name of Object.keys(METRIC_MAX) as MetricName[]) {
+    planningMetrics[name] =
+      validPlanningEntry(name, rawPlanning[name], input, sources) ?? UNKNOWN_PLANNING;
+  }
+  return planningMetrics;
+}
+
+function parseWorkSteps(rawWork: unknown): WorkStep[] | undefined {
+  if (!Array.isArray(rawWork) || rawWork.length < 1 || rawWork.length > 5) return;
+  const work: WorkStep[] = [];
+  for (const item of rawWork) {
+    if (
+      !item ||
+      typeof item !== "object" ||
+      !plainText(item.step, 240) ||
+      !plainText(item.check, 240)
+    )
+      return;
+    work.push({ step: item.step.trim(), check: item.check.trim() });
+  }
+  return work;
+}
+
 /** The model extracts evidence and proposes a work plan; it cannot select labels or budgets. */
 export function parseAssessment(
   raw: string | undefined,
@@ -200,55 +269,13 @@ export function parseAssessment(
   if (!raw || raw.length > 16_384) return;
   try {
     const value = JSON.parse(raw.trim().replace(/^```(?:json)?\s*\n?([\s\S]*?)\n?```$/i, "$1"));
-    if (!value || typeof value !== "object" || Array.isArray(value)) return;
-    if (!value.metrics || typeof value.metrics !== "object" || Array.isArray(value.metrics)) return;
+    if (!isJsonObject(value) || !isJsonObject(value.metrics)) return;
     const sources = [input.title.slice(0, 500), input.body.slice(0, 12_000)];
-    const metrics = {} as Record<MetricName, MetricEvidence>;
-    for (const name of Object.keys(METRIC_MAX) as MetricName[]) {
-      const metric = value.metrics[name];
-      if (!metric || typeof metric !== "object" || Array.isArray(metric)) return;
-      if (metric.value === null && metric.evidence === null) {
-        metrics[name] = { value: null, evidence: null };
-        continue;
-      }
-      if (!Number.isInteger(metric.value) || metric.value < 0 || metric.value > METRIC_MAX[name])
-        return;
-      // Quotes must be meaningful exact substrings, not invented supporting claims.
-      if (
-        !plainText(metric.evidence, 240) ||
-        metric.evidence.trim().length < 4 ||
-        !sources.some((source) => source.includes(metric.evidence))
-      )
-        return;
-      // A proposed safeguard cannot supply incident urgency, even if the extractor overstates it.
-      if (name === "urgency" && metric.value === 2 && !confirmedIncident(metric.evidence)) return;
-      metrics[name] = { value: metric.value, evidence: metric.evidence };
-    }
-    // Planning entries are advisory: one that fails validation becomes unknown instead of voiding the whole answer.
-    let planningMetrics: ExtractedAssessment["planningMetrics"];
-    if (
-      value.planningMetrics &&
-      typeof value.planningMetrics === "object" &&
-      !Array.isArray(value.planningMetrics)
-    ) {
-      planningMetrics = {} as NonNullable<ExtractedAssessment["planningMetrics"]>;
-      for (const name of Object.keys(METRIC_MAX) as MetricName[]) {
-        planningMetrics[name] =
-          validPlanningEntry(name, value.planningMetrics[name], input, sources) ?? UNKNOWN_PLANNING;
-      }
-    }
-    if (!Array.isArray(value.work) || value.work.length < 1 || value.work.length > 5) return;
-    const work: WorkStep[] = [];
-    for (const item of value.work) {
-      if (
-        !item ||
-        typeof item !== "object" ||
-        !plainText(item.step, 240) ||
-        !plainText(item.check, 240)
-      )
-        return;
-      work.push({ step: item.step.trim(), check: item.check.trim() });
-    }
+    const metrics = parseMetrics(value.metrics, sources);
+    if (!metrics) return;
+    const planningMetrics = parsePlanningMetrics(value.planningMetrics, input, sources);
+    const work = parseWorkSteps(value.work);
+    if (!work) return;
     return { metrics, ...(planningMetrics ? { planningMetrics } : {}), work };
   } catch {
     return;
@@ -280,6 +307,53 @@ export function deriveUrgency(
   return { score: score as UrgencyAssessment["score"], priority, drivers };
 }
 
+type ReadyPricing = Extract<ReturnType<typeof quoteEffort>, { status: "ready" }>;
+
+function deriveDesign(scores: Record<MetricName, number>): TriageScorecard["design"] {
+  const detailed =
+    scores.breadth === 3 || scores.complexity === 3 || scores.uncertainty === 3 || scores.risk >= 2;
+  const none =
+    scores.breadth === 0 && scores.complexity === 0 && scores.uncertainty <= 1 && scores.risk <= 1;
+  const designSignals = (["breadth", "complexity", "uncertainty", "risk"] as const)
+    .filter((name) => (name === "risk" ? scores[name] >= 2 : scores[name] === 3))
+    .map((name) => `${name} ${scores[name]}/3`)
+    .join(", ");
+  if (detailed)
+    return {
+      level: "detailed",
+      reason: `Required by ${designSignals}. Write boundaries, state/data flow, failure paths, rollout, and acceptance checks before implementation.`,
+    };
+  if (none)
+    return {
+      level: "none",
+      reason:
+        "Breadth and complexity are 0; uncertainty and risk are ≤1. Use the work checklist and acceptance checks without a separate design document.",
+    };
+  return {
+    level: "light",
+    reason:
+      "Planning scores fall between mechanical and detailed-design thresholds. Record the approach, touched components, failure cases, and acceptance checks.",
+  };
+}
+
+function scorecardFacts(input: AssessmentInput): ScorecardFacts {
+  const facts: ScorecardFacts = {};
+  for (const name of ["changedFiles", "additions", "deletions"] as const) {
+    if (Number.isSafeInteger(input[name]) && input[name]! >= 0 && input[name]! <= 100_000_000)
+      facts[name] = input[name];
+  }
+  return facts;
+}
+
+function assessmentReason(pricing: ReadyPricing): string {
+  const actions = (value: number) => value.toLocaleString("en-US", { maximumFractionDigits: 1 });
+  const workUnit =
+    pricing.workloadMetric === "totalTokens" ? "total session tokens" : "logged tool actions";
+  return pricing.estimator === "historical-baseline"
+    ? `Historical session usage: ${actions(pricing.activity.p50)} ${workUnit} (P50), ${actions(pricing.activity.p80)} (P80). Initial-message complexity did not beat the median baseline; this quote is not task-specific.`
+    : `Initial-request complexity implies ${actions(pricing.activity.p50)} ${workUnit} (P50), ${actions(pricing.activity.p80)} (P80) per ${pricing.scope === "completed-session" ? "whole session" : "delivery run"}; ${pricing.confidence} quote with ${pricing.unknowns.length} unknown complexity feature(s).`;
+}
+
 export function deriveAssessment(
   extracted: ExtractedAssessment,
   input: AssessmentInput,
@@ -301,44 +375,16 @@ export function deriveAssessment(
   ) as Record<MetricName, number>;
   const urgency = deriveUrgency(scores, planning.urgency.value, unknowns);
   const priority = urgency.priority;
-  const detailed =
-    scores.breadth === 3 || scores.complexity === 3 || scores.uncertainty === 3 || scores.risk >= 2;
-  const none =
-    scores.breadth === 0 && scores.complexity === 0 && scores.uncertainty <= 1 && scores.risk <= 1;
-  const designSignals = (["breadth", "complexity", "uncertainty", "risk"] as const)
-    .filter((name) => (name === "risk" ? scores[name] >= 2 : scores[name] === 3))
-    .map((name) => `${name} ${scores[name]}/3`)
-    .join(", ");
-  const design: TriageScorecard["design"] = detailed
-    ? {
-        level: "detailed",
-        reason: `Required by ${designSignals}. Write boundaries, state/data flow, failure paths, rollout, and acceptance checks before implementation.`,
-      }
-    : none
-      ? {
-          level: "none",
-          reason:
-            "Breadth and complexity are 0; uncertainty and risk are ≤1. Use the work checklist and acceptance checks without a separate design document.",
-        }
-      : {
-          level: "light",
-          reason:
-            "Planning scores fall between mechanical and detailed-design thresholds. Record the approach, touched components, failure cases, and acceptance checks.",
-        };
+  const design = deriveDesign(scores);
   // The label follows the design level. The token quote stays in the comment as a rough guide only.
   const effort = ({ none: "trivial", light: "bau", detailed: "deep" } as const)[design.level];
-  const facts: ScorecardFacts = {};
-  for (const name of ["changedFiles", "additions", "deletions"] as const) {
-    if (Number.isSafeInteger(input[name]) && input[name]! >= 0 && input[name]! <= 100_000_000)
-      facts[name] = input[name];
-  }
   const scorecard: TriageScorecard = {
     version: TRIAGE_SCORECARD_VERSION,
     metrics: extracted.metrics,
     ...(extracted.planningMetrics ? { planningMetrics: extracted.planningMetrics } : {}),
     urgency,
     unknowns,
-    facts,
+    facts: scorecardFacts(input),
     work: extracted.work,
     design,
     tokens: {
@@ -350,12 +396,5 @@ export function deriveAssessment(
     pricing,
     structure: quoteStructure(requestText, pricing),
   };
-  const actions = (value: number) => value.toLocaleString("en-US", { maximumFractionDigits: 1 });
-  const workUnit =
-    pricing.workloadMetric === "totalTokens" ? "total session tokens" : "logged tool actions";
-  const reason =
-    pricing.estimator === "historical-baseline"
-      ? `Historical session usage: ${actions(pricing.activity.p50)} ${workUnit} (P50), ${actions(pricing.activity.p80)} (P80). Initial-message complexity did not beat the median baseline; this quote is not task-specific.`
-      : `Initial-request complexity implies ${actions(pricing.activity.p50)} ${workUnit} (P50), ${actions(pricing.activity.p80)} (P80) per ${pricing.scope === "completed-session" ? "whole session" : "delivery run"}; ${pricing.confidence} quote with ${pricing.unknowns.length} unknown complexity feature(s).`;
-  return { effort, priority, reason, scorecard } as const;
+  return { effort, priority, reason: assessmentReason(pricing), scorecard } as const;
 }

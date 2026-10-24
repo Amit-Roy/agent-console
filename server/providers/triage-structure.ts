@@ -94,20 +94,19 @@ export interface StructureRequest {
   complete?: (prompt: string, system: string) => Promise<string | undefined>;
 }
 
-/** Strict schema check; anything off returns undefined so the caller falls back to pure code. */
-export function parseStructureReply(
-  raw: string | undefined,
-  request: Pick<StructureRequest, "text" | "repoContext">,
-): StructureExtraction | undefined {
-  if (!raw) return;
+function parseStructureJson(raw: string | undefined): any {
+  if (!raw) return undefined;
   let value: any;
   try {
     value = JSON.parse(raw.trim().replace(/^```(?:json)?\s*([\s\S]*?)\s*```$/i, "$1"));
   } catch {
-    return;
+    return undefined;
   }
-  if (!value || typeof value !== "object" || Array.isArray(value)) return;
-  if (
+  return value && typeof value === "object" && !Array.isArray(value) ? value : undefined;
+}
+
+function validStructureShape(value: any): boolean {
+  return !(
     typeof value.hasFilePath !== "boolean" ||
     typeof value.hasExpectedOutput !== "boolean" ||
     typeof value.hasAcceptanceCheck !== "boolean" ||
@@ -115,8 +114,27 @@ export function parseStructureReply(
     typeof value.missing !== "string" ||
     !Object.hasOwn(MISSING_FLAG, value.missing) ||
     !(value.suggestion === null || typeof value.suggestion === "string")
-  )
-    return;
+  );
+}
+
+// Model prose from an untrusted prompt: short, no links, mentions, markup or invented paths.
+function safeSuggestion(rawSuggestion: string | null): string | null {
+  const suggestion = (rawSuggestion ?? "").replace(/\s+/g, " ").trim();
+  return suggestion &&
+    suggestion.length <= 120 &&
+    !/[@<>`[\]]|https?:|www\./i.test(suggestion) &&
+    !requestStructure(suggestion).hasFilePath
+    ? suggestion
+    : null;
+}
+
+/** Strict schema check; anything off returns undefined so the caller falls back to pure code. */
+export function parseStructureReply(
+  raw: string | undefined,
+  request: Pick<StructureRequest, "text" | "repoContext">,
+): StructureExtraction | undefined {
+  const value = parseStructureJson(raw);
+  if (!value || !validStructureShape(value)) return;
   const observed = requestStructure(request.text);
   // A file path comes from the request text only; the repository description can add output or a check, never a path.
   const flags: StructureFlags = {
@@ -128,18 +146,10 @@ export function parseStructureReply(
     (flags.hasExpectedOutput && !observed.hasExpectedOutput) ||
     (flags.hasAcceptanceCheck && !observed.hasAcceptanceCheck);
   const missing = MISSING_FLAG[value.missing];
-  const suggestion = (value.suggestion ?? "").replace(/\s+/g, " ").trim();
   return {
     flags,
     missing: missing && !flags[missing] ? missing : null,
-    // Model prose from an untrusted prompt: short, no links, mentions, markup or invented paths.
-    suggestion:
-      suggestion &&
-      suggestion.length <= 120 &&
-      !/[@<>`[\]]|https?:|www\./i.test(suggestion) &&
-      !requestStructure(suggestion).hasFilePath
-        ? suggestion
-        : null,
+    suggestion: safeSuggestion(value.suggestion),
     inferredFromRepo: value.inferredFromRepo && !!request.repoContext?.trim() && gained,
   };
 }
