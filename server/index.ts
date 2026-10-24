@@ -49,6 +49,7 @@ import {
 } from "./benchmark-subscriptions.ts";
 import { BenchmarkError, benchmarkUsage, createBenchmarks } from "./benchmarks.ts";
 import { createBootTiming } from "./boot-timing.ts";
+import { BrainGraph, BrainGraphError } from "./brain-graph.ts";
 import { cancelClaudeLogin, finishClaudeLogin, startClaudeLogin } from "./claude-login.ts";
 import { contextAllocation } from "./context-allocation.ts";
 import { createDoctor } from "./doctor.ts";
@@ -154,6 +155,7 @@ const threads = new Threads(broadcast, (notice) => {
 });
 const schedules = new Schedules(threads, broadcast);
 const ideas = new Ideas();
+const brainGraph = new BrainGraph();
 const sessionSearch = new SessionSearch(DATA_DIR);
 // Agent tools (Pi extension providers/console-tools.mjs) call back over loopback with a per-process secret, never the session cookie
 const TOOL_TOKEN = crypto.randomBytes(24).toString("base64url");
@@ -1210,6 +1212,35 @@ app.post("/api/ideas", sameOrigin, express.json({ limit: "4kb" }), async (req, r
     res.status(201).json(await ideas.add({ name: req.body?.name, line: req.body?.line }));
   } catch (e) {
     ideaError(res, e);
+  }
+});
+// Brain graph: searchable view of the shared brain wiki (server/brain-graph.ts). Read-only; a CLI without `graph --json` answers 503.
+const brainGraphError = (res: express.Response, failure: any) =>
+  res.status(failure instanceof BrainGraphError ? failure.status : 500).json({
+    error: failure instanceof BrainGraphError ? failure.message : "The brain graph is unavailable.",
+  });
+app.get("/api/brain/graph", async (_req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  try {
+    res.json(await brainGraph.graph());
+  } catch (failure) {
+    brainGraphError(res, failure);
+  }
+});
+app.get("/api/brain/page/:slug", (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  try {
+    res.json(brainGraph.page(req.params.slug));
+  } catch (failure) {
+    brainGraphError(res, failure);
+  }
+});
+app.get("/api/brain/search", async (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  try {
+    res.json(await brainGraph.search(typeof req.query.q === "string" ? req.query.q : ""));
+  } catch (failure) {
+    brainGraphError(res, failure);
   }
 });
 app.get("/uploads/:thread/:id/:name", (req, res) => {
