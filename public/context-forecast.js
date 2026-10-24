@@ -164,6 +164,8 @@ export function forecastModel(thread, rates = {}) {
     ];
     for (const key of keys) {
       digits.add(key);
+      const slash = key.lastIndexOf("/");
+      if (slash >= 0) digits.add(key.slice(slash + 1));
       if (key.startsWith("gpt-")) {
         digits.add(key.replace(/-(\d)(?=-)/g, ".$1"));
         digits.add(key.replace(/-(\d+)(?=-|$)/g, ".$1"));

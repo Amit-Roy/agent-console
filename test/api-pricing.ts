@@ -87,6 +87,19 @@ assert.equal(
   apiPricedTurn({ ...original, models: [{ ...model, model: "gpt-6-luna-2026-10-17" }] }).cost,
   2.495,
 );
+assert.equal(
+  apiPricedTurn({ ...original, models: [{ ...model, model: "deepseek/deepseek-flash" }] }).cost,
+  6.012,
+);
+assert.equal(
+  apiPricedTurn({ ...original, models: [{ ...model, model: "deepseek-v4-pro" }] }).cost,
+  21.208,
+);
+assert.equal(
+  apiPricedTurn({ ...original, models: [{ ...model, model: "deepseek-v4-flash" }] }).cost,
+  6.012,
+  "legacy Flash aliases bill at the current Flash price",
+);
 const partial = apiPricedTurn({ ...original, models: [model, { ...model, model: "default" }] });
 assert.equal(partial.cost, undefined);
 assert.equal(partial.models![0].cost, 99.4);
@@ -113,7 +126,8 @@ const noProviderPrice = apiPricedTurn({
   models: [{ ...model, cost: undefined }],
 });
 assert.deepEqual(apiPricedTurn(noProviderPrice), noProviderPrice);
-assert.equal(pricing.verifiedAt, "2026-10-17");
+assert.equal(pricing.verifiedAt, "2026-10-23");
+assert.ok(pricing.sources.some((source) => source.url.includes("api-docs.deepseek.com")));
 console.log(
   "PASS public API list prices, disjoint caches, reasoning exclusion, unknown coverage and preserved provider costs",
 );
