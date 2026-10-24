@@ -1187,6 +1187,8 @@ const base = (p) => p.replace(/\/+$/, "").split("/").pop() || p;
 
 let rowMenuOpen = false; // rebuilding the list would pull the trigger out from under an open menu
 let renderPending = false;
+// Pending share-target picker; set while the drawer is in share mode.
+let shareResolve = null;
 function renderThreads() {
   if (rowMenuOpen) {
     renderPending = true;
@@ -1268,6 +1270,7 @@ function renderThreads() {
     else if (t.status === "running") li.append(el("span", "sr-only", "Running"));
     else if (t.background) li.append(el("span", "sr-only", "Subagents working"));
     const pick = () => {
+      if (shareResolve) finishShare(t.id);
       setNav(false);
       openThread(t.id);
     };
@@ -1332,6 +1335,7 @@ setInterval(refreshSecurity, 5 * 60_000);
 document.addEventListener("visibilitychange", () => !document.hidden && void refreshSecurity());
 
 function setNav(open) {
+  if (!open) finishShare(null);
   document.body.classList.toggle("nav", open);
   $("menu").setAttribute("aria-expanded", String(open));
 }
@@ -4546,20 +4550,44 @@ async function maybeShareInstagram() {
   for (const key of ["share_text", "share_url", "share_title"]) params.delete(key);
   const query = params.toString();
   history.replaceState(null, "", `${location.pathname}${query ? `?${query}` : ""}${location.hash}`);
-  toast("Fetching Instagram reel…");
   try {
+    const choice = await pickShareTarget();
+    if (choice === null) return void toast("Share cancelled");
+    toast("Fetching Instagram reel…");
     const response = await apiFetch("/api/share/instagram", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ text, url, title }),
+      body: JSON.stringify(choice ? { text, url, title, thread: choice } : { text, url, title }),
     });
     const body = await response.json().catch(() => ({}));
     if (!response.ok || !body.thread) return void toast(body.error || "Could not fetch that reel.");
     openThread(body.thread);
   } catch (error) {
     toast(error.message || "Could not fetch that reel.");
+  } finally {
+    sharingInstagram = false;
   }
 }
+// Share mode: the left drawer doubles as the target picker. Resolves "" for a new thread, a thread id, or null when cancelled.
+function finishShare(value) {
+  const resolve = shareResolve;
+  if (!resolve) return;
+  shareResolve = null;
+  document.body.classList.remove("sharing");
+  $("share-banner").hidden = true;
+  resolve(value);
+}
+function pickShareTarget() {
+  finishShare(null);
+  return new Promise((resolve) => {
+    shareResolve = resolve;
+    setLane("threads");
+    document.body.classList.add("sharing");
+    $("share-banner").hidden = false;
+    setNav(true);
+  });
+}
+$("share-cancel").onclick = () => setNav(false);
 function openTaskDialog(task) {
   setNav(false);
   setDialogKind(task || "new");
@@ -4602,7 +4630,11 @@ $("lanes").addEventListener("keydown", (e) => {
   );
 });
 setLane(state.lane);
-$("new").onclick = openNewDialog;
+$("new").onclick = () => {
+  if (!shareResolve) return openNewDialog();
+  finishShare("");
+  setNav(false);
+};
 $("archive-toggle").onclick = () => {
   state.archiveOpen = !state.archiveOpen;
   localStorage.setItem("ac_archive_open", state.archiveOpen ? "1" : "");

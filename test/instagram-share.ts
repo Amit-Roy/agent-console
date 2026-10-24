@@ -171,6 +171,25 @@ try {
   const thread = saved.find((entry: any) => entry.id === body.thread);
   assert.equal(thread.title, "Instagram reel EEEEE55555");
   assert.equal(thread.provider, "claude");
+  const savedBefore = JSON.parse(fs.readFileSync(path.join(dataDir, "threads.json"), "utf8"));
+  const intoExisting = await post(base, {
+    url: "https://www.instagram.com/reel/GGGGG77777/",
+    thread: body.thread,
+  });
+  const existingBody: any = await intoExisting.json();
+  assert.equal(intoExisting.status, 200, JSON.stringify(existingBody));
+  assert.equal(existingBody.thread, body.thread);
+  assert.equal(fs.readdirSync(uploads).length, 4, "second video + caption attached to same thread");
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  assert.equal(
+    JSON.parse(fs.readFileSync(path.join(dataDir, "threads.json"), "utf8")).length,
+    savedBefore.length,
+    "no new thread when sharing into an existing one",
+  );
+  for (const thread of ["nope", "00000000-0000-4000-8000-000000000000", 7]) {
+    const unknown = await post(base, { url: "https://www.instagram.com/reel/HHHHH88888/", thread });
+    assert.equal(unknown.status, 404, `thread ${thread}`);
+  }
   setMode("blocked");
   const blocked = await post(base, { url: "https://www.instagram.com/reel/FFFFF66666/" });
   assert.equal(blocked.status, 422);
