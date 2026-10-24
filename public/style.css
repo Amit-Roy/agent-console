@@ -708,8 +708,19 @@ main {
   grid-column: 2;
   grid-row: 1;
 }
-.thread-list .dot:not(.running) {
+.thread-list .dot:not(.running):not(.unread) {
   display: none;
+}
+.thread-list li.unread .t {
+  font-weight: var(--fw-med);
+  color: var(--t1);
+}
+.dot.unread:not(.running) {
+  background: var(--accent);
+  animation: none;
+}
+.thread-list .meta .tag.limit-tag {
+  color: var(--warn);
 }
 .thread-list .meta {
   grid-column: 1 / 3;

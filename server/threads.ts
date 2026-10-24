@@ -60,6 +60,7 @@ import {
   withFileList,
 } from "./uploads.ts";
 import { claudeWindows, codexWindows, usage } from "./usage.ts";
+import { detectUsageStop } from "./usage-stop.ts";
 import type { IssueRun } from "./window-dispatch.ts";
 
 export type { Command, Mode };
@@ -111,6 +112,9 @@ export interface Thread {
   quotaPaused?: { provider: string; windowLabel: string; resetsAt: number }; // paused due to quota exhaustion; auto-resumes late in a later window (see resumeDue)
   schedule?: { task: string; run: string }; // a scheduled task's run: the sidebar files it under its task
   issueRun?: IssueRun; // started by window-dispatch for a GitHub issue
+  usageStop?: { provider: string; at: number; resetsAt?: number; text: string }; // last turn ended on a usage limit; cleared when the next turn starts
+  replyAt?: number; // when the last non-compaction turn ended
+  readAt?: number; // when the user last viewed the thread
   cost: number;
   costMeasured?: boolean;
   createdAt: number;
@@ -272,6 +276,7 @@ interface TurnState {
   usage?: any;
   models?: ModelUsage[];
   clock?: TurnClock;
+  failureCode?: string; // codexErrorInfo kind of that console_error
   failure?: string; // newest console_error text; Codex and Pi report a failed turn there, not on the result
 }
 
@@ -341,6 +346,7 @@ export class Threads {
         delete t.operation;
         delete t.background;
         t.provider ||= DEFAULT_PROVIDER;
+        t.readAt ??= t.replyAt ?? t.updatedAt;
         if (t.provider === "claude") {
           try {
             t.claudeAccount = normalizeClaudeAccount(t.claudeAccount);
@@ -622,6 +628,7 @@ export class Threads {
       cost: 0,
       createdAt: now,
       updatedAt: now,
+      readAt: now,
     };
     this.threads.set(t.id, t);
     this.refreshIdleCompaction(t);
@@ -635,6 +642,25 @@ export class Threads {
     if (!prov?.modelDetails?.()[model]?.efforts.includes(effort))
       throw new Error("Unsupported effort for this model.");
     return effort;
+  }
+
+  /** Soonest-known reset of the fullest future window in the ledger, if any. */
+  private windowReset(providerKey: string): number | undefined {
+    const now = Date.now();
+    const windows = (usage.get(providerKey)?.windows ?? []).filter(
+      (w) => w.resetsAt && w.resetsAt > now,
+    );
+    windows.sort((a, b) => b.used / (b.limit || 1) - a.used / (a.limit || 1));
+    return windows[0]?.resetsAt;
+  }
+
+  // Viewing is not activity: updatedAt stays so ordering is unchanged
+  markRead(id: string) {
+    const t = this.threads.get(id);
+    if (!t) return;
+    t.readAt = Date.now();
+    this.persist();
+    this.emit({ t: "thread", thread: t });
   }
 
   // Filing a thread away is not activity: updatedAt stays, so it keeps its place in either list
@@ -787,6 +813,7 @@ export class Threads {
       cost: 0,
       createdAt: now,
       updatedAt: now,
+      readAt: now,
     };
     const prov = target ?? PROVIDERS.get(src.provider);
     if (pick.model && prov?.models().includes(pick.model)) t.model = pick.model;
@@ -1127,7 +1154,10 @@ export class Threads {
     }
     if (ev.type === "console_error" && typeof ev.text === "string") {
       const turn = this.turns.get(t.id);
-      if (turn) turn.failure = ev.text;
+      if (turn) {
+        turn.failure = ev.text;
+        turn.failureCode = typeof ev.code === "string" ? ev.code : undefined;
+      }
     }
     if (ev.type === "subagent_wake") return this.wake(t, String(ev.text || ""));
     // Claude starts a turn by itself when a background subagent finishes after the turn ended: show it as running
@@ -1275,8 +1305,22 @@ export class Threads {
         clearTimeout(live.compactWait);
         live.compactWait = undefined;
       }
-      const failure = this.turns.get(t.id)?.failure;
+      const failedTurn = this.turns.get(t.id);
+      const failure = failedTurn?.failure;
       this.finishTurn(t, ev);
+      const stop = ev.is_error
+        ? detectUsageStop(t.provider, ev, failure, failedTurn?.failureCode)
+        : undefined;
+      if (stop) {
+        const stopKey = t.provider === "claude" ? claudeUsageKey(t.claudeAccount) : t.provider;
+        t.usageStop = {
+          provider: t.provider,
+          at: Date.now(),
+          text: stop.text,
+          resetsAt: stop.resetsAt ?? this.windowReset(stopKey),
+        };
+        if (t.usageStop.resetsAt === undefined) delete t.usageStop.resetsAt;
+      }
       // Mark thread as quota-paused if turn ended due to rate limit and quota is exhausted
       if (ev.is_error && !t.archived && !t.quotaPaused) {
         const errMsg = [ev.error?.message ?? ev.error, ev.result, failure]
@@ -1302,6 +1346,7 @@ export class Threads {
         }
       }
       if (!compacting) {
+        t.replyAt = Date.now();
         t.lastProviderActivityAt = Math.max(Date.now(), t.lastUserActivityAt ?? 0);
         if (ev.is_error) t.idleCompactionConsumedAt = t.lastUserActivityAt;
       }
@@ -1621,6 +1666,7 @@ export class Threads {
       t.replay = false;
       delete t.replayLimit;
     }
+    delete t.usageStop;
     if (!opts.auto) delete t.archived; // writing to an archived thread puts it back to work (touch below persists it)
     this.recycleRouting(id);
     let live = this.live.get(id);

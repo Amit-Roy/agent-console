@@ -16,21 +16,39 @@ fs.mkdirSync(path.join(data, "logs"));
 fs.writeFileSync(
   path.join(data, "threads.json"),
   JSON.stringify(
-    ids.map((id, i) => ({
-      id,
-      provider: "mock",
-      model: "echo",
-      mode: "acceptEdits",
-      title: `Draft ${i + 1}`,
-      cwd: os.tmpdir(),
-      status: "idle",
-      cost: 0,
-      createdAt: 2 - i,
-      updatedAt: 2 - i,
-    })),
+    ids
+      .map((id, i) => ({
+        id,
+        provider: "mock",
+        model: "echo",
+        mode: "acceptEdits",
+        title: `Draft ${i + 1}`,
+        cwd: os.tmpdir(),
+        status: "idle",
+        cost: 0,
+        createdAt: 2 - i,
+        updatedAt: 2 - i,
+      }))
+      .concat([
+        {
+          id: "unread-a",
+          provider: "mock",
+          model: "echo",
+          mode: "acceptEdits",
+          title: "Unread 1",
+          cwd: os.tmpdir(),
+          status: "idle",
+          cost: 0,
+          createdAt: 0,
+          updatedAt: 0,
+          replyAt: 5000,
+          readAt: 1000,
+          usageStop: { provider: "mock", at: 4000, resetsAt: 9e12, text: "Fixture limit hit" },
+        } as any,
+      ]),
   ),
 );
-for (const id of ids)
+for (const id of [...ids, "unread-a"])
   fs.writeFileSync(
     path.join(data, "logs", `${id}.jsonl`),
     JSON.stringify({ type: "user_input", text: "fixture" }) + "\n",
@@ -268,6 +286,33 @@ try {
   await page.reload();
   await page.waitForFunction(
     () => (document.getElementById("input") as any).value === "Newer edits",
+  );
+  const unreadRow = page.locator("#threads li", { hasText: "Unread 1" });
+  assert.equal(await unreadRow.evaluate((e) => e.classList.contains("unread")), true, "unread row");
+  assert.equal(await unreadRow.locator(".dot.unread").count(), 1, "unread dot");
+  assert.equal(await unreadRow.locator(".limit-tag").count(), 1, "limit tag");
+  assert.match(
+    (await unreadRow.locator(".limit-tag").getAttribute("title")) || "",
+    /Resets .*\nFixture limit hit/,
+    "limit tooltip",
+  );
+  await thread("Unread 1");
+  await page.waitForFunction(
+    () =>
+      ![...document.querySelectorAll("#threads li")]
+        .find((e) => e.textContent?.includes("Unread 1"))
+        ?.classList.contains("unread"),
+  );
+  // Needs server `read` handling: readAt must persist across reload.
+  await page.reload();
+  await page.waitForFunction(() => document.getElementById("ttl")?.textContent === "Unread 1");
+  await thread("Draft 2");
+  assert.equal(
+    await page
+      .locator("#threads li", { hasText: "Unread 1" })
+      .evaluate((e) => e.classList.contains("unread")),
+    false,
+    "read persists across reload (server-dependent)",
   );
   assert.deepEqual(errors, []);
   console.log(
