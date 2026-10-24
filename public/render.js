@@ -777,48 +777,85 @@ function codeTarget(t) {
   const ref = parseFileRef(t);
   return ref ? { local: t, ref } : null;
 }
-function linkify(root) {
+const HASH_REF = /(^|[\s(\[])#(\d{1,6})(?!\w)/g;
+const HASH_SKIP = "pre, code, a, .md-media, .chart";
+function hashRefNodes(text) {
+  const frag = document.createDocumentFragment();
+  let last = 0;
+  for (const match of text.matchAll(HASH_REF)) {
+    const start = match.index + match[1].length;
+    frag.append(text.slice(last, start));
+    const link = el("a", "ref-link");
+    link.href = "#";
+    link.dataset.ghRef = match[2];
+    link.textContent = `#${match[2]}`;
+    frag.append(link);
+    last = start + match[2].length + 1;
+  }
+  frag.append(text.slice(last));
+  return frag;
+}
+function linkHashRefs(root) {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const hits = [];
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    HASH_REF.lastIndex = 0;
+    if (HASH_REF.test(node.nodeValue) && !node.parentElement?.closest(HASH_SKIP)) hits.push(node);
+  }
+  for (const node of hits) node.replaceWith(hashRefNodes(node.nodeValue));
+}
+function linkCodeSpans(root) {
   for (const code of root.querySelectorAll(":not(pre) > code")) {
     if (code.closest("a")) continue;
-    const t = code.textContent.trim(),
-      target = codeTarget(t);
+    const text = code.textContent.trim(),
+      target = codeTarget(text);
     if (!target) continue;
-    const a = el("a", "code-link");
+    const link = el("a", "code-link");
     if (target.url) {
-      a.href = target.url;
-      a.target = "_blank";
-      a.rel = "noopener noreferrer";
+      link.href = target.url;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
     } else {
-      a.href = "#";
-      a.dataset.fileRef = target.local;
+      link.href = "#";
+      link.dataset.fileRef = target.local;
     }
-    code.replaceWith(a);
-    a.append(code);
+    code.replaceWith(link);
+    link.append(code);
   }
-  // Links to video files get a player after their paragraph/item; the link stays as a tappable fallback.
+}
+function videoSpec(link) {
+  const href = link.getAttribute("href") || "";
+  if (link.dataset.fileRef) {
+    const ref = parseFileRef(link.dataset.fileRef);
+    if (ref && VIDEO_EXT.test(ref.path))
+      return { local: { ...ref, raw: link.dataset.fileRef }, key: ref.path };
+  } else if (HTTP_URL.test(href) && VIDEO_EXT.test(href.split(/[?#]/)[0]))
+    return { src: href, key: href };
+  return null;
+}
+// Links to video files get a player after their paragraph/item; the link stays as a tappable fallback.
+function addVideoPlayers(root) {
   let players = 0;
-  for (const a of root.querySelectorAll("a")) {
-    if (players >= 8 || a.closest("pre, .md-media, .md-fail, .chart")) continue;
-    const href = a.getAttribute("href") || "";
-    let spec = null;
-    if (a.dataset.fileRef) {
-      const ref = parseFileRef(a.dataset.fileRef);
-      if (ref && VIDEO_EXT.test(ref.path))
-        spec = { local: { ...ref, raw: a.dataset.fileRef }, key: ref.path };
-    } else if (HTTP_URL.test(href) && VIDEO_EXT.test(href.split(/[?#]/)[0]))
-      spec = { src: href, key: href };
+  for (const link of root.querySelectorAll("a")) {
+    if (players >= 8 || link.closest("pre, .md-media, .md-fail, .chart")) continue;
+    const spec = videoSpec(link);
     if (!spec) continue;
-    const block = a.closest("p, li, td, th, blockquote, h1, h2, h3, h4") || a.parentElement;
+    const block = link.closest("p, li, td, th, blockquote, h1, h2, h3, h4") || link.parentElement;
     if (
       !block ||
       [...block.querySelectorAll(".md-media")].some((m) => m.dataset.keep === `video:${spec.key}`)
     )
       continue;
     block.append(
-      keep(`video:${spec.key}`, () => buildVideo({ alt: a.textContent.trim(), ...spec })),
+      keep(`video:${spec.key}`, () => buildVideo({ alt: link.textContent.trim(), ...spec })),
     );
     players++;
   }
+}
+function linkify(root) {
+  linkHashRefs(root);
+  linkCodeSpans(root);
+  addVideoPlayers(root);
 }
 
 // -- placeholders -> nodes --

@@ -1613,6 +1613,16 @@ li.sel .dot {
   background: var(--accent-tint);
   text-decoration-color: currentColor;
 }
+.prose a.ref-link {
+  color: var(--accent);
+  background: var(--accent-tint);
+  padding: 0.0625em 0.375em;
+  border-radius: var(--r-xs);
+  text-decoration: none;
+}
+.prose a.ref-link:hover {
+  text-decoration: underline;
+}
 .prose :not(pre) > code {
   background: var(--s2);
   color: var(--t1);
