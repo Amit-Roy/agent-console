@@ -87,6 +87,7 @@ export type DownloadedItem = ShareItem;
 export interface Downloaded {
   items: DownloadedItem[];
   captionPath: string;
+  missing?: number[];
   cleanup: () => void;
 }
 
@@ -215,8 +216,8 @@ async function downloadNow(link: InstagramLink, signal?: AbortSignal): Promise<D
   const stage = fs.mkdtempSync(path.join(root, "instagram-"));
   const cleanup = () => fs.rmSync(stage, { recursive: true, force: true });
   try {
-    const { items, captionPath } = await fetchPost(link, stage, { signal });
-    return { items, captionPath, cleanup };
+    const { items, captionPath, missing } = await fetchPost(link, stage, { signal });
+    return { items, captionPath, missing, cleanup };
   } catch (error) {
     cleanup();
     recent.delete(link.url);

@@ -472,7 +472,7 @@ function handle(m) {
         warmFileViewer();
       }
       maybeOpenWorkflowDialog();
-      void maybeShareInstagram();
+      void maybeShareLink();
       break;
     }
     case "thread":
@@ -4562,15 +4562,15 @@ function maybeOpenWorkflowDialog() {
   $("d-ok").textContent = "Create thread";
 }
 // Android share sheet -> manifest share_target -> /?share_text=...&share_url=... . Strip the params first so a reload never re-shares.
-let sharingInstagram = false;
-async function maybeShareInstagram() {
+let sharingLink = false;
+async function maybeShareLink() {
   const params = new URLSearchParams(location.search);
   const text = params.get("share_text") || "";
   const url = params.get("share_url") || "";
   const title = params.get("share_title") || "";
   if (!text && !url) return;
-  if (sharingInstagram) return;
-  sharingInstagram = true;
+  if (sharingLink) return;
+  sharingLink = true;
   for (const key of ["share_text", "share_url", "share_title"]) params.delete(key);
   const query = params.toString();
   history.replaceState(null, "", `${location.pathname}${query ? `?${query}` : ""}${location.hash}`);
@@ -4578,19 +4578,19 @@ async function maybeShareInstagram() {
     let choice = await pickShareTarget();
     if (choice === "") choice = await createShareThread();
     if (choice === null) return void toast("Share cancelled");
-    toast("Fetching Instagram reel…");
-    const response = await apiFetch("/api/share/instagram", {
+    toast("Fetching link…");
+    const response = await apiFetch("/api/share", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ text, url, title, thread: choice }),
     });
     const body = await response.json().catch(() => ({}));
-    if (!response.ok || !body.thread) return void toast(body.error || "Could not fetch that reel.");
+    if (!response.ok || !body.thread) return void toast(body.error || "Could not fetch that link.");
     await fillShareDraft(body);
   } catch (error) {
-    toast(error.message || "Could not fetch that reel.");
+    toast(error.message || "Could not fetch that link.");
   } finally {
-    sharingInstagram = false;
+    sharingLink = false;
   }
 }
 function handleCreated(threadId) {
