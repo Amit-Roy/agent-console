@@ -511,6 +511,46 @@ assert.equal(
   "unavailable",
   "Eight names need eight-element vectors",
 );
+// Quantile-tree artifacts price the session directly; channels reuse observed shares.
+const treeNames = ["size", "lines", "refs", "verbs"] as const;
+const leaf = (value: number) => ({ f: [0], t: [0], l: [-1], r: [-1], v: [value] });
+const withTrees: EffortModel = {
+  ...sessionTotals,
+  quantileModel: {
+    features: [...treeNames],
+    quantiles: { p50: 0.5, p75: 0.75, p80: 0.8, p95: 0.95, p99: 0.99 },
+    baseline: { p50: 1, p75: 2, p80: 2.5, p95: 4, p99: 5 },
+    trees: {
+      p50: [leaf(1)],
+      p75: [leaf(1)],
+      p80: [leaf(1)],
+      p95: [leaf(1)],
+      p99: [leaf(1)],
+    },
+    offsets: { p50: 0, p75: 0, p80: 0, p95: 0, p99: 0 },
+    ceiling: 1_000_000,
+  },
+};
+const treed = quoteEffort(features(1), validateEffortModel(withTrees), "fix the parser");
+assert.equal(treed.status, "ready");
+const treeQuote = treed as EffortQuote;
+assert.equal(treeQuote.method, "boosted-trees-quantile-v1");
+assert.ok(treeQuote.total?.p75 !== undefined && treeQuote.total.p99 !== undefined);
+const total = treeQuote.total!;
+assert.ok(total.p50 <= total.p75 && total.p75 <= total.p80 && total.p80 <= total.p95);
+assert.ok(total.p95 <= total.p99, "Quantiles must never cross");
+assert.equal(treeQuote.output.p50, Math.ceil(total.p50 * 0.2));
+assert.equal(treeQuote.input!.p50, Math.ceil(total.p50 * 0.8));
+assert.equal(treeQuote.input!.p50 + treeQuote.output.p50 >= total.p50, true);
+// Without request text the tree estimator cannot run; the legacy equation still answers.
+const legacyOnly = quoteEffort(features(1), validateEffortModel(withTrees));
+assert.equal(legacyOnly.status, "ready");
+assert.equal((legacyOnly as EffortQuote).method, "nonnegative-ridge-log-work-v1");
+const brokenTree = {
+  ...withTrees,
+  quantileModel: { ...withTrees.quantileModel!, trees: { p50: [] } },
+};
+assert.equal(validateEffortModel(brokenTree).status, "unavailable");
 console.log(
   "triage effort inference: monotonic work, empirical budgets, private model validation passed",
 );

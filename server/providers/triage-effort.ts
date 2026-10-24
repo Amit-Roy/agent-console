@@ -1,6 +1,12 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import {
+  predictQuantiles,
+  type QuantileTreeModel,
+  requestFeatures,
+  validateQuantileModel,
+} from "./triage-quantile.ts";
 
 /** Only pre-work task characteristics enter the effort equation. */
 export const LEGACY_EFFORT_FEATURES = ["breadth", "complexity", "uncertainty", "risk"] as const;
@@ -38,8 +44,11 @@ export type EffortEstimator = "complexity" | "historical-baseline";
 export type ComplexityInput = Partial<Record<EffortFeature, { value: number | null }>>;
 export interface EffortQuantiles {
   p50: number;
+  /** Present when the quantile-tree estimator prices the session. */
+  p75?: number;
   p80: number;
   p95: number;
+  p99?: number;
 }
 export interface FeatureRange {
   min: number | null;
@@ -78,6 +87,8 @@ export interface EffortModel {
     residualQuantiles: EffortQuantiles;
   };
   scenarios: EffortScenario[];
+  /** Direct session quantiles from boosted tree heads; legacy artifacts omit it. */
+  quantileModel?: QuantileTreeModel | null;
   workCutoffs: { trivialMax: number; deepMin: number };
   /** Training maximum of the fitted target. Session pricing never exceeds it. */
   workloadCeiling?: number | null;
@@ -97,7 +108,7 @@ export interface EffortQuote {
   tokenYieldBasis: TokenYieldBasis;
   workloadMetric: EffortWorkloadMetric;
   estimator: EffortEstimator;
-  method: EffortModel["method"];
+  method: EffortModel["method"] | "boosted-trees-quantile-v1";
   /** Token tercile tier, a rough guide only. The triage label follows the level of design. */
   effort: "trivial" | "bau" | "deep";
   /** Explicit routing policy; it does not modify the learned distribution. */
@@ -183,7 +194,12 @@ export function validateEffortModel(value: unknown): LoadedEffortModel {
     (value.workloadMetric !== undefined &&
       !["toolCalls", "totalTokens"].includes(value.workloadMetric as string)) ||
     (value.estimator !== undefined &&
-      !["complexity", "historical-baseline"].includes(value.estimator as string)) ||
+      !["complexity", "historical-baseline", "quantile-trees"].includes(
+        value.estimator as string,
+      )) ||
+    (value.quantileModel !== undefined &&
+      value.quantileModel !== null &&
+      validateQuantileModel(value.quantileModel) === null) ||
     (value.workloadMetric === "totalTokens") !== (value.tokenYieldBasis === "workload") ||
     ![LEGACY_EFFORT_FEATURES, SHAPE_FEATURES, EFFORT_FEATURES].some(
       (names) => JSON.stringify(value.featureNames) === JSON.stringify(names),
@@ -387,6 +403,7 @@ const quantiles = (values: number[], round = true): EffortQuantiles => {
 export function quoteEffort(
   metrics: ComplexityInput,
   loaded: LoadedEffortModel = loadEffortModel(),
+  requestText?: string,
 ): EffortQuote | EffortUnavailable {
   if (loaded.status !== "ready") return loaded;
   const validated = validateEffortModel(loaded.model);
@@ -486,6 +503,77 @@ export function quoteEffort(
   const complete = (values: number[], round = true) =>
     values.length === model.scenarios.length ? quantiles(values, round) : null;
   const input = complete(inputValues);
+  // Tree heads price the whole session directly. Channel splits keep the observed paired
+  // shares, so any printed input/output budget still sums to the priced total.
+  const tree =
+    model.quantileModel && typeof requestText === "string" && requestText.trim()
+      ? predictQuantiles(model.quantileModel, requestFeatures(requestText))
+      : null;
+  const median = (values: number[]): number | null => {
+    if (!values.length) return null;
+    const sorted = [...values].sort((a, b) => a - b);
+    const middle = Math.floor(sorted.length / 2);
+    return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+  };
+  const scaled = (values: (number | null)[], total: EffortQuantiles): EffortQuantiles | null => {
+    const ratio = median(values.filter((value): value is number => value !== null));
+    if (ratio === null) return null;
+    const round = (value: number) => Math.ceil(value);
+    return {
+      p50: round(total.p50 * ratio),
+      ...(total.p75 === undefined ? {} : { p75: round(total.p75 * ratio) }),
+      p80: round(total.p80 * ratio),
+      p95: round(total.p95 * ratio),
+      ...(total.p99 === undefined ? {} : { p99: round(total.p99 * ratio) }),
+    };
+  };
+  const pricedTotal: EffortQuantiles | null = tree
+    ? { p50: tree.p50, p75: tree.p75, p80: tree.p80, p95: tree.p95, p99: tree.p99 }
+    : complete(totalValues);
+  const pricedActivity: EffortQuantiles = tree
+    ? { p50: tree.p50, p75: tree.p75, p80: tree.p80, p95: tree.p95, p99: tree.p99 }
+    : activity;
+  const pricedOutput =
+    tree && pricedTotal
+      ? scaled(
+          model.scenarios.map((row) => row.outputPerWork),
+          pricedTotal,
+        )
+      : output;
+  const pricedInput =
+    tree && pricedTotal
+      ? scaled(
+          model.scenarios.map(
+            (row) =>
+              row.inputPerWork ??
+              (row.freshInputPerWork !== null && row.cachedInputPerWork !== null
+                ? row.freshInputPerWork + row.cachedInputPerWork
+                : null),
+          ),
+          pricedTotal,
+        )
+      : input;
+  const pricedFresh =
+    tree && pricedTotal
+      ? scaled(
+          model.scenarios.map((row) => row.freshInputPerWork),
+          pricedTotal,
+        )
+      : complete(freshValues);
+  const pricedCached =
+    tree && pricedTotal
+      ? scaled(
+          model.scenarios.map((row) => row.cachedInputPerWork),
+          pricedTotal,
+        )
+      : complete(cachedValues);
+  const pricedRounds =
+    tree && pricedTotal
+      ? scaled(
+          model.scenarios.map((row) => row.roundsPerWork),
+          pricedTotal,
+        )
+      : complete(roundValues, false);
   const thresholds = model.workCutoffs;
   // Out-of-sample residuals already include the usual share of unknown model-extracted metrics, so
   // when request-shape features exist only unknown shape features (never expected) or extrapolation force P95.
@@ -500,9 +588,9 @@ export function quoteEffort(
   const effort =
     thresholds.trivialMax === thresholds.deepMin
       ? "bau"
-      : activity[effortBasis] <= thresholds.trivialMax
+      : pricedActivity[effortBasis] <= thresholds.trivialMax
         ? "trivial"
-        : activity[effortBasis] >= thresholds.deepMin
+        : pricedActivity[effortBasis] >= thresholds.deepMin
           ? "deep"
           : "bau";
   return {
@@ -512,21 +600,21 @@ export function quoteEffort(
     tokenYieldBasis,
     workloadMetric,
     estimator,
-    method: model.method,
+    method: tree ? "boosted-trees-quantile-v1" : model.method,
     effort,
     effortBasis,
     recommendedBudget,
-    activity,
-    output,
-    total: complete(totalValues),
-    input,
-    freshInput: complete(freshValues),
-    cachedInput: complete(cachedValues),
-    rounds: complete(roundValues, false),
+    activity: pricedActivity,
+    output: pricedOutput ?? output,
+    total: pricedTotal,
+    input: pricedInput,
+    freshInput: pricedFresh,
+    cachedInput: pricedCached,
+    rounds: pricedRounds,
     riskPremium: {
-      work: activity.p80 - activity.p50,
-      output: output.p80 - output.p50,
-      input: input ? input.p80 - input.p50 : null,
+      work: pricedActivity.p80 - pricedActivity.p50,
+      output: (pricedOutput ?? output).p80 - (pricedOutput ?? output).p50,
+      input: pricedInput ? pricedInput.p80 - pricedInput.p50 : null,
     },
     contributions,
     unknowns,
@@ -534,8 +622,9 @@ export function quoteEffort(
     thresholds,
     training: model.training,
     validation: model.validation,
-    formula:
-      estimator === "historical-baseline"
+    formula: tree
+      ? `Boosted quantile tree heads predict five session-total quantiles from the initial request text (length, structure, references, action verbs, code fences, paths, tests, checklists) plus the request-shape buckets. Heads are rearranged into a monotone set and capped at the largest observed training total. Input, generated, and cached channels reuse the median observed share of the priced total. P50 routes complete in-range scope; unknown or extrapolated scope routes through P95 by policy. Those are observed session snapshots, including later follow-ups, not human hours.`
+      : estimator === "historical-baseline"
         ? "The complexity fit did not beat the training-median baseline on held-out session totals. This quote uses the empirical training-session usage distribution and paired observed token shares. It does not claim task-specific predictive accuracy. All measured zero-usage sessions remain in that distribution. Total input includes cached replay once; input plus generated output defines total session usage. Initial requests remain the only candidate predictors. Unknown scope selects the P95 reserve by policy. These are historical session snapshots, including later follow-ups, not human hours or guarantees about future resumption."
         : workloadMetric === "totalTokens"
           ? `Initial-request ${model.featureNames.length > 4 ? "breadth, complexity, uncertainty, risk, and request shape (size, lines, references, action verbs)" : model.featureNames[0] === "requestSize" ? "shape (size, lines, references, action verbs)" : "breadth, complexity, uncertainty, and risk"} predict log(1 + total session tokens) with nonnegative ridge coefficients. Total session tokens are recorded input plus generated output, including cached replay once. Chronological out-of-fold residuals produce usage scenarios; paired observed input/output/cache shares split those scenarios. Explicitly measured zero-total sessions retain an empirical point mass at zero. Tool counts are optional diagnostics, never the fitted target. Effort tiers compare predicted session tokens against training-session terciles. P50 routes complete in-range scope; unknown or extrapolated scope routes through P95 by policy. Only initial user messages supply predictors; later follow-ups are part of the outcome and add unexplained variance. Raw usage and later conversation never enter the predictors. Unknowns use training-only imputation and remain flagged. These are observed session snapshots, not human hours or guarantees about future resumption.`
