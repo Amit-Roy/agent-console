@@ -1,12 +1,21 @@
 // Offline startup regression: delay proxy health and verify no session can inherit the initial unhealthy state.
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import http from "node:http";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { diagnostic, ResourceGuard } from "../server/headroom-diagnostics.ts";
 
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "ac-headroom-"));
+const inheritedHeadroomCommand = process.env.AGENT_CONSOLE_HEADROOM_COMMAND;
+const inheritedHeadroomKompress = process.env.AGENT_CONSOLE_HEADROOM_KOMPRESS;
+const inheritedEnvFiles = process.env.AGENT_CONSOLE_ENV_FILES;
+delete process.env.AGENT_CONSOLE_HEADROOM_COMMAND;
+delete process.env.AGENT_CONSOLE_HEADROOM_KOMPRESS;
+const fixtureEnvFile = path.join(scratch, "agent-console.env");
+fs.writeFileSync(fixtureEnvFile, "");
+process.env.AGENT_CONSOLE_ENV_FILES = fixtureEnvFile;
 const socket = net.createServer();
 await new Promise<void>((resolve) => socket.listen(0, "127.0.0.1", resolve));
 const port = (socket.address() as net.AddressInfo).port;
@@ -21,6 +30,14 @@ process.stdout.write('PROMPT_SECRET auth=AUTH_SECRET');
 process.stderr.write('ERROR AUTH_SECRET');
 setTimeout(() => http.createServer((req, res) => res.end('ok')).listen(Number(process.argv[process.argv.indexOf('--port') + 1]), '127.0.0.1'), 300);
 `,
+  { mode: 0o700 },
+);
+const customCommand = path.join(scratch, "custom-headroom");
+fs.writeFileSync(
+  customCommand,
+  fs
+    .readFileSync(path.join(scratch, "headroom"), "utf8")
+    .replace("JSON.stringify({args:", "JSON.stringify({command: process.argv[1], args:"),
   { mode: 0o700 },
 );
 process.env.PATH = `${scratch}:${process.env.PATH}`;
@@ -80,7 +97,14 @@ try {
     assert.equal(refreshed.reachable, false);
     assert.equal(refreshed.running, false, "Explicit repair invalidates unavailable proxy routing");
     assert.equal(headroom.url(), undefined);
-    globalThis.fetch = nativeFetch;
+    globalThis.fetch = ((input: RequestInfo | URL) =>
+      new Promise<Response>((resolve, reject) => {
+        const request = http.get(String(input), (response) => {
+          response.resume();
+          resolve(new Response(null, { status: response.statusCode ?? 500 }));
+        });
+        request.once("error", reject);
+      })) as typeof fetch;
     assert.equal((await headroom.probe(true)).reachable, true);
     assert.equal(
       headroom.url(),
@@ -117,6 +141,22 @@ try {
   ])
     assert.equal(launch.args[launch.args.indexOf(flag) + 1], "1");
   assert.deepEqual(Object.values(launch.env), ["1", "1", "1", "1", "1", "1", "false", "0"]);
+  await headroom.stop();
+  fs.writeFileSync(
+    fixtureEnvFile,
+    `AGENT_CONSOLE_HEADROOM_COMMAND=${customCommand}\nAGENT_CONSOLE_HEADROOM_KOMPRESS=1\n`,
+  );
+  await headroom.start();
+  const optInLaunch = fs
+    .readFileSync(process.env.CAPTURE, "utf8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line))[1];
+  assert.equal(optInLaunch.command, customCommand, "Environment file executable path is spawned");
+  assert.ok(!optInLaunch.args.includes("--disable-kompress"));
+  assert.ok(optInLaunch.args.includes("--disable-kompress-fallback"));
+  assert.ok(optInLaunch.args.includes("--no-ccr"));
+  await headroom.stop();
   const guard = new ResourceGuard();
   guard.sample({ rssBytes: 100, ticks: 0, time: 1000 });
   for (let sec = 5; sec < 30; sec += 5)
@@ -158,4 +198,10 @@ try {
 } finally {
   await headroom.stop();
   fs.rmSync(scratch, { recursive: true, force: true });
+  if (inheritedHeadroomCommand === undefined) delete process.env.AGENT_CONSOLE_HEADROOM_COMMAND;
+  else process.env.AGENT_CONSOLE_HEADROOM_COMMAND = inheritedHeadroomCommand;
+  if (inheritedHeadroomKompress === undefined) delete process.env.AGENT_CONSOLE_HEADROOM_KOMPRESS;
+  else process.env.AGENT_CONSOLE_HEADROOM_KOMPRESS = inheritedHeadroomKompress;
+  if (inheritedEnvFiles === undefined) delete process.env.AGENT_CONSOLE_ENV_FILES;
+  else process.env.AGENT_CONSOLE_ENV_FILES = inheritedEnvFiles;
 }
