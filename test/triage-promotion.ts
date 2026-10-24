@@ -79,19 +79,65 @@ const throwing = {
 assert.equal(promotionDecision(throwing).promote, false);
 assert.equal(promotionDecision(artifact(), null as never).promote, true);
 
-// Coverage bounds.
-assert.equal(promotionDecision(artifact({ quantiles: quantiles(0.75) })).promote, true);
-assert.equal(promotionDecision(artifact({ quantiles: quantiles(0.92) })).promote, true);
-assert.equal(promotionDecision(artifact({ quantiles: quantiles(0.9, 0.9) })).promote, true);
-const low = promotionDecision(artifact({ quantiles: quantiles(0.7) }));
-assert.equal(low.promote, false);
-assert.deepEqual(low.reasons, ["p80 coverage 0.700 is below 0.75."]);
-const high = promotionDecision(artifact({ quantiles: quantiles(0.95) }));
-assert.equal(high.promote, false);
-assert.deepEqual(high.reasons, ["p80 coverage 0.950 is above 0.92."]);
-const thin = promotionDecision(artifact({ quantiles: quantiles(0.8, 0.85) }));
-assert.equal(thin.promote, false);
-assert.deepEqual(thin.reasons, ["p95 coverage 0.850 is below 0.90."]);
+// Coverage bounds (bootstrap: absolute bounds apply).
+const noChampion = (quantileSet: Json) => artifact({ quantiles: quantileSet }, null);
+const bootCover = (p80: number, p95 = 0.95) =>
+  promotionDecision(noChampion(quantiles(p80, p95)), { compareChampion: false });
+assert.equal(bootCover(0.75).promote, true);
+assert.equal(bootCover(0.92).promote, true);
+assert.equal(bootCover(0.9, 0.9).promote, true);
+assert.deepEqual(bootCover(0.7).reasons, ["p80 coverage 0.700 is below 0.75."]);
+assert.deepEqual(bootCover(0.95).reasons, ["p80 coverage 0.950 is above 0.92."]);
+assert.deepEqual(bootCover(0.8, 0.85).reasons, ["p95 coverage 0.850 is below 0.90."]);
+assert.equal(promotionDecision(noChampion(quantiles(0.95))).bootstrap, true);
+assert.equal(promotionDecision(noChampion(quantiles(0.95))).promote, false);
+
+// Missing champion coverage falls back to the absolute bounds.
+const noCoverage = champion({ quantiles: undefined });
+const fallback = promotionDecision(artifact({ quantiles: quantiles(0.95) }, noCoverage));
+assert.equal(fallback.promote, false);
+assert.equal(fallback.bootstrap, false);
+assert.deepEqual(fallback.reasons, ["p80 coverage 0.950 is above 0.92."]);
+assert.equal(fallback.metrics.championP80Coverage, null);
+assert.equal(fallback.metrics.championP95Coverage, null);
+
+// Relative rule with a champion that has coverage.
+const withCoverage = (champ80: number, champ95 = 0.95, sampleCount = 109) =>
+  champion({ sampleCount, quantiles: quantiles(champ80, champ95) });
+const realCase = promotionDecision(
+  artifact(
+    { meanPinball: 0.463, quantiles: quantiles(0.963, 1.0) },
+    {
+      ...withCoverage(0.927, 1.0),
+      meanPinball: 0.5,
+      pairedDelta: { mean: -0.037, lower90: -0.055, upper90: -0.019, resamples: 2000 },
+    },
+  ),
+);
+assert.equal(realCase.promote, true);
+assert.deepEqual(realCase.reasons, []);
+assert.equal(realCase.metrics.championP80Coverage, 0.927);
+assert.equal(realCase.metrics.championP95Coverage, 1.0);
+const tooHigh = promotionDecision(artifact({ quantiles: quantiles(0.99) }, withCoverage(0.82)));
+assert.equal(tooHigh.promote, false);
+assert.deepEqual(tooHigh.reasons, ["p80 coverage 0.990 is above 0.98."]);
+const worseMiss = promotionDecision(artifact({ quantiles: quantiles(0.96) }, withCoverage(0.8)));
+assert.equal(worseMiss.promote, false);
+assert.deepEqual(worseMiss.reasons, [
+  "p80 coverage 0.960 is above 0.92 and 0.160 further from 0.80 than champion (limit 0.077).",
+]);
+const lowButClose = promotionDecision(
+  artifact({ quantiles: quantiles(0.7, 0.85) }, withCoverage(0.72, 0.86)),
+);
+assert.equal(lowButClose.promote, true);
+const thinWorse = promotionDecision(artifact({ quantiles: quantiles(0.8, 0.85) }));
+assert.equal(thinWorse.promote, false);
+assert.match(
+  thinWorse.reasons[0],
+  /^p95 coverage 0\.850 is below 0\.90 and 0\.100 further from 0\.95 than champion \(limit 0\.069\)\.$/,
+);
+const hardP95 = promotionDecision(artifact({ quantiles: quantiles(0.8, 0.7) }));
+assert.deepEqual(hardP95.reasons, ["p95 coverage 0.700 is below 0.80."]);
 const both = promotionDecision(artifact({ quantiles: quantiles(0.5, 0.5) }));
 assert.equal(both.reasons.length, 2);
 
