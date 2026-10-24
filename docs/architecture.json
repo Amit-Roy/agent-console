@@ -1,94 +1,171 @@
 {
- "title": "Agent tool discovery",
- "subtitle": "MCP tools served by the Console",
+ "title": "Shares and prompt tools",
+ "subtitle": "Untrusted shares reach the agent via sandboxed subagents; drafts can be improved and quoted",
  "items": [
   {
-   "group": "Agent session",
-   "sub": "Claude, Codex, Pi",
+   "group": "Phone PWA",
    "border": "solid",
-   "color": "blue",
-   "icon": "bot",
+   "color": "slate",
+   "icon": "smartphone",
    "items": [
     {
-     "id": "agent",
-     "label": "Agent",
-     "tech": "claude / codex / pi",
-     "desc": "Discovers tools from MCP list",
-     "icon": "bot",
-     "color": "blue"
+     "id": "pwa",
+     "label": "PWA share target",
+     "tech": "POST /api/share",
+     "icon": "share-2",
+     "color": "indigo"
     },
     {
-     "id": "mcp",
-     "label": "MCP bridge",
-     "tech": "console-mcp.mjs",
-     "desc": "Exposes session_*, pi_research and cli_search over stdio",
-     "icon": "plug",
+     "id": "composer",
+     "label": "Composer",
+     "tech": "public/app.js",
+     "desc": "Draft, attachments, Improve dialog",
+     "icon": "pen-line",
      "color": "indigo"
     }
    ]
   },
   {
    "group": "Agent Console server",
-   "sub": "server/index.ts",
-   "border": "solid",
-   "color": "slate",
+   "sub": "server/",
+   "border": "dashed",
+   "color": "blue",
    "icon": "server",
    "items": [
     {
-     "id": "route",
-     "label": "Tool route",
-     "tech": "POST /api/agent-tools/:name",
-     "desc": "Token check; read-only allowlist for unattended runs; cli_search routed",
+     "id": "run",
+     "label": "downloadShare",
+     "tech": "share/run.ts",
+     "desc": "Routes Instagram links to the queue",
      "icon": "route",
-     "color": "orange"
+     "color": "blue"
     },
     {
-     "id": "ss",
-     "label": "Session search",
-     "tech": "session-search.ts",
-     "desc": "FTS5 BM25 over past conversations",
-     "icon": "history",
+     "id": "ig",
+     "label": "Instagram provider",
+     "tech": "share/instagram.ts",
+     "desc": "Queue, dedupe, retries, caption, cookie fallback",
+     "icon": "camera",
+     "color": "pink"
+    },
+    {
+     "id": "prompt",
+     "label": "Share prompt + uploads",
+     "tech": "share/prompt.ts, uploads.ts",
+     "desc": "Social media flagged untrusted, sent as paths",
+     "icon": "file-lock",
      "color": "teal"
     },
     {
-     "id": "cs",
-     "label": "CLI search",
-     "tech": "cli-search.ts",
-     "desc": "In-memory FTS5; name 5, tags 3, description 2; rebuilt on manifest mtime",
-     "icon": "search",
+     "id": "improve",
+     "label": "Prompt improve API",
+     "tech": "prompt-improve.ts",
+     "desc": "Haiku rewrite, placeholders, quotes",
+     "icon": "wand-sparkles",
+     "color": "purple"
+    }
+   ]
+  },
+  {
+   "group": "Agents",
+   "sub": "Claude thread",
+   "border": "dashed",
+   "color": "indigo",
+   "icon": "bot",
+   "items": [
+    {
+     "id": "main",
+     "label": "Main agent",
+     "tech": "Claude thread",
+     "desc": "Never opens shared assets",
+     "icon": "bot",
+     "color": "orange"
+    },
+    {
+     "id": "analyzer",
+     "label": "share-analyzer",
+     "tech": "Sonnet, Read + Bash",
+     "desc": "Commands run in the jail",
+     "icon": "scan-search",
+     "color": "cyan"
+    },
+    {
+     "id": "classifier",
+     "label": "share-safety-classifier",
+     "tech": "Sonnet, no tools",
+     "desc": "Judges commands tried, SAFE or UNSAFE",
+     "icon": "shield-check",
      "color": "teal"
     }
    ]
   },
   {
-   "group": "CLI manifests",
-   "sub": "AGENT_CONSOLE_TOOL_MANIFESTS",
-   "border": "dashed",
+   "group": "Downloaders and models",
+   "border": "solid",
    "color": "slate",
-   "icon": "files",
+   "icon": "boxes",
    "items": [
     {
-     "id": "mb",
-     "label": "brain tools.json",
-     "tech": "brain/tools.json",
-     "desc": "name, path, description, usage, tags",
-     "icon": "file-json",
-     "color": "cyan"
+     "id": "ytdlp",
+     "label": "yt-dlp runner",
+     "tech": "share/ytdlp.ts",
+     "desc": "Anonymous; image posts skip retries",
+     "icon": "film",
+     "color": "orange"
     },
     {
-     "id": "md",
-     "label": "dotfiles tools.json",
-     "tech": "dotfiles/tools.json",
-     "desc": "Same schema; internal entries hidden",
-     "icon": "file-json",
-     "color": "cyan"
+     "id": "gdl",
+     "label": "gallery-dl runner",
+     "tech": "share/gallerydl.ts",
+     "desc": "Cookie file, image slides",
+     "icon": "images",
+     "color": "purple"
     },
     {
-     "id": "mr",
-     "label": "console tools.json",
-     "tech": "agent-console/tools.json",
-     "desc": "bin/ CLIs of this repo",
-     "icon": "file-json",
+     "id": "haiku",
+     "label": "Haiku",
+     "tech": "claude --print",
+     "desc": "No tools, 45 s timeout",
+     "icon": "sparkles",
+     "color": "orange"
+    },
+    {
+     "id": "effort",
+     "label": "Effort model",
+     "tech": "quantile tree",
+     "desc": "Text-only quote, mtime cache",
+     "icon": "gauge",
+     "color": "blue"
+    },
+    {
+     "id": "trace",
+     "label": "share-trace CLI",
+     "tech": "subagent JSONL",
+     "desc": "Calls, blocked kind, report",
+     "icon": "file-search",
+     "color": "slate"
+    },
+    {
+     "id": "jail",
+     "label": "share-jail",
+     "tech": "bwrap via PreToolUse hook",
+     "desc": "No network, no home, assets read-only",
+     "icon": "lock",
+     "color": "slate"
+    }
+   ]
+  },
+  {
+   "group": "Instagram",
+   "border": "solid",
+   "color": "slate",
+   "icon": "globe",
+   "items": [
+    {
+     "id": "insta",
+     "label": "instagram.com",
+     "tech": "Web + API",
+     "icon": "cloud",
      "color": "cyan"
     }
    ]
@@ -96,38 +173,79 @@
  ],
  "edges": [
   {
-   "from": "agent",
-   "to": "mcp",
-   "label": "tools/call"
+   "from": "pwa",
+   "to": "run",
+   "label": "Shared link"
   },
   {
-   "from": "mcp",
-   "to": "route",
-   "label": "HTTP + tool token"
+   "from": "run",
+   "to": "ig",
+   "label": "Queue job"
   },
   {
-   "from": "route",
-   "to": "ss",
-   "label": "session_search"
+   "from": "ig",
+   "to": "ytdlp",
+   "label": "First attempt"
   },
   {
-   "from": "route",
-   "to": "cs"
+   "from": "ytdlp",
+   "to": "insta",
+   "label": "Anonymous"
   },
   {
-   "from": "cs",
-   "to": "mb",
-   "label": "read"
+   "from": "ig",
+   "to": "gdl",
+   "label": "Empty or missing"
   },
   {
-   "from": "cs",
-   "to": "md",
-   "label": "read"
+   "from": "gdl",
+   "to": "insta",
+   "label": "With cookies"
   },
   {
-   "from": "cs",
-   "to": "mr",
-   "label": "read"
+   "from": "run",
+   "to": "prompt",
+   "label": "Flags"
+  },
+  {
+   "from": "prompt",
+   "to": "main",
+   "label": "Paths, no vision"
+  },
+  {
+   "from": "main",
+   "to": "analyzer",
+   "label": "Exact paths"
+  },
+  {
+   "from": "main",
+   "to": "trace",
+   "label": "agentId"
+  },
+  {
+   "from": "trace",
+   "to": "classifier",
+   "label": "Calls + report"
+  },
+  {
+   "from": "composer",
+   "to": "improve",
+   "label": "Improve, Check"
+  },
+  {
+   "from": "improve",
+   "to": "haiku",
+   "label": "Rewrite"
+  },
+  {
+   "from": "improve",
+   "to": "effort",
+   "label": "Quote old/new"
+  },
+  {
+   "from": "analyzer",
+   "to": "jail",
+   "label": "Bash, wrapped"
   }
  ]
 }
