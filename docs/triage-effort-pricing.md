@@ -113,3 +113,13 @@ Chronological rolling-origin checks on all 162 sessions agree with the held-out 
 Uncapped scenario quantiles had reached 394.0M total tokens, more than three times the largest recorded session in the cohort, and the missing-structure interpolation turned that surplus into a 149.0M recommended budget for almost every request. Scenarios now clamp to `workloadCeiling`, the training-split maximum, which is 119,894,832 total tokens for this artifact.
 
 The refit on 308 training and 89 held-out sessions keeps the complexity estimator, with RMSLE 2.64 against 3.57 for the training-median baseline. Active held-out coverage is 83.1% at P80 and 96.6% at P95 on the fitted target, so this artifact reports `validated` rather than `experimental`. Coverage is still validation-selection evidence, not an independent test. The ceiling bounds a quote by the observed distribution; it does not predict unseen work, and one missing structure item still moves a budget a third of the way from P80 to the capped P95.
+
+## Quantile tree heads (2026-10-24)
+
+The ridge equation prices an average session and then spreads residuals. That cannot express the observed heteroscedasticity: a linear quantile fit stayed 40 to 45 percent behind boosted trees on held-out log pinball loss. Eight hundred fifty-two measured session rows, four shape buckets and eleven deterministic text features are now fitted with five independent gradient-boosted quantile heads (depth 3, 100 iterations, learning rate 0.05, leaf 20, L2 1.0) for P50, P75, P80, P95 and P99.
+
+Independent heads can cross. They are rearranged into a monotone set before pricing, and every quantile is capped at the largest observed training total. The artifact stores the trees as flat node arrays (`f`, `t`, `l`, `r`, `v`), so the runtime walks them without Python. A fit fails if the exported arrays do not reproduce the fitted estimator to 1e-9.
+
+The comment reports the best guess as P50, then P75, P80, P95 and P99. Input, generated and cached channels keep the median observed share of the priced total, so a printed input plus output budget still matches the total. Holding out the newest 20% of thread groups gives pinball 0.365 with coverage 0.31 at P50, 0.88 at P80 and 0.96 at P95. P50 coverage below nominal is why the budget still uses P80 for complete requests and P95 for incomplete ones.
+
+The ridge equation stays in the artifact for structure pricing, cost-driver text and the legacy path. Artifacts without text features load unchanged and quote with the ridge equation.

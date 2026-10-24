@@ -353,6 +353,7 @@ async function calibrate() {
         history,
       ],
       120_000,
+      "session-build",
     );
     await run(
       process.execPath,
@@ -366,6 +367,7 @@ async function calibrate() {
         dataset,
       ],
       30 * 60_000,
+      "effort-features",
     );
     const python =
       process.env.AGENT_CONSOLE_TRIAGE_PYTHON ||
@@ -381,7 +383,10 @@ async function calibrate() {
         "--report",
         report,
       ],
-      120_000,
+      // Five boosted quantile heads fit in about a minute locally and longer under a busy
+      // worker; the old 120 s ceiling killed valid fits.
+      600_000,
+      "effort-fit",
     );
     const model = loadEffortModel(artifact);
     const quote = quoteEffort(

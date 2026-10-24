@@ -19,6 +19,7 @@ import numpy as np
 import scipy
 import sklearn
 from scipy.optimize import lsq_linear
+from sklearn.ensemble import HistGradientBoostingRegressor
 from sklearn.metrics import mean_absolute_error, mean_squared_log_error
 
 LEGACY_FEATURES = ["breadth", "complexity", "uncertainty", "risk"]
@@ -48,6 +49,34 @@ def use_features(dataset):
 
 ALPHAS = [0.01, 0.1, 1.0, 10.0, 100.0]
 QUANTILES = {"p50": 0.5, "p80": 0.8, "p95": 0.95}
+# Quantile tree heads price the whole session directly; independent heads are rearranged
+# into a monotone set so a higher quantile never falls below a lower one.
+QUANTILE_LEVELS = {"p50": 0.5, "p75": 0.75, "p80": 0.8, "p95": 0.95, "p99": 0.99}
+QUANTILE_FEATURES = [
+    "size",
+    "lines",
+    "refs",
+    "verbs",
+    "logChars",
+    "logLines",
+    "logRefs",
+    "logVerbs",
+    "fence",
+    "logPaths",
+    "tests",
+    "checklist",
+    "bullets",
+    "questions",
+    "versions",
+]
+TREE_PARAMS = {
+    "max_depth": 3,
+    "max_iter": 100,
+    "learning_rate": 0.05,
+    "min_samples_leaf": 20,
+    "l2_regularization": 1.0,
+    "random_state": 0,
+}
 
 
 def dataset_scope(dataset):
@@ -409,6 +438,138 @@ def errors(actual, predicted):
     }
 
 
+def quantile_text(sample):
+    """Deterministic request-text features. Missing or non-finite rows cannot train the trees."""
+    text = sample.get("text")
+    if not isinstance(text, dict) or any(name not in text for name in QUANTILE_FEATURES):
+        return None
+    values = [text[name] for name in QUANTILE_FEATURES]
+    if any(not finite(value) for value in values):
+        return None
+    return values
+
+
+def export_tree(predictor):
+    """Flatten one fitted tree into parallel arrays the TypeScript walker reads."""
+    nodes = predictor.nodes
+    if not isinstance(nodes, np.ndarray):
+        raise ValueError("Unexpected tree node representation")
+    # left/right are unsigned in sklearn; leaves carry 0 there. is_leaf is authoritative.
+    leaf = nodes["is_leaf"].astype(bool)
+    left = np.where(leaf, -1, nodes["left"].astype(np.int64)).astype(int).tolist()
+    right = np.where(leaf, -1, nodes["right"].astype(np.int64)).astype(int).tolist()
+    return {
+        "f": nodes["feature_idx"].astype(int).tolist(),
+        "t": nodes["num_threshold"].astype(float).tolist(),
+        "l": left,
+        "r": right,
+        "v": nodes["value"].astype(float).tolist(),
+    }
+
+
+def score_tree(tree, features, baseline):
+    node = 0
+    while tree["l"][node] != -1:
+        node = tree["l"][node] if features[tree["f"][node]] <= tree["t"][node] else tree["r"][node]
+    return baseline + tree["v"][node]
+
+
+def fit_quantile_model(train, heldout, ceiling):
+    """Fit independent quantile tree heads and verify the exported arrays reproduce sklearn."""
+    matrix = np.array([quantile_text(s) for s in train], dtype=float)
+    target = np.log1p([observed_work(s, "totalTokens") for s in train])
+    trees, baseline, params = {}, {}, 0
+    for name, q in QUANTILE_LEVELS.items():
+        fitted = HistGradientBoostingRegressor(loss="quantile", quantile=q, **TREE_PARAMS).fit(
+            matrix, target
+        )
+        exported = [export_tree(iteration[0]) for iteration in fitted._predictors]
+        base = float(fitted._baseline_prediction.ravel()[0])
+        # The artifact must be walkable by the runtime: compare exported arrays with sklearn.
+        rows = matrix[: min(3, len(matrix))]
+
+        def exported_log(row):
+            return base + sum(score_tree(tree, row, 0.0) for tree in exported)
+
+        check = [exported_log(row) for row in rows]
+        if not np.allclose(np.array(check), fitted.predict(rows), atol=1e-9):
+            raise ValueError("Exported quantile trees do not reproduce the fitted estimator")
+        trees[name] = exported
+        baseline[name] = base
+        params += sum(len(tree["f"]) for tree in exported)
+    model = {
+        "method": "boosted-trees-quantile-v1",
+        "features": QUANTILE_FEATURES,
+        "quantiles": QUANTILE_LEVELS,
+        "baseline": baseline,
+        "trees": trees,
+        "offsets": {name: 0.0 for name in QUANTILE_LEVELS},
+        "ceiling": ceiling,
+        "nodeCount": params,
+        "parameters": TREE_PARAMS,
+    }
+    actual = np.array([observed_work(s, "totalTokens") for s in heldout])
+    predicted = {"log": {}, "tokens": {}}
+    cap = math.log1p(ceiling) if ceiling is not None else 30.0
+    for name in QUANTILE_LEVELS:
+        logs = np.array(
+            [
+                min(
+                    cap,
+                    baseline[name]
+                    + sum(score_tree(tree, quantile_text(s), 0.0) for tree in trees[name]),
+                )
+                for s in heldout
+            ]
+        )
+        predicted["log"][name] = logs
+    order = [predicted["log"][name] for name in QUANTILE_LEVELS]
+    stacked = np.maximum.accumulate(np.column_stack(order), axis=1)
+    for index, name in enumerate(QUANTILE_LEVELS):
+        predicted["tokens"][name] = np.expm1(stacked[:, index])
+    metrics = {}
+    for index, (name, q) in enumerate(QUANTILE_LEVELS.items()):
+        delta = np.log1p(actual) - stacked[:, index]
+        metrics[name] = {
+            "pinball": float(np.mean(np.maximum(q * delta, (q - 1) * delta))),
+            "coverage": float(np.mean(actual <= predicted["tokens"][name])),
+        }
+    median_log = float(np.median(target))
+    baseline_pinball = {
+        name: float(
+            np.mean(
+                np.maximum(
+                    q * (np.log1p(actual) - median_log),
+                    (q - 1) * (np.log1p(actual) - median_log),
+                )
+            )
+        )
+        for name, q in QUANTILE_LEVELS.items()
+    }
+    covered = all(
+        metrics[name]["coverage"] >= target_coverage
+        for name, target_coverage in (("p80", 0.8), ("p95", 0.95))
+    )
+    improves = float(np.mean([m["pinball"] for m in metrics.values()])) < float(
+        np.mean(list(baseline_pinball.values()))
+    )
+    validation = {
+        "status": "validated" if covered and improves else "experimental",
+        "sampleCount": len(heldout),
+        "groupCount": len(groups(heldout)),
+        "quantiles": metrics,
+        "baselinePinball": baseline_pinball,
+        "beatsPinballBaseline": improves,
+        "nodeCount": params,
+        "fit": TREE_PARAMS,
+        "limitations": [
+            "Independent quantile heads are rearranged, so fitted head values are not a density.",
+            "Coverage is the held-out block that also selected artifacts; it is not an independent test.",
+        ],
+    }
+    return model, validation
+
+
 def build_artifact(dataset):
     samples, rejected = validate_dataset(dataset)
     scope = dataset_scope(dataset)
@@ -665,6 +826,10 @@ def build_artifact(dataset):
         validation["limitations"].append(
             "The held-out block selected the active estimator; its active metrics are validation-selection results, not independent test performance."
         )
+    quantile_model = quantile_validation = None
+    if scope == "completed-session" and all(quantile_text(s) for s in samples):
+        quantile_model, quantile_validation = fit_quantile_model(train, heldout, ceiling)
+        validation["quantileModel"] = quantile_validation
     artifact = {
         "schemaVersion": 1,
         "method": "nonnegative-ridge-log-work-v1",
@@ -677,6 +842,7 @@ def build_artifact(dataset):
         "cohortAudit": cohort_audit,
         "featureNames": FEATURES,
         "workload": model,
+        "quantileModel": quantile_model,
         "scenarios": scenarios,
         "workCutoffs": {
             "trivialMax": float(np.quantile(work, 1 / 3)),
@@ -698,6 +864,7 @@ def build_artifact(dataset):
         "formula": f"log1p({workload_metric})=intercept+sum(nonnegative_weight*feature/scale)+sum(missing_weight*is_missing)",
         "featureNames": FEATURES,
         "workload": model,
+        "quantileModel": quantile_validation,
         "workCutoffs": artifact["workCutoffs"],
         "workloadCeiling": ceiling,
         "training": {k: v for k, v in training.items() if k != "sampleIds"},
