@@ -23,7 +23,12 @@ const bashResult = (id: string, text: string, isError = true) => ({
   message: {
     role: "user",
     content: [
-      { type: "tool_result", tool_use_id: id, is_error: isError, content: [{ type: "text", text }] },
+      {
+        type: "tool_result",
+        tool_use_id: id,
+        is_error: isError,
+        content: [{ type: "text", text }],
+      },
     ],
   },
 });
