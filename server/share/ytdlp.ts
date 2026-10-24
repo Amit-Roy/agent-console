@@ -6,8 +6,9 @@ import { ShareError } from "./types.ts";
 // Anonymous yt-dlp runner shared by providers (no shell, no cookies). Output and metadata are untrusted data.
 
 const DEFAULT_YTDLP = "/home/coder/.local/bin/yt-dlp";
-export const BLOCKED_MESSAGE =
-  "Instagram blocked anonymous download. Cookie fallback is not set up yet.";
+export const BLOCKED_MESSAGE = "Instagram blocked the download. Try again later.";
+export const IMAGE_POST_MESSAGE =
+  "Image posts need Instagram cookies. Add instagram-cookies.txt to the agent-console data folder.";
 const TIMEOUT_MS = 120_000;
 export const MAX_ITEMS = 10;
 export const MAX_TOTAL_BYTES = 100 << 20;
@@ -47,6 +48,7 @@ export function classifyError(stderr: string, code: unknown): string {
     return "Instagram download timed out. Try again later.";
   if (/larger than max-filesize|file is larger|too large/.test(text))
     return "That video is too large (over 100 MB).";
+  if (/no video formats found/.test(text)) return IMAGE_POST_MESSAGE;
   if (
     /login required|rate-limit|rate limit|not available|empty media response|restricted|log in/.test(
       text,

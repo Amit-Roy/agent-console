@@ -2,7 +2,9 @@
 export {
   BLOCKED_MESSAGE,
   buildArgs,
+  COOKIES_EXPIRED_MESSAGE,
   classifyError,
+  classifyGalleryError,
   type Downloaded,
   type DownloadedItem,
   downloadInstagram,
@@ -10,6 +12,8 @@ export {
   FETCH_HINT,
   type FetchedPost,
   fetchPost,
+  galleryArgs,
+  IMAGE_POST_MESSAGE,
   type InstagramLink,
   MAX_ITEMS,
   MAX_TOTAL_BYTES,

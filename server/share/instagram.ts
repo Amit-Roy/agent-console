@@ -1,11 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
+import { galleryArgs, normalizeMeta, runGalleryDl } from "./gallerydl.ts";
 import { type Provider, ShareError, type ShareItem, type ShareLink } from "./types.ts";
 import {
   BLOCKED_MESSAGE,
   buildArgs,
   expectedCount,
   type Found,
+  IMAGE_POST_MESSAGE,
   MAX_ITEMS,
   MAX_TOTAL_BYTES,
   readInfo,
@@ -21,7 +23,21 @@ const PATH_RE = /^\/(reel|reels|p|tv)\/([A-Za-z0-9_-]{5,40})/;
 const URL_RE = /https:\/\/[^\s<>"']+/g;
 const DEDUPE_MS = 60_000;
 
-export { BLOCKED_MESSAGE, buildArgs, classifyError, MAX_ITEMS, MAX_TOTAL_BYTES } from "./ytdlp.ts";
+export {
+  COOKIES_EXPIRED_MESSAGE,
+  classifyGalleryError,
+  galleryArgs,
+  normalizeMeta,
+  runGalleryDl,
+} from "./gallerydl.ts";
+export {
+  BLOCKED_MESSAGE,
+  buildArgs,
+  classifyError,
+  IMAGE_POST_MESSAGE,
+  MAX_ITEMS,
+  MAX_TOTAL_BYTES,
+} from "./ytdlp.ts";
 export { ShareError };
 
 export interface InstagramLink extends ShareLink {
@@ -156,7 +172,36 @@ function nameItems(stage: string, found: Found[]): DownloadedItem[] {
   });
 }
 
-/** Downloads, then retries once when nothing arrived (unless Instagram said no) and once more for the missing items. */
+function isMessage(error: unknown, message: string): boolean {
+  return error instanceof ShareError && error.message === message;
+}
+
+/**
+ * Last resort for image-only posts: gallery-dl with the user's cookie file, run once for whatever is still missing.
+ * Returns its error (if any) so the caller can prefer it when nothing at all arrived; a missing binary or cookie file is skipped quietly.
+ */
+async function runGalleryFallback(
+  link: InstagramLink,
+  stage: string,
+  opts: { signal?: AbortSignal; items?: number[] },
+  wanted: number[],
+): Promise<unknown> {
+  const { DATA_DIR } = await import("../auth.ts");
+  const cookies = path.join(DATA_DIR, "instagram-cookies.txt");
+  if (!fs.existsSync(cookies)) return undefined;
+  let failure: unknown;
+  let ran = true;
+  try {
+    ran = await runGalleryDl(galleryArgs(link.url, stage, cookies, wanted), opts.signal);
+  } catch (error) {
+    if (opts.signal?.aborted) throw error;
+    failure = error;
+  }
+  if (ran) normalizeMeta(stage);
+  return failure;
+}
+
+/** Downloads, then retries once when nothing arrived (unless Instagram said no), once more for the missing items, then tries gallery-dl. */
 async function downloadItems(
   link: InstagramLink,
   stage: string,
@@ -165,16 +210,20 @@ async function downloadItems(
   const errors: unknown[] = [];
   await runAttempt(link, stage, opts, opts.items, errors);
   const first = errors[0];
-  const blocked = first instanceof ShareError && first.message === BLOCKED_MESSAGE;
-  // nothing at all: one more try, except when Instagram said no (retrying only adds rate-limit pressure)
-  if (!scanStage(stage).length && !blocked) await runAttempt(link, stage, opts, opts.items, errors);
-  if (!scanStage(stage).length) return { missing: [], firstError: first };
-  let missing = missingItems(stage, opts.items);
-  if (missing.length) {
+  // Instagram said no (or the post has images only): retrying only adds rate-limit pressure
+  const final = isMessage(first, BLOCKED_MESSAGE) || isMessage(first, IMAGE_POST_MESSAGE);
+  if (!scanStage(stage).length && !final) await runAttempt(link, stage, opts, opts.items, errors);
+  let missing = scanStage(stage).length ? missingItems(stage, opts.items) : [];
+  if (missing.length && !final) {
     await runAttempt(link, stage, opts, missing, errors);
     missing = missingItems(stage, opts.items);
   }
-  return { missing, firstError: first };
+  const empty = !scanStage(stage).length;
+  if (!empty && !missing.length) return { missing, firstError: first };
+  const wanted = empty ? (opts.items ?? []) : missing;
+  const galleryError = await runGalleryFallback(link, stage, opts, wanted);
+  if (!scanStage(stage).length) return { missing: [], firstError: galleryError ?? first };
+  return { missing: missingItems(stage, opts.items), firstError: first };
 }
 
 /**
