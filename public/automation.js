@@ -2,6 +2,7 @@
 // drawer with one step's log. Everything comes from GET /api/automation (see server/automation/contracts.ts); security
 // rows come from GET /api/security/automations. The page holds no state beyond the selected workflow.
 import { createMenu } from "/menu.js";
+import { openCrashLog } from "/sec-crash-log.js";
 
 const $ = (id) => document.getElementById(id);
 const el = (tag, cls, text) => {
@@ -113,7 +114,7 @@ const SEC_ROWS = {
     "opencve-digest",
     "opencve-backup",
   ],
-  runtime: ["falco-alert"],
+  runtime: ["falco-alert", "crashes"],
   scans: ["secscan", "osv"],
   deadman: ["heartbeat"],
 };
@@ -632,6 +633,14 @@ function securityChecks(p) {
       );
       b.type = "button";
       b.onclick = () => runNow(r.runnable, b);
+      const c = el("span", "c");
+      c.append(b);
+      li.append(c);
+    }
+    if (r.id === "crashes") {
+      const b = el("button", "btn sm crash-log-btn", "Log");
+      b.type = "button";
+      b.onclick = () => openCrashLog(b);
       const c = el("span", "c");
       c.append(b);
       li.append(c);
