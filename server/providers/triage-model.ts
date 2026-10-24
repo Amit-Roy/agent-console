@@ -391,7 +391,11 @@ export async function askPi(
   }
 }
 
-async function askHaiku(prompt: string, system: string): Promise<string> {
+export async function askHaiku(
+  prompt: string,
+  system: string,
+  timeoutMs?: number,
+): Promise<string> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ac-triage-haiku-"));
   try {
     const env = childEnv();
@@ -427,6 +431,7 @@ async function askHaiku(prompt: string, system: string): Promise<string> {
       prompt,
       dir,
       env,
+      timeoutMs,
     );
     let result: any;
     try {

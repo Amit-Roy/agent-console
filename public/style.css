@@ -2920,6 +2920,7 @@ div.msg.foot {
 }
 #send,
 #stop,
+#improve,
 #attach {
   width: var(--ctl-h);
   padding: 0;
@@ -4009,7 +4010,7 @@ body.login {
     display: none;
   }
   /* icon controls share one shape: a 36px circle (fill or hover) centred in the 44px touch target */
-  #cbox .toolbar :is(#attach, #mode, #send, #stop, #ctx) {
+  #cbox .toolbar :is(#attach, #improve, #mode, #send, #stop, #ctx) {
     width: var(--ctl-h);
     min-width: var(--ctl-h);
     padding: var(--sp-1);
@@ -5509,4 +5510,212 @@ body.sharing .row-more {
 }
 .crash-log .job-debug-actions {
   flex-wrap: wrap;
+}
+
+/* ---------- improve prompt ---------- */
+#improve {
+  color: var(--t2);
+}
+#improve:hover:not(:disabled) {
+  background: var(--hover);
+  color: var(--t1);
+}
+#improve:active:not(:disabled) {
+  background: var(--press);
+  color: var(--t1);
+}
+#improve:disabled {
+  opacity: 1;
+  color: var(--t3);
+}
+#prompt-improve {
+  width: min(36rem, calc(100vw - var(--sp-4)));
+  max-height: calc(var(--viewport-height, 100dvh) - var(--sp-4));
+  padding: var(--sp-4);
+  overflow: hidden;
+}
+#prompt-improve[open] {
+  display: flex;
+  flex-direction: column;
+}
+#prompt-improve .pi-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: var(--sp-1) 0;
+}
+#prompt-improve .pi-actions {
+  flex: none;
+  margin-top: var(--sp-3);
+}
+#prompt-improve .pi-actions .btn {
+  flex: 1 1 0;
+}
+@media (min-width: 761px) {
+  #prompt-improve {
+    padding: var(--sp-6);
+  }
+  #prompt-improve .pi-actions .btn {
+    flex: 0 0 auto;
+  }
+}
+.pi-working {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  color: var(--t2);
+  font: var(--fw-reg) var(--f-md);
+}
+.pi-lbl {
+  display: block;
+  margin: var(--sp-3) 0 var(--sp-1);
+  color: var(--t2);
+  font: var(--fw-med) var(--f-sm);
+  letter-spacing: var(--ls-sm);
+}
+.pi-old {
+  margin: 0;
+  max-height: 9rem;
+  overflow: auto;
+  padding: var(--sp-3);
+  border-radius: var(--r-sm);
+  background: var(--s2);
+  box-shadow: inset 0 0 0 1px var(--edge-strong);
+  color: var(--t2);
+  font: var(--fw-text) var(--f-text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+/* textarea over a mirror: both share one box model and font so marks line up with the text above them */
+.pi-edit {
+  position: relative;
+  border-radius: var(--r-sm);
+  background: var(--s2);
+  box-shadow: inset 0 0 0 1px var(--edge-strong);
+}
+.pi-edit:focus-within {
+  box-shadow:
+    inset 0 0 0 1px var(--accent),
+    0 0 0 3px var(--accent-tint);
+}
+#pi-back,
+#pi-text {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 9rem;
+  margin: 0;
+  padding: var(--sp-3);
+  border: 0;
+  font: var(--fw-text) var(--f-text);
+  letter-spacing: normal;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: normal;
+  tab-size: 4;
+}
+#pi-back {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  color: transparent;
+  pointer-events: none;
+}
+#pi-back mark {
+  color: transparent;
+  background: var(--warn-tint);
+  box-shadow: 0 0 0 1px var(--warn);
+  border-radius: 2px;
+}
+#pi-text {
+  position: relative;
+  resize: none;
+  overflow: hidden;
+  background: transparent;
+  color: var(--t1);
+  outline: none;
+}
+.pi-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin: var(--sp-2) 0 0;
+  padding: 0;
+  list-style: none;
+}
+.pi-chips[hidden] {
+  display: none;
+}
+.pi-chip {
+  max-width: 100%;
+  min-height: 2rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: var(--warn-tint);
+  color: var(--warn);
+}
+.pi-quote h3 {
+  margin: var(--sp-4) 0 var(--sp-2);
+  font: var(--fw-semi) var(--f-md);
+}
+.pi-cards {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--sp-2);
+}
+.pi-card {
+  min-width: 0;
+  padding: var(--sp-3);
+  border-radius: var(--r-sm);
+  background: var(--s2);
+  box-shadow: inset 0 0 0 1px var(--edge);
+}
+.pi-card h4 {
+  margin: 0 0 var(--sp-1);
+  color: var(--t2);
+  font: var(--fw-med) var(--f-sm);
+}
+.pi-row {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  margin: 0;
+  font: var(--fw-reg) var(--f-md);
+}
+.pi-key {
+  color: var(--t2);
+}
+.pi-val {
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--fw-semi);
+}
+.pi-none,
+.pi-pending {
+  margin: 0;
+  color: var(--t3);
+  font: var(--fw-reg) var(--f-sm);
+}
+.pi-diff {
+  margin: var(--sp-2) 0 0;
+  color: var(--t2);
+  font: var(--fw-reg) var(--f-sm);
+}
+.pi-diff:empty {
+  display: none;
+}
+.pi-note {
+  margin: var(--sp-1) 0 0;
+  color: var(--t3);
+  font: var(--fw-reg) var(--f-sm);
+}
+#pi-error {
+  margin: var(--sp-3) 0 0;
+  color: var(--bad);
+  font: var(--fw-reg) var(--f-md);
+}
+#pi-error[hidden] {
+  display: none;
 }

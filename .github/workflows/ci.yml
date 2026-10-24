@@ -142,7 +142,7 @@ jobs:
           TEST_SHARD: ${{ matrix.shard }}
           # Scratch servers exercise the same production bundle built above.
           TEST_SERVER_ENTRY: .bundle/server/index.ts.mjs
-        run: npm test -- test/composer-scroll-ui.ts test/drafts-ui.ts test/attachment-drafts-ui.ts test/pi-e2e-ui.ts 2>&1 | tee "$RUNNER_TEMP/test.log"
+        run: npm test -- test/composer-scroll-ui.ts test/drafts-ui.ts test/attachment-drafts-ui.ts test/composer-paste-ui.ts test/pi-e2e-ui.ts 2>&1 | tee "$RUNNER_TEMP/test.log"
       # Fails the run when one file or the whole pool gets slower than the budget, so test time cannot creep up.
       - name: Test time budget
         env:

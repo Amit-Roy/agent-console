@@ -8,6 +8,7 @@ import { composerField } from "/composer-field.js";
 import { openContextEconomics } from "/context-economics.js";
 import { createMenu } from "/menu.js";
 import { setupNotifications } from "/notifications.js";
+import { createPromptImprove } from "/prompt-improve.js";
 import { createQuestions } from "/questions.js";
 import {
   $,
@@ -2051,6 +2052,7 @@ function renderAction() {
   const stop = busy && empty;
   $("stop").hidden = !stop;
   $("send").hidden = stop;
+  $("improve").disabled = !t || !$("input").value.trim();
   $("send").disabled = !t || (empty && !busy);
   $("send").title = waiting
     ? "Reply to the agent (Enter)"
@@ -4106,6 +4108,17 @@ $("input").addEventListener("paste", (e) => {
   addFiles(files);
 });
 $("attach").onclick = () => $("file").click();
+const promptImprove = createPromptImprove({
+  getText: () => $("input").value,
+  apply(text) {
+    $("input").value = text;
+    saveDraft();
+    sizeInput();
+    renderAction();
+    $("input").focus();
+  },
+});
+$("improve").onclick = () => promptImprove.open();
 $("file").onchange = (e) => {
   addFiles([...e.target.files]);
   e.target.value = "";
