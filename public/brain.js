@@ -194,38 +194,39 @@ function setView(view) {
   $("listView").hidden = graph;
   $("graphView").hidden = !graph;
   $("listTabs").hidden = graph;
-  $("linksToggle").hidden = !graph;
   render();
 }
 
 // ---------- graph view ----------
 const css = (name) => getComputedStyle(document.body).getPropertyValue(name).trim();
-function graphStyle() {
-  const text = css("--t1");
-  const muted = css("--t3");
-  const label = {
-    "font-family": css("--font-ui") || "sans-serif",
-    color: text,
-    "min-zoomed-font-size": 11,
-  };
+function nodeStyles(canvas) {
+  const ring = { "border-width": 2, "border-color": canvas };
   return [
     {
       selector: "node",
       style: {
-        ...label,
+        "font-family": css("--font-ui") || "sans-serif",
+        color: css("--t1"),
+        "min-zoomed-font-size": 11,
         label: "data(label)",
         width: 24,
         height: 24,
+        ...ring,
         "font-size": 12,
-        "text-valign": "bottom",
-        "text-margin-y": 4,
+        "font-weight": 500,
+        "text-halign": "right",
+        "text-valign": "center",
+        "text-margin-x": 6,
         "text-wrap": "ellipsis",
-        "text-max-width": 96,
+        "text-max-width": 110,
+        "text-outline-color": canvas,
+        "text-outline-width": 3,
+        "text-outline-opacity": 1,
       },
     },
     {
-      selector: "node[kind='page']",
       // Page labels wait for closer zoom so tag hubs stay readable in the overview.
+      selector: "node[kind='page']",
       style: { shape: "ellipse", "background-color": css("--viz-1"), "min-zoomed-font-size": 16 },
     },
     {
@@ -234,44 +235,37 @@ function graphStyle() {
     },
     {
       selector: "node[kind='tag']",
-      style: {
-        shape: "round-rectangle",
-        "background-color": css("--s3"),
-        "border-width": 2,
-        "border-color": css("--viz-2"),
-        "font-weight": 600,
-      },
+      style: { shape: "round-rectangle", "background-color": css("--viz-2") },
     },
+  ];
+}
+function graphStyle() {
+  const canvas = css("--s1");
+  const muted = css("--t3");
+  return [
+    ...nodeStyles(canvas),
     {
       selector: "edge",
       style: {
         width: 1,
-        "line-color": css("--edge-strong"),
+        "line-color": muted,
         "curve-style": "haystack",
-        opacity: 0.35,
+        opacity: 0.4,
       },
     },
     {
       selector: "edge[kind='link']",
       style: {
         "line-style": "dashed",
-        "line-color": muted,
         "curve-style": "bezier",
+        "control-point-step-size": 20,
         "target-arrow-shape": "triangle",
         "target-arrow-color": muted,
         "arrow-scale": 0.7,
+        opacity: 0.55,
       },
     },
-    {
-      selector: "node.neighbor, node.picked",
-      style: {
-        "min-zoomed-font-size": 0,
-        "text-background-color": css("--s1"),
-        "text-background-opacity": 0.9,
-        "text-background-padding": 3,
-        "text-background-shape": "roundrectangle",
-      },
-    },
+    { selector: "node.neighbor, node.picked", style: { "min-zoomed-font-size": 0 } },
     { selector: "edge.neighbor", style: { opacity: 0.9, width: 2 } },
     { selector: ".faded", style: { opacity: 0.15 } },
     { selector: "node.picked", style: { "border-width": 3, "border-color": css("--accent") } },
@@ -341,14 +335,15 @@ async function drawGraph(pages, tags) {
     net.add(elements);
   });
   net.resize();
+  const narrow = net.width() < 600;
   const layout = net.layout({
     name: "cose",
     animate: false,
     fit: true,
-    padding: 24,
+    padding: narrow ? 12 : 24,
     randomize: true,
-    nodeRepulsion: () => 40000,
-    idealEdgeLength: () => 110,
+    nodeRepulsion: () => (narrow ? 6000 : 40000),
+    idealEdgeLength: () => (narrow ? 40 : 110),
     numIter: 800,
   });
   layout.run();
@@ -518,6 +513,16 @@ $("linksToggle").onclick = () => {
   state.links = !state.links;
   $("linksToggle").setAttribute("aria-pressed", String(state.links));
   render();
+};
+const LEGEND_PHONE = matchMedia("(max-width: 599px)");
+function setLegend(open) {
+  $("legendToggle").setAttribute("aria-expanded", String(open));
+  $("legendBody").hidden = !open;
+}
+setLegend(!LEGEND_PHONE.matches);
+LEGEND_PHONE.addEventListener("change", () => setLegend(!LEGEND_PHONE.matches));
+$("legendToggle").onclick = () => {
+  if (LEGEND_PHONE.matches) setLegend($("legendToggle").getAttribute("aria-expanded") !== "true");
 };
 function zoomGraph(factor) {
   if (!net) return;

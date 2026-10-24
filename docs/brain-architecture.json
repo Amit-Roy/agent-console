@@ -32,7 +32,7 @@
           "id": "graph",
           "label": "Graph exploration",
           "tech": "Cytoscape + brain.css",
-          "desc": "Equal-size symbols, a legend, zoom controls, and detail labels clarify the graph.",
+          "desc": "Full-height canvas with floating legend and toolbar; filled, ringed, equal-size symbols with side labels.",
           "icon": "network"
         },
         {
