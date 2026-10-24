@@ -46,7 +46,10 @@ for (const text of negatives) {
   assert.equal(announcesNextStep(text), false, `expected negative: ${text}`);
 }
 
-assert.match(AUTO_CONTINUE_PROMPT, /^Continue if you are waiting on an action the user already approved/);
+assert.match(
+  AUTO_CONTINUE_PROMPT,
+  /^Continue if you are waiting on an action the user already approved/,
+);
 
 const previous = process.env.AGENT_CONSOLE_AUTO_CONTINUE;
 try {
