@@ -463,6 +463,104 @@ try {
       .some((f) => fs.readFileSync(path.join(dir, f)).includes("NEVER_STORE")),
     "no prompt or command text in the timing store",
   );
+
+  const worker = {
+    key: "fixture/repo#201",
+    repo: "fixture/repo",
+    number: 201,
+    effort: "bau",
+    role: "work" as const,
+    branch: "issue-201",
+  };
+  let ended: any;
+  threads.onIssueTurnEnd = (_thread, event) => {
+    ended = event;
+  };
+  for (const error of [
+    { console: "HTTP 503 token=fixture-secret", expected: "HTTP 503 token=[redacted]" },
+    { error: "HTTP 429", expected: "HTTP 429" },
+    { error: { message: "Function not found HTTP 404" }, expected: "Function not found HTTP 404" },
+    {
+      errors: ["ETIMEDOUT", { message: "socket disconnected" }],
+      expected: "ETIMEDOUT\nsocket disconnected",
+    },
+    { console: "x".repeat(2000), expected: "x".repeat(1000) },
+  ]) {
+    delete t.issueRun;
+    threads.send(t.id, "exercise explicit worker failure");
+    t.issueRun = { ...worker };
+    if (error.console) ctx.event({ type: "console_error", text: error.console });
+    ctx.event({ type: "result", is_error: true, error: error.error, errors: error.errors });
+    assert.equal(
+      ended.error,
+      error.expected,
+      "issue turn end retains bounded, redacted provider errors",
+    );
+  }
+  delete t.issueRun;
+
+  const piProvider = PROVIDERS.get("pi")!;
+  const claudeProvider = PROVIDERS.get("claude")!;
+  const codexProvider = PROVIDERS.get("codex")!;
+  const approved = [
+    "nvidia/nvidia/nemotron-3-ultra-550b-a55b",
+    "nvidia/nvidia/nemotron-3.5-super-vl-120b-a12b",
+  ];
+  try {
+    for (const [provider, models] of [
+      ["pi", [...approved, "unsafe-chat"]],
+      ["claude", ["opus", "sonnet", "haiku"]],
+      ["codex", ["gpt-6.1-sol", "unsafe-chat"]],
+    ] as const)
+      PROVIDERS.set(provider, { ...piProvider, id: provider, models: () => [...models] });
+    threads.send(t.id, "keep existing harness alive");
+    t.issueRun = { ...worker };
+    ctx.event({ type: "result", is_error: false });
+    assert.equal(ended.error, undefined, "a previous failure does not leak into a successful turn");
+    t.provider = "pi";
+    t.model = approved[0];
+    t.sessionId = "existing-worker-session";
+    const identity = { id: t.id, cwd: t.cwd, branch: t.issueRun.branch, session: t.sessionId };
+    assert.deepEqual(threads.rerouteIssueWorker({ thread: t.id }), { model: approved[1] });
+    assert.equal(alive, false, "reroute replaces the warm harness before resuming work");
+    assert.deepEqual(
+      { id: t.id, cwd: t.cwd, branch: t.issueRun.branch, session: t.sessionId },
+      identity,
+    );
+    t.status = "running";
+    assert.equal(threads.rerouteIssueWorker({ thread: t.id }), undefined);
+    t.status = "idle";
+    t.archived = Date.now();
+    assert.equal(threads.rerouteIssueWorker({ thread: t.id }), undefined);
+    delete t.archived;
+    t.background = 1;
+    assert.equal(threads.rerouteIssueWorker({ thread: t.id }), undefined);
+    delete t.background;
+    PROVIDERS.set("pi", { ...piProvider, models: () => [approved[1], "unsafe-chat"] });
+    assert.equal(
+      threads.rerouteIssueWorker({ thread: t.id }),
+      undefined,
+      "no approved alternative means no reroute",
+    );
+    t.provider = "claude";
+    t.model = "sonnet";
+    assert.deepEqual(threads.rerouteIssueWorker({ thread: t.id }), { model: "opus" });
+    t.provider = "codex";
+    t.model = "gpt-6.1-sol";
+    assert.equal(threads.rerouteIssueWorker({ thread: t.id }), undefined);
+    delete t.issueRun;
+    t.provider = "pi";
+    t.model = approved[0];
+    assert.equal(
+      threads.rerouteIssueWorker({ thread: t.id }),
+      undefined,
+      "manual threads are never rerouted",
+    );
+  } finally {
+    PROVIDERS.set("pi", piProvider);
+    PROVIDERS.set("claude", claudeProvider);
+    PROVIDERS.set("codex", codexProvider);
+  }
 } finally {
   threads.shutdown();
   fs.rmSync(dir, { recursive: true, force: true });

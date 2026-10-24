@@ -12,6 +12,7 @@ import { repairAccounting } from "./accounting-repair.ts";
 import { backfill, readTurns, recordTurn, restoreAccounting, type Turn } from "./analytics.ts";
 import { DATA_DIR } from "./auth.ts";
 import { AUTO_CONTINUE_PROMPT, announcesNextStep, autoContinueEnabled } from "./auto-continue.ts";
+import { redact } from "./automation/events.ts";
 import { assertAutomationSandbox } from "./automation/sandbox.ts";
 import { CONSOLE_COMMANDS, commandList, parseCommand } from "./commands.ts";
 import { recentPreamble, replayPreamble } from "./export.ts";
@@ -49,7 +50,11 @@ import {
   needsLabel,
   readSketch,
 } from "./providers/label.ts";
-import { isAutomationPiModel, selectAutomationPiModel } from "./providers/pi-model.ts";
+import {
+  AUTOMATION_PI_MODELS,
+  isAutomationPiModel,
+  selectAutomationPiModel,
+} from "./providers/pi-model.ts";
 import { suggestTitle, titleText } from "./providers/title.ts";
 import { type PendingQuestion, Questions } from "./questions.ts";
 import { fromProcess, runFacts, TurnClock, TurnTimingStore } from "./turn-timing.ts";
@@ -62,7 +67,7 @@ import {
 } from "./uploads.ts";
 import { claudeWindows, codexWindows, usage } from "./usage.ts";
 import { detectUsageStop } from "./usage-stop.ts";
-import type { IssueRun } from "./window-dispatch.ts";
+import { type IssueRun, ROUTES } from "./window-dispatch.ts";
 
 export type { Command, Mode };
 
@@ -775,6 +780,25 @@ export class Threads {
     this.touch(t);
   }
 
+  /** Replace a failed worker's model without moving its checkout, branch, or conversation. */
+  rerouteIssueWorker(req: { thread: string }): { model: string } | undefined {
+    const t = this.threads.get(req.thread);
+    if (!t || t.issueRun?.role !== "work" || t.status !== "idle" || t.background || t.archived)
+      return;
+    const approved =
+      t.provider === "pi"
+        ? AUTOMATION_PI_MODELS
+        : Object.values(ROUTES)
+            .flat()
+            .filter((route) => route.provider === t.provider)
+            .map((route) => route.model);
+    const available = PROVIDERS.get(t.provider)?.models() ?? [];
+    const model = approved.find((model) => model !== t.model && available.includes(model));
+    if (!model) return;
+    this.update(t.id, { model });
+    return { model };
+  }
+
   // A new thread that carries on from this one. Claude forks its session, Pi gets a copy of its session directory, and agents with
   // no fork (Codex) replay the earlier conversation as text in the first message. The history and uploads are copied so the fork reads whole.
   // With `provider` set to another agent the fork switches harness: its native session cannot carry over, so it always replays text.
@@ -1142,6 +1166,7 @@ export class Threads {
   // Canonical events from any harness. We only interpret the two that change thread state.
   private onEvent(t: Thread, ev: any) {
     const compacting = t.operation === "compact";
+    let issueError: string | undefined;
     if (
       ev.type === "system" &&
       ev.subtype === "background_tasks_changed" &&
@@ -1316,6 +1341,23 @@ export class Threads {
       const failure = failedTurn?.failure;
       const endedText = failedTurn?.lastText;
       const unfinished = questionOpen || !!failedTurn?.bgTools?.size;
+      if (ev.is_error) {
+        const message = (error: unknown): string | undefined =>
+          typeof error === "string"
+            ? error
+            : error &&
+                typeof error === "object" &&
+                "message" in error &&
+                typeof error.message === "string"
+              ? error.message
+              : undefined;
+        const errors = [
+          message(ev.error),
+          ...(Array.isArray(ev.errors) ? ev.errors.slice(0, 20).map(message) : []),
+          failure,
+        ].filter((error): error is string => typeof error === "string" && !!error.trim());
+        if (errors.length) issueError = redact([...new Set(errors)].join("\n")).slice(0, 1000);
+      }
       this.finishTurn(t, ev);
       const stop = ev.is_error
         ? detectUsageStop(t.provider, ev, failure, failedTurn?.failureCode)
@@ -1408,7 +1450,7 @@ export class Threads {
       } catch {}
     if (ev.type === "result" && t.issueRun && t.status === "idle")
       try {
-        this.onIssueTurnEnd?.(t, ev);
+        this.onIssueTurnEnd?.(t, ev.is_error ? { ...ev, error: issueError } : ev);
       } catch {}
     if (ev.type === "assistant") {
       for (const b of ev.message?.content ?? []) {

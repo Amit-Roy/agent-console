@@ -16,6 +16,7 @@ export interface RouteRequest {
   premium?: boolean; // non-Deep work given an expiring premium slot: Sonnet low or Sol low, never Pi
   flags?: { bauOnPi?: boolean };
   failures?: Record<string, number>; // recent failed runs per provider
+  exclude?: readonly { provider: string; model: string }[]; // Infrastructure recovery must not repeat the failed model.
 }
 export interface RouteResponse {
   v: typeof VERSION;
@@ -101,6 +102,10 @@ export function route(req: RouteRequest): RouteResponse {
     };
   // good headroom first, then unknown (never preferred over a known-good provider), then known-low; best score within each class
   const ranked = list
+    .filter(
+      (r) =>
+        !req.exclude?.some((failed) => failed.provider === r.provider && failed.model === r.model),
+    )
     .map((r) => score(r, req))
     .filter((s): s is Scored => !!s)
     .map((s, i) => ({ ...s, i }))

@@ -123,7 +123,7 @@ try {
   await tick();
   assert.equal(count(), 2);
   assert.ok(steps("worker").includes("ok:turn ended"), "worker end is recorded");
-  assert.equal(marks.at(-1).patch.finishedAt > 0, true);
+  assert.ok(marks.some((m) => m.id === "WD" && m.patch.finishedAt > 0));
   // an errored turn is a failure; without a PR nothing is reviewed
   rv.turnEnded(worker("bau", "WE", { key: "o/webapp#99" }), { is_error: true });
   await tick();
@@ -501,7 +501,7 @@ try {
   rv.turnEnded(redo({ outcome: "changes" }), {});
   await tick();
   assert.equal(sent.length, sentBefore + 1, "an already judged reviewer is not judged again");
-  // the worker ends its turn without pushing: no review of the same commit; it is asked to push, then a person decides
+  // Exhausted push reminders hand the unchanged PR to premium ownership.
   headAt = now - 1000;
   const w50 = (extra: any = {}) =>
     ({
@@ -538,12 +538,12 @@ try {
   assert.equal(count(), nb);
   assert.ok(
     steps("redo").some((m) =>
-      /still has no commit after the last review: a person decides/.test(m),
+      /still has no commit after the last review: premium takeover pending/.test(m),
     ),
   );
   assert.ok(
-    marks.some((m) => m.id === "W50" && m.patch.reviewedAt),
-    "the worker is parked",
+    marks.some((m) => m.id === "W50" && m.patch.reviews === 2 && m.patch.reviewedAt === undefined),
+    "failed first: exhausted push reminders queue premium takeover",
   );
   // the worker pushes its fixes; the next review records the redo and starts review number 2
   headAt = now + 1000;
@@ -764,6 +764,171 @@ try {
   await loop.sweep([loopWorker]);
   assert.equal(loopCreated.length, 3, "same worker retries a reviewer that posted no verdict");
 
+  // Error retry preserves the branch and error, refunds infrastructure failures, then queues premium ownership.
+  {
+    const failed: any = {
+      id: "FAILED",
+      provider: "pi",
+      model: "nvidia/nvidia/nemotron-3-ultra-550b-a55b",
+      status: "idle",
+      issueRun: { ...created[0].issueRun, effort: "bau" },
+    };
+    const prompts: string[] = [],
+      alternatives: any[] = [],
+      escalations: any[] = [];
+    let premiumReady = false,
+      failSend = false,
+      modelReady = true;
+    const failureDeps: any = {
+      github: async (_method: string, url: string) => {
+        if (/\/pulls\?/.test(url)) return [];
+        if (/\/issues\/\d+$/.test(url)) return { state: "open" };
+        throw new Error(`unexpected ${url}`);
+      },
+      runner: {
+        ...runner,
+        mark(id: string, patch: any) {
+          assert.equal(id, failed.id);
+          Object.assign(failed.issueRun, patch);
+        },
+        send(id: string, text: string) {
+          assert.equal(id, failed.id, "retry uses the existing worker and private branch");
+          if (failSend) throw new Error("send unavailable");
+          prompts.push(text);
+        },
+      },
+      route: routing,
+      canResume: () => true,
+      rerouteWorker: (req: any) => {
+        alternatives.push(req);
+        if (!modelReady) return;
+        failed.model = "nvidia/nvidia/nemotron-3.5-super-vl-120b-a12b";
+        return { model: failed.model };
+      },
+      premium: async (req: any) => {
+        escalations.push(req);
+        return premiumReady ? { thread: "PREMIUM" } : undefined;
+      },
+      events: ev,
+      now: () => now,
+    };
+    const failure = createReviewer(failureDeps);
+    await failure.turnEnded(failed, {
+      is_error: true,
+      error: "TypeError: totals is undefined",
+    } as any);
+    await failure.sweep([failed]);
+    assert.match(
+      prompts[0] ?? "",
+      /TypeError: totals is undefined/,
+      "failed first: errored worker retry includes prior error",
+    );
+    assert.match(prompts[0], new RegExp(failed.issueRun.branch));
+    assert.equal(failed.issueRun.recoveries, 1);
+    assert.equal(failed.issueRun.retryAttempts, 1);
+    now += 15 * 60_000;
+    for (const error of [
+      "429 rate limit exceeded",
+      "404 Function not found for account",
+      "stream truncated before completion",
+    ]) {
+      await failure.turnEnded(failed, { is_error: true, error } as any);
+      await failure.sweep([failed]);
+      assert.equal(
+        failed.issueRun.recoveries,
+        1,
+        "infrastructure retry does not spend task budget",
+      );
+      assert.match(prompts.at(-1)!, new RegExp(error));
+      now += 15 * 60_000;
+    }
+    assert.equal(alternatives.length, 3, "each infrastructure failure reselects an approved model");
+    assert.equal(failed.issueRun.retryAttempts, 4);
+    await failure.turnEnded(failed, { is_error: true, error: "task still broken" } as any);
+    failSend = true;
+    await failure.sweep([failed]);
+    assert.equal(failed.issueRun.recoveries, 1, "failed delivery does not consume a task attempt");
+    failSend = false;
+    now += 15 * 60_000;
+    await failure.sweep([failed]);
+    assert.equal(failed.issueRun.recoveries, 2);
+    now += 15 * 60_000;
+    await createReviewer(failureDeps).sweep([failed]);
+    assert.ok(
+      failed.issueRun.premiumPending,
+      "exhausted worker enters durable premium queue despite dispatch ledger",
+    );
+    assert.ok(
+      ev.all().some((e) => e.ref === failed.issueRun.key && e.data?.reason === "budget-exhausted"),
+    );
+    premiumReady = true;
+    await createReviewer(failureDeps).sweep([failed]);
+    assert.equal(failed.issueRun.premiumThread, "PREMIUM");
+    const premiumCount = escalations.length;
+    await createReviewer(failureDeps).sweep([failed]);
+    assert.equal(
+      escalations.length,
+      premiumCount,
+      "restart cannot dispatch a second premium owner",
+    );
+    assert.equal(prompts.length, 5, "exhaustion never retries the failed worker again");
+    Object.assign(failed.issueRun, {
+      premiumThread: undefined,
+      premiumPending: undefined,
+      stalled: undefined,
+      recoveries: 0,
+      retryAt: 0,
+    });
+    modelReady = false;
+    premiumReady = false;
+    failed.provider = "codex";
+    failed.model = "gpt-6.1-sol";
+    await failure.turnEnded(failed, {
+      is_error: true,
+      error: "stream truncated before completion",
+    });
+    await failure.sweep([failed]);
+    assert.ok(
+      failed.issueRun.premiumPending,
+      "no same-provider alternative queues an approved premium alternative",
+    );
+    assert.equal(failed.issueRun.recoveries, 0);
+    assert.deepEqual(escalations.at(-1).exclude, [{ provider: "codex", model: "gpt-6.1-sol" }]);
+  }
+
+  // A successful direct-apply Deep worker owes no PR; only its failed turns need recovery.
+  {
+    const direct: any = {
+      id: "DIRECT",
+      status: "idle",
+      issueRun: { ...created[0].issueRun, repo: "o/agent-console", effort: "deep" },
+    };
+    let retries = 0;
+    const directRecovery = createReviewer({
+      route: routing,
+      canResume: () => true,
+      runner: {
+        ...runner,
+        mark: (_id, patch) => Object.assign(direct.issueRun, patch),
+        send: () => {
+          retries++;
+        },
+      },
+      github: async (_method, endpoint) => (/\/pulls\?/.test(endpoint) ? [] : { state: "open" }),
+      now: () => now,
+    });
+    await directRecovery.turnEnded(direct, {});
+    await directRecovery.sweep([direct]);
+    assert.equal(
+      retries,
+      0,
+      "successful direct-apply Deep work must not be retried for lacking a PR",
+    );
+    await directRecovery.turnEnded(direct, { is_error: true, error: "implementation failed" });
+    await directRecovery.sweep([direct]);
+    assert.equal(retries, 1, "Deep errors still resume the existing worker");
+  }
+
   // Missing PRs resume the existing worker, with durable backoff and a strict cap.
   prs = [];
   const recovering: any = {
@@ -801,6 +966,10 @@ try {
     events: ev,
     route: routing,
     canResume: () => allowed,
+    rerouteWorker: () => {
+      recovering.model = "nvidia/nvidia/nemotron-3-ultra-550b-a55b";
+      return { model: recovering.model };
+    },
     now: () => now,
   };
   let recovery = createReviewer(recoveryDeps);
@@ -860,14 +1029,21 @@ try {
   assert.equal(noPrLogs(), noPrOnce, "a restart does not log the missing PR again");
 
   // A worker whose Pi model was retired upstream spent its recoveries on 404s: it gets one fresh budget.
-  recovering.issueRun.stalled = undefined;
   recovering.model = "nvidia/nvidia/nemotron-3-super-120b-a12b";
   await createReviewer(recoveryDeps).sweep([recovering]);
   assert.equal(resumed, 3, "a retired model resets the recovery budget");
-  assert.equal(recovering.issueRun.recoveries, 1);
+  assert.equal(
+    recovering.issueRun.recoveries,
+    0,
+    "retired-model recovery does not spend task budget",
+  );
   assert.equal(recovering.issueRun.rerouted, true);
   recovering.status = "idle";
   now += 15 * 60_000;
+  await recovery.turnEnded(recovering, {
+    is_error: true,
+    error: "task failed after model recovery",
+  });
   recovering.issueRun.recoveries = 2;
   await createReviewer(recoveryDeps).sweep([recovering]);
   assert.equal(resumed, 3, "the budget resets only once per worker");

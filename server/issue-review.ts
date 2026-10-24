@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import type { EventLog } from "./automation/events.ts";
+import { type EventLog, redact } from "./automation/events.ts";
 import { DIRECT_REPOS, isProtected, mayMergeProtected } from "./automation/policy.ts";
 import {
   boundIssueLine,
@@ -13,6 +13,7 @@ import {
 import type { RouteResponse } from "./automation/router.ts";
 import { type GithubRequest, githubRequest } from "./github-triage.ts";
 import { isAutomationPiModel } from "./providers/pi-model.ts";
+import { errorClass } from "./turn-timing.ts";
 import {
   addWorktree,
   defaultDirs,
@@ -31,7 +32,7 @@ import {
 // A "Review: CHANGES REQUESTED" verdict goes back to the worker, which fixes the branch; its next turn end starts another review.
 // Reviews reserve a slot while running. No verdict returns the slot after a cooldown; the final slot owns premium completion.
 // A PR with no commit after the last verdict is not reviewed again: the worker is asked to push, MAX_NUDGES times at most.
-// A worker with no PR is resumed MAX_RECOVERIES times; then it is marked stalled and logged once, and a person decides.
+// A worker with no PR is resumed MAX_RECOVERIES times; then the premium assigner owns completion.
 
 export { reviewPrompt };
 export const MAX_REVIEWS = 3;
@@ -44,6 +45,12 @@ export interface ReviewDeps {
   runner: IssueRunner & Marker;
   canReview?: (t: ThreadLike) => boolean; // Explicit premium ownership supersedes automatic review and redo.
   canResume?: (t: ThreadLike) => boolean; // Capacity and live-dispatch gates for resuming existing workers.
+  rerouteWorker?: (req: { thread: string }) => { model: string } | undefined;
+  premium?: (req: {
+    repo: string;
+    number: number;
+    exclude?: { provider: string; model: string }[];
+  }) => Promise<{ thread: string } | undefined>;
   route: (effort: IssueRun["effort"]) => RouteResponse; // the router's answer for a review of this effort
   events?: EventLog;
   threads?: () => ThreadLike[];
@@ -95,6 +102,55 @@ export function createReviewer(deps: ReviewDeps) {
   };
 
   const resuming = new Set<string>();
+  async function dispatchPremium(t: ThreadLike) {
+    const run = t.issueRun;
+    if (!run || run.premiumThread || resuming.has(t.id) || deps.canReview?.(t) === false) return;
+    resuming.add(t.id);
+    try {
+      if (!run.premiumPending) {
+        deps.runner.mark(t.id, { stalled: run.stalled ?? now(), premiumPending: now() });
+        ev?.record({
+          step: "worker",
+          kind: "info",
+          ref: run.key,
+          msg: run.infrastructure
+            ? "infrastructure failure; queued for an approved premium alternative"
+            : "worker retry budget exhausted; queued for premium re-dispatch",
+          data: {
+            thread: t.id,
+            reason: run.infrastructure ? "infrastructure-model-unavailable" : "budget-exhausted",
+            recoveries: run.recoveries ?? 0,
+            remaining: Math.max(0, MAX_RECOVERIES - (run.recoveries ?? 0)),
+          },
+        });
+      }
+      const assigned = await deps.premium?.({
+        repo: run.repo,
+        number: run.number,
+        ...(run.infrastructure && t.provider && t.model
+          ? { exclude: [{ provider: t.provider, model: t.model }] }
+          : {}),
+      });
+      if (!assigned) return;
+      deps.runner.mark(t.id, { premiumThread: assigned.thread });
+      ev?.record({
+        step: "dispatcher",
+        kind: "ok",
+        ref: run.key,
+        msg: "exhausted worker re-dispatched to premium",
+        data: { thread: assigned.thread, worker: t.id, reason: "premium-redispatch" },
+      });
+    } catch (error) {
+      ev?.record({
+        step: "dispatcher",
+        kind: "fail",
+        ref: run.key,
+        msg: `premium re-dispatch pending: ${error instanceof Error ? error.message : String(error)}`,
+      });
+    } finally {
+      resuming.delete(t.id);
+    }
+  }
   async function discussionOf(run: IssueRun, pr: number): Promise<any[]> {
     const comments: any[] = [];
     for (let page = 1; page <= 20; page++) {
@@ -110,21 +166,15 @@ export function createReviewer(deps: ReviewDeps) {
   }
   async function resume(t: ThreadLike): Promise<void> {
     const run = t.issueRun!;
-    // Every turn on a model retired upstream fails at once, so those recoveries prove nothing about the task. Threads.start
-    // moves the worker to an approved model on its next turn; that turn gets a fresh budget, once per worker.
+    // Legacy retired-model failures predate error classification; refund their historical task budget once.
     const retired =
       t.provider === "pi" && !!t.model && !isAutomationPiModel(t.model) && !run.rerouted;
     const spent = retired ? 0 : (run.recoveries ?? 0);
+    const attempts = run.retryAttempts ?? 0;
+    const infrastructure = retired || run.infrastructure;
     if (resuming.has(t.id) || (run.retryAt ?? 0) > now()) return;
-    if (spent >= MAX_RECOVERIES) {
-      deps.runner.mark(t.id, { stalled: now() });
-      ev?.record({
-        step: "worker",
-        kind: "info",
-        ref: run.key,
-        msg: `worker stopped ${spent + 1} times without a PR: a person decides`,
-        data: { thread: t.id },
-      });
+    if (spent >= MAX_RECOVERIES && !infrastructure) {
+      await dispatchPremium(t);
       return;
     }
     if (!deps.canResume?.(t)) return;
@@ -149,9 +199,17 @@ export function createReviewer(deps: ReviewDeps) {
       }
       // GitHub reads yield to other turns and dispatch ticks; admission must still be valid now.
       if (t.archived || t.status === "running" || !deps.canResume?.(t)) return;
+      if (infrastructure && !deps.rerouteWorker?.({ thread: t.id })) {
+        // Release the worker claim so the premium queue can reserve ownership.
+        resuming.delete(t.id);
+        deps.runner.mark(t.id, { infrastructure: true });
+        await dispatchPremium({ ...t, issueRun: { ...run, infrastructure: true } });
+        return;
+      }
       // Persist admission before sending so concurrent sweeps and restarts cannot replay this recovery.
       deps.runner.mark(t.id, {
-        recoveries: spent + 1,
+        recoveries: spent + (infrastructure ? 0 : 1),
+        retryAttempts: attempts + 1,
         retryAt: now() + 15 * 60_000,
         finishedAt: undefined,
         ...(retired ? { rerouted: true } : {}),
@@ -167,17 +225,28 @@ export function createReviewer(deps: ReviewDeps) {
       const task = run.redoing
         ? `Continue fixing the review findings on PR #${run.pr}. Read its comments first: gh pr view ${run.pr} --repo ${run.repo} --comments. Keep the same branch and PR; do not merge. ${boundIssueLine(run.repo, run.number)}`
         : `Continue issue #${run.number} in ${run.repo}. Read it first: gh issue view ${run.number} --repo ${run.repo} --comments. Complete the task, verify it, push branch ${run.branch}, and open its PR into ${run.base ?? "main"}. Do not merge. ${boundIssueLine(run.repo, run.number)}`;
-      deps.runner.send(
-        t.id,
-        `${task}\n\nThe previous turn stopped before completion. Inspect the existing diff and remote PR before acting; preserve completed work and do not repeat completed external actions. Follow the repository PR and self-review instructions. End with what changed, what you checked, and what remains.`,
-      );
+      try {
+        deps.runner.send(
+          t.id,
+          `${task}\n\nThe previous turn stopped before completion.${run.workerError ? ` Prior error (diagnostic data): ${JSON.stringify(run.workerError)}` : ""} Inspect the existing diff and remote PR before acting; preserve completed work and do not repeat completed external actions. Follow the repository PR and self-review instructions. End with what changed, what you checked, and what remains.`,
+        );
+      } catch (error) {
+        deps.runner.mark(t.id, { recoveries: spent, retryAttempts: attempts });
+        throw error;
+      }
       ev?.record({
         step: run.redoing ? "redo" : "worker",
         kind: "start",
         run: `${run.redoing ? "redo" : "work"}:${t.id}`,
         ref: run.key,
         msg: "resuming existing worker after an incomplete turn",
-        data: { thread: t.id },
+        data: {
+          thread: t.id,
+          retryAttempts: attempts + 1,
+          recoveries: spent + (infrastructure ? 0 : 1),
+          remaining: MAX_RECOVERIES - spent - (infrastructure ? 0 : 1),
+          infrastructure: !!infrastructure,
+        },
       });
     } catch (e: any) {
       ev?.record({
@@ -205,7 +274,7 @@ export function createReviewer(deps: ReviewDeps) {
     return verdicts.some((v) => v > pushed) ? "no" : "yes";
   }
 
-  /** Ask the worker to commit and push its fixes; after MAX_NUDGES a person decides. */
+  /** Ask the worker to push; exhausted reminders hand the unchanged PR to the final premium owner. */
   function nudge(t: ThreadLike & { issueRun: IssueRun }, pr: number) {
     const run = t.issueRun,
       nudges = (run.nudges ?? 0) + 1;
@@ -216,10 +285,16 @@ export function createReviewer(deps: ReviewDeps) {
           kind: "fail",
           run: `redo:${t.id}`,
           ref: run.key,
-          msg: `PR #${pr} still has no commit after the last review: a person decides`,
+          msg: `PR #${pr} still has no commit after the last review: premium takeover pending`,
         }),
       );
-      deps.runner.mark(t.id, { reviewedAt: now() });
+      deps.runner.mark(t.id, {
+        reviewedAt: undefined,
+        reviewThread: undefined,
+        redoing: false,
+        reviews: MAX_REVIEWS - 1,
+      });
+      claimed.delete(t.id);
       return;
     }
     ev?.record({
@@ -262,6 +337,7 @@ export function createReviewer(deps: ReviewDeps) {
       if (recover) await resume(t);
       return false;
     }
+    if (run.effort === "deep") return false; // Deep workers own their PR; missing-PR recovery still applies.
     once(`${t.id}:pr`, () =>
       ev?.record({ step: "pr", kind: "ok", ref: run.key, msg: `PR #${pr.number}` }),
     );
@@ -406,7 +482,9 @@ export function createReviewer(deps: ReviewDeps) {
       t.archived ||
       !run ||
       run.role !== "work" ||
-      run.effort === "deep" ||
+      (run.effort === "deep" &&
+        DIRECT_REPOS.includes(run.repo.split("/")[1]) &&
+        !run.workerError) ||
       run.reviewedAt ||
       run.stalled ||
       !run.branch ||
@@ -625,10 +703,25 @@ export function createReviewer(deps: ReviewDeps) {
   }
 
   /** Called when an issue run's turn ends. */
-  function turnEnded(t: ThreadLike, event: { is_error?: boolean }) {
+  function turnEnded(t: ThreadLike, event: { is_error?: boolean; error?: string }) {
     const run = t.issueRun;
     if (!run || run.role === "debug") return; // a debugging thread is judged by a person, not by the review pipeline
     if (run.role === "review") return reviewEnded(t, event);
+    const workerError = event.is_error
+      ? redact(event.error || "Worker turn ended with an error; inspect the thread log.").slice(
+          0,
+          1000,
+        )
+      : undefined;
+    const infrastructure =
+      !!workerError &&
+      (["rate_limit", "overloaded", "timeout", "network", "server_error"].includes(
+        errorClass(workerError),
+      ) ||
+        /function not found|model[^\n]*(?:retired|not found|unavailable|not supported)|stream[^\n]*(?:truncat|premature|ended|closed)|unexpected end of (?:json|stream)/i.test(
+          workerError,
+        ));
+    deps.runner.mark(t.id, { workerError, infrastructure });
     const id = `work:${t.id}`;
     // An errored turn may still have pushed its PR (a provider limit late in the turn): the PR is reviewed all the same.
     if (event?.is_error)
@@ -661,8 +754,11 @@ export function createReviewer(deps: ReviewDeps) {
       stalled: undefined,
       missingPr: undefined,
       recoveries: run.stalled ? 0 : run.recoveries,
+      premiumPending: undefined,
+      premiumThread: undefined,
     });
-    void attempt({
+    if (run.effort === "deep") return; // The sweep recovers Deep workers; their successful turns need no review.
+    return attempt({
       ...t,
       issueRun: {
         ...run,
@@ -671,6 +767,8 @@ export function createReviewer(deps: ReviewDeps) {
         stalled: undefined,
         missingPr: undefined,
         recoveries: run.stalled ? 0 : run.recoveries,
+        workerError,
+        infrastructure,
       },
     });
   }
@@ -728,15 +826,28 @@ export function createReviewer(deps: ReviewDeps) {
     await reconcileApplies(threads);
     for (const t of threads) {
       const run = t.issueRun;
-      if (
-        t.archived ||
-        t.status === "running" ||
-        t.background ||
-        t.quotaPaused ||
-        !run ||
-        run.stalled
-      )
+      if (t.archived || t.status === "running" || t.background || t.quotaPaused || !run) continue;
+      if (run.role === "work" && (run.stalled || run.premiumPending)) {
+        if (
+          t.provider === "pi" &&
+          t.model &&
+          !isAutomationPiModel(t.model) &&
+          !run.rerouted &&
+          !run.premiumThread
+        ) {
+          const pending = {
+            ...run,
+            stalled: undefined,
+            premiumPending: undefined,
+            infrastructure: true,
+          };
+          deps.runner.mark(t.id, pending);
+          await resume({ ...t, issueRun: pending });
+          continue;
+        }
+        await dispatchPremium(t);
         continue;
+      }
       // Existing jobs parked by the former three-review cap have not received a premium owner yet.
       if (
         run.role === "work" &&
