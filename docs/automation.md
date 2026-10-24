@@ -4,10 +4,10 @@ How the issue automation works end to end, what you can watch, and how to debug 
 
 ## Flow
 
-Two separate workflows. The PR workflow has three phases:
+Two separate workflows. Window dispatch has three phases:
 
 ```
-PR workflow
+Window dispatch
   1. Issue to labels            triage
   2. Labels to pull request     dispatcher ─► router ─► worktree + hook ─► worker ─► self-review ─► PR
   3. Premium review and merge   review ◄─► worker redo ─► merge ─► apply
@@ -40,7 +40,7 @@ Every stage writes to `automation-events.jsonl` in the Console data directory (m
 
 ## The dashboard
 
-`/automation` (link in the Auto lane and the sidebar menu). Its left panel groups the workflows: PR workflow, Window opener and Workspace monitor under **Workflows**; CVE alerts, Runtime guard, Scheduled scans and Dead-man switch under **Security**; Other triggers (scheduled tasks, the Debug button) under **Console**. Selecting one opens only that workflow (`#pr`, `#cve`, and so on). The steps are boxes with icons: the working step pulses, a failed step is red with a count, a disabled one is dashed. Click a step for its log, newest first. Panels list that workflow's triggers, failures, security units, runs, git hooks and settings where they apply. It refreshes every 5 seconds. On a phone the panel becomes a full-width workflow field that opens the console's popover menu, the New workflow button sits below it, and each phase becomes a vertical list.
+`/automation` (link in the Auto lane and the sidebar menu). Its left panel groups the workflows: Window dispatch, Window opener and Workspace monitor under **Workflows**; CVE alerts, Runtime guard, Scheduled scans and Dead-man switch under **Security**. Selecting one opens only that workflow (`#pr`, `#cve`, and so on). Scheduled prompts stay in the Scheduled lane, not here; the header Debug button remains the one manual entry point. The steps are boxes with icons: the working step pulses, a failed step is red with a count, a disabled one is dashed. Click a step for its log, newest first. Panels list that workflow's triggers, failures, security units, runs, git hooks and settings where they apply. Window dispatch carries the dispatcher settings and its issue runs; Window opener carries the opener settings, so neither hides on a detached console page. It refreshes every 5 seconds. On a phone the panel becomes a full-width workflow field that opens the console's popover menu, the New workflow button sits below it, and each phase becomes a vertical list.
 
 The security workflows draw their architecture, not one status row per unit: OpenCVE sync → authenticated webhook receiver → tool watch → patch bridge → daily digest → phone alert, plus the runtime guard, scan and dead-man paths. Each step carries the verdict of the VPS units behind it; the full unit list with schedule, last and next run is below the diagram, and the agents' event log still supplies every other step.
 
