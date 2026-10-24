@@ -644,7 +644,9 @@ try {
       .locator(".file-tree-entry")
       .filter({ hasText: new RegExp(`^[▸▾·]${name.replaceAll(".", "\\.")}$$`) });
   const openWorkspace = async (p: Page) => {
-    await p.locator("#files").click();
+    // Files lives in the sidebar More menu
+    await p.locator("#side-more").click();
+    await p.getByRole("menuitem", { name: /^Files/ }).click();
     await settled(p);
     assert.equal(await p.locator("#file-viewer-title").textContent(), "Files");
     assert.equal(await p.locator("#file-viewer-path").textContent(), "~/repos");
