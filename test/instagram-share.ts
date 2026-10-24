@@ -17,10 +17,18 @@ const { extractInstagramUrl, buildArgs, classifyError, downloadInstagram, BLOCKE
 // ---- extraction table
 const table: [string, string, string | null][] = [
   ["", "https://www.instagram.com/reel/ABCDE12345/", "https://www.instagram.com/reel/ABCDE12345/"],
-  ["", "https://instagram.com/reels/ABCDE12345/?igsh=tracking&utm_source=x", "https://www.instagram.com/reel/ABCDE12345/"],
+  [
+    "",
+    "https://instagram.com/reels/ABCDE12345/?igsh=tracking&utm_source=x",
+    "https://www.instagram.com/reel/ABCDE12345/",
+  ],
   ["", "https://m.instagram.com/p/Cx_-1234567", "https://www.instagram.com/p/Cx_-1234567/"],
   ["", "https://www.instagram.com/tv/ABCDE12345/", "https://www.instagram.com/tv/ABCDE12345/"],
-  ["look at this https://www.instagram.com/reel/ABCDE12345/?igsh=1 wow", "", "https://www.instagram.com/reel/ABCDE12345/"],
+  [
+    "look at this https://www.instagram.com/reel/ABCDE12345/?igsh=1 wow",
+    "",
+    "https://www.instagram.com/reel/ABCDE12345/",
+  ],
   ["", "https://instagram.com.evil.com/reel/ABCDE12345/", null],
   ["", "https://evilinstagram.com/reel/ABCDE12345/", null],
   ["", "https://www.instagram.com.evil.com/reel/ABCDE12345/", null],
@@ -39,7 +47,13 @@ for (const [text, url, want] of table)
 const args = buildArgs("https://www.instagram.com/reel/ABCDE12345/", "/tmp/out");
 assert.equal(args.at(-1), "https://www.instagram.com/reel/ABCDE12345/");
 assert.equal(args.at(-2), "--");
-for (const flag of ["--ignore-config", "--no-cookies", "--no-playlist", "--no-progress", "--write-info-json"])
+for (const flag of [
+  "--ignore-config",
+  "--no-cookies",
+  "--no-playlist",
+  "--no-progress",
+  "--write-info-json",
+])
   assert.ok(args.includes(flag), flag);
 assert.equal(args[args.indexOf("--max-filesize") + 1], "100M");
 assert.equal(classifyError("ERROR: login required", 1), BLOCKED_MESSAGE);
@@ -125,19 +139,32 @@ const post = (origin: string, body: unknown) =>
   });
 try {
   for (let attempt = 0; attempt < 100; attempt++) {
-    if (await fetch(`${base}/login`).then((response) => response.ok, () => false)) break;
+    if (
+      await fetch(`${base}/login`).then(
+        (response) => response.ok,
+        () => false,
+      )
+    )
+      break;
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  const cross = await post("https://evil.example", { url: "https://www.instagram.com/reel/DDDDD44444/" });
+  const cross = await post("https://evil.example", {
+    url: "https://www.instagram.com/reel/DDDDD44444/",
+  });
   assert.equal(cross.status, 403);
   const bad = await post(base, { text: "nothing", url: "https://evil.com/reel/DDDDD44444/" });
   assert.equal(bad.status, 422);
-  const shared = await post(base, { text: "", url: "https://www.instagram.com/reel/EEEEE55555/?igsh=1" });
+  const shared = await post(base, {
+    text: "",
+    url: "https://www.instagram.com/reel/EEEEE55555/?igsh=1",
+  });
   const body: any = await shared.json();
   assert.equal(shared.status, 200, JSON.stringify(body));
   const uploads = path.join(dataDir, "uploads", body.thread);
   assert.equal(fs.readdirSync(uploads).length, 2, "video + caption attached");
-  const names = fs.readdirSync(uploads).flatMap((uploadId) => fs.readdirSync(path.join(uploads, uploadId)));
+  const names = fs
+    .readdirSync(uploads)
+    .flatMap((uploadId) => fs.readdirSync(path.join(uploads, uploadId)));
   assert.deepEqual(names.sort(), ["instagram.txt", "video.mp4"]);
   await new Promise((resolve) => setTimeout(resolve, 500));
   const saved = JSON.parse(fs.readFileSync(path.join(dataDir, "threads.json"), "utf8"));
@@ -148,7 +175,11 @@ try {
   const blocked = await post(base, { url: "https://www.instagram.com/reel/FFFFF66666/" });
   assert.equal(blocked.status, 422);
   assert.equal(((await blocked.json()) as any).error, BLOCKED_MESSAGE);
-  assert.equal(JSON.parse(fs.readFileSync(path.join(dataDir, "threads.json"), "utf8")).length, 1, "no thread on failure");
+  assert.equal(
+    JSON.parse(fs.readFileSync(path.join(dataDir, "threads.json"), "utf8")).length,
+    1,
+    "no thread on failure",
+  );
   console.log("instagram-share: ok");
 } finally {
   server.kill();

@@ -57,7 +57,12 @@ import { headroom } from "./headroom.ts";
 import { hostKill, hostMetrics, hostPorts, hostProcessDetail, hostProcesses } from "./host.ts";
 import { hostDu, hostDuRescan, hostHistory, latestHost, startHostSampler } from "./host-history.ts";
 import { IdeaError, Ideas } from "./ideas.ts";
-import { type Downloaded, downloadInstagram, extractInstagramUrl, ShareError } from "./instagram.ts";
+import {
+  type Downloaded,
+  downloadInstagram,
+  extractInstagramUrl,
+  ShareError,
+} from "./instagram.ts";
 import { createIssueDraft } from "./issue-draft.ts";
 import { createReviewer } from "./issue-review.ts";
 import { LatencyStore } from "./latency.ts";
@@ -754,7 +759,8 @@ const SHARE_PROMPT =
 const MAX_SHARE_BYTES = 100 << 20;
 app.post("/api/share/instagram", sameOrigin, express.json({ limit: "4kb" }), async (req, res) => {
   const link = extractInstagramUrl(req.body?.text, req.body?.url);
-  if (!link) return void res.status(422).json({ error: "No Instagram reel link found in that share." });
+  if (!link)
+    return void res.status(422).json({ error: "No Instagram reel link found in that share." });
   const abort = new AbortController();
   res.on("close", () => {
     if (!res.writableEnded) abort.abort();
@@ -770,8 +776,15 @@ app.post("/api/share/instagram", sameOrigin, express.json({ limit: "4kb" }), asy
     });
     try {
       const video = adoptUpload(thread.id, download.videoPath, "video.mp4", MAX_SHARE_BYTES);
-      const caption = adoptUpload(thread.id, download.captionPath, "instagram.txt", MAX_SHARE_BYTES);
-      threads.send(thread.id, SHARE_PROMPT, { attachments: [{ id: video.id }, { id: caption.id }] });
+      const caption = adoptUpload(
+        thread.id,
+        download.captionPath,
+        "instagram.txt",
+        MAX_SHARE_BYTES,
+      );
+      threads.send(thread.id, SHARE_PROMPT, {
+        attachments: [{ id: video.id }, { id: caption.id }],
+      });
     } catch (error) {
       threads.remove(thread.id);
       throw error;
@@ -779,7 +792,8 @@ app.post("/api/share/instagram", sameOrigin, express.json({ limit: "4kb" }), asy
     res.json({ thread: thread.id });
   } catch (failure: any) {
     res.status(422).json({
-      error: failure instanceof ShareError ? failure.message : (failure?.message ?? "Share failed."),
+      error:
+        failure instanceof ShareError ? failure.message : (failure?.message ?? "Share failed."),
     });
   } finally {
     download?.cleanup();

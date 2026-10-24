@@ -115,7 +115,12 @@ export function saveUpload(
 }
 
 /** Moves a server-side file into a thread's uploads (used by share targets). Same layout and id format as saveUpload. */
-export function adoptUpload(thread: string, srcPath: string, rawName: string, maxBytes: number): Saved {
+export function adoptUpload(
+  thread: string,
+  srcPath: string,
+  rawName: string,
+  maxBytes: number,
+): Saved {
   if (!isId(thread)) throw new Error("Invalid thread.");
   const size = fs.statSync(srcPath).size;
   if (!size) throw new Error("That file is empty.");
@@ -133,7 +138,13 @@ export function adoptUpload(thread: string, srcPath: string, rawName: string, ma
   }
   fs.chmodSync(target, 0o600);
   const image = sniffImageFile(target);
-  return { id: uploadId, name, kind: image ? "image" : "file", media_type: image ?? (name.endsWith(".mp4") ? "video/mp4" : "text/plain"), size };
+  return {
+    id: uploadId,
+    name,
+    kind: image ? "image" : "file",
+    media_type: image ?? (name.endsWith(".mp4") ? "video/mp4" : "text/plain"),
+    size,
+  };
 }
 
 /** Turns the `{id}` references in a send message into stored attachments; throws on anything unknown. */
