@@ -333,10 +333,31 @@ function warmFileViewer() {
     }),
   );
 }
+function openRefLink(event) {
+  const link = event.target.closest?.("a[data-gh-ref]");
+  if (!link || !$("chat").contains(link)) return;
+  event.preventDefault();
+  if (!state.current) return;
+  const tab = window.open("", "_blank"); // opened synchronously so the popup blocker allows it
+  const query = new URLSearchParams({ thread: state.current, n: link.dataset.ghRef });
+  fetch(`/api/gh-ref?${query}`)
+    .then(async (res) => {
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok || !body.url) throw new Error(body.error || "Could not resolve this reference.");
+      if (tab) {
+        tab.opener = null;
+        tab.location.href = body.url;
+      }
+    })
+    .catch((error) => {
+      tab?.close();
+      toast(error.message || "Could not resolve this reference.");
+    });
+}
 function openFileLink(event) {
   if (event.type === "auxclick" && event.button !== 1) return;
   const link = event.target.closest?.("a");
-  if (!link || !$("chat").contains(link)) return;
+  if (!link || !$("chat").contains(link) || link.dataset.ghRef) return;
   const image = link.dataset.viewerImage;
   const ref = image
     ? {
@@ -377,6 +398,7 @@ $("files").onclick = async () => {
     opener.removeAttribute("aria-busy");
   }
 };
+$("chat").addEventListener("click", openRefLink);
 $("chat").addEventListener("click", openFileLink);
 $("chat").addEventListener("auxclick", openFileLink);
 

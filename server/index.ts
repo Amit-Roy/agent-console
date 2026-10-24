@@ -55,6 +55,7 @@ import { contextAllocation } from "./context-allocation.ts";
 import { createDoctor } from "./doctor.ts";
 import { threadToMarkdown } from "./export.ts";
 import { fileMedia, fileTree, fileViewer } from "./files.ts";
+import { refHandler } from "./gh-refs.ts";
 import { headroom } from "./headroom.ts";
 import { hostKill, hostMetrics, hostPorts, hostProcessDetail, hostProcesses } from "./host.ts";
 import { hostDu, hostDuRescan, hostHistory, latestHost, startHostSampler } from "./host-history.ts";
@@ -960,6 +961,10 @@ app.get("/api/turn-latency", (req, res) => {
 app.get(
   "/api/file",
   fileViewer((id) => threads.get(id)),
+);
+app.get(
+  "/api/gh-ref",
+  refHandler((threadId) => threads.get(threadId)),
 );
 app.post(
   "/api/acode/edit",
