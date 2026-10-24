@@ -67,33 +67,114 @@ function validate(req: ResearchRequest) {
   };
 }
 
+interface ResearchRun {
+  usage: ResearchUsage;
+  text: string;
+  error: string | undefined;
+  settled: (() => void) | undefined;
+}
+
+function recordResearchResult(run: ResearchRun, event: any) {
+  for (const entry of event.usageModels ?? []) {
+    run.usage.input += (entry.fresh ?? 0) + (entry.cacheWrite ?? 0) + (entry.cacheRead ?? 0);
+    run.usage.cacheRead += entry.cacheRead ?? 0;
+    run.usage.output += entry.output ?? 0;
+    if (typeof entry.cost === "number") run.usage.cost = (run.usage.cost ?? 0) + entry.cost;
+  }
+  if (event.is_error) run.error ||= "pi reported an error";
+  run.settled?.();
+}
+
+function handleResearchEvent(run: ResearchRun, event: any) {
+  if (event.type === "console_error") run.error ||= String(event.text);
+  if (event.type === "result") recordResearchResult(run, event);
+}
+
+function captureResearchText(run: ResearchRun, reply: any) {
+  if (reply.type !== "message_end" || reply.message?.role !== "assistant") return;
+  const joined = (reply.message.content ?? [])
+    .filter((block: any) => block?.type === "text")
+    .map((block: any) => block.text)
+    .join("\n");
+  if (joined) run.text = joined;
+}
+
+function writeResearchNotes(
+  req: ResearchRequest,
+  paths: { notesPath: string; indexPath: string },
+  details: {
+    id: string;
+    task: string;
+    cwd: string;
+    model: string;
+    text: string;
+    usage: ResearchUsage;
+  },
+) {
+  const { id: runId, task, cwd, model, text, usage } = details;
+  fs.writeFileSync(paths.notesPath, text, { mode: 0o600 });
+  fs.writeFileSync(
+    paths.indexPath,
+    JSON.stringify(
+      {
+        version: 1,
+        id: runId,
+        task,
+        cwd,
+        provider: "pi",
+        model,
+        caller: req.caller ?? {},
+        createdAt: new Date().toISOString(),
+        notes: path.basename(paths.notesPath),
+        usage,
+      },
+      null,
+      1,
+    ),
+    { mode: 0o600 },
+  );
+}
+
+function appendResearchLedger(
+  req: ResearchRequest,
+  runId: string,
+  phase: string,
+  model: string,
+  usage: ResearchUsage,
+) {
+  try {
+    fs.appendFileSync(
+      LEDGER,
+      JSON.stringify({
+        ts: Date.now(),
+        id: runId,
+        phase,
+        caller: req.caller ?? {},
+        pi: { model, ...usage },
+      }) + "\n",
+      { mode: 0o600 },
+    );
+  } catch (error: any) {
+    console.error(`pi-research ledger write failed: ${error?.message || error}`);
+  }
+}
+
 export async function runPiResearch(req: ResearchRequest): Promise<ResearchResponse> {
   const { task, cwd, model, timeoutMs } = validate(req);
-  const id = `${Date.now().toString(36)}-${crypto.randomBytes(4).toString("hex")}`;
-  const dir = path.join(ROOT, id);
+  const runId = `${Date.now().toString(36)}-${crypto.randomBytes(4).toString("hex")}`;
+  const dir = path.join(ROOT, runId);
   fs.mkdirSync(path.join(dir, "session"), { recursive: true, mode: 0o700 });
   const notesPath = path.join(dir, "research-notes.md");
   const indexPath = path.join(dir, "index.json");
 
-  const usage: ResearchUsage = { input: 0, cacheRead: 0, output: 0 };
-  let text = "";
-  let error: string | undefined;
-  let settled: (() => void) | undefined;
-  const done = new Promise<void>((resolve) => (settled = resolve));
-
-  const translate = piTranslator((ev) => {
-    if (ev.type === "console_error") error ||= String(ev.text);
-    if (ev.type === "result") {
-      for (const m of ev.usageModels ?? []) {
-        usage.input += (m.fresh ?? 0) + (m.cacheWrite ?? 0) + (m.cacheRead ?? 0);
-        usage.cacheRead += m.cacheRead ?? 0;
-        usage.output += m.output ?? 0;
-        if (typeof m.cost === "number") usage.cost = (usage.cost ?? 0) + m.cost;
-      }
-      if (ev.is_error) error ||= "pi reported an error";
-      settled?.();
-    }
-  });
+  const run: ResearchRun = {
+    usage: { input: 0, cacheRead: 0, output: 0 },
+    text: "",
+    error: undefined,
+    settled: undefined,
+  };
+  const done = new Promise<void>((resolve) => (run.settled = resolve));
+  const translate = piTranslator((event) => handleResearchEvent(run, event));
 
   const args = [
     "--mode",
@@ -105,96 +186,56 @@ export async function runPiResearch(req: ResearchRequest): Promise<ResearchRespo
     "--tools",
     READ_ONLY_TOOLS,
   ];
-  const env = piRateEnv({ ...childEnv(), AGENT_CONSOLE_THREAD: id }, "interactive");
+  const env = piRateEnv({ ...childEnv(), AGENT_CONSOLE_THREAD: runId }, "interactive");
   const proc = spawnLines(
     "pi",
     "pi",
     args,
     { cwd, env },
     {
-      event: (ev) => {
-        if (ev.type === "console_error") error ||= String(ev.text);
+      event: (event) => {
+        if (event.type === "console_error") run.error ||= String(event.text);
       },
       commands() {},
       exited(info) {
-        if (!info.aborted) error ||= info.stderr.trim() || `pi exited with code ${info.code}`;
-        settled?.();
+        if (!info.aborted) run.error ||= info.stderr.trim() || `pi exited with code ${info.code}`;
+        run.settled?.();
       },
     },
     (line) => {
-      const r = parseJson(line);
-      if (!r) return;
-      if (r.type === "message_end" && r.message?.role === "assistant") {
-        const t = (r.message.content ?? [])
-          .filter((b: any) => b?.type === "text")
-          .map((b: any) => b.text)
-          .join("\n");
-        if (t) text = t;
-      }
-      translate(r);
+      const reply = parseJson(line);
+      if (!reply) return;
+      captureResearchText(run, reply);
+      translate(reply);
     },
   );
 
   proc.write(JSON.stringify({ id: "p1", type: "prompt", message: PROMPT(task) }));
   const timer = setTimeout(() => {
-    error ||= `timed out after ${Math.round(timeoutMs / 1000)}s`;
-    settled?.();
+    run.error ||= `timed out after ${Math.round(timeoutMs / 1000)}s`;
+    run.settled?.();
   }, timeoutMs);
   await done;
   clearTimeout(timer);
   if (proc.alive()) proc.kill();
 
-  const phase = error || !text ? "failed" : "completed";
-  if (phase === "failed") error ||= "pi returned no report";
+  const { text, usage } = run;
+  const phase = run.error || !text ? "failed" : "completed";
+  if (phase === "failed") run.error ||= "pi returned no report";
   const res: ResearchResponse = {
     version: 1,
-    id,
+    id: runId,
     provider: "pi",
     model,
     phase,
     notesPath,
     indexPath,
     usage,
-    ...(phase === "completed" ? { finalText: text } : { error }),
+    ...(phase === "completed" ? { finalText: text } : { error: run.error }),
   };
-  if (phase === "completed") {
-    fs.writeFileSync(notesPath, text, { mode: 0o600 });
-    fs.writeFileSync(
-      indexPath,
-      JSON.stringify(
-        {
-          version: 1,
-          id,
-          task,
-          cwd,
-          provider: "pi",
-          model,
-          caller: req.caller ?? {},
-          createdAt: new Date().toISOString(),
-          notes: path.basename(notesPath),
-          usage,
-        },
-        null,
-        1,
-      ),
-      { mode: 0o600 },
-    );
-  }
-  try {
-    fs.appendFileSync(
-      LEDGER,
-      JSON.stringify({
-        ts: Date.now(),
-        id,
-        phase,
-        caller: req.caller ?? {},
-        pi: { model, ...usage },
-      }) + "\n",
-      { mode: 0o600 },
-    );
-  } catch (e: any) {
-    console.error(`pi-research ledger write failed: ${e?.message || e}`);
-  }
+  if (phase === "completed")
+    writeResearchNotes(req, { notesPath, indexPath }, { id: runId, task, cwd, model, text, usage });
+  appendResearchLedger(req, runId, phase, model, usage);
   return res;
 }
 

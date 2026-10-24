@@ -161,6 +161,53 @@ export class ModelRateLimit {
     }
   }
 
+  private recordAdmission(provider: ModelRequestProvider, now: number): void {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.db.prepare("UPDATE admission SET next_at = ? WHERE id = 1").run(now + this.intervalMs);
+      if (provider === "openrouter") {
+        const day = new Date(now).toISOString().slice(0, 10);
+        this.db.prepare("INSERT INTO openrouter_starts VALUES (?)").run(now);
+        this.db
+          .prepare(`INSERT INTO openrouter_days VALUES (?, 1)
+                ON CONFLICT(day) DO UPDATE SET requests = requests + 1`)
+          .run(day);
+        this.db.prepare("DELETE FROM openrouter_days WHERE day < ?").run(day);
+      }
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  private admitNow(provider: ModelRequestProvider, signal: AbortSignal | undefined): void {
+    signal?.throwIfAborted();
+    const now = this.now();
+    const cooldown = this.cooldown(provider);
+    if (cooldown > now) throw new DeferredAdmission(cooldown);
+    if (provider === "openrouter") this.checkQuota(now);
+    const next = this.nextAt();
+    if (next > now) {
+      this.resumeAt(next);
+      throw new DeferredAdmission(next);
+    }
+    this.recordAdmission(provider, now);
+    // PQueue owns live spacing; persisted next_at restores it after restart.
+  }
+
+  /** Returns true when the OpenRouter quota deferred this attempt and the wait already finished. */
+  private async deferForQuota(signal: AbortSignal | undefined): Promise<boolean> {
+    try {
+      this.checkQuota(this.now());
+    } catch (error) {
+      if (!(error instanceof DeferredAdmission)) throw error;
+      await delay(Math.max(0, error.until - this.now()), undefined, { signal });
+      return true;
+    }
+    return false;
+  }
+
   async acquire(input?: AbortSignal | ModelRequestAdmission): Promise<void> {
     const options = input && "aborted" in input ? { signal: input } : (input ?? {});
     const { signal, provider = "other" } = options;
@@ -172,53 +219,11 @@ export class ModelRateLimit {
     for (;;) {
       if (this.closed) throw new Error("Model request scheduler is closed.");
       signal?.throwIfAborted();
-      if (provider === "openrouter") {
-        try {
-          this.checkQuota(this.now());
-        } catch (error) {
-          if (!(error instanceof DeferredAdmission)) throw error;
-          await delay(Math.max(0, error.until - this.now()), undefined, { signal });
-          continue;
-        }
-      }
+      if (provider === "openrouter" && (await this.deferForQuota(signal))) continue;
       const waiting = this.cooldown(provider) - this.now();
       if (waiting > 0) await delay(waiting, undefined, { signal });
       try {
-        await this.queue.add(
-          () => {
-            signal?.throwIfAborted();
-            const now = this.now();
-            const cooldown = this.cooldown(provider);
-            if (cooldown > now) throw new DeferredAdmission(cooldown);
-            if (provider === "openrouter") this.checkQuota(now);
-            const next = this.nextAt();
-            if (next > now) {
-              this.resumeAt(next);
-              throw new DeferredAdmission(next);
-            }
-            this.db.exec("BEGIN IMMEDIATE");
-            try {
-              this.db
-                .prepare("UPDATE admission SET next_at = ? WHERE id = 1")
-                .run(now + this.intervalMs);
-              if (provider === "openrouter") {
-                const day = new Date(now).toISOString().slice(0, 10);
-                this.db.prepare("INSERT INTO openrouter_starts VALUES (?)").run(now);
-                this.db
-                  .prepare(`INSERT INTO openrouter_days VALUES (?, 1)
-                ON CONFLICT(day) DO UPDATE SET requests = requests + 1`)
-                  .run(day);
-                this.db.prepare("DELETE FROM openrouter_days WHERE day < ?").run(day);
-              }
-              this.db.exec("COMMIT");
-            } catch (error) {
-              this.db.exec("ROLLBACK");
-              throw error;
-            }
-            // PQueue owns live spacing; persisted next_at restores it after restart.
-          },
-          { priority, signal },
-        );
+        await this.queue.add(() => this.admitNow(provider, signal), { priority, signal });
         return;
       } catch (error) {
         if (!(error instanceof DeferredAdmission)) throw error;
