@@ -15,6 +15,9 @@ from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
+# Tiny boosted trees fit in about 2 s on one thread; the default thread pool contends and takes minutes.
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+
 import numpy as np
 import scipy
 import sklearn
@@ -69,14 +72,21 @@ QUANTILE_FEATURES = [
     "questions",
     "versions",
 ]
+# Shallow, heavily regularised heads: depth 2 with 80-row leaves was the most stable on the
+# real data (small gap when the newest rows are dropped, best held-out pinball).
 TREE_PARAMS = {
-    "max_depth": 3,
+    "max_depth": 2,
     "max_iter": 100,
-    "learning_rate": 0.05,
-    "min_samples_leaf": 20,
-    "l2_regularization": 1.0,
+    "learning_rate": 0.03,
+    "min_samples_leaf": 80,
+    "l2_regularization": 10.0,
     "random_state": 0,
 }
+# Paired bootstrap of per-row pinball, challenger minus champion, on shared held-out rows.
+BOOTSTRAP_RESAMPLES = 2000
+BOOTSTRAP_SEED = 7
+# Report-only stability probe: refit without the newest training rows.
+STABILITY_DROPPED = 14
 
 
 def dataset_scope(dataset):
@@ -485,9 +495,8 @@ def quantile_cap(ceiling):
     return math.inf
 
 
-def score_quantile_model(model, rows, cap):
-    """Per-quantile pinball (log1p space) and coverage on rows, as the runtime would price them."""
-    actual = np.array([observed_work(sample, "totalTokens") for sample in rows])
+def stacked_logs(model, rows, cap):
+    """Monotone log1p quantile predictions (rows x levels), as the runtime would price them."""
     features = [quantile_text(sample) for sample in rows]
     logs = []
     for name in QUANTILE_LEVELS:
@@ -498,15 +507,49 @@ def score_quantile_model(model, rows, cap):
                 for row in features
             ]
         )
-    stacked = np.maximum.accumulate(np.column_stack(logs), axis=1)
+    return np.maximum.accumulate(np.column_stack(logs), axis=1)
+
+
+def pinball_loss(level, delta):
+    return np.maximum(level * delta, (level - 1) * delta)
+
+
+def row_pinball(model, rows, cap):
+    """Per-row pinball averaged over the quantile levels."""
+    actual = np.log1p([observed_work(sample, "totalTokens") for sample in rows])
+    stacked = stacked_logs(model, rows, cap)
+    losses = [
+        pinball_loss(level, actual - stacked[:, index])
+        for index, level in enumerate(QUANTILE_LEVELS.values())
+    ]
+    return np.mean(losses, axis=0)
+
+
+def score_quantile_model(model, rows, cap):
+    """Per-quantile pinball (log1p space) and coverage on rows, as the runtime would price them."""
+    actual = np.array([observed_work(sample, "totalTokens") for sample in rows])
+    stacked = stacked_logs(model, rows, cap)
     metrics = {}
     for index, (name, level) in enumerate(QUANTILE_LEVELS.items()):
         delta = np.log1p(actual) - stacked[:, index]
         metrics[name] = {
-            "pinball": float(np.mean(np.maximum(level * delta, (level - 1) * delta))),
+            "pinball": float(np.mean(pinball_loss(level, delta))),
             "coverage": float(np.mean(actual <= np.expm1(stacked[:, index]))),
         }
     return metrics
+
+
+def paired_bootstrap(delta):
+    """Mean and 90% percentile interval of the mean of per-row differences."""
+    rng = np.random.default_rng(BOOTSTRAP_SEED)
+    picks = rng.integers(0, len(delta), size=(BOOTSTRAP_RESAMPLES, len(delta)))
+    means = delta[picks].mean(axis=1)
+    return {
+        "mean": float(delta.mean()),
+        "lower90": float(np.quantile(means, 0.05)),
+        "upper90": float(np.quantile(means, 0.95)),
+        "resamples": BOOTSTRAP_RESAMPLES,
+    }
 
 
 def mean_pinball(metrics):
@@ -540,8 +583,11 @@ def load_champion_model(path):
     return model, ids if isinstance(ids, list) else None, None
 
 
-def score_champion(path, heldout):
-    """Score the installed champion on held-out rows it did not train on."""
+def score_champion(path, heldout, challenger=None):
+    """Score the installed champion on held-out rows it did not train on.
+
+    With a (model, cap) challenger, also store the paired per-row pinball delta on those rows.
+    """
     model, training_ids, reason = load_champion_model(path)
     if model is None:
         return unscoreable_champion(reason)
@@ -558,16 +604,23 @@ def score_champion(path, heldout):
         metrics = score_quantile_model(model, rows, quantile_cap(model.get("ceiling")))
     except (KeyError, IndexError, TypeError, ValueError):
         return unscoreable_champion("champion quantileModel is malformed")
-    return {
+    result = {
         "scoreable": True,
         "reason": note,
         "sampleCount": len(rows),
         "quantiles": metrics,
         "meanPinball": mean_pinball(metrics),
     }
+    if challenger is not None:
+        challenger_model, challenger_cap = challenger
+        delta = row_pinball(challenger_model, rows, challenger_cap) - row_pinball(
+            model, rows, quantile_cap(model.get("ceiling"))
+        )
+        result["pairedDelta"] = paired_bootstrap(delta)
+    return result
 
 
-def fit_quantile_model(train, heldout, ceiling):
+def fit_quantile_heads(train, ceiling):
     """Fit independent quantile tree heads and verify the exported arrays reproduce sklearn."""
     matrix = np.array([quantile_text(s) for s in train], dtype=float)
     target = np.log1p([observed_work(s, "totalTokens") for s in train])
@@ -593,24 +646,38 @@ def fit_quantile_model(train, heldout, ceiling):
         "quantiles": QUANTILE_LEVELS,
         "baseline": baseline,
         "trees": trees,
+        # Conformal offsets are not applied today; the runtime still adds these zeros.
         "offsets": {name: 0.0 for name in QUANTILE_LEVELS},
         "ceiling": ceiling,
         "nodeCount": params,
         "parameters": TREE_PARAMS,
     }
+    return model, float(np.median(target))
+
+
+def stability_probe(train, heldout, ceiling, cap, full_pinball):
+    """Report-only: refit without the newest training rows and score the same held-out rows."""
+    older = sorted(train, key=lambda sample: sample["_start"])[:-STABILITY_DROPPED]
+    if len(older) < 2:
+        return None
+    model, _ = fit_quantile_heads(older, ceiling)
+    pinball = mean_pinball(score_quantile_model(model, heldout, cap))
+    return {
+        "droppedNewest": STABILITY_DROPPED,
+        "meanPinball": pinball,
+        "gap": abs(pinball - full_pinball),
+    }
+
+
+def fit_quantile_model(train, heldout, ceiling):
+    """Fit quantile tree heads, then score them on the held-out block."""
+    model, median_log = fit_quantile_heads(train, ceiling)
+    params = model["nodeCount"]
     actual = np.array([observed_work(s, "totalTokens") for s in heldout])
     cap = math.log1p(ceiling) if ceiling is not None else 30.0
     metrics = score_quantile_model(model, heldout, cap)
-    median_log = float(np.median(target))
     baseline_pinball = {
-        name: float(
-            np.mean(
-                np.maximum(
-                    q * (np.log1p(actual) - median_log),
-                    (q - 1) * (np.log1p(actual) - median_log),
-                )
-            )
-        )
+        name: float(np.mean(pinball_loss(q, np.log1p(actual) - median_log)))
         for name, q in QUANTILE_LEVELS.items()
     }
     covered = all(
@@ -628,6 +695,7 @@ def fit_quantile_model(train, heldout, ceiling):
         "beatsPinballBaseline": improves,
         "nodeCount": params,
         "fit": TREE_PARAMS,
+        "stability": stability_probe(train, heldout, ceiling, cap, mean_pinball(metrics)),
         "limitations": [
             "Independent quantile heads are rearranged, so fitted head values are not a density.",
             "Coverage is the held-out block that also selected artifacts; it is not an independent test.",
@@ -722,7 +790,8 @@ def fit_quantile_section(eligible, split, validation, champion_path):
     model, quantile_validation = fit_quantile_model(*split)
     validation["quantileModel"] = quantile_validation
     if champion_path is not None:
-        quantile_validation["champion"] = score_champion(champion_path, split[1])
+        challenger = (model, quantile_cap(model["ceiling"]))
+        quantile_validation["champion"] = score_champion(champion_path, split[1], challenger)
     return model, quantile_validation
 
 

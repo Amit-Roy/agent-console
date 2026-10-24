@@ -230,3 +230,55 @@ test("validation rejects reserved prototype keys", () => {
   assert.equal(validateQuantileModel([]), null);
   assert.equal(validateQuantileModel("model"), null);
 });
+
+/** Complete binary tree in breadth-first order; depth d has 2^d leaves with distinct values. */
+function completeTree(depth: number): QuantileTree {
+  const count = 2 ** (depth + 1) - 1;
+  const firstLeaf = 2 ** depth - 1;
+  const tree: QuantileTree = { f: [], t: [], l: [], r: [], v: [] };
+  for (let node = 0; node < count; node += 1) {
+    const isLeaf = node >= firstLeaf;
+    const level = Math.floor(Math.log2(node + 1));
+    tree.f.push(level % 3);
+    tree.t.push(0.5);
+    tree.l.push(isLeaf ? -1 : 2 * node + 1);
+    tree.r.push(isLeaf ? -1 : 2 * node + 2);
+    tree.v.push(isLeaf ? Math.log1p(10 * (node - firstLeaf + 1)) : 0);
+  }
+  return tree;
+}
+const walkReference = (tree: QuantileTree, row: number[]): number => {
+  let node = 0;
+  while (tree.l[node] !== -1)
+    node = row[tree.f[node]] <= tree.t[node] ? tree.l[node] : tree.r[node];
+  return tree.v[node];
+};
+
+test("validator and walker accept depth-2 and depth-3 heads", () => {
+  const texts = [
+    "fix typo",
+    "audit /a/b/c then /d/e/f and `x`\nsecond line\nthird line\nfourth line\nfifth line here",
+    "```\ncode\n```\nrun it now please\nand more\nlines\nfor\nthe\nsize bucket",
+    "x ".repeat(300),
+  ];
+  for (const depth of [2, 3]) {
+    const tree = completeTree(depth);
+    const model = validateQuantileModel({
+      ...base(),
+      trees: {
+        p50: [tree],
+        p75: [tree],
+        p80: [tree],
+        p95: [tree],
+        p99: [tree],
+      },
+    });
+    assert.ok(model, `depth ${depth} accepted`);
+    assert.equal(tree.f.length, 2 ** (depth + 1) - 1);
+    for (const text of texts) {
+      const row = shape(text);
+      const expected = walkReference(tree, [row.size, row.lines, row.fence]);
+      assert.equal(predictQuantileLogs(model, row).p50, expected, `depth ${depth}: ${text}`);
+    }
+  }
+});

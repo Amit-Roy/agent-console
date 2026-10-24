@@ -5,6 +5,7 @@ import copy
 import importlib.util
 import json
 import math
+import os
 import sys
 import tempfile
 import unittest
@@ -687,7 +688,8 @@ class EffortFitTests(unittest.TestCase):
         challenger = artifact["validation"]["quantileModel"]
         champion = challenger["champion"]
         self.assertEqual(
-            list(champion), ["scoreable", "reason", "sampleCount", "quantiles", "meanPinball"]
+            list(champion),
+            ["scoreable", "reason", "sampleCount", "quantiles", "meanPinball", "pairedDelta"],
         )
         self.assertTrue(champion["scoreable"])
         self.assertIsNone(champion["reason"])
@@ -759,6 +761,61 @@ class EffortFitTests(unittest.TestCase):
         limited, _ = self.champion_result(fixture, capped)
         clipped = limited["validation"]["quantileModel"]["champion"]["quantiles"]["p50"]
         self.assertLess(clipped["coverage"], 1.0)
+
+    def test_tree_params_are_the_stable_shallow_set(self):
+        expected = {
+            "max_depth": 2,
+            "min_samples_leaf": 80,
+            "l2_regularization": 10.0,
+            "learning_rate": 0.03,
+            "max_iter": 100,
+        }
+        for name, value in expected.items():
+            self.assertEqual(fit.TREE_PARAMS[name], value, name)
+        self.assertEqual(os.environ.get("OMP_NUM_THREADS"), "1")
+
+    def test_paired_delta_sign_bounds_and_determinism(self):
+        fixture, first = self.quantile_fixture()
+        worse = copy.deepcopy(first)
+        worse["quantileModel"]["baseline"] = {
+            name: value + 3.0 for name, value in first["quantileModel"]["baseline"].items()
+        }
+        worse["quantileModel"]["ceiling"] = None
+        artifact, _ = self.champion_result(fixture, worse)
+        delta = artifact["validation"]["quantileModel"]["champion"]["pairedDelta"]
+        self.assertEqual(list(delta), ["mean", "lower90", "upper90", "resamples"])
+        self.assertEqual(delta["resamples"], 2000)
+        # Challenger beats a champion shifted far off target, so the whole interval is below zero.
+        self.assertLess(delta["mean"], 0)
+        self.assertLessEqual(delta["lower90"], delta["mean"])
+        self.assertLessEqual(delta["mean"], delta["upper90"])
+        self.assertLess(delta["upper90"], 0)
+        again, _ = self.champion_result(fixture, worse)
+        self.assertEqual(again["validation"]["quantileModel"]["champion"]["pairedDelta"], delta)
+
+    def test_paired_delta_of_identical_models_is_zero(self):
+        fixture, first = self.quantile_fixture()
+        artifact, _ = self.champion_result(fixture, first)
+        delta = artifact["validation"]["quantileModel"]["champion"]["pairedDelta"]
+        for name in ("mean", "lower90", "upper90"):
+            self.assertAlmostEqual(delta[name], 0.0, delta=1e-9)
+
+    def test_paired_bootstrap_interval_orders_around_the_mean(self):
+        rows = fit.np.array([0.1, 0.3, -0.2, 0.4, 0.0, 0.2, 0.1, 0.5])
+        result = fit.paired_bootstrap(rows)
+        self.assertAlmostEqual(result["mean"], float(rows.mean()), delta=1e-12)
+        self.assertLess(result["lower90"], result["upper90"])
+        self.assertEqual(result, fit.paired_bootstrap(rows))
+
+    def test_stability_probe_is_reported(self):
+        _, artifact = self.quantile_fixture()
+        validation = artifact["validation"]["quantileModel"]
+        stability = validation["stability"]
+        self.assertEqual(stability["droppedNewest"], 14)
+        self.assertTrue(math.isfinite(stability["meanPinball"]))
+        self.assertAlmostEqual(
+            stability["gap"], abs(stability["meanPinball"] - validation["meanPinball"]), delta=1e-12
+        )
 
     def test_dropped_quantile_trees_leave_no_quantile_validation_even_with_champion(self):
         fixture, first = self.quantile_fixture()
