@@ -170,6 +170,64 @@ def timestamp(value, field="completedAt"):
         raise ValueError(f"{field} must be an ISO timestamp with timezone") from exc
 
 
+def validate_sample_ids(sample, ids):
+    for name in ("sampleId", "groupId"):
+        if not isinstance(sample.get(name), str) or not sample[name] or len(sample[name]) > 300:
+            raise ValueError(f"Invalid {name}")
+    if sample["sampleId"] in ids:
+        raise ValueError("Duplicate sampleId")
+    ids.add(sample["sampleId"])
+
+
+def validate_sample_features(features):
+    if not isinstance(features, dict) or any(name not in features for name in FEATURES):
+        raise ValueError("Missing prework feature")
+    for name in FEATURES:
+        value = features[name]
+        if value is not None and (not finite(value) or value not in (0, 1, 2, 3)):
+            raise ValueError(f"Feature {name} must be 0..3 or null")
+
+
+def session_outcomes(outcomes):
+    """Return (outcomes, rejection) for a completed-session sample."""
+    # Full-session input and output define the supervised target.
+    # Action counters, cache splits, and rounds are optional diagnostics.
+    invalid = next(
+        (
+            name
+            for name in ("inputTokens", "outputTokens")
+            if not finite(outcomes.get(name)) or outcomes[name] < 0
+        ),
+        None,
+    )
+    if invalid:
+        return outcomes, f"missingOrInvalid{invalid[0].upper()}{invalid[1:]}"
+    outcomes = {**outcomes}
+    for name in ("toolCalls", "toolRounds", "nonCachedInputTokens", "cachedInputTokens"):
+        if not finite(outcomes.get(name)) or outcomes[name] < 0:
+            outcomes[name] = None
+    return outcomes, None
+
+
+def legacy_outcomes(outcomes):
+    """Return (outcomes, rejection) for a legacy delivery-run sample."""
+    for name, value in outcomes.items():
+        if value is not None and (not finite(value) or value < 0):
+            raise ValueError(f"Invalid outcome {name}")
+    # Legacy artifacts retain their original positive-action cohort
+    # and per-action yields for numerical compatibility.
+    for name, rejection in (
+        ("toolCalls", "missingOrZeroToolCalls"),
+        ("outputTokens", "missingOrZeroOutputTokens"),
+        ("toolRounds", "missingOrZeroToolRounds"),
+    ):
+        if not finite(outcomes.get(name)) or outcomes[name] <= 0:
+            return outcomes, rejection
+    if outcomes["toolRounds"] > outcomes["toolCalls"]:
+        return outcomes, "roundsExceedCalls"
+    return outcomes, None
+
+
 def validate_dataset(dataset):
     use_features(dataset)
     if (
@@ -183,61 +241,20 @@ def validate_dataset(dataset):
     for sample in dataset["samples"]:
         if not isinstance(sample, dict):
             raise ValueError("Sample must be an object")
-        for name in ("sampleId", "groupId"):
-            if not isinstance(sample.get(name), str) or not sample[name] or len(sample[name]) > 300:
-                raise ValueError(f"Invalid {name}")
-        if sample["sampleId"] in ids:
-            raise ValueError("Duplicate sampleId")
-        ids.add(sample["sampleId"])
+        validate_sample_ids(sample, ids)
         stamp = timestamp(sample.get("completedAt"))
         started = timestamp(sample.get("startedAt"), "startedAt")
         if started > stamp:
             raise ValueError("startedAt must not follow completedAt")
         features, outcomes = sample.get("features"), sample.get("outcomes")
-        if not isinstance(features, dict) or any(name not in features for name in FEATURES):
-            raise ValueError("Missing prework feature")
-        for name in FEATURES:
-            value = features[name]
-            if value is not None and (not finite(value) or value not in (0, 1, 2, 3)):
-                raise ValueError(f"Feature {name} must be 0..3 or null")
+        validate_sample_features(features)
         if not isinstance(outcomes, dict):
             raise ValueError("Missing outcomes object")
-        if scope == "completed-session":
-            # Full-session input and output define the supervised target.
-            # Action counters, cache splits, and rounds are optional diagnostics.
-            invalid = next(
-                (
-                    name
-                    for name in ("inputTokens", "outputTokens")
-                    if not finite(outcomes.get(name)) or outcomes[name] < 0
-                ),
-                None,
-            )
-            if invalid:
-                rejected[f"missingOrInvalid{invalid[0].upper()}{invalid[1:]}"] += 1
-                continue
-            outcomes = {**outcomes}
-            for name in ("toolCalls", "toolRounds", "nonCachedInputTokens", "cachedInputTokens"):
-                if not finite(outcomes.get(name)) or outcomes[name] < 0:
-                    outcomes[name] = None
-        else:
-            for name, value in outcomes.items():
-                if value is not None and (not finite(value) or value < 0):
-                    raise ValueError(f"Invalid outcome {name}")
-            # Legacy artifacts retain their original positive-action cohort
-            # and per-action yields for numerical compatibility.
-            if not finite(outcomes.get("toolCalls")) or outcomes["toolCalls"] <= 0:
-                rejected["missingOrZeroToolCalls"] += 1
-                continue
-            if not finite(outcomes.get("outputTokens")) or outcomes["outputTokens"] <= 0:
-                rejected["missingOrZeroOutputTokens"] += 1
-                continue
-            if not finite(outcomes.get("toolRounds")) or outcomes["toolRounds"] <= 0:
-                rejected["missingOrZeroToolRounds"] += 1
-                continue
-            if outcomes["toolRounds"] > outcomes["toolCalls"]:
-                rejected["roundsExceedCalls"] += 1
-                continue
+        check = session_outcomes if scope == "completed-session" else legacy_outcomes
+        outcomes, rejection = check(outcomes)
+        if rejection:
+            rejected[rejection] += 1
+            continue
         accepted.append({**sample, "outcomes": outcomes, "_time": stamp, "_start": started})
     if len(accepted) < 6:
         raise ValueError("Need at least six valid measured runs")

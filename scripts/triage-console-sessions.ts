@@ -162,48 +162,60 @@ function nativeIds(thread: Json | undefined, events: Json[], rows: Json[]) {
   return { own, lineage };
 }
 
+type MeasureState = {
+  accounting: SessionAccounting;
+  seen: Set<string>;
+  session: string;
+  inputAt: number | undefined;
+  pendingUsage: Json | undefined;
+};
+
+function trackEvent(state: MeasureState, event: Json) {
+  if (event.type === "system" && event.subtype === "init" && typeof event.session_id === "string") {
+    if (state.session !== event.session_id)
+      state.accounting.seedFork(event.session_id, state.session);
+    state.session = event.session_id;
+  }
+  if (event.type === "user_input" && finite(event.ts) && state.inputAt === undefined)
+    state.inputAt = event.ts;
+  if (event.type === "token_usage") state.pendingUsage = event;
+}
+
+function measureResult(state: MeasureState, event: Json, thread: Json) {
+  if (event.modelUsage) return state.accounting.consume(event.session_id || state.session, event);
+  if (event.usageModels) return piAccounting(event.usageModels);
+  if (state.pendingUsage) return codexAccounting(state.pendingUsage, thread.model || "unknown");
+  return { accounting: 2 };
+}
+
+function resultProvider(state: MeasureState, event: Json, thread: Json) {
+  if (event.modelUsage) return "claude";
+  if (event.usageModels) return "pi";
+  return state.pendingUsage ? "codex" : thread.provider;
+}
+
 /** Root-result deltas also cover billable auto-wakes lacking a new user_input. */
 function resultMeasurements(events: Json[], thread: Json, firstIndex: number) {
-  const accounting = new SessionAccounting(),
-    seen = new Set<string>();
-  let session = thread.id,
-    inputAt: number | undefined,
-    pendingUsage: Json | undefined;
+  const state: MeasureState = {
+    accounting: new SessionAccounting(),
+    seen: new Set<string>(),
+    session: thread.id,
+    inputAt: undefined,
+    pendingUsage: undefined,
+  };
   const results: Json[] = [];
   for (let index = 0; index < events.length; index++) {
     const event = events[index];
-    if (
-      event.type === "system" &&
-      event.subtype === "init" &&
-      typeof event.session_id === "string"
-    ) {
-      if (session !== event.session_id) accounting.seedFork(event.session_id, session);
-      session = event.session_id;
-    }
-    if (event.type === "user_input" && finite(event.ts) && inputAt === undefined)
-      inputAt = event.ts;
-    if (event.type === "token_usage") pendingUsage = event;
+    trackEvent(state, event);
     if (event.type !== "result") continue;
-    const measured = event.modelUsage
-      ? accounting.consume(event.session_id || session, event)
-      : event.usageModels
-        ? piAccounting(event.usageModels)
-        : pendingUsage
-          ? codexAccounting(pendingUsage, thread.model || "unknown")
-          : { accounting: 2 };
+    const measured = measureResult(state, event, thread);
     const key = typeof event.uuid === "string" ? event.uuid : undefined;
-    if (!measured.duplicate && (!key || !seen.has(key)) && index >= firstIndex) {
+    if (!measured.duplicate && (!key || !state.seen.has(key)) && index >= firstIndex) {
       results.push({
         ...measured,
-        provider: event.modelUsage
-          ? "claude"
-          : event.usageModels
-            ? "pi"
-            : pendingUsage
-              ? "codex"
-              : thread.provider,
+        provider: resultProvider(state, event, thread),
         eventId: key,
-        inputAt,
+        inputAt: state.inputAt,
         index,
         resultAt: timestamp(event.ts) ?? timestamp(event.timestamp),
         ms: event.duration_ms,
@@ -211,318 +223,479 @@ function resultMeasurements(events: Json[], thread: Json, firstIndex: number) {
         zeroTurn: event.num_turns === 0,
       });
     }
-    if (key) seen.add(key);
-    inputAt = undefined;
-    pendingUsage = undefined;
+    if (key) state.seen.add(key);
+    state.inputAt = undefined;
+    state.pendingUsage = undefined;
   }
   return results;
 }
 
-export function buildConsoleSessions(opts: { dataDir: string }) {
-  const metadataFile = path.join(opts.dataDir, "threads.json"),
-    ledgerFile = path.join(opts.dataDir, "turns.jsonl");
+type Dedup = ReturnType<typeof deduplicateSessionLedger>;
+type ConsoleContext = {
+  byId: Map<string, Json>;
+  normalized: Json[];
+  dedup: Dedup;
+  logDir: string;
+  ledgerFile: string;
+};
+type ThreadOutcome = {
+  provider: string;
+  link?: Json;
+  reason?: string;
+  logRead?: boolean;
+  rootResults?: number;
+  task?: Json;
+  matched?: number;
+  reconstructed?: number;
+  selectedRows?: number;
+  failures?: number;
+};
+type MeasureAccumulator = {
+  used: Set<Json>;
+  measurements: Json[];
+  incomplete: boolean;
+  conflicts: boolean;
+  reconstructed: number;
+  matched: number;
+};
+
+function loadThreadMetadata(dataDir: string) {
+  const metadataFile = path.join(dataDir, "threads.json");
   const metadata = fs.existsSync(metadataFile)
     ? JSON.parse(fs.readFileSync(metadataFile, "utf8"))
     : [];
   if (!Array.isArray(metadata)) throw Error("Expected Console thread metadata array");
-  const raw = fs.existsSync(ledgerFile) ? jsonLines(ledgerFile) : [];
-  const dedup = deduplicateSessionLedger(raw);
-  const normalized = normalizeAccountingRows(opts.dataDir, dedup.records).map((row, index) => {
-    const source = dedup.records[index];
-    // Legacy Codex input/output are per-turn totals even if cache telemetry was absent.
-    if (
-      (row.unresolved || !finite(row.in) || !finite(row.out)) &&
-      source.provider === "codex" &&
-      finite(source.in) &&
-      finite(source.out) &&
-      source.cache == null
-    ) {
-      const { unresolved, ...rest } = row;
-      return {
-        ...rest,
-        in: source.in,
-        out: source.out,
-        cache: undefined,
-        accounting: 2,
-        cacheUnreported: true,
-      };
+  return metadata;
+}
+
+function restoreLegacyCodexRow(row: Json, source: Json) {
+  // Legacy Codex input/output are per-turn totals even if cache telemetry was absent.
+  if (
+    (row.unresolved || !finite(row.in) || !finite(row.out)) &&
+    source.provider === "codex" &&
+    finite(source.in) &&
+    finite(source.out) &&
+    source.cache == null
+  ) {
+    const { unresolved, ...rest } = row;
+    return {
+      ...rest,
+      in: source.in,
+      out: source.out,
+      cache: undefined,
+      accounting: 2,
+      cacheUnreported: true,
+    };
+  }
+  return row;
+}
+
+function readSessionLog(logFile: string) {
+  let events: Json[] = [],
+    logError = false,
+    logRead = false;
+  try {
+    if (fs.existsSync(logFile)) {
+      events = jsonLines(logFile);
+      logRead = true;
     }
-    return row;
-  });
-  const byId = new Map<string, Json>();
-  for (const thread of metadata) if (typeof thread.id === "string") byId.set(thread.id, thread);
-  const logDir = path.join(opts.dataDir, "logs");
-  const logIds = fs.existsSync(logDir)
+  } catch {
+    logError = true;
+  }
+  return { events, logError, logRead };
+}
+
+function sessionLink(threadId: string, thread: Json | undefined, identities: Json): Json {
+  return {
+    threadId,
+    nativeSessionIds: identities.own,
+    lineageNativeSessionIds: identities.lineage,
+    status: thread?.status ?? "unknown",
+    active: !!thread && (thread.status !== "idle" || !!thread.operation || thread.background > 0),
+    selected: false,
+  };
+}
+
+function preflightReason(
+  thread: Json | undefined,
+  threadId: string,
+  provider: string,
+  logError: boolean,
+  logFile: string,
+) {
+  if (!thread) return "missingThreadMetadata";
+  if (
+    thread.mock ||
+    thread.synthetic ||
+    thread.testFixture ||
+    provider === "mock" ||
+    /^(?:mock|test-fixture|fixture)[-_]/i.test(threadId)
+  )
+    return "explicitSyntheticSession";
+  if (thread.status !== "idle" || thread.operation || thread.background > 0)
+    return "activeOrUnconfirmedIdle";
+  if (logError) return "invalidOrOversizedLog";
+  if (!fs.existsSync(logFile)) return "missingSessionLog";
+  return undefined;
+}
+
+function findCandidates(selected: Json[], used: Set<Json>, result: Json) {
+  let candidates = selected.filter(
+    (row) => !used.has(row) && result.eventId && row.eventId === result.eventId,
+  );
+  if (!candidates.length && finite(result.inputAt))
+    candidates = selected.filter((row) => !used.has(row) && row.ts === result.inputAt);
+  if (!candidates.length && finite(result.ms))
+    candidates = selected.filter(
+      (row) =>
+        !used.has(row) &&
+        row.ms === result.ms &&
+        (!finite(result.inputAt) || Math.abs(row.ts - result.inputAt) <= 1000),
+    );
+  return candidates;
+}
+
+function reconcileUnmatched(acc: MeasureAccumulator, result: Json) {
+  if (!validUsage(result)) {
+    acc.incomplete = true;
+    return;
+  }
+  acc.measurements.push(result);
+  acc.reconstructed++;
+}
+
+function reconcileMatched(acc: MeasureAccumulator, row: Json, result: Json, provider: string) {
+  if (validUsage(row)) {
+    if (validUsage(result) && !usageEqual(row, result)) acc.conflicts = true;
+    acc.measurements.push(row);
+  } else if (validUsage(result)) {
+    acc.measurements.push({ ...result, provider: result.provider || row.provider || provider });
+    acc.reconstructed++;
+  } else acc.incomplete = true;
+}
+
+function consumeResult(acc: MeasureAccumulator, selected: Json[], result: Json, provider: string) {
+  const candidates = findCandidates(selected, acc.used, result);
+  if (candidates.length > 1) {
+    acc.incomplete = true;
+    return;
+  }
+  const row = candidates[0];
+  if (!row) {
+    reconcileUnmatched(acc, result);
+    return;
+  }
+  acc.used.add(row);
+  acc.matched++;
+  reconcileMatched(acc, row, result, provider);
+}
+
+/** Join log results against ledger rows; leftovers must carry valid usage. */
+function matchMeasurements(selected: Json[], results: Json[], provider: string) {
+  const acc: MeasureAccumulator = {
+    used: new Set<Json>(),
+    measurements: [],
+    incomplete: false,
+    conflicts: false,
+    reconstructed: 0,
+    matched: 0,
+  };
+  for (const result of results) consumeResult(acc, selected, result, provider);
+  for (const row of selected) {
+    if (acc.used.has(row)) continue;
+    if (validUsage(row)) acc.measurements.push(row);
+    else acc.incomplete = true;
+  }
+  return acc;
+}
+
+function completionBounds(thread: Json, initial: Json, selected: Json[], results: Json[]) {
+  const latestLedgerStart = Math.max(
+    initial.startedAt,
+    ...selected.map((row) => (finite(row.ts) ? row.ts : 0)),
+  );
+  const metadataBound = timestamp(thread.updatedAt);
+  const lastResultAt = results.at(-1)?.resultAt;
+  let safeBound: number | undefined;
+  if (metadataBound !== undefined && metadataBound >= latestLedgerStart) safeBound = metadataBound;
+  else if (finite(lastResultAt) && lastResultAt >= latestLedgerStart) safeBound = lastResultAt;
+  return { metadataBound, safeBound };
+}
+
+function latestCompletion(events: Json[], safeBound: number) {
+  return Math.max(
+    safeBound,
+    ...events.flatMap((event) => {
+      const value = timestamp(event.ts) ?? timestamp(event.timestamp);
+      return value === undefined ? [] : [value];
+    }),
+  );
+}
+
+function tokenTotals(measurements: Json[]) {
+  const total = (field: "in" | "out" | "cache") =>
+    measurements.reduce((sum, row) => sum + row[field], 0);
+  const inputTokens = total("in"),
+    outputTokens = total("out");
+  const cacheReadTokens = measurements.every((row) => finite(row.cache)) ? total("cache") : null;
+  const safe = [inputTokens, outputTokens, ...(cacheReadTokens === null ? [] : [cacheReadTokens])];
+  return { inputTokens, outputTokens, cacheReadTokens, safe: safe.every(Number.isSafeInteger) };
+}
+
+function providerMixOf(measurements: Json[], provider: string) {
+  return Object.fromEntries(
+    [...new Set(measurements.map((row) => row.provider || provider))]
+      .sort()
+      .map((name) => [
+        name,
+        measurements.filter((row) => (row.provider || provider) === name).length,
+      ]),
+  );
+}
+
+type SessionFacts = {
+  threadId: string;
+  initial: Json;
+  events: Json[];
+  identities: Json;
+  logFile: string;
+  ledgerFile: string;
+  selectedRows: number;
+  acc: MeasureAccumulator;
+  failures: number;
+  metadataBound: number | undefined;
+  safeBound: number;
+};
+
+function consoleProvenance(facts: SessionFacts) {
+  const { initial, identities, acc } = facts;
+  return {
+    scope: "completed-session",
+    source: "agent-console",
+    threadId: facts.threadId,
+    nativeSessionIds: identities.own,
+    lineageNativeSessionIds: identities.lineage,
+    predictor:
+      "Only first genuine user_input and contiguous user inputs before first assistant/tool/result. No subsequent conversation, plans, outcomes, or commit proof.",
+    initialMessageCount: initial.messageCount,
+    initialSourceLines: initial.sourceLines,
+    requestOriginalCharacters: initial.originalCharacters,
+    requestTruncated: initial.truncated,
+    requestLimit: MAX_REQUEST,
+    log: facts.logFile,
+    ledger: facts.ledgerFile,
+    ledgerRows: facts.selectedRows,
+    matchedLogResults: acc.matched,
+    reconstructedLogResults: acc.reconstructed,
+    accountingRecords: acc.measurements.length,
+    historicalFailureRecords: facts.failures,
+    completionBound:
+      facts.metadataBound === facts.safeBound
+        ? "idle-thread-updatedAt/log-timestamp-upper-bound"
+        : "last-result/log-timestamp-upper-bound",
+    completionTimeExact: false,
+    completionNote:
+      "Conservative observed availability bound for whole idle session; no duration or active-time inference.",
+    inputIncludesCache: true,
+    usageScope:
+      "Entire retained Console session, including measured failures and retries; child usage depends on provider accounting and is not imputed.",
+    outcomeNote:
+      "Actual session usage, not successful-task effort. Session may contain multiple later requests, scope changes, failures, and troubleshooting.",
+    activityNote:
+      "Distinct root-log tool_use IDs; rounds are distinct assistant message IDs or deduplicated call batches. Zero observed calls is valid.",
+  };
+}
+
+function consoleTask(
+  facts: SessionFacts,
+  totals: ReturnType<typeof tokenTotals>,
+  provider: string,
+) {
+  const { initial, acc } = facts;
+  const { inputTokens, outputTokens, cacheReadTokens } = totals;
+  const providerMix = providerMixOf(acc.measurements, provider);
+  return {
+    id: `console:${facts.threadId}`,
+    group: `console:${facts.threadId}`,
+    startedAt: new Date(initial.startedAt).toISOString(),
+    completedAt: new Date(latestCompletion(facts.events, facts.safeBound)).toISOString(),
+    request: initial.request,
+    preworkContext: [],
+    inputTokens,
+    outputTokens,
+    cacheReadTokens,
+    nonCachedInputTokens: cacheReadTokens === null ? null : inputTokens - cacheReadTokens,
+    ...observedActivity(facts.events.slice(initial.index)),
+    provider: Object.keys(providerMix).length === 1 ? Object.keys(providerMix)[0] : "mixed",
+    providerMix,
+    provenance: consoleProvenance(facts),
+  };
+}
+
+type SessionInput = {
+  context: ConsoleContext;
+  thread: Json;
+  threadId: string;
+  provider: string;
+  ledger: Json[];
+  logFile: string;
+  events: Json[];
+  identities: Json;
+};
+
+/** Evaluate one idle, readable session; returns an exclusion reason or the finished task. */
+function evaluateSession(input: SessionInput): Partial<ThreadOutcome> {
+  const { context, thread, threadId, provider, ledger, logFile, events, identities } = input;
+  const initial = initialSessionRequest(events, finite(thread.createdAt) ? thread.createdAt : 0);
+  if (!initial) return { reason: "missingInitiatingUserInput" };
+  if (context.dedup.conflictThreads.has(threadId))
+    return { reason: "conflictingDuplicateAccounting" };
+  const results = resultMeasurements(events, thread, initial.index);
+  const rootResults = results.length;
+  const selected = ledger.filter(
+    (row) => !finite(thread.createdAt) || !finite(row.ts) || row.ts >= thread.createdAt,
+  );
+  const acc = matchMeasurements(selected, results, provider);
+  if (acc.conflicts) return { rootResults, reason: "conflictingLogAndLedgerUsage" };
+  if (acc.incomplete) return { rootResults, reason: "incompleteSessionAccounting" };
+  if (!acc.measurements.length) return { rootResults, reason: "missingSessionAccounting" };
+  const { metadataBound, safeBound } = completionBounds(thread, initial, selected, results);
+  if (safeBound === undefined) return { rootResults, reason: "missingSafeSessionCompletionBound" };
+  const totals = tokenTotals(acc.measurements);
+  if (!totals.safe) return { rootResults, reason: "unsafeSessionTokenTotal" };
+  const failures = acc.measurements.filter((row) => row.err).length;
+  const facts: SessionFacts = {
+    threadId,
+    initial,
+    events,
+    identities,
+    logFile,
+    ledgerFile: context.ledgerFile,
+    selectedRows: selected.length,
+    acc,
+    failures,
+    metadataBound,
+    safeBound,
+  };
+  return {
+    rootResults,
+    task: consoleTask(facts, totals, provider),
+    matched: acc.matched,
+    reconstructed: acc.reconstructed,
+    selectedRows: selected.length,
+    failures,
+  };
+}
+
+function threadProvider(thread: Json | undefined, ledger: Json[]) {
+  return (
+    thread?.provider ||
+    [...new Set(ledger.map((row) => row.provider).filter(Boolean))].join("+") ||
+    "unknown"
+  );
+}
+
+function evaluateThread(context: ConsoleContext, threadId: string): ThreadOutcome {
+  const thread = context.byId.get(threadId);
+  const ledger = context.normalized.filter((row) => row.thread === threadId);
+  const provider = threadProvider(thread, ledger);
+  if (!/^[A-Za-z0-9_-]+$/.test(threadId)) return { provider, reason: "invalidThreadId" };
+  const logFile = path.join(context.logDir, `${threadId}.jsonl`);
+  const { events, logError, logRead } = readSessionLog(logFile);
+  const identities = nativeIds(thread, events, ledger);
+  const link = sessionLink(threadId, thread, identities);
+  const base = { provider, link, logRead };
+  const preflight = preflightReason(thread, threadId, provider, logError, logFile);
+  if (preflight || !thread) return { ...base, reason: preflight };
+  const input = { context, thread, threadId, provider, ledger, logFile, events, identities };
+  return { ...base, ...evaluateSession(input) };
+}
+
+function listLogIds(logDir: string) {
+  return fs.existsSync(logDir)
     ? fs
         .readdirSync(logDir)
         .filter((name) => name.endsWith(".jsonl"))
         .map((name) => name.slice(0, -6))
     : [];
+}
+
+function newTally() {
+  return {
+    exclusions: {} as Record<string, number>,
+    providers: {} as Record<string, Json>,
+    tasks: [] as Json[],
+    linkage: [] as Json[],
+    linked: new Set<string>(),
+    reconstructedResults: 0,
+    matchedResults: 0,
+    selectedLedgerRows: 0,
+    selectedFailureRows: 0,
+    logsRead: 0,
+    rootResults: 0,
+  };
+}
+
+function recordOutcome(tally: ReturnType<typeof newTally>, outcome: ThreadOutcome) {
+  const coverage = (tally.providers[outcome.provider] ??= { total: 0, selected: 0, excluded: {} });
+  coverage.total++;
+  if (outcome.logRead) tally.logsRead++;
+  if (outcome.link) {
+    for (const value of outcome.link.nativeSessionIds) tally.linked.add(value);
+    tally.linkage.push(outcome.link);
+  }
+  tally.rootResults += outcome.rootResults ?? 0;
+  if (outcome.reason || !outcome.task) {
+    const reason = outcome.reason as string;
+    tally.exclusions[reason] = (tally.exclusions[reason] || 0) + 1;
+    coverage.excluded[reason] = (coverage.excluded[reason] || 0) + 1;
+    if (outcome.link) outcome.link.exclusion = reason;
+    return;
+  }
+  tally.tasks.push(outcome.task);
+  outcome.link!.selected = true;
+  coverage.selected++;
+  tally.reconstructedResults += outcome.reconstructed!;
+  tally.matchedResults += outcome.matched!;
+  tally.selectedLedgerRows += outcome.selectedRows!;
+  tally.selectedFailureRows += outcome.failures!;
+}
+
+export function buildConsoleSessions(opts: { dataDir: string }) {
+  const ledgerFile = path.join(opts.dataDir, "turns.jsonl");
+  const metadata = loadThreadMetadata(opts.dataDir);
+  const raw = fs.existsSync(ledgerFile) ? jsonLines(ledgerFile) : [];
+  const dedup = deduplicateSessionLedger(raw);
+  const normalized = normalizeAccountingRows(opts.dataDir, dedup.records).map((row, index) =>
+    restoreLegacyCodexRow(row, dedup.records[index]),
+  );
+  const byId = new Map<string, Json>();
+  for (const thread of metadata) if (typeof thread.id === "string") byId.set(thread.id, thread);
+  const logDir = path.join(opts.dataDir, "logs");
+  const logIds = listLogIds(logDir);
   const ids = [
     ...new Set([...byId.keys(), ...logIds, ...normalized.map((row) => row.thread)]),
   ].sort();
-  const exclusions: Record<string, number> = {},
-    providers: Record<string, Json> = {},
-    tasks: Json[] = [],
-    linkage: Json[] = [];
-  const linked = new Set<string>();
-  let reconstructedResults = 0,
-    matchedResults = 0,
-    selectedLedgerRows = 0,
-    selectedFailureRows = 0,
-    logsRead = 0,
-    rootResults = 0;
-  for (const id of ids) {
-    const thread = byId.get(id),
-      ledger = normalized.filter((row) => row.thread === id);
-    const provider =
-      thread?.provider ||
-      [...new Set(ledger.map((row) => row.provider).filter(Boolean))].join("+") ||
-      "unknown";
-    const coverage = (providers[provider] ??= { total: 0, selected: 0, excluded: {} });
-    coverage.total++;
-    const exclude = (reason: string) => {
-      exclusions[reason] = (exclusions[reason] || 0) + 1;
-      coverage.excluded[reason] = (coverage.excluded[reason] || 0) + 1;
-    };
-    if (!/^[A-Za-z0-9_-]+$/.test(id)) {
-      exclude("invalidThreadId");
-      continue;
-    }
-    const logFile = path.join(logDir, `${id}.jsonl`);
-    let events: Json[] = [],
-      logError = false;
-    try {
-      if (fs.existsSync(logFile)) {
-        events = jsonLines(logFile);
-        logsRead++;
-      }
-    } catch {
-      logError = true;
-    }
-    const identities = nativeIds(thread, events, ledger),
-      sessionIds = identities.own;
-    for (const value of sessionIds) linked.add(value);
-    const link: Json = {
-      threadId: id,
-      nativeSessionIds: sessionIds,
-      lineageNativeSessionIds: identities.lineage,
-      status: thread?.status ?? "unknown",
-      active: !!thread && (thread.status !== "idle" || !!thread.operation || thread.background > 0),
-      selected: false,
-    };
-    linkage.push(link);
-    if (!thread) {
-      exclude("missingThreadMetadata");
-      link.exclusion = "missingThreadMetadata";
-      continue;
-    }
-    if (
-      thread.mock ||
-      thread.synthetic ||
-      thread.testFixture ||
-      provider === "mock" ||
-      /^(?:mock|test-fixture|fixture)[-_]/i.test(id)
-    ) {
-      exclude("explicitSyntheticSession");
-      link.exclusion = "explicitSyntheticSession";
-      continue;
-    }
-    if (thread.status !== "idle" || thread.operation || thread.background > 0) {
-      exclude("activeOrUnconfirmedIdle");
-      link.exclusion = "activeOrUnconfirmedIdle";
-      continue;
-    }
-    if (logError) {
-      exclude("invalidOrOversizedLog");
-      link.exclusion = "invalidOrOversizedLog";
-      continue;
-    }
-    if (!fs.existsSync(logFile)) {
-      exclude("missingSessionLog");
-      link.exclusion = "missingSessionLog";
-      continue;
-    }
-    const initial = initialSessionRequest(events, finite(thread.createdAt) ? thread.createdAt : 0);
-    if (!initial) {
-      exclude("missingInitiatingUserInput");
-      link.exclusion = "missingInitiatingUserInput";
-      continue;
-    }
-    if (dedup.conflictThreads.has(id)) {
-      exclude("conflictingDuplicateAccounting");
-      link.exclusion = "conflictingDuplicateAccounting";
-      continue;
-    }
-    const results = resultMeasurements(events, thread, initial.index);
-    rootResults += results.length;
-    const selected = ledger.filter(
-      (row) => !finite(thread.createdAt) || !finite(row.ts) || row.ts >= thread.createdAt,
-    );
-    const used = new Set<Json>(),
-      measurements: Json[] = [];
-    let incomplete = false,
-      conflicts = false,
-      localReconstructed = 0,
-      localMatched = 0;
-    for (const result of results) {
-      let candidates = selected.filter(
-        (row) => !used.has(row) && result.eventId && row.eventId === result.eventId,
-      );
-      if (!candidates.length && finite(result.inputAt))
-        candidates = selected.filter((row) => !used.has(row) && row.ts === result.inputAt);
-      if (!candidates.length && finite(result.ms))
-        candidates = selected.filter(
-          (row) =>
-            !used.has(row) &&
-            row.ms === result.ms &&
-            (!finite(result.inputAt) || Math.abs(row.ts - result.inputAt) <= 1000),
-        );
-      if (candidates.length > 1) {
-        incomplete = true;
-        continue;
-      }
-      const row = candidates[0];
-      if (row) {
-        used.add(row);
-        localMatched++;
-        if (validUsage(row)) {
-          if (validUsage(result) && !usageEqual(row, result)) conflicts = true;
-          measurements.push(row);
-        } else if (validUsage(result)) {
-          measurements.push({ ...result, provider: result.provider || row.provider || provider });
-          localReconstructed++;
-        } else incomplete = true;
-      } else if (validUsage(result)) {
-        measurements.push(result);
-        localReconstructed++;
-      } else incomplete = true;
-    }
-    for (const row of selected)
-      if (!used.has(row)) {
-        if (validUsage(row)) measurements.push(row);
-        else incomplete = true;
-      }
-    if (conflicts) {
-      exclude("conflictingLogAndLedgerUsage");
-      link.exclusion = "conflictingLogAndLedgerUsage";
-      continue;
-    }
-    if (incomplete) {
-      exclude("incompleteSessionAccounting");
-      link.exclusion = "incompleteSessionAccounting";
-      continue;
-    }
-    if (!measurements.length) {
-      exclude("missingSessionAccounting");
-      link.exclusion = "missingSessionAccounting";
-      continue;
-    }
-    const latestLedgerStart = Math.max(
-      initial.startedAt,
-      ...selected.map((row) => (finite(row.ts) ? row.ts : 0)),
-    );
-    const metadataBound = timestamp(thread.updatedAt);
-    const lastResultAt = results.at(-1)?.resultAt;
-    const safeBound =
-      metadataBound !== undefined && metadataBound >= latestLedgerStart
-        ? metadataBound
-        : finite(lastResultAt) && lastResultAt >= latestLedgerStart
-          ? lastResultAt
-          : undefined;
-    if (safeBound === undefined) {
-      exclude("missingSafeSessionCompletionBound");
-      link.exclusion = "missingSafeSessionCompletionBound";
-      continue;
-    }
-    const completedAt = Math.max(
-      safeBound,
-      ...events.flatMap((event) => {
-        const value = timestamp(event.ts) ?? timestamp(event.timestamp);
-        return value === undefined ? [] : [value];
-      }),
-    );
-    const total = (field: "in" | "out" | "cache") =>
-      measurements.reduce((sum, row) => sum + row[field], 0);
-    const inputTokens = total("in"),
-      outputTokens = total("out");
-    const cacheReadTokens = measurements.every((row) => finite(row.cache)) ? total("cache") : null;
-    if (
-      ![inputTokens, outputTokens, ...(cacheReadTokens === null ? [] : [cacheReadTokens])].every(
-        Number.isSafeInteger,
-      )
-    ) {
-      exclude("unsafeSessionTokenTotal");
-      link.exclusion = "unsafeSessionTokenTotal";
-      continue;
-    }
-    const providerMix = Object.fromEntries(
-      [...new Set(measurements.map((row) => row.provider || provider))]
-        .sort()
-        .map((name) => [
-          name,
-          measurements.filter((row) => (row.provider || provider) === name).length,
-        ]),
-    );
-    const failures = measurements.filter((row) => row.err).length;
-    tasks.push({
-      id: `console:${id}`,
-      group: `console:${id}`,
-      startedAt: new Date(initial.startedAt).toISOString(),
-      completedAt: new Date(completedAt).toISOString(),
-      request: initial.request,
-      preworkContext: [],
-      inputTokens,
-      outputTokens,
-      cacheReadTokens,
-      nonCachedInputTokens: cacheReadTokens === null ? null : inputTokens - cacheReadTokens,
-      ...observedActivity(events.slice(initial.index)),
-      provider: Object.keys(providerMix).length === 1 ? Object.keys(providerMix)[0] : "mixed",
-      providerMix,
-      provenance: {
-        scope: "completed-session",
-        source: "agent-console",
-        threadId: id,
-        nativeSessionIds: sessionIds,
-        lineageNativeSessionIds: identities.lineage,
-        predictor:
-          "Only first genuine user_input and contiguous user inputs before first assistant/tool/result. No subsequent conversation, plans, outcomes, or commit proof.",
-        initialMessageCount: initial.messageCount,
-        initialSourceLines: initial.sourceLines,
-        requestOriginalCharacters: initial.originalCharacters,
-        requestTruncated: initial.truncated,
-        requestLimit: MAX_REQUEST,
-        log: logFile,
-        ledger: ledgerFile,
-        ledgerRows: selected.length,
-        matchedLogResults: localMatched,
-        reconstructedLogResults: localReconstructed,
-        accountingRecords: measurements.length,
-        historicalFailureRecords: failures,
-        completionBound:
-          metadataBound === safeBound
-            ? "idle-thread-updatedAt/log-timestamp-upper-bound"
-            : "last-result/log-timestamp-upper-bound",
-        completionTimeExact: false,
-        completionNote:
-          "Conservative observed availability bound for whole idle session; no duration or active-time inference.",
-        inputIncludesCache: true,
-        usageScope:
-          "Entire retained Console session, including measured failures and retries; child usage depends on provider accounting and is not imputed.",
-        outcomeNote:
-          "Actual session usage, not successful-task effort. Session may contain multiple later requests, scope changes, failures, and troubleshooting.",
-        activityNote:
-          "Distinct root-log tool_use IDs; rounds are distinct assistant message IDs or deduplicated call batches. Zero observed calls is valid.",
-      },
-    });
-    link.selected = true;
-    coverage.selected++;
-    reconstructedResults += localReconstructed;
-    matchedResults += localMatched;
-    selectedLedgerRows += selected.length;
-    selectedFailureRows += failures;
-  }
-  tasks.sort((a, b) => a.startedAt.localeCompare(b.startedAt) || a.id.localeCompare(b.id));
+  const context: ConsoleContext = { byId, normalized, dedup, logDir, ledgerFile };
+  const tally = newTally();
+  for (const threadId of ids) recordOutcome(tally, evaluateThread(context, threadId));
+  const {
+    exclusions,
+    providers,
+    tasks,
+    linkage,
+    linked,
+    reconstructedResults,
+    matchedResults,
+    selectedLedgerRows,
+    selectedFailureRows,
+    logsRead,
+    rootResults,
+  } = tally;
+  tasks.sort(
+    (left, right) =>
+      left.startedAt.localeCompare(right.startedAt) || left.id.localeCompare(right.id),
+  );
   const excludedSessions = Object.values(exclusions).reduce((sum, value) => sum + value, 0);
   return {
     version: 1,
@@ -549,7 +722,7 @@ export function buildConsoleSessions(opts: { dataDir: string }) {
       orphanLedgerSessions: new Set(
         normalized.filter((row) => !byId.has(row.thread)).map((row) => row.thread),
       ).size,
-      orphanLogSessions: logIds.filter((id) => !byId.has(id)).length,
+      orphanLogSessions: logIds.filter((logId) => !byId.has(logId)).length,
       selectedSessions: tasks.length,
       excludedSessions,
       exclusions,

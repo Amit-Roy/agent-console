@@ -70,108 +70,122 @@ risk: 0 explicitly cosmetic-only; 1 reversible functional change; 2 authenticati
 The request contains only the initial user message or consecutive initial user messages before the first agent response. Never use later conversation, assistant plans, outcomes, usage, or implementation results as complexity evidence. Evidence must quote the initial request verbatim.
 Sparse requests may have all null metrics. Do not infer unstated facts. Give one record per supplied ID.`;
 
+type FeatureInput = { id: string; request: string; preworkContext?: Context[] };
+
+function isPlainObject(value: any) {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function validEvidence(metric: any, request: string) {
+  return (
+    Number.isInteger(metric.value) &&
+    metric.value >= 0 &&
+    metric.value <= 3 &&
+    typeof metric.evidence === "string" &&
+    metric.evidence.trim().length >= 4 &&
+    metric.evidence.length <= 240 &&
+    !/[\u0000-\u001f\u007f]/.test(metric.evidence) &&
+    request.includes(metric.evidence)
+  );
+}
+
+function parseMetric(metric: any, request: string): Metric | undefined {
+  if (!isPlainObject(metric)) return;
+  if (metric.value === null && metric.evidence === null) return { value: null, evidence: null };
+  if (!validEvidence(metric, request)) return;
+  return { value: metric.value, evidence: metric.evidence };
+}
+
+function parseMetrics(rawMetrics: any, request: string): Metrics | undefined {
+  const metrics = {} as Metrics;
+  for (const name of FEATURE_NAMES) {
+    const metric = parseMetric(rawMetrics[name], request);
+    if (!metric) return;
+    metrics[name] = metric;
+  }
+  return metrics;
+}
+
+function parseFeatureRows(rows: any[], inputs: FeatureInput[]) {
+  const ids = new Set<string>();
+  const records = [];
+  for (const row of rows) {
+    const source = inputs.find((input) => input.id === row?.id);
+    if (!source || ids.has(row.id) || !isPlainObject(row.metrics)) return;
+    ids.add(row.id);
+    const metrics = parseMetrics(row.metrics, source.request);
+    if (!metrics) return;
+    records.push({ id: row.id, metrics });
+  }
+  return records;
+}
+
 export function parseFeatureBatch(
   raw: string | undefined,
-  inputs: { id: string; request: string; preworkContext?: Context[] }[],
+  inputs: FeatureInput[],
 ): { id: string; metrics: Metrics }[] | undefined {
   if (!raw || raw.length > 24_576) return;
   try {
     const parsed = JSON.parse(raw.trim().replace(/^```(?:json)?\s*\n?([\s\S]*?)\n?```$/i, "$1"));
     if (!Array.isArray(parsed?.records) || parsed.records.length !== inputs.length) return;
-    const ids = new Set<string>();
-    const records = [];
-    for (const row of parsed.records) {
-      const source = inputs.find((input) => input.id === row?.id);
-      if (
-        !source ||
-        ids.has(row.id) ||
-        !row.metrics ||
-        typeof row.metrics !== "object" ||
-        Array.isArray(row.metrics)
-      )
-        return;
-      ids.add(row.id);
-      const metrics = {} as Metrics;
-      for (const name of FEATURE_NAMES) {
-        const metric = row.metrics[name];
-        if (!metric || typeof metric !== "object" || Array.isArray(metric)) return;
-        if (metric.value === null && metric.evidence === null) {
-          metrics[name] = { value: null, evidence: null };
-          continue;
-        }
-        if (
-          !Number.isInteger(metric.value) ||
-          metric.value < 0 ||
-          metric.value > 3 ||
-          typeof metric.evidence !== "string" ||
-          metric.evidence.trim().length < 4 ||
-          metric.evidence.length > 240 ||
-          /[\u0000-\u001f\u007f]/.test(metric.evidence) ||
-          !source.request.includes(metric.evidence)
-        )
-          return;
-        metrics[name] = { value: metric.value, evidence: metric.evidence };
-      }
-      records.push({ id: row.id, metrics });
-    }
-    return records;
+    return parseFeatureRows(parsed.records, inputs);
   } catch {
     return;
   }
 }
 
-export async function extractEffortFeatures(
-  tasks: Source[],
-  cached: FeatureRecord[] = [],
-  engines: LabelEngine[] = defaultTriageEngines(),
-  save?: (records: FeatureRecord[]) => void,
-) {
-  const records: FeatureRecord[] = [];
-  const audit = {
-    sourceRuns: tasks.length,
-    reused: 0,
-    extracted: 0,
-    privacySkipped: 0,
-    invalidSource: 0,
-    failed: 0,
-  };
-  const pending: { task: Source; request: string; context: Context[]; hash: string }[] = [];
-  for (const task of tasks) {
-    if (typeof task.id !== "string" || typeof task.request !== "string") {
-      audit.invalidSource++;
-      continue;
-    }
-    const request = safePreworkRequest(task.request);
-    if (Array.isArray(task.preworkContext) && task.preworkContext.length) {
-      audit.invalidSource++;
-      continue;
-    }
-    const context: Context[] = [];
-    if (!request) {
-      audit.privacySkipped++;
-      continue;
-    }
-    const hash = requestHash(task.request);
-    const existing = cached.find(
-      (row) =>
-        row.sourceId === task.id &&
-        row.requestHash === hash &&
-        row.featureVersion === EFFORT_FEATURE_VERSION,
-    );
-    if (
-      existing &&
-      parseFeatureBatch(JSON.stringify({ records: [{ id: "0", metrics: existing.metrics }] }), [
-        { id: "0", request, preworkContext: context },
-      ])
-    ) {
-      records.push(existing);
-      audit.reused++;
-    } else pending.push({ task, request, context, hash });
+type Pending = { task: Source; request: string; context: Context[]; hash: string };
+type FeatureAudit = {
+  sourceRuns: number;
+  reused: number;
+  extracted: number;
+  privacySkipped: number;
+  invalidSource: number;
+  failed: number;
+};
+type Completion = { id: string; complete: ReturnType<typeof createLabelCompletion> };
+type ExtractState = {
+  records: FeatureRecord[];
+  audit: FeatureAudit;
+  completions: Completion[];
+  preferred: string | undefined;
+  save?: (records: FeatureRecord[]) => void;
+};
+
+/** Returns a reusable cached record, a pending row, or nothing when the source is skipped. */
+function prepareSource(task: Source, cached: FeatureRecord[], audit: FeatureAudit) {
+  if (typeof task.id !== "string" || typeof task.request !== "string") {
+    audit.invalidSource++;
+    return;
   }
-  const latest = records.at(-1);
-  let preferred: string | undefined =
-    latest && Date.now() - Date.parse(latest.extractedAt) < 30 * 60_000 ? latest.model : undefined;
-  const completions = engines.map((engine) => ({
+  const request = safePreworkRequest(task.request);
+  if (Array.isArray(task.preworkContext) && task.preworkContext.length) {
+    audit.invalidSource++;
+    return;
+  }
+  const context: Context[] = [];
+  if (!request) {
+    audit.privacySkipped++;
+    return;
+  }
+  const hash = requestHash(task.request);
+  const existing = cached.find(
+    (row) =>
+      row.sourceId === task.id &&
+      row.requestHash === hash &&
+      row.featureVersion === EFFORT_FEATURE_VERSION,
+  );
+  const reusable =
+    existing &&
+    parseFeatureBatch(JSON.stringify({ records: [{ id: "0", metrics: existing.metrics }] }), [
+      { id: "0", request, preworkContext: context },
+    ]);
+  if (existing && reusable) return { existing };
+  return { pending: { task, request, context, hash } as Pending };
+}
+
+function wrapEngines(engines: LabelEngine[]): Completion[] {
+  return engines.map((engine) => ({
     id: engine.id,
     complete: createLabelCompletion([
       {
@@ -185,66 +199,107 @@ export async function extractEffortFeatures(
       },
     ]),
   }));
-  const extractBatch = async (batch: typeof pending) => {
-    const inputs = batch.map((row, index) => ({
-      id: String(index),
-      request: row.request,
-      preworkContext: row.context,
-    }));
-    let reply: { model: string; rows: { id: string; metrics: Metrics }[] } | undefined;
-    const ordered = [...completions].sort(
-      (a, b) => Number(b.id === preferred) - Number(a.id === preferred),
+}
+
+function parseWrappedReply(raw: string | undefined, inputs: FeatureInput[]) {
+  if (!raw) return;
+  try {
+    const wrapper = JSON.parse(raw);
+    const rows = parseFeatureBatch(wrapper.raw, inputs);
+    return rows ? { model: wrapper.model, rows } : undefined;
+  } catch {
+    return;
+  }
+}
+
+async function askEngines(state: ExtractState, inputs: FeatureInput[]) {
+  const ordered = [...state.completions].sort(
+    (left, right) => Number(right.id === state.preferred) - Number(left.id === state.preferred),
+  );
+  for (const engine of ordered) {
+    const reply = await engine.complete(
+      "Extract only prework features from these requests:\n" + JSON.stringify({ records: inputs }),
+      FEATURE_SYSTEM,
+      (raw) => parseWrappedReply(raw, inputs),
     );
-    for (const engine of ordered) {
-      reply = await engine.complete(
-        "Extract only prework features from these requests:\n" +
-          JSON.stringify({ records: inputs }),
-        FEATURE_SYSTEM,
-        (raw) => {
-          if (!raw) return;
-          try {
-            const wrapper = JSON.parse(raw);
-            const rows = parseFeatureBatch(wrapper.raw, inputs);
-            return rows ? { model: wrapper.model, rows } : undefined;
-          } catch {
-            return;
-          }
-        },
-      );
-      if (reply) {
-        preferred = engine.id;
-        break;
-      }
+    if (reply) {
+      state.preferred = engine.id;
+      return reply;
     }
-    if (!reply) {
-      audit.failed += batch.length;
-      return;
-    }
-    for (const row of reply.rows) {
-      const source = batch[Number(row.id)];
-      records.push({
-        sourceId: source.task.id,
-        requestHash: source.hash,
-        featureVersion: EFFORT_FEATURE_VERSION,
-        metrics: row.metrics,
-        model: reply.model,
-        extractedAt: new Date().toISOString(),
-      });
-      audit.extracted++;
-    }
-    save?.(records);
+  }
+  return undefined;
+}
+
+async function extractBatch(state: ExtractState, batch: Pending[]) {
+  const inputs = batch.map((row, index) => ({
+    id: String(index),
+    request: row.request,
+    preworkContext: row.context,
+  }));
+  const reply = await askEngines(state, inputs);
+  if (!reply) {
+    state.audit.failed += batch.length;
+    return;
+  }
+  for (const row of reply.rows) {
+    const source = batch[Number(row.id)];
+    state.records.push({
+      sourceId: source.task.id,
+      requestHash: source.hash,
+      featureVersion: EFFORT_FEATURE_VERSION,
+      metrics: row.metrics,
+      model: reply.model,
+      extractedAt: new Date().toISOString(),
+    });
+    state.audit.extracted++;
+  }
+  state.save?.(state.records);
+}
+
+export async function extractEffortFeatures(
+  tasks: Source[],
+  cached: FeatureRecord[] = [],
+  engines: LabelEngine[] = defaultTriageEngines(),
+  save?: (records: FeatureRecord[]) => void,
+) {
+  const records: FeatureRecord[] = [];
+  const audit: FeatureAudit = {
+    sourceRuns: tasks.length,
+    reused: 0,
+    extracted: 0,
+    privacySkipped: 0,
+    invalidSource: 0,
+    failed: 0,
+  };
+  const pending: Pending[] = [];
+  for (const task of tasks) {
+    const prepared = prepareSource(task, cached, audit);
+    if (prepared?.existing) {
+      records.push(prepared.existing);
+      audit.reused++;
+    } else if (prepared?.pending) pending.push(prepared.pending);
+  }
+  const latest = records.at(-1);
+  const preferred =
+    latest && Date.now() - Date.parse(latest.extractedAt) < 30 * 60_000 ? latest.model : undefined;
+  const state: ExtractState = {
+    records,
+    audit,
+    completions: wrapEngines(engines),
+    preferred,
+    save,
   };
   for (let at = 0; at < pending.length; at += 8) {
     await Promise.all(
       [pending.slice(at, at + 4), pending.slice(at + 4, at + 8)]
         .filter((batch) => batch.length)
-        .map(extractBatch),
+        .map((batch) => extractBatch(state, batch)),
     );
   }
   records.sort(
-    (a, b) =>
-      tasks.findIndex((task) => task.id === a.sourceId) -
-      tasks.findIndex((task) => task.id === b.sourceId),
+    (left, right) =>
+      tasks.findIndex((task) => task.id === left.sourceId) -
+      tasks.findIndex((task) => task.id === right.sourceId),
   );
   return { version: 1, featureVersion: EFFORT_FEATURE_VERSION, records, audit };
 }

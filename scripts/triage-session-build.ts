@@ -15,8 +15,10 @@ const nativeIds = (task: Json): string[] =>
     ),
   );
 
-/** Identity links deduplicate backend transcripts; token totals are never added to their Console mirror. */
-export function canonicalSessionSamples(consoleSource: Json, nativeSource: Json) {
+type Component = { console: Json[]; native: Json[]; links: Json[] };
+type Selection = { selected: Json[]; linkedIds: string[]; nativeComplete: boolean };
+
+function createIdentityForest() {
   const parents = new Map<string, string>();
   const find = (id: string): string => {
     if (!parents.has(id)) parents.set(id, id);
@@ -25,32 +27,121 @@ export function canonicalSessionSamples(consoleSource: Json, nativeSource: Json)
     return parents.get(id)!;
   };
   const join = (left: string, right: string) => parents.set(find(right), find(left));
-  const consoleTasks = consoleSource.tasks || [],
-    nativeTasks = nativeSource.tasks || [];
-  const links = consoleSource.sessionLinks || [];
+  return { find, join };
+}
+type Forest = ReturnType<typeof createIdentityForest>;
+
+function linkIdentities(forest: Forest, links: Json[], nativeTasks: Json[], consoleTasks: Json[]) {
   for (const link of links) {
     const node = `console:${link.threadId}`;
-    find(node);
-    for (const id of link.nativeSessionIds || []) join(node, `native:${id}`);
+    forest.find(node);
+    for (const nativeId of link.nativeSessionIds || []) forest.join(node, `native:${nativeId}`);
   }
   for (const task of nativeTasks) {
     const node = `task:${task.id}`;
-    find(node);
-    for (const id of nativeIds(task)) join(node, `native:${id}`);
+    forest.find(node);
+    for (const nativeId of nativeIds(task)) forest.join(node, `native:${nativeId}`);
   }
-  for (const task of consoleTasks) find(task.id);
-  const components = new Map<string, { console: Json[]; native: Json[]; links: Json[] }>();
+  for (const task of consoleTasks) forest.find(task.id);
+}
+
+function groupComponents(forest: Forest, links: Json[], consoleTasks: Json[], nativeTasks: Json[]) {
+  const components = new Map<string, Component>();
   const component = (node: string) => {
-    const root = find(node);
+    const root = forest.find(node);
     if (!components.has(root)) components.set(root, { console: [], native: [], links: [] });
     return components.get(root)!;
   };
   for (const link of links) component(`console:${link.threadId}`).links.push(link);
   for (const task of consoleTasks) component(task.id).console.push(task);
   for (const task of nativeTasks) component(`task:${task.id}`).native.push(task);
-  const tasks: Json[] = [];
-  const audit = {
-    identityComponents: components.size,
+  return components;
+}
+
+function selectSources(value: Component): Selection {
+  const covered = new Set(value.native.flatMap(nativeIds));
+  const linkedIds = unique(value.links.flatMap((link) => link.nativeSessionIds || []));
+  const nativeComplete =
+    value.native.length > 0 &&
+    (!value.console.length || linkedIds.every((linkedId) => covered.has(linkedId)));
+  return { selected: nativeComplete ? value.native : value.console, linkedIds, nativeComplete };
+}
+
+function sumField(selected: Json[], field: string) {
+  const valid = selected.every(
+    (task) => typeof task[field] === "number" && Number.isFinite(task[field]) && task[field] >= 0,
+  );
+  return valid ? selected.reduce((total, task) => total + task[field], 0) : null;
+}
+
+function linkSampleIdentity(
+  forest: Forest,
+  sampleId: string,
+  value: Component,
+  selection: Selection,
+) {
+  const { selected, linkedIds } = selection;
+  forest.find(`sample:${sampleId}`);
+  for (const source of [...selected, ...value.native])
+    forest.join(`sample:${sampleId}`, `cohort:${source.group}`);
+  for (const identity of unique([...selected.flatMap(nativeIds), ...linkedIds]))
+    forest.join(`sample:${sampleId}`, `lineage:${identity}`);
+  for (const lineage of unique(value.links.flatMap((link) => link.lineageNativeSessionIds || [])))
+    forest.join(`sample:${sampleId}`, `lineage:${lineage}`);
+}
+
+function buildSampleTask(forest: Forest, value: Component, selection: Selection) {
+  const { selected, nativeComplete } = selection;
+  const initial = [...selected, ...value.console].sort((left, right) =>
+    left.startedAt.localeCompare(right.startedAt),
+  )[0];
+  const consoleIdentity = [...value.links].sort((left, right) =>
+    left.threadId.localeCompare(right.threadId),
+  )[0];
+  const sampleId = consoleIdentity ? `console:${consoleIdentity.threadId}` : initial.id;
+  const request = initial.request.slice(0, 12_000);
+  linkSampleIdentity(forest, sampleId, value, selection);
+  return {
+    id: sampleId,
+    group: consoleIdentity ? sampleId : initial.group,
+    request,
+    preworkContext: [],
+    startedAt: selected.reduce(
+      (time, task) => (task.startedAt < time ? task.startedAt : time),
+      initial.startedAt,
+    ),
+    completedAt: [...selected, ...value.console].reduce(
+      (time, task) => (task.completedAt > time ? task.completedAt : time),
+      initial.completedAt,
+    ),
+    provider: unique(selected.flatMap((task) => String(task.provider).split("+")))
+      .sort()
+      .join("+"),
+    inputTokens: sumField(selected, "inputTokens"),
+    outputTokens: sumField(selected, "outputTokens"),
+    cacheReadTokens: sumField(selected, "cacheReadTokens"),
+    nonCachedInputTokens: sumField(selected, "nonCachedInputTokens"),
+    toolCalls: sumField(selected, "toolCalls"),
+    toolRounds: sumField(selected, "toolRounds"),
+    provenance: {
+      scope: "completed-session",
+      source: nativeComplete ? "native-canonical" : "console-ledger-fallback",
+      nativeSessionIds: unique(selected.flatMap(nativeIds)),
+      consoleThreads: value.links.map((link) => link.threadId),
+      sourceSessions: selected.map((task) => ({ id: task.id, provenance: task.provenance })),
+      initialRequestTruncated:
+        initial.request.length > request.length || !!initial.provenance?.initialRequestTruncated,
+      inputNote:
+        "Only initial user messages before the first agent response are predictors. Later messages are never features.",
+      outcomeNote:
+        "Recorded usage across the whole inactive session, including later follow-ups. Native usage and its Console mirror are never added together. Future resumption can change this observed snapshot.",
+    },
+  };
+}
+
+function newCanonicalAudit(componentCount: number) {
+  return {
+    identityComponents: componentCount,
     selectedSessions: 0,
     activeComponents: 0,
     unavailableComponents: 0,
@@ -60,89 +151,52 @@ export function canonicalSessionSamples(consoleSource: Json, nativeSource: Json)
     mergedNativeRoots: 0,
     firstRequestTruncated: 0,
   };
+}
+
+function recordSelection(
+  audit: ReturnType<typeof newCanonicalAudit>,
+  value: Component,
+  selection: Selection,
+  task: Json,
+) {
+  audit.selectedSessions++;
+  if (selection.nativeComplete) {
+    audit.nativeCanonicalSessions++;
+    audit.mergedNativeRoots += selection.selected.length - 1;
+    audit.duplicateConsoleMirrors += value.console.length;
+  } else audit.consoleFallbackSessions++;
+  if (task.provenance.initialRequestTruncated) audit.firstRequestTruncated++;
+}
+
+/** Identity links deduplicate backend transcripts; token totals are never added to their Console mirror. */
+export function canonicalSessionSamples(consoleSource: Json, nativeSource: Json) {
+  const forest = createIdentityForest();
+  const consoleTasks = consoleSource.tasks || [],
+    nativeTasks = nativeSource.tasks || [];
+  const links = consoleSource.sessionLinks || [];
+  linkIdentities(forest, links, nativeTasks, consoleTasks);
+  const components = groupComponents(forest, links, consoleTasks, nativeTasks);
+  const tasks: Json[] = [];
+  const audit = newCanonicalAudit(components.size);
   for (const value of components.values()) {
     if (value.links.some((link) => link.active)) {
       audit.activeComponents++;
       continue;
     }
-    const covered = new Set(value.native.flatMap(nativeIds));
-    const linkedIds = unique(value.links.flatMap((link) => link.nativeSessionIds || []));
-    const nativeComplete =
-      value.native.length > 0 &&
-      (!value.console.length || linkedIds.every((id) => covered.has(id)));
-    const selected = nativeComplete ? value.native : value.console;
-    if (!selected.length) {
+    const selection = selectSources(value);
+    if (!selection.selected.length) {
       audit.unavailableComponents++;
       continue;
     }
-    const initial = [...selected, ...value.console].sort((a, b) =>
-      a.startedAt.localeCompare(b.startedAt),
-    )[0];
-    const consoleIdentity = [...value.links].sort((a, b) =>
-      a.threadId.localeCompare(b.threadId),
-    )[0];
-    const id = consoleIdentity ? `console:${consoleIdentity.threadId}` : initial.id;
-    const sum = (field: string) =>
-      selected.every(
-        (task) =>
-          typeof task[field] === "number" && Number.isFinite(task[field]) && task[field] >= 0,
-      )
-        ? selected.reduce((total, task) => total + task[field], 0)
-        : null;
-    const request = initial.request.slice(0, 12_000);
-    find(`sample:${id}`);
-    for (const source of [...selected, ...value.native])
-      join(`sample:${id}`, `cohort:${source.group}`);
-    for (const identity of unique([...selected.flatMap(nativeIds), ...linkedIds]))
-      join(`sample:${id}`, `lineage:${identity}`);
-    for (const lineage of unique(value.links.flatMap((link) => link.lineageNativeSessionIds || [])))
-      join(`sample:${id}`, `lineage:${lineage}`);
-    tasks.push({
-      id,
-      group: consoleIdentity ? id : initial.group,
-      request,
-      preworkContext: [],
-      startedAt: selected.reduce(
-        (time, task) => (task.startedAt < time ? task.startedAt : time),
-        initial.startedAt,
-      ),
-      completedAt: [...selected, ...value.console].reduce(
-        (time, task) => (task.completedAt > time ? task.completedAt : time),
-        initial.completedAt,
-      ),
-      provider: unique(selected.flatMap((task) => String(task.provider).split("+")))
-        .sort()
-        .join("+"),
-      inputTokens: sum("inputTokens"),
-      outputTokens: sum("outputTokens"),
-      cacheReadTokens: sum("cacheReadTokens"),
-      nonCachedInputTokens: sum("nonCachedInputTokens"),
-      toolCalls: sum("toolCalls"),
-      toolRounds: sum("toolRounds"),
-      provenance: {
-        scope: "completed-session",
-        source: nativeComplete ? "native-canonical" : "console-ledger-fallback",
-        nativeSessionIds: unique(selected.flatMap(nativeIds)),
-        consoleThreads: value.links.map((link) => link.threadId),
-        sourceSessions: selected.map((task) => ({ id: task.id, provenance: task.provenance })),
-        initialRequestTruncated:
-          initial.request.length > request.length || !!initial.provenance?.initialRequestTruncated,
-        inputNote:
-          "Only initial user messages before the first agent response are predictors. Later messages are never features.",
-        outcomeNote:
-          "Recorded usage across the whole inactive session, including later follow-ups. Native usage and its Console mirror are never added together. Future resumption can change this observed snapshot.",
-      },
-    });
-    audit.selectedSessions++;
-    if (nativeComplete) {
-      audit.nativeCanonicalSessions++;
-      audit.mergedNativeRoots += selected.length - 1;
-      audit.duplicateConsoleMirrors += value.console.length;
-    } else audit.consoleFallbackSessions++;
-    if (tasks.at(-1)!.provenance.initialRequestTruncated) audit.firstRequestTruncated++;
+    const task = buildSampleTask(forest, value, selection);
+    tasks.push(task);
+    recordSelection(audit, value, selection, task);
   }
-  for (const task of tasks) task.group = find(`sample:${task.id}`);
-  tasks.sort((a, b) => a.startedAt.localeCompare(b.startedAt) || a.id.localeCompare(b.id));
+  for (const task of tasks) task.group = forest.find(`sample:${task.id}`);
+  tasks.sort(
+    (left, right) =>
+      left.startedAt.localeCompare(right.startedAt) || left.id.localeCompare(right.id),
+  );
   return { tasks, audit };
 }
 
