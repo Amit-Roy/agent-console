@@ -8,6 +8,69 @@ const within = (root: string, dir: string) => dir === root || dir.startsWith(roo
 const expand = (p: string) =>
   p === "~" ? os.homedir() : p.startsWith("~/") ? path.join(os.homedir(), p.slice(2)) : p;
 
+/** Last 512 KiB of a thread's event log; `offset` > 0 means the first line may be cut. */
+export function readLogTail(threadId: string): { text: string; offset: number } | null {
+  try {
+    const file = path.join(DATA_DIR, "logs", `${threadId}.jsonl`);
+    const size = fs.statSync(file).size,
+      fd = fs.openSync(file, "r");
+    try {
+      const buf = Buffer.alloc(Math.min(size, TAIL));
+      const offset = size - buf.length;
+      fs.readSync(fd, buf, 0, buf.length, offset);
+      return { text: buf.toString("utf8"), offset };
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return null;
+  }
+}
+
+const TEXT_PATH = /(?<![\w.~/-])(?:~|\/(?:home|tmp)\b)[^\s"'`;|&()<>[\]*]*\.\w+/g;
+const CD_CMD = /\bcd\s+(?:"([^"]+)"|'([^']+)'|([^\s;&|`()]+))/g;
+const ABS_IN_CMD = /(?:~|\/(?:home|tmp)\b)\/[^\s"'`;|&)<>]+/g;
+
+function parseLine(line: string): any {
+  if (!line.includes('"tool_use"') && !line.includes('"text"')) return null;
+  try {
+    return JSON.parse(line);
+  } catch {
+    return null;
+  }
+}
+
+function commandDirs(command: string, base: string, add: (target: string) => void) {
+  let cur = base;
+  for (const match of command.matchAll(CD_CMD)) {
+    cur = path.resolve(cur, expand(match[1] ?? match[2] ?? match[3]));
+    add(cur);
+  }
+  for (const match of command.matchAll(ABS_IN_CMD)) add(expand(match[0]));
+}
+
+function toolInputDirs(input: any, cwd: string, add: (target: string) => void) {
+  const workdir = input.workdir ?? input.cwd;
+  const base = typeof workdir === "string" ? path.resolve(cwd, expand(workdir)) : cwd;
+  if (base !== cwd) add(base);
+  for (const key of ["file_path", "path", "notebook_path"])
+    if (typeof input[key] === "string" && path.isAbsolute(expand(input[key])))
+      add(expand(input[key]));
+  for (const change of Array.isArray(input.changes) ? input.changes : []) {
+    if (typeof change?.path === "string") add(path.resolve(base, expand(change.path)));
+  }
+  const command = input.command ?? input.cmd;
+  if (typeof command === "string") commandDirs(command, base, add);
+}
+
+function blockDirs(event: any, block: any, cwd: string, add: (target: string) => void) {
+  if (block?.type === "text" && event.type === "assistant" && typeof block.text === "string") {
+    for (const match of block.text.matchAll(TEXT_PATH)) add(expand(match[0]));
+    return;
+  }
+  if (block?.type === "tool_use" && block.input) toolInputDirs(block.input, cwd, add);
+}
+
 /**
  * Folders a thread has been working in, newest first, read from its shared Claude/Codex/Pi event log:
  * shell working directories and `cd` targets in Bash calls,
@@ -17,23 +80,8 @@ const expand = (p: string) =>
  * so a bare `after-open.png` finds the file the agent named earlier. The viewer still applies its own scope rules.
  */
 export function contextDirs(threadId: string, cwd: string): string[] {
-  let text = "",
-    offset = 0;
-  try {
-    const file = path.join(DATA_DIR, "logs", `${threadId}.jsonl`);
-    const size = fs.statSync(file).size,
-      fd = fs.openSync(file, "r");
-    try {
-      const buf = Buffer.alloc(Math.min(size, TAIL));
-      offset = size - buf.length;
-      fs.readSync(fd, buf, 0, buf.length, offset);
-      text = buf.toString("utf8");
-    } finally {
-      fs.closeSync(fd);
-    }
-  } catch {
-    return [];
-  }
+  const tail = readLogTail(threadId);
+  if (!tail) return [];
   const found: string[] = [];
   const add = (target: string) => {
     let dir = path.resolve(target);
@@ -41,44 +89,10 @@ export function contextDirs(threadId: string, cwd: string): string[] {
     if (!within(cwd, dir)) return void found.push(dir);
     for (; within(cwd, dir) && dir !== cwd; dir = path.dirname(dir)) found.push(dir);
   };
-  for (const line of text.split("\n").slice(offset ? 1 : 0)) {
-    // discard only a potentially cut line
-    if (!line.includes('"tool_use"') && !line.includes('"text"')) continue;
-    let event: any;
-    try {
-      event = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    for (const block of event?.message?.content || []) {
-      if (block?.type === "text" && event.type === "assistant" && typeof block.text === "string") {
-        for (const m of block.text.matchAll(
-          /(?<![\w.~/-])(?:~|\/(?:home|tmp)\b)[^\s"'`;|&()<>[\]*]*\.\w+/g,
-        ))
-          add(expand(m[0]));
-        continue;
-      }
-      if (block?.type !== "tool_use" || !block.input) continue;
-      const input = block.input;
-      const workdir = input.workdir ?? input.cwd;
-      const base = typeof workdir === "string" ? path.resolve(cwd, expand(workdir)) : cwd;
-      if (base !== cwd) add(base);
-      for (const key of ["file_path", "path", "notebook_path"])
-        if (typeof input[key] === "string" && path.isAbsolute(expand(input[key])))
-          add(expand(input[key]));
-      for (const change of Array.isArray(input.changes) ? input.changes : []) {
-        if (typeof change?.path === "string") add(path.resolve(base, expand(change.path)));
-      }
-      const command = input.command ?? input.cmd;
-      if (typeof command !== "string") continue;
-      let cur = base;
-      for (const m of command.matchAll(/\bcd\s+(?:"([^"]+)"|'([^']+)'|([^\s;&|`()]+))/g)) {
-        cur = path.resolve(cur, expand(m[1] ?? m[2] ?? m[3]));
-        add(cur);
-      }
-      for (const m of command.matchAll(/(?:~|\/(?:home|tmp)\b)\/[^\s"'`;|&)<>]+/g))
-        add(expand(m[0]));
-    }
+  // discard only a potentially cut line
+  for (const line of tail.text.split("\n").slice(tail.offset ? 1 : 0)) {
+    const event = parseLine(line);
+    for (const block of event?.message?.content || []) blockDirs(event, block, cwd, add);
   }
   return [...new Set(found.reverse())].slice(0, 60);
 }
