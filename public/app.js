@@ -3225,7 +3225,11 @@ function onEvent(e, live) {
       }
       if (e.auto === "continue") {
         push(
-          el("div", "msg note", "Auto-continued: the agent announced a next step without doing it."),
+          el(
+            "div",
+            "msg note",
+            "Auto-continued: the agent announced a next step without doing it.",
+          ),
           live,
         );
         break;
