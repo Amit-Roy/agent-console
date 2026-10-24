@@ -3223,6 +3223,17 @@ function onEvent(e, live) {
         );
         break;
       }
+      if (e.auto === "continue") {
+        push(
+          el(
+            "div",
+            "msg note",
+            "Auto-continued: the agent announced a next step without doing it.",
+          ),
+          live,
+        );
+        break;
+      }
       if (e.auto === "subagent") {
         push(
           el("div", "msg note", "Background subagent finished. Its result was sent to the agent."),
