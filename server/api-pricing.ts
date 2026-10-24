@@ -2,12 +2,16 @@ import type { ModelUsage } from "./accounting.ts";
 
 export const pricing = {
   currency: "USD",
-  verifiedAt: "2026-10-17",
+  verifiedAt: "2026-10-23",
   sources: [
     { name: "OpenAI API pricing", url: "https://developers.openai.com/api/docs/pricing" },
     {
       name: "Anthropic API pricing",
       url: "https://platform.claude.com/docs/en/about-claude/pricing",
+    },
+    {
+      name: "DeepSeek API pricing",
+      url: "https://api-docs.deepseek.com/quick_start/pricing",
     },
   ],
   assumptions: [
@@ -17,6 +21,7 @@ export const pricing = {
     "Codex fresh input is priced as regular input when cache-write telemetry is absent.",
     "Haiku uses the short-prompt rate; prompts over 100,000 tokens can cost five times more.",
     "Reasoning tokens are included in output and are not charged twice.",
+    "DeepSeek uses peak-hour rates; off-peak input and output are half price.",
     "Excludes server-side tool fees, taxes, regional uplifts and premium processing modes.",
     "Unrecognized models or incomplete token categories remain unpriced.",
   ],
@@ -35,6 +40,10 @@ export const rates: Record<string, readonly [number, number, number, number]> = 
   "claude-opus-5-5": [4, 0.2, 5, 20],
   "claude-sonnet-5-5": [2, 0.1, 2.5, 10],
   "claude-haiku-5-5": [0.1, 0.01, 0.125, 0.5],
+  "deepseek-flash": [0.3, 0.006, 0.3, 1.2],
+  "deepseek-v4-flash": [0.3, 0.006, 0.3, 1.2],
+  "deepseek-v4-flash-vision-exp": [0.3, 0.006, 0.3, 1.2],
+  "deepseek-v4-pro": [1.32, 0.044, 1.32, 3.96],
 };
 const measured = (n: unknown): n is number => typeof n === "number" && Number.isFinite(n) && n >= 0;
 function modelRate(model: string) {
@@ -49,6 +58,8 @@ function modelRate(model: string) {
     withDashes.replace(/-(?:\d{8}|\d{4}-\d{2}-\d{2})$/, ""),
   ]) {
     candidates.add(key);
+    const slash = key.lastIndexOf("/");
+    if (slash >= 0) candidates.add(key.slice(slash + 1));
     if (key.startsWith("gpt-")) {
       candidates.add(key.replace(/-(\d)(?=-)/g, ".$1"));
       candidates.add(key.replace(/-(\d+)(?=-|$)/g, ".$1"));
