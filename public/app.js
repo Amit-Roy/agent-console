@@ -1187,6 +1187,8 @@ const base = (p) => p.replace(/\/+$/, "").split("/").pop() || p;
 
 let rowMenuOpen = false; // rebuilding the list would pull the trigger out from under an open menu
 let renderPending = false;
+// Pending share-target picker; set while the drawer is in share mode.
+let shareResolve = null;
 function renderThreads() {
   if (rowMenuOpen) {
     renderPending = true;
@@ -4567,7 +4569,6 @@ async function maybeShareInstagram() {
   }
 }
 // Share mode: the left drawer doubles as the target picker. Resolves "" for a new thread, a thread id, or null when cancelled.
-let shareResolve = null;
 function finishShare(value) {
   const resolve = shareResolve;
   if (!resolve) return;
