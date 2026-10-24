@@ -129,6 +129,273 @@ export function completionAvailability(
   return undefined;
 }
 
+type Segment = {
+  input: Json;
+  eventsForRun: Json[];
+  lineStart: number;
+  resultIndex: number;
+  result: Json;
+};
+type Completion = NonNullable<ReturnType<typeof completionAvailability>>;
+type HistoryContext = {
+  opts: { dataDir: string; repoDir: string; repo: string };
+  resolve: (prefix: string) => string | undefined;
+  usedLedger: Set<Json>;
+};
+type Verdict = { reason: string } | { task: Json };
+
+function isEmptyCompact(start: Json, result: Json, segment: Json[]) {
+  return (
+    /^\/compact(?:\s|$)/.test(start.text || "") &&
+    result.num_turns === 0 &&
+    !result.is_error &&
+    !segment.some((entry) => entry.type === "system" && entry.subtype === "compact_boundary")
+  );
+}
+
+/** Split a thread log into user-input to result segments. */
+function collectSegments(events: Json[]) {
+  const segments: Segment[] = [];
+  let start: Json | undefined,
+    segment: Json[] = [],
+    lineStart = 0;
+  for (let index = 0; index < events.length; index++) {
+    const event = events[index];
+    if (event.type === "user_input" && !start) {
+      start = event;
+      segment = [];
+      lineStart = index + 1;
+    }
+    if (!start) continue;
+    segment.push(event);
+    if (event.type !== "result") continue;
+    if (isEmptyCompact(start, event, segment)) continue;
+    segments.push({
+      input: start,
+      eventsForRun: segment,
+      lineStart,
+      resultIndex: index,
+      result: event,
+    });
+    start = undefined;
+    segment = [];
+  }
+  return segments;
+}
+
+function threadExclusion(thread: Json, logFile: string) {
+  if (!/^[\w-]+$/.test(thread.id)) return "invalidThreadId";
+  if (!fs.existsSync(logFile)) return "missingThreadLog";
+  if (/mock|test-fixture|^\/tmp\//i.test(String(thread.cwd || ""))) return "syntheticThread";
+  return undefined;
+}
+
+function inputExclusion(input: Json, eventsForRun: Json[]) {
+  if (
+    input.auto ||
+    input.questionAnswer ||
+    /^\/(?:compact|help|clear|model|effort)\b/.test(input.text || "")
+  )
+    return "nonTaskInput";
+  // Very short continuations do not describe the work without earlier conversation.
+  if (typeof input.text !== "string" || input.text.trim().split(/\s+/).length < 6)
+    return "contextOnlyRequest";
+  if (eventsForRun.slice(1).some((entry) => entry.type === "user_input"))
+    return "multipleRequestsInRun";
+  if (!finite(input.ts)) return "missingStartTime";
+  return undefined;
+}
+
+function matchLedger(ledger: Json[], input: Json, result: Json) {
+  const byInput = ledger.filter((row) => row.ts === input.ts);
+  if (byInput.length === 1) return { match: byInput[0], join: "exact-user-input-timestamp" };
+  if (typeof result.uuid === "string") {
+    const exact = ledger.filter((row) => row.eventId === result.uuid);
+    if (exact.length === 1) return { match: exact[0], join: "exact-result-event-id" };
+  }
+  if (finite(result.duration_ms)) {
+    // Older live accounting starts before user_input is logged. This joins an
+    // identical result measurement within one thread, never nearest timestamps.
+    const exact = ledger.filter((row) => row.ms === result.duration_ms);
+    if (exact.length === 1) return { match: exact[0], join: "unique-thread-exact-result-duration" };
+  }
+  return { match: undefined, join: "" };
+}
+
+function accountingExclusion(
+  match: Json | undefined,
+  usedLedger: Set<Json>,
+  input: Json,
+  result: Json,
+  completion: Completion,
+) {
+  if (!match || usedLedger.has(match)) return "missingOrReusedAccounting";
+  // Exact duration is an identity check only when the accounting record also
+  // belongs to this logged run. Allow one second for log-write ordering.
+  if (!finite(match.ts) || match.ts < input.ts - 1000 || match.ts > completion.at)
+    return "accountingOutsideRun";
+  if (match.err || result.is_error || match.unresolved || !finite(match.in) || !finite(match.out))
+    return "failedOrIncompleteAccounting";
+  return undefined;
+}
+
+function proofFromBlock(block: Json, calls: Map<string, Json>, resolve: HistoryContext["resolve"]) {
+  const proof: { sha: string; toolUseId: string }[] = [];
+  if (block.type !== "tool_result" || block.is_error || typeof block.content !== "string")
+    return proof;
+  const call = calls.get(block.tool_use_id);
+  if (!call || !/git[^\n]{0,160}\bcommit\b/.test(JSON.stringify(call.input || {}))) return proof;
+  // Native git and RTK both report the newly created commit hash.
+  for (const pattern of [/\[[^\]\n]{0,100}\b([0-9a-f]{7,40})\]/g, /\bok\s+([0-9a-f]{7,40})\b/g])
+    for (const found of block.content.matchAll(pattern)) {
+      const sha = resolve(found[1]);
+      if (sha) proof.push({ sha, toolUseId: block.tool_use_id });
+    }
+  return proof;
+}
+
+function toolUseCalls(eventsForRun: Json[]) {
+  const calls = new Map<string, Json>();
+  for (const entry of eventsForRun) {
+    if (entry.type !== "assistant") continue;
+    for (const block of content(entry)) if (block.type === "tool_use") calls.set(block.id, block);
+  }
+  return calls;
+}
+
+function collectCommitProof(eventsForRun: Json[], resolve: HistoryContext["resolve"]) {
+  const calls = toolUseCalls(eventsForRun);
+  const proof: { sha: string; toolUseId: string }[] = [];
+  for (const entry of eventsForRun) {
+    if (entry.type !== "user") continue;
+    for (const block of content(entry)) proof.push(...proofFromBlock(block, calls, resolve));
+  }
+  return proof;
+}
+
+function verifyCommits(opts: HistoryContext["opts"], proof: { sha: string; toolUseId: string }[]) {
+  return [...new Set(proof.map((entry) => entry.sha))].map((sha) => {
+    const [timestamp, ...title] = git(opts.repoDir, ["show", "-s", "--format=%ct%n%s", sha]).split(
+      "\n",
+    );
+    return { repo: opts.repo, sha, title: title.join("\n"), at: Number(timestamp) * 1000 };
+  });
+}
+
+function runProvenance(fields: {
+  context: HistoryContext;
+  logFile: string;
+  segment: Segment;
+  match: Json;
+  join: string;
+  proof: Json[];
+  completion: Completion;
+}) {
+  const { context, logFile, segment, match, join, proof, completion } = fields;
+  return {
+    scope: "delivery-turn",
+    usageScope: "direct root process; child usage unproven",
+    wholeTask: false,
+    log: logFile,
+    lines: [segment.lineStart, segment.resultIndex + 1],
+    ledger: path.join(context.opts.dataDir, "turns.jsonl"),
+    ledgerStartedAt: match.ts,
+    accountingJoin: join,
+    commitProof: proof,
+    completionBound: completion.bound,
+    completionTimeExact: completion.exact,
+    completionNote: completion.exact
+      ? "Observed result timestamp."
+      : "Completed no later than this availability bound; this is not runtime.",
+    cacheReadTokens: match.cache,
+    inputIncludesCache: true,
+    activeMs: null,
+    activityNote:
+      "Root-log distinct tool_use IDs; tool rounds are distinct assistant message IDs or deduplicated tool-call batches when IDs are absent. Missing child-agent activity is not imputed. These are outcome targets, never prework predictors.",
+    preworkContextNote:
+      "At most four conversational user/assistant text messages before the current user input, bounded to 8000 characters. Tool/results/thinking and commit/hash/token-report lines are excluded. Current-run outcome text is never included.",
+    timingNote: "Result durations are not a reliable whole-task active-time measurement.",
+  };
+}
+
+/** Evaluate one segment: either an exclusion reason or the completed task row. */
+function evaluateSegment(
+  context: HistoryContext,
+  thread: Json,
+  events: Json[],
+  ledger: Json[],
+  logFile: string,
+  segment: Segment,
+): Verdict {
+  const { input, eventsForRun, result } = segment;
+  const inputReason = inputExclusion(input, eventsForRun);
+  if (inputReason) return { reason: inputReason };
+  const completion = completionAvailability(events, segment.resultIndex, thread, input.ts);
+  if (!completion) return { reason: "missingSafeCompletionBound" };
+  const { match, join } = matchLedger(ledger, input, result);
+  const accountingReason = accountingExclusion(
+    match,
+    context.usedLedger,
+    input,
+    result,
+    completion,
+  );
+  if (accountingReason || !match) return { reason: accountingReason ?? "" };
+  const proof = collectCommitProof(eventsForRun, context.resolve);
+  const verified = verifyCommits(context.opts, proof);
+  if (!verified.length) return { reason: "noSuccessfulCommitToolProof" };
+  if (
+    verified.some(
+      (commit) =>
+        !finite(commit.at) || commit.at < input.ts - 1000 || commit.at > completion.at + 1000,
+    )
+  )
+    return { reason: "commitOutsideRun" };
+  context.usedLedger.add(match);
+  const cacheReadTokens = finite(match.cache) && match.cache <= match.in ? match.cache : null;
+  return {
+    task: {
+      id: `${thread.id}:${input.ts}`,
+      group: thread.id,
+      startedAt: new Date(input.ts).toISOString(),
+      completedAt: new Date(completion.at).toISOString(),
+      request: input.text.slice(0, 12_000),
+      provider: match.provider,
+      inputTokens: match.in,
+      outputTokens: match.out,
+      preworkContext: preworkContext(events, segment.lineStart - 1),
+      ...observedActivity(eventsForRun),
+      cacheReadTokens,
+      nonCachedInputTokens: cacheReadTokens === null ? null : match.in - cacheReadTokens,
+      commits: verified.map(({ at: _boundAt, ...commit }) => commit),
+      provenance: runProvenance({ context, logFile, segment, match, join, proof, completion }),
+    },
+  };
+}
+
+function buildHistoryAudit(
+  rowCount: number,
+  completedSegments: number,
+  tasks: Json[],
+  exclusions: Record<string, number>,
+) {
+  return {
+    ledgerRows: rowCount,
+    completedSegments,
+    selectedRuns: tasks.length,
+    independentGroups: new Set(tasks.map((task) => task.group)).size,
+    exclusions,
+    completionBounds: Object.fromEntries(
+      ["result-timestamp", "next-input", "idle-thread-updatedAt"].map((kind) => [
+        kind,
+        tasks.filter((task) => task.provenance.completionBound === kind).length,
+      ]),
+    ),
+    limitation:
+      "Observed direct-agent delivery-run tokens only. These are not whole-task totals or independent revisions. Failed or unfinished runs are not used as successful outcomes. No missing telemetry is imputed.",
+  };
+}
+
 export function buildTriageHistory(opts: { dataDir: string; repoDir: string; repo: string }) {
   const raw = readJsonLines(path.join(opts.dataDir, "turns.jsonl"));
   const rows = normalizeAccountingRows(opts.dataDir, raw);
@@ -146,217 +413,33 @@ export function buildTriageHistory(opts: { dataDir: string; repoDir: string; rep
     exclusions[why] = (exclusions[why] || 0) + 1;
   };
   const tasks: Json[] = [];
-  const usedLedger = new Set<Json>();
+  const context: HistoryContext = { opts, resolve, usedLedger: new Set<Json>() };
   let completedSegments = 0;
   for (const thread of threads) {
-    if (!/^[\w-]+$/.test(thread.id)) {
-      exclude("invalidThreadId");
-      continue;
-    }
     const logFile = path.join(opts.dataDir, "logs", `${thread.id}.jsonl`);
-    if (!fs.existsSync(logFile)) {
-      exclude("missingThreadLog");
+    const threadReason = threadExclusion(thread, logFile);
+    if (threadReason) {
+      exclude(threadReason);
       continue;
     }
-    if (/mock|test-fixture|^\/tmp\//i.test(String(thread.cwd || ""))) {
-      exclude("syntheticThread");
-      continue;
-    }
-    const ledger = rows.filter((r) => r.thread === thread.id);
+    const ledger = rows.filter((row) => row.thread === thread.id);
     const events = readJsonLines(logFile);
-    let start: Json | undefined,
-      segment: Json[] = [],
-      lineStart = 0;
-    for (let i = 0; i < events.length; i++) {
-      const e = events[i];
-      if (e.type === "user_input" && !start) {
-        start = e;
-        segment = [];
-        lineStart = i + 1;
-      }
-      if (!start) continue;
-      segment.push(e);
-      if (e.type !== "result") continue;
-      if (
-        /^\/compact(?:\s|$)/.test(start.text || "") &&
-        e.num_turns === 0 &&
-        !e.is_error &&
-        !segment.some((x) => x.type === "system" && x.subtype === "compact_boundary")
-      )
-        continue;
-      const input = start;
-      const eventsForRun = segment;
-      start = undefined;
-      segment = [];
+    for (const segment of collectSegments(events)) {
       completedSegments++;
-      if (
-        input.auto ||
-        input.questionAnswer ||
-        /^\/(?:compact|help|clear|model|effort)\b/.test(input.text || "")
-      ) {
-        exclude("nonTaskInput");
-        continue;
-      }
-      // Very short continuations do not describe the work without earlier conversation.
-      if (typeof input.text !== "string" || input.text.trim().split(/\s+/).length < 6) {
-        exclude("contextOnlyRequest");
-        continue;
-      }
-      if (eventsForRun.slice(1).some((x) => x.type === "user_input")) {
-        exclude("multipleRequestsInRun");
-        continue;
-      }
-      if (!finite(input.ts)) {
-        exclude("missingStartTime");
-        continue;
-      }
-      const completion = completionAvailability(events, i, thread, input.ts);
-      if (!completion) {
-        exclude("missingSafeCompletionBound");
-        continue;
-      }
-      let match: Json | undefined,
-        join = "";
-      const byInput = ledger.filter((r) => r.ts === input.ts);
-      if (byInput.length === 1) {
-        match = byInput[0];
-        join = "exact-user-input-timestamp";
-      }
-      if (!match && typeof e.uuid === "string") {
-        const exact = ledger.filter((r) => r.eventId === e.uuid);
-        if (exact.length === 1) {
-          match = exact[0];
-          join = "exact-result-event-id";
-        }
-      }
-      if (!match && finite(e.duration_ms)) {
-        // Older live accounting starts before user_input is logged. This joins an
-        // identical result measurement within one thread, never nearest timestamps.
-        const exact = ledger.filter((r) => r.ms === e.duration_ms);
-        if (exact.length === 1) {
-          match = exact[0];
-          join = "unique-thread-exact-result-duration";
-        }
-      }
-      if (!match || usedLedger.has(match)) {
-        exclude("missingOrReusedAccounting");
-        continue;
-      }
-      // Exact duration is an identity check only when the accounting record also
-      // belongs to this logged run. Allow one second for log-write ordering.
-      if (!finite(match.ts) || match.ts < input.ts - 1000 || match.ts > completion.at) {
-        exclude("accountingOutsideRun");
-        continue;
-      }
-      if (match.err || e.is_error || match.unresolved || !finite(match.in) || !finite(match.out)) {
-        exclude("failedOrIncompleteAccounting");
-        continue;
-      }
-      const calls = new Map<string, Json>();
-      for (const x of eventsForRun)
-        if (x.type === "assistant")
-          for (const b of content(x)) if (b.type === "tool_use") calls.set(b.id, b);
-      const proof: { sha: string; toolUseId: string }[] = [];
-      for (const x of eventsForRun)
-        if (x.type === "user")
-          for (const b of content(x)) {
-            if (b.type !== "tool_result" || b.is_error || typeof b.content !== "string") continue;
-            const call = calls.get(b.tool_use_id);
-            if (!call || !/git[^\n]{0,160}\bcommit\b/.test(JSON.stringify(call.input || {})))
-              continue;
-            // Native git and RTK both report the newly created commit hash.
-            for (const pattern of [
-              /\[[^\]\n]{0,100}\b([0-9a-f]{7,40})\]/g,
-              /\bok\s+([0-9a-f]{7,40})\b/g,
-            ])
-              for (const m of b.content.matchAll(pattern)) {
-                const sha = resolve(m[1]);
-                if (sha) proof.push({ sha, toolUseId: b.tool_use_id });
-              }
-          }
-      const verified = [...new Set(proof.map((p) => p.sha))].map((sha) => {
-        const [timestamp, ...title] = git(opts.repoDir, [
-          "show",
-          "-s",
-          "--format=%ct%n%s",
-          sha,
-        ]).split("\n");
-        return { repo: opts.repo, sha, title: title.join("\n"), at: Number(timestamp) * 1000 };
-      });
-      if (!verified.length) {
-        exclude("noSuccessfulCommitToolProof");
-        continue;
-      }
-      if (
-        verified.some((c) => !finite(c.at) || c.at < input.ts - 1000 || c.at > completion.at + 1000)
-      ) {
-        exclude("commitOutsideRun");
-        continue;
-      }
-      usedLedger.add(match);
-      const activity = observedActivity(eventsForRun);
-      const cacheReadTokens = finite(match.cache) && match.cache <= match.in ? match.cache : null;
-      tasks.push({
-        id: `${thread.id}:${input.ts}`,
-        group: thread.id,
-        startedAt: new Date(input.ts).toISOString(),
-        completedAt: new Date(completion.at).toISOString(),
-        request: input.text.slice(0, 12_000),
-        provider: match.provider,
-        inputTokens: match.in,
-        outputTokens: match.out,
-        preworkContext: preworkContext(events, lineStart - 1),
-        ...activity,
-        cacheReadTokens,
-        nonCachedInputTokens: cacheReadTokens === null ? null : match.in - cacheReadTokens,
-        commits: verified.map(({ at, ...c }) => c),
-        provenance: {
-          scope: "delivery-turn",
-          usageScope: "direct root process; child usage unproven",
-          wholeTask: false,
-          log: logFile,
-          lines: [lineStart, i + 1],
-          ledger: path.join(opts.dataDir, "turns.jsonl"),
-          ledgerStartedAt: match.ts,
-          accountingJoin: join,
-          commitProof: proof,
-          completionBound: completion.bound,
-          completionTimeExact: completion.exact,
-          completionNote: completion.exact
-            ? "Observed result timestamp."
-            : "Completed no later than this availability bound; this is not runtime.",
-          cacheReadTokens: match.cache,
-          inputIncludesCache: true,
-          activeMs: null,
-          activityNote:
-            "Root-log distinct tool_use IDs; tool rounds are distinct assistant message IDs or deduplicated tool-call batches when IDs are absent. Missing child-agent activity is not imputed. These are outcome targets, never prework predictors.",
-          preworkContextNote:
-            "At most four conversational user/assistant text messages before the current user input, bounded to 8000 characters. Tool/results/thinking and commit/hash/token-report lines are excluded. Current-run outcome text is never included.",
-          timingNote: "Result durations are not a reliable whole-task active-time measurement.",
-        },
-      });
+      const verdict = evaluateSegment(context, thread, events, ledger, logFile, segment);
+      if ("task" in verdict) tasks.push(verdict.task);
+      else exclude(verdict.reason);
     }
   }
-  tasks.sort((a, b) => a.startedAt.localeCompare(b.startedAt) || a.id.localeCompare(b.id));
+  tasks.sort(
+    (left, right) =>
+      left.startedAt.localeCompare(right.startedAt) || left.id.localeCompare(right.id),
+  );
   return {
     version: 1,
     scope: "completed-delivery-run",
     tasks,
-    audit: {
-      ledgerRows: rows.length,
-      completedSegments,
-      selectedRuns: tasks.length,
-      independentGroups: new Set(tasks.map((t) => t.group)).size,
-      exclusions,
-      completionBounds: Object.fromEntries(
-        ["result-timestamp", "next-input", "idle-thread-updatedAt"].map((kind) => [
-          kind,
-          tasks.filter((t) => t.provenance.completionBound === kind).length,
-        ]),
-      ),
-      limitation:
-        "Observed direct-agent delivery-run tokens only. These are not whole-task totals or independent revisions. Failed or unfinished runs are not used as successful outcomes. No missing telemetry is imputed.",
-    },
+    audit: buildHistoryAudit(rows.length, completedSegments, tasks, exclusions),
   };
 }
 
