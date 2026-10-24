@@ -1,0 +1,31 @@
+{
+  "source": "/home/coder/worktrees/agent-console-issue-201-d9a8a028/.scratch-issue201-evidence/comparison-baseline",
+  "command": "/home/coder/.local/node-v24.22.1/bin/node /home/coder/worktrees/agent-console-issue-201-d9a8a028/.scratch-issue201-evidence/compare-retry.mjs .scratch-issue201-evidence/comparison-baseline",
+  "samplesPerScenario": 1,
+  "observed": {
+    "task": {
+      "retries": 1,
+      "containsError": false,
+      "recoveries": 1,
+      "reroutes": 0,
+      "assignments": 0,
+      "premiumPending": false
+    },
+    "infrastructure": {
+      "retries": 1,
+      "containsError": false,
+      "recoveries": 1,
+      "reroutes": 0,
+      "assignments": 0,
+      "premiumPending": false
+    },
+    "exhausted": {
+      "retries": 0,
+      "containsError": false,
+      "recoveries": 2,
+      "reroutes": 0,
+      "assignments": 0,
+      "premiumPending": false
+    }
+  }
+}
