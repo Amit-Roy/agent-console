@@ -79,10 +79,10 @@ export function cleanTitle(raw: unknown): string | undefined {
   if (!t || words.length > MAX_WORDS + 4) return undefined; // a sentence, not a title
   const kept = words.slice(0, MAX_WORDS);
   while (kept.length > 1 && kept.join(" ").length > MAX_CHARS) kept.pop();
-  return kept.join(" ").length <= MAX_CHARS ? kept.join(" ") : undefined; // one huge word: keep the current title
+  return kept.join(" ").length <= MAX_CHARS ? kept.join(" ") : undefined;
 }
 
-/** Deterministic stand-in for tests (AGENT_CONSOLE_MOCK=1): the first few words of the latest message. */
+/** Deterministic stand-in for tests (AGENT_CONSOLE_MOCK=1), using the same format and validator. */
 const fake = (messages: string[]) =>
   cleanTitle(messages[messages.length - 1].split(" ").slice(0, 4).join(" "));
 
