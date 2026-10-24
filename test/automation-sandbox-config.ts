@@ -6,6 +6,7 @@ import path from "node:path";
 import {
   assertAutomationProject,
   automationSandboxConfig,
+  bindTaskIssue,
   launch,
 } from "../server/automation/sandbox.ts";
 
@@ -205,6 +206,56 @@ try {
   const sub = path.join(cwd, "sub");
   fs.mkdirSync(sub);
   assert.throws(() => assertAutomationProject({ ...t, cwd: sub }));
+  const stateHome = path.join(root, "state");
+  const bound = { id: "bound-1", cwd, issueRun: { role: "work", repo: "o/r", number: 42 } };
+  bindTaskIssue(bound, { XDG_STATE_HOME: stateHome });
+  const record = path.join(stateHome, "task-issue", "bound-1.json");
+  const first = fs.readFileSync(record, "utf8");
+  const parsed = JSON.parse(first);
+  assert.deepEqual(
+    { ...parsed, created: typeof parsed.created },
+    {
+      repo: "o/r",
+      url: "https://github.com/o/r/issues/42",
+      number: 42,
+      title: "",
+      thread: "bound-1",
+      created: "number",
+      source: "auto",
+    },
+  );
+  assert.equal(fs.statSync(path.join(stateHome, "task-issue")).mode & 0o777, 0o700);
+  fs.writeFileSync(record, first.replace("o/r", "kept/existing"));
+  const kept = fs.readFileSync(record, "utf8");
+  bindTaskIssue(bound, { XDG_STATE_HOME: stateHome });
+  assert.equal(fs.readFileSync(record, "utf8"), kept, "existing record is kept");
+  bindTaskIssue(
+    { ...bound, id: "no-issue", issueRun: { role: "debug" } },
+    { XDG_STATE_HOME: stateHome },
+  );
+  assert.ok(!fs.existsSync(path.join(stateHome, "task-issue", "no-issue.json")));
+  bindTaskIssue(
+    { ...bound, id: "debug-1", issueRun: { role: "debug", repo: "o/r", number: 0 } },
+    { XDG_STATE_HOME: stateHome },
+  );
+  const debugRecord = JSON.parse(
+    fs.readFileSync(path.join(stateHome, "task-issue", "debug-1.json"), "utf8"),
+  );
+  assert.equal(debugRecord.url, "", "debug runs are bound without an issue URL");
+  const guard = path.join(os.homedir(), "repos", "brain", "bin", "task-issue-guard");
+  // The guard lives in the brain repository, which CI does not check out.
+  if (fs.existsSync(guard)) {
+    execFileSync("python3", [guard, "check", "edit", "/home/coder/repos/x"], {
+      env: { PATH: process.env.PATH, AGENT_CONSOLE_THREAD: "bound-1", XDG_STATE_HOME: stateHome },
+      stdio: "pipe",
+    });
+    assert.throws(() =>
+      execFileSync("python3", [guard, "check", "edit", "/home/coder/repos/x"], {
+        env: { PATH: process.env.PATH, AGENT_CONSOLE_THREAD: "other", XDG_STATE_HOME: stateHome },
+        stdio: "pipe",
+      }),
+    );
+  }
   console.log(
     "automation-sandbox-config: private runtime, credentials, clone boundary, and manual passthrough passed",
   );

@@ -78,6 +78,26 @@ const issues = [
 ];
 const none = plan({ now, usage: { claude: win(70, 120) }, issues, done: new Set() });
 assert.deepEqual(none, [], "nothing before the last 90 minutes");
+
+// task-issue issues carry `manual`: Auto never picks them
+assert.deepEqual(
+  plan({
+    now,
+    usage: { claude: win(10, 60) },
+    issues: [{ ...issue(7, "BAU"), labels: ["Eff: BAU", "Pri: P2", "manual"] }],
+    done: new Set(),
+  }),
+  [],
+  "a manual issue yields no decision",
+);
+assert.match(
+  issuePrompt(
+    { key: "o/r#7", issue: issue(7, "BAU"), effort: "bau", route: ROUTES.bau, reason: "t" } as any,
+    "b",
+    "main",
+  ),
+  /already bound to o\/r#7; never run task-issue/,
+);
 assert.equal(
   plan({ now, usage: { claude: win(10, 120) }, issues, done: new Set() }).length,
   2,
