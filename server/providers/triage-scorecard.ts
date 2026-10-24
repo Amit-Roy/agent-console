@@ -287,7 +287,11 @@ export function deriveAssessment(
 ) {
   // Request shape is computed from the initial request itself; it is never model-written.
   const requestText = input.body.trim() ? `${input.title}\n${input.body}` : input.title;
-  const pricing = quoteEffort({ ...extracted.metrics, ...requestShape(requestText) }, model);
+  const pricing = quoteEffort(
+    { ...extracted.metrics, ...requestShape(requestText) },
+    model,
+    requestText,
+  );
   if (pricing.status !== "ready") return;
   const names = Object.keys(METRIC_MAX) as MetricName[];
   const planning = extracted.planningMetrics ?? extracted.metrics;

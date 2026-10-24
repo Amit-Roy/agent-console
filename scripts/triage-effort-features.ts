@@ -9,6 +9,7 @@ import { childEnv } from "../server/providers/env.ts";
 import { createLabelCompletion, type LabelEngine } from "../server/providers/small-model.ts";
 import { requestShape } from "../server/providers/triage-effort.ts";
 import { defaultTriageEngines } from "../server/providers/triage-model.ts";
+import { requestFeatures } from "../server/providers/triage-quantile.ts";
 
 export const EFFORT_FEATURE_VERSION = "effort-session-initial-v1";
 export const FEATURE_NAMES = ["breadth", "complexity", "uncertainty", "risk"] as const;
@@ -293,6 +294,9 @@ export function effortDataset(
             ]),
           ),
         },
+        // Deterministic text features train the quantile trees; they never leave this file's
+        // private output and never replace the reported request-shape buckets.
+        text: requestFeatures(task.request),
         outcomes: {
           toolCalls: task.toolCalls ?? null,
           toolRounds: task.toolRounds ?? null,

@@ -44,6 +44,27 @@ def dataset():
     return {"schemaVersion": 1, "samples": samples}
 
 
+def text_features(index):
+    level = index % 4
+    return {
+        "size": level,
+        "lines": level,
+        "refs": level,
+        "verbs": level,
+        "logChars": 3.0 + level * 0.8,
+        "logLines": 0.7 + level * 0.4,
+        "logRefs": float(level),
+        "logVerbs": float(level),
+        "fence": 1.0 if level > 2 else 0.0,
+        "logPaths": level * 0.5,
+        "tests": 1.0 if level > 1 else 0.0,
+        "checklist": float(level == 3),
+        "bullets": float(level),
+        "questions": float(level > 2),
+        "versions": float(level == 2),
+    }
+
+
 class EffortFitTests(unittest.TestCase):
     def test_session_zero_action_conversations_keep_positive_token_totals(self):
         fixture = dataset()
@@ -595,6 +616,43 @@ class EffortFitTests(unittest.TestCase):
         self.assertIsNone(result["freshInputTokens"])
         self.assertIsNotNone(result["cachedInputTokens"])
         self.assertIsNotNone(result["outputTokens"])
+
+    def test_quantile_trees_price_sessions_and_stay_monotone(self):
+        fixture = dataset()
+        fixture["scope"] = "completed-session"
+        for index, sample in enumerate(fixture["samples"]):
+            sample["text"] = text_features(index)
+        with mock.patch.object(fit, "TREE_PARAMS", {**fit.TREE_PARAMS, "max_iter": 12}):
+            artifact, report = fit.build_artifact(fixture)
+        model = artifact["quantileModel"]
+        self.assertEqual(model["method"], "boosted-trees-quantile-v1")
+        self.assertEqual(list(model["trees"]), ["p50", "p75", "p80", "p95", "p99"])
+        self.assertGreater(model["nodeCount"], 0)
+        self.assertEqual(model["features"], fit.QUANTILE_FEATURES)
+        self.assertEqual(artifact["validation"]["quantileModel"]["nodeCount"], model["nodeCount"])
+        self.assertIn("coverage", report["quantileModel"]["quantiles"]["p95"])
+        # Every tree must be walkable: leaves are -1 and child indices stay in range.
+        trees = [tree for head in model["trees"].values() for tree in head]
+        for tree in trees[:40]:
+            self.assertEqual(len(tree["f"]), len(tree["l"]))
+            for left, right in zip(tree["l"], tree["r"], strict=True):
+                self.assertTrue(-1 <= left < len(tree["f"]))
+                self.assertTrue(-1 <= right < len(tree["f"]))
+                self.assertEqual(left == -1, right == -1)
+        train_ids = set(artifact["training"]["sampleIds"])
+        expected_ceiling = max(
+            sample["outcomes"]["inputTokens"] + sample["outcomes"]["outputTokens"]
+            for sample in fixture["samples"]
+            if sample["sampleId"] in train_ids
+        )
+        self.assertEqual(model["ceiling"], expected_ceiling)
+
+    def test_artifacts_without_text_features_keep_no_quantile_model(self):
+        fixture = dataset()
+        fixture["scope"] = "completed-session"
+        artifact, report = fit.build_artifact(fixture)
+        self.assertIsNone(artifact["quantileModel"])
+        self.assertIsNone(report["quantileModel"])
 
 
 if __name__ == "__main__":

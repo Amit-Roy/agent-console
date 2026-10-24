@@ -144,7 +144,9 @@ export function renderTriageComment(decision: TriageDecision, sourceMarker = "")
   let tokenUsageText: string;
   if (price.total) {
     tokenUsageText = price.total
-      ? `About **${compact(price.total.p50)}** tokens typical; **${compact(price.total.p80)}** likely ceiling; **${compact(price.total.p95)}** worst case. Plan with **${compact(budget ?? price.total.p80)}**.`
+      ? price.total.p75 !== undefined && price.total.p99 !== undefined
+        ? `Best guess **${compact(price.total.p50)}** tokens; **${compact(price.total.p75)}** at 3 in 4; **${compact(price.total.p80)}** likely ceiling; **${compact(price.total.p95)}** at 19 in 20; **${compact(price.total.p99)}** worst case. Plan with **${compact(budget ?? price.total.p80)}**.`
+        : `About **${compact(price.total.p50)}** tokens typical; **${compact(price.total.p80)}** likely ceiling; **${compact(price.total.p95)}** worst case. Plan with **${compact(budget ?? price.total.p80)}**.`
       : "Unavailable.";
   } else {
     tokenUsageText = `Token usage estimation is not available for ${decision.model || "this request type"}. [Please refer to the pricing model documentation](http://docs.agent-console.dev/pricing-model) for guidance.`;
@@ -156,12 +158,36 @@ export function renderTriageComment(decision: TriageDecision, sourceMarker = "")
       JSON.stringify({
         type: "line",
         data: {
-          labels: ["P50", "P80", "P95"],
+          labels:
+            price.total.p75 !== undefined && price.total.p99 !== undefined
+              ? ["P50", "P75", "P80", "P95", "P99"]
+              : ["P50", "P80", "P95"],
           datasets: [
-            { label: "Total tokens", data: [price.total.p50, price.total.p80, price.total.p95] },
+            {
+              label: "Total tokens",
+              data:
+                price.total.p75 !== undefined && price.total.p99 !== undefined
+                  ? [
+                      price.total.p50,
+                      price.total.p75,
+                      price.total.p80,
+                      price.total.p95,
+                      price.total.p99,
+                    ]
+                  : [price.total.p50, price.total.p80, price.total.p95],
+            },
             {
               label: "Generated tokens",
-              data: [price.output.p50, price.output.p80, price.output.p95],
+              data:
+                price.output.p75 !== undefined && price.output.p99 !== undefined
+                  ? [
+                      price.output.p50,
+                      price.output.p75,
+                      price.output.p80,
+                      price.output.p95,
+                      price.output.p99,
+                    ]
+                  : [price.output.p50, price.output.p80, price.output.p95],
             },
           ],
         },
