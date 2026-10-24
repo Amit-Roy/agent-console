@@ -108,6 +108,7 @@ export function claudeControl(write: (msg: object) => void, emit: (ev: any) => v
           "mcp__agent_console__session_search",
           "mcp__agent_console__session_read",
           "mcp__agent_console__pi_research",
+          "mcp__agent_console__cli_search",
         ].includes(r.tool_name)
       ) {
         respond(ev.request_id, { behavior: "allow", updatedInput: r.input ?? {} });

@@ -50,6 +50,31 @@ export const TOOLS = [
     },
   },
   {
+    name: "cli_search",
+    label: "Find CLIs",
+    description:
+      "Find command-line tools by keywords (BM25 over name, description, tags). Returns name, purpose, path and usage lines. Use before writing a script or hand-rolling a shell pipeline.",
+    parameters: {
+      type: "object",
+      required: ["terms"],
+      properties: {
+        terms: {
+          type: "array",
+          items: { type: "string" },
+          minItems: 1,
+          maxItems: 10,
+          description: 'Keywords for the task, e.g. ["wait", "pr", "ci"].',
+        },
+        limit: {
+          type: "integer",
+          minimum: 1,
+          maximum: 20,
+          description: "Maximum results; default 5.",
+        },
+      },
+    },
+  },
+  {
     name: "session_read",
     label: "Read past session evidence",
     description:
