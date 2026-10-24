@@ -187,7 +187,11 @@ async function collectPrs(
     const run = thread.issueRun!;
     if (run.pr && !prs.has(run.pr)) prs.set(run.pr, await read(`pulls/${run.pr}`));
   }
-  for (const branch of new Set(related().map((thread) => thread.issueRun!.branch).filter(Boolean))) {
+  for (const branch of new Set(
+    related()
+      .map((thread) => thread.issueRun!.branch)
+      .filter(Boolean),
+  )) {
     const found = await read(
       `pulls?state=all&head=${encodeURIComponent(`${repo.split("/")[0]}:${branch}`)}&per_page=100`,
     );
@@ -374,7 +378,8 @@ async function assignGuarded(
   step("prs");
   const { pr: pullRequest, prEvidence } = await gatherPrEvidence(read, log, related, repo);
   assertAssignable(ctx, key); // Network waits must not let a newly resumed sibling race this assignment.
-  const branch = pullRequest?.head?.ref ?? `premium-issue-${req.number}-${randomUUID().slice(0, 8)}`;
+  const branch =
+    pullRequest?.head?.ref ?? `premium-issue-${req.number}-${randomUUID().slice(0, 8)}`;
   if (typeof branch !== "string" || branch.startsWith("-") || /[\s\x00-\x1f]/.test(branch))
     throw new Error("Invalid pull request branch.");
   const attempt = randomUUID().slice(0, 8),
