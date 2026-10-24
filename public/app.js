@@ -1051,79 +1051,111 @@ function toast(msg) {
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => (t.hidden = true), 3200);
 }
-async function runThreadAction(id, action) {
-  const t = state.threads.get(id);
-  if (!t) return;
-  if (action === "search") {
-    setNav(false);
-    if (state.current !== id) openThread(id);
-    chatSearch.open();
-  } else if (action === "rename") {
-    setNav(false);
-    if (state.current !== id) openThread(id);
-    startRename();
-  } else if (action === "compact") {
-    send({ t: "compact", thread: id });
-  } else if (action === "idle-compaction") {
-    if (!t.idleCompactionTtlMs) return;
-    const enabled = t.idleCompaction === false;
-    send({ t: "update", thread: id, idleCompaction: enabled });
-    toast(`Automatic compaction ${enabled ? "enabled" : "disabled"} for this thread.`);
-  } else if (action === "economy") {
-    if (t.status === "running") {
-      toast("Apply economy settings when this turn finishes.");
-      return;
-    }
-    const provider = state.providers.get(t.provider);
-    const efforts = provider?.modelDetails?.[t.model]?.efforts || [];
-    const effort = ["medium", "low"].find((e) => efforts.includes(e)) || "default";
-    send({
-      t: "update",
-      thread: id,
-      effort,
-      ...(provider?.advisors?.includes("off") ? { advisor: "off" } : {}),
-    });
-    toast("Economy settings applied; selected model kept.");
-  } else if (action === "details") {
-    setNav(false);
-    if (state.current !== id) openThread(id);
-    closeBreakdown(false);
-    $("run-details").showModal();
-    void loadLatencySummary();
-  } else if (action === "archive" || action === "unarchive") {
-    send({ t: "archive", thread: id, archived: action === "archive" });
-  } else if (action === "delete") {
-    if (confirm(`Delete "${t.title}" and its history?`)) send({ t: "delete", thread: id });
-  } else if (action === "fork") {
-    openForkDialog(id);
-  } else if (action === "download") {
-    const a = el("a");
-    a.href = `/export/${id}`;
-    a.download = ""; // the server names the file after the thread
-    document.body.append(a);
-    a.click();
-    a.remove();
-  } else if (action === "create-issue") {
-    createIssueDraft(id);
-  } else if (action === "share") {
-    const r = await apiFetch(`/export/${id}`).catch(() => null);
-    if (!r?.ok) return toast("Could not read that conversation.");
-    const text = await r.text();
-    if (navigator.share) {
-      try {
-        await navigator.share({ title: t.title, text });
-        return;
-      } catch (e) {
-        if (e?.name === "AbortError") return; // the user closed the share sheet
-      }
-    }
-    try {
-      await navigator.clipboard.writeText(text);
-      toast("Copied the conversation as Markdown.");
-    } catch {
-      toast("Sharing is not available here. Use Download instead.");
-    }
+function openThreadForAction(id) {
+  setNav(false);
+  if (state.current !== id) openThread(id);
+}
+function searchThreadAction(id) {
+  openThreadForAction(id);
+  chatSearch.open();
+}
+function renameThreadAction(id) {
+  openThreadForAction(id);
+  startRename();
+}
+function compactThreadAction(id) {
+  send({ t: "compact", thread: id });
+}
+function idleCompactionThreadAction(id, thread) {
+  if (!thread.idleCompactionTtlMs) return;
+  const enabled = thread.idleCompaction === false;
+  send({ t: "update", thread: id, idleCompaction: enabled });
+  toast(`Automatic compaction ${enabled ? "enabled" : "disabled"} for this thread.`);
+}
+function economyThreadAction(id, thread) {
+  if (thread.status === "running") {
+    toast("Apply economy settings when this turn finishes.");
+    return;
   }
+  const provider = state.providers.get(thread.provider);
+  const efforts = provider?.modelDetails?.[thread.model]?.efforts || [];
+  const effort = ["medium", "low"].find((level) => efforts.includes(level)) || "default";
+  send({
+    t: "update",
+    thread: id,
+    effort,
+    ...(provider?.advisors?.includes("off") ? { advisor: "off" } : {}),
+  });
+  toast("Economy settings applied; selected model kept.");
+}
+function detailsThreadAction(id) {
+  openThreadForAction(id);
+  closeBreakdown(false);
+  $("run-details").showModal();
+  void loadLatencySummary();
+}
+function archiveThreadAction(id, thread, action) {
+  send({ t: "archive", thread: id, archived: action === "archive" });
+}
+function deleteThreadAction(id, thread) {
+  if (confirm(`Delete "${thread.title}" and its history?`)) send({ t: "delete", thread: id });
+}
+function forkThreadAction(id) {
+  openForkDialog(id);
+}
+function downloadThreadAction(id) {
+  const link = el("a");
+  link.href = `/export/${id}`;
+  link.download = ""; // the server names the file after the thread
+  document.body.append(link);
+  link.click();
+  link.remove();
+}
+function createIssueThreadAction(id) {
+  createIssueDraft(id);
+}
+// Resolves true when the native share sheet took the text (or the user closed it).
+async function nativeShareText(title, text) {
+  if (!navigator.share) return false;
+  try {
+    await navigator.share({ title, text });
+    return true;
+  } catch (error) {
+    return error?.name === "AbortError"; // the user closed the share sheet
+  }
+}
+async function shareThreadAction(id, thread) {
+  const response = await apiFetch(`/export/${id}`).catch(() => null);
+  if (!response?.ok) return toast("Could not read that conversation.");
+  const text = await response.text();
+  if (await nativeShareText(thread.title, text)) return;
+  try {
+    await navigator.clipboard.writeText(text);
+    toast("Copied the conversation as Markdown.");
+  } catch {
+    toast("Sharing is not available here. Use Download instead.");
+  }
+}
+const THREAD_ACTION_HANDLERS = {
+  __proto__: null,
+  search: searchThreadAction,
+  rename: renameThreadAction,
+  compact: compactThreadAction,
+  "idle-compaction": idleCompactionThreadAction,
+  economy: economyThreadAction,
+  details: detailsThreadAction,
+  archive: archiveThreadAction,
+  unarchive: archiveThreadAction,
+  delete: deleteThreadAction,
+  fork: forkThreadAction,
+  download: downloadThreadAction,
+  "create-issue": createIssueThreadAction,
+  share: shareThreadAction,
+};
+async function runThreadAction(id, action) {
+  const thread = state.threads.get(id);
+  if (!thread) return;
+  await THREAD_ACTION_HANDLERS[action]?.(id, thread, action);
 }
 
 const menus = {
@@ -1283,6 +1315,126 @@ function markRead(id) {
   const t = state.threads.get(id);
   if (id && isUnreadReply(t) && document.visibilityState === "visible") send({ t: "read", id });
 }
+function visibleThreadList() {
+  // a scheduled task's runs are listed under the task in the Scheduled lane, not here
+  // automation-started runs (issue work, reviews) are listed in the Auto lane
+  return [...state.threads.values()]
+    .filter(
+      (thread) => !(thread.schedule && state.tasks.has(thread.schedule.task)) && !thread.issueRun,
+    )
+    .sort((left, right) => right.updatedAt - left.updatedAt);
+}
+function usualThreadDir(list) {
+  // the folder most threads share says nothing per row; only the odd ones out show theirs
+  const dirs = new Map();
+  for (const thread of list) dirs.set(base(thread.cwd), (dirs.get(base(thread.cwd)) || 0) + 1);
+  return [...dirs].sort((left, right) => right[1] - left[1])[0]?.[0];
+}
+function threadRowTitle(thread) {
+  return `${thread.title}\n${thread.cwd}\n${provLabel(thread.provider)} · ${modelMeta(thread.model).label}${thread.mode === "bypassPermissions" ? " · Bypass" : ""} · ${thread.costMeasured ? `$${thread.cost.toFixed(3)} recorded API-equivalent` : "cost not measured"}`;
+}
+function threadStatusDot(thread, waiting, unread) {
+  // background subagents keep working after the turn ends: show the thread as busy until they finish
+  const dot = el(
+    "span",
+    `dot ${waiting ? "waiting" : thread.background ? "running" : thread.status}${unread ? " unread" : ""}`,
+  );
+  dot.setAttribute("aria-hidden", "true");
+  return dot;
+}
+function usageLimitTag(stop) {
+  const limit = el("span", "tag warn limit-tag");
+  const resets = stop.resetsAt ? `Resets ${new Date(stop.resetsAt).toLocaleString()}` : "";
+  limit.title = [resets, stop.text].filter(Boolean).join("\n");
+  limit.append(icon("alert"), el("span", "", "Usage limit"));
+  return limit;
+}
+function threadRowMeta(thread, usualDir, waiting) {
+  const meta = el("div", "meta");
+  if (base(thread.cwd) !== usualDir) meta.append(el("span", "dir", base(thread.cwd)));
+  meta.append(el("span", "tag", provLabel(thread.provider || "claude")));
+  if (thread.mode === "bypassPermissions") {
+    const tag = el("span", "tag warn");
+    tag.title = "Bypass permissions";
+    tag.append(icon("shield-off"), el("span", "sr-only", "Bypass"));
+    meta.append(tag);
+  }
+  if (waiting) meta.append(el("span", "tag question-tag", "Needs input"));
+  if (thread.usageStop) meta.append(usageLimitTag(thread.usageStop));
+  const time = el("time", "", ago(thread.updatedAt));
+  time.dateTime = new Date(thread.updatedAt).toISOString();
+  meta.append(time);
+  return meta;
+}
+function threadRowMore(thread, row) {
+  const more = el("button", "btn sm icon ghost row-more");
+  more.type = "button";
+  more.title = "Thread actions";
+  more.append(icon("more"));
+  more.onclick = (event) => event.stopPropagation(); // the menu opens from its own listener; the row must not also open the thread
+  more.addEventListener(
+    "keydown",
+    (event) => (event.key === "Enter" || event.key === " ") && event.stopPropagation(),
+  );
+  createMenu({
+    trigger: more,
+    kind: "menu",
+    label: `Actions for ${thread.title}`,
+    header: () => state.threads.get(thread.id)?.title || thread.title,
+    align: "end",
+    items: THREAD_ACTIONS,
+    getItems: () => threadActions(thread.id),
+    onOpen: () => {
+      rowMenuOpen = true;
+      row.classList.add("menu-open");
+    },
+    onClose: () => {
+      rowMenuOpen = false;
+      row.classList.remove("menu-open");
+      if (renderPending) renderThreads();
+    },
+    onSelect: (value) => runThreadAction(thread.id, value),
+  });
+  more.setAttribute("aria-label", `Actions for ${thread.title}`);
+  return more;
+}
+function threadRowStatusText(thread, waiting, unread) {
+  if (waiting) return "Needs your input";
+  if (thread.status === "running") return "Running";
+  if (thread.background) return "Subagents working";
+  if (unread) return "Unread reply";
+  return "";
+}
+function threadRow(thread, usualDir) {
+  const unread = isUnread(thread);
+  const row = el(
+    "li",
+    `${thread.id === state.current ? "sel" : ""}${unread ? " unread" : ""}`.trim(),
+  );
+  row.tabIndex = 0;
+  row.title = threadRowTitle(thread);
+  if (thread.id === state.current) row.setAttribute("aria-current", "true");
+  const waiting = questions.count(thread.id) || thread.waiting;
+  const dot = threadStatusDot(thread, waiting, unread);
+  const meta = threadRowMeta(thread, usualDir, waiting);
+  const more = threadRowMore(thread, row);
+  row.append(dot, el("div", "t", thread.title), meta, more);
+  const statusText = threadRowStatusText(thread, waiting, unread);
+  if (statusText) row.append(el("span", "sr-only", statusText));
+  const pick = () => {
+    if (shareResolve) finishShare(thread.id);
+    setNav(false);
+    openThread(thread.id);
+  };
+  row.onclick = pick;
+  row.onkeydown = (event) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      pick();
+    }
+  };
+  return row;
+}
 function renderThreads() {
   if (rowMenuOpen) {
     renderPending = true;
@@ -1293,107 +1445,23 @@ function renderThreads() {
     shelf = $("archived");
   ul.replaceChildren();
   shelf.replaceChildren();
-  // a scheduled task's runs are listed under the task in the Scheduled lane, not here
-  // automation-started runs (issue work, reviews) are listed in the Auto lane
-  const list = [...state.threads.values()]
-    .filter((t) => !(t.schedule && state.tasks.has(t.schedule.task)) && !t.issueRun)
-    .sort((a, b) => b.updatedAt - a.updatedAt);
+  const list = visibleThreadList();
   // archived threads sit in their own section below, collapsed unless the user opened it
-  const filed = list.filter((t) => t.archived).length;
+  const filed = list.filter((thread) => thread.archived).length;
   $("archive").hidden = !filed;
   $("archive-count").textContent = filed || "";
   $("archive-toggle").setAttribute("aria-expanded", String(state.archiveOpen));
   shelf.hidden = !state.archiveOpen;
-  // the folder most threads share says nothing per row; only the odd ones out show theirs
-  const dirs = new Map();
-  for (const t of list) dirs.set(base(t.cwd), (dirs.get(base(t.cwd)) || 0) + 1);
-  const usualDir = [...dirs].sort((a, b) => b[1] - a[1])[0]?.[0];
-  for (const t of list) {
-    const unread = isUnread(t);
-    const li = el("li", `${t.id === state.current ? "sel" : ""}${unread ? " unread" : ""}`.trim());
-    li.tabIndex = 0;
-    li.title = `${t.title}\n${t.cwd}\n${provLabel(t.provider)} · ${modelMeta(t.model).label}${t.mode === "bypassPermissions" ? " · Bypass" : ""} · ${t.costMeasured ? `$${t.cost.toFixed(3)} recorded API-equivalent` : "cost not measured"}`;
-    if (t.id === state.current) li.setAttribute("aria-current", "true");
-    const waiting = questions.count(t.id) || t.waiting;
-    // background subagents keep working after the turn ends: show the thread as busy until they finish
-    const dot = el(
-      "span",
-      `dot ${waiting ? "waiting" : t.background ? "running" : t.status}${unread ? " unread" : ""}`,
-    );
-    dot.setAttribute("aria-hidden", "true");
-    const meta = el("div", "meta");
-    if (base(t.cwd) !== usualDir) meta.append(el("span", "dir", base(t.cwd)));
-    meta.append(el("span", "tag", provLabel(t.provider || "claude")));
-    if (t.mode === "bypassPermissions") {
-      const tag = el("span", "tag warn");
-      tag.title = "Bypass permissions";
-      tag.append(icon("shield-off"), el("span", "sr-only", "Bypass"));
-      meta.append(tag);
-    }
-    if (waiting) meta.append(el("span", "tag question-tag", "Needs input"));
-    if (t.usageStop) {
-      const stop = t.usageStop;
-      const limit = el("span", "tag warn limit-tag");
-      const resets = stop.resetsAt ? `Resets ${new Date(stop.resetsAt).toLocaleString()}` : "";
-      limit.title = [resets, stop.text].filter(Boolean).join("\n");
-      limit.append(icon("alert"), el("span", "", "Usage limit"));
-      meta.append(limit);
-    }
-    const time = el("time", "", ago(t.updatedAt));
-    time.dateTime = new Date(t.updatedAt).toISOString();
-    meta.append(time);
-    const more = el("button", "btn sm icon ghost row-more");
-    more.type = "button";
-    more.title = "Thread actions";
-    more.append(icon("more"));
-    more.onclick = (e) => e.stopPropagation(); // the menu opens from its own listener; the row must not also open the thread
-    more.addEventListener(
-      "keydown",
-      (e) => (e.key === "Enter" || e.key === " ") && e.stopPropagation(),
-    );
-    createMenu({
-      trigger: more,
-      kind: "menu",
-      label: `Actions for ${t.title}`,
-      header: () => state.threads.get(t.id)?.title || t.title,
-      align: "end",
-      items: THREAD_ACTIONS,
-      getItems: () => threadActions(t.id),
-      onOpen: () => {
-        rowMenuOpen = true;
-        li.classList.add("menu-open");
-      },
-      onClose: () => {
-        rowMenuOpen = false;
-        li.classList.remove("menu-open");
-        if (renderPending) renderThreads();
-      },
-      onSelect: (v) => runThreadAction(t.id, v),
-    });
-    more.setAttribute("aria-label", `Actions for ${t.title}`);
-    li.append(dot, el("div", "t", t.title), meta, more);
-    if (waiting) li.append(el("span", "sr-only", "Needs your input"));
-    else if (t.status === "running") li.append(el("span", "sr-only", "Running"));
-    else if (t.background) li.append(el("span", "sr-only", "Subagents working"));
-    else if (unread) li.append(el("span", "sr-only", "Unread reply"));
-    const pick = () => {
-      if (shareResolve) finishShare(t.id);
-      setNav(false);
-      openThread(t.id);
-    };
-    li.onclick = pick;
-    li.onkeydown = (e) => {
-      if (e.key === "Enter" || e.key === " ") {
-        e.preventDefault();
-        pick();
-      }
-    };
-    (t.archived ? shelf : ul).append(li);
-  }
+  const usualDir = usualThreadDir(list);
+  for (const thread of list) (thread.archived ? shelf : ul).append(threadRow(thread, usualDir));
   if (list.length === filed)
     ul.append(el("li", "empty-list", list.length ? "Everything is archived." : "No threads yet."));
   const busy = list.some(
-    (t) => questions.count(t.id) || t.waiting || t.background || t.status === "running",
+    (thread) =>
+      questions.count(thread.id) ||
+      thread.waiting ||
+      thread.background ||
+      thread.status === "running",
   );
   const laneDot = $("lane-threads-dot");
   laneDot.hidden = !busy && !list.some(isUnread);
@@ -2018,110 +2086,124 @@ async function showEarlier(m) {
   if (state.deferredRefresh && nearBottom()) refreshConversation();
 }
 
-function renderHead() {
-  const t = cur();
-  if (!$("ttl-edit")) $("ttl").textContent = t ? t.title : state.ready ? "No thread" : "";
-  $("cwd").hidden = !t;
-  $("ttl-archived").hidden = !t?.archived;
-  $("thread-account").hidden = t?.provider !== "claude";
+function renderHeadTitle(thread) {
+  if (!$("ttl-edit")) $("ttl").textContent = thread ? thread.title : state.ready ? "No thread" : "";
+  $("cwd").hidden = !thread;
+  $("ttl-archived").hidden = !thread?.archived;
+  $("thread-account").hidden = thread?.provider !== "claude";
   $("thread-account").textContent =
-    t?.provider === "claude" ? `${claudeAccount(t.claudeAccount).label} ·` : "";
+    thread?.provider === "claude" ? `${claudeAccount(thread.claudeAccount).label} ·` : "";
   $("thread-account").title =
-    t?.provider === "claude"
-      ? `Claude account: ${claudeAccount(t.claudeAccount).email || claudeAccount(t.claudeAccount).label}`
+    thread?.provider === "claude"
+      ? `Claude account: ${claudeAccount(thread.claudeAccount).email || claudeAccount(thread.claudeAccount).label}`
       : "";
-  $("cwd-t").textContent = t ? t.cwd.replace(/^\/home\/[^/]+/, "~") : "";
-  $("cwd").title = t ? t.cwd : "";
-  if (t) {
-    const p = prov(t.provider);
-    if (p && menus.model.provider !== t.provider) {
-      menus.model.provider = t.provider; // models and modes differ per agent
-      menus.model.advisorShown = undefined;
-      menus.model.setItems(withAdvisors(modelItems(p.models, p), p, t.advisor || "default"));
-      menus.mode.setItems(modeItems(p.modes));
-    }
-    if (p && menus.model.advisorShown !== (t.advisor || "default")) {
-      // the check mark on the advisor rows follows the thread
-      menus.model.advisorShown = t.advisor || "default";
-      menus.model.setItems(
-        withAdvisors(modelItems(p.models, p), p, menus.model.advisorShown),
-        t.model,
-      );
-    }
-    menus.model.setValue(t.model);
-    $("effort").hidden = !p?.modelDetails;
-    fillEffort(menus.effort, p, t.model, t.effort || "default");
-    menus.effort.setDisabled(t.status === "running");
-    const run = t.lastRun;
-    const tok =
-      run && [run.input_tokens, run.cached_input_tokens, run.output_tokens].some((n) => n != null);
-    facts([
-      ...(run
-        ? [
-            ["Model", run.timing?.model || run.model || t.model],
-            [
-              "Effort",
-              effortLabel(run.effort || t.effort || "default"),
-              run.source && run.source !== "thread settings" ? `from ${run.source}` : "",
-            ],
-            ["Last run", run.duration_ms == null ? "Still running" : fmtMs(run.duration_ms)],
-            ...(tok
-              ? [
-                  [
-                    "Tokens",
-                    `${run.input_tokens ?? 0} in · ${run.cached_input_tokens ?? 0} from cache · ${run.output_tokens ?? 0} out`,
-                    "whole turn, not the context size",
-                  ],
-                ]
-              : []),
-          ]
-        : [["Last run", "None yet"]]),
-      [
-        "Automatic compaction",
-        !t.idleCompactionTtlMs
-          ? "Unavailable: cache lifetime unknown"
-          : t.idleCompaction === false
-            ? "Off"
-            : "On for substantial idle contexts",
-        t.idleCompactionDueAt
-          ? `Scheduled around ${new Date(t.idleCompactionDueAt).toLocaleTimeString()}; cache expiry is estimated.`
-          : "Compaction uses tokens and may shorten details. Full transcript is kept.",
-      ],
-    ]);
-    renderThreadId(t.id);
-    renderTurnTiming(run?.timing, firstTokenMs.get(t.id));
-    $("diagnostics").title = run
-      ? `Last run: ${run.model || t.model} · effort ${run.effort || t.effort || "default"} (${run.source || "thread settings"})\n${run.duration_ms ?? "?"} ms · input ${run.input_tokens ?? "?"} · cached ${run.cached_input_tokens ?? "?"} · output ${run.output_tokens ?? "?"} tokens`
-      : "No run metrics yet.";
-    menus.mode.setValue(t.mode);
+  $("cwd-t").textContent = thread ? thread.cwd.replace(/^\/home\/[^/]+/, "~") : "";
+  $("cwd").title = thread ? thread.cwd : "";
+}
+function syncHeadModelMenu(thread, provider) {
+  if (provider && menus.model.provider !== thread.provider) {
+    menus.model.provider = thread.provider; // models and modes differ per agent
+    menus.model.advisorShown = undefined;
+    menus.model.setItems(
+      withAdvisors(modelItems(provider.models, provider), provider, thread.advisor || "default"),
+    );
+    menus.mode.setItems(modeItems(provider.modes));
   }
-  const running = t?.status === "running";
-  menus.model.setDisabled(!t || running);
-  menus.mode.setDisabled(!t || running);
-  $("more").disabled = !t;
-  $("chat-search-toggle").disabled = !t;
-  $("state").hidden = !running && !t?.background && !questions.count(state.current);
-  $("input").disabled = !t;
-  $("attach").disabled = !t;
+  if (provider && menus.model.advisorShown !== (thread.advisor || "default")) {
+    // the check mark on the advisor rows follows the thread
+    menus.model.advisorShown = thread.advisor || "default";
+    menus.model.setItems(
+      withAdvisors(modelItems(provider.models, provider), provider, menus.model.advisorShown),
+      thread.model,
+    );
+  }
+}
+function lastRunFacts(run, thread) {
+  if (!run) return [["Last run", "None yet"]];
+  const hasTokens = [run.input_tokens, run.cached_input_tokens, run.output_tokens].some(
+    (count) => count != null,
+  );
+  return [
+    ["Model", run.timing?.model || run.model || thread.model],
+    [
+      "Effort",
+      effortLabel(run.effort || thread.effort || "default"),
+      run.source && run.source !== "thread settings" ? `from ${run.source}` : "",
+    ],
+    ["Last run", run.duration_ms == null ? "Still running" : fmtMs(run.duration_ms)],
+    ...(hasTokens
+      ? [
+          [
+            "Tokens",
+            `${run.input_tokens ?? 0} in · ${run.cached_input_tokens ?? 0} from cache · ${run.output_tokens ?? 0} out`,
+            "whole turn, not the context size",
+          ],
+        ]
+      : []),
+  ];
+}
+function idleCompactionState(thread) {
+  if (!thread.idleCompactionTtlMs) return "Unavailable: cache lifetime unknown";
+  return thread.idleCompaction === false ? "Off" : "On for substantial idle contexts";
+}
+function idleCompactionNote(thread) {
+  return thread.idleCompactionDueAt
+    ? `Scheduled around ${new Date(thread.idleCompactionDueAt).toLocaleTimeString()}; cache expiry is estimated.`
+    : "Compaction uses tokens and may shorten details. Full transcript is kept.";
+}
+function diagnosticsTitle(run, thread) {
+  return run
+    ? `Last run: ${run.model || thread.model} · effort ${run.effort || thread.effort || "default"} (${run.source || "thread settings"})\n${run.duration_ms ?? "?"} ms · input ${run.input_tokens ?? "?"} · cached ${run.cached_input_tokens ?? "?"} · output ${run.output_tokens ?? "?"} tokens`
+    : "No run metrics yet.";
+}
+function renderHeadThread(thread) {
+  const provider = prov(thread.provider);
+  syncHeadModelMenu(thread, provider);
+  menus.model.setValue(thread.model);
+  $("effort").hidden = !provider?.modelDetails;
+  fillEffort(menus.effort, provider, thread.model, thread.effort || "default");
+  menus.effort.setDisabled(thread.status === "running");
+  const run = thread.lastRun;
+  facts([
+    ...lastRunFacts(run, thread),
+    ["Automatic compaction", idleCompactionState(thread), idleCompactionNote(thread)],
+  ]);
+  renderThreadId(thread.id);
+  renderTurnTiming(run?.timing, firstTokenMs.get(thread.id));
+  $("diagnostics").title = diagnosticsTitle(run, thread);
+  menus.mode.setValue(thread.mode);
+}
+function composerPlaceholder(thread) {
+  if (!thread) return "Message the agent";
+  if (questions.count(thread.id) || thread.waiting)
+    return "Reply to the agent, or choose an option above…";
+  if (thread.status !== "running") return "Message the agent";
+  return thread.operation
+    ? "Queue a message to send after compaction…"
+    : "Queue a message for after this turn…";
+}
+function renderHead() {
+  const thread = cur();
+  renderHeadTitle(thread);
+  if (thread) renderHeadThread(thread);
+  const running = thread?.status === "running";
+  menus.model.setDisabled(!thread || running);
+  menus.mode.setDisabled(!thread || running);
+  $("more").disabled = !thread;
+  $("chat-search-toggle").disabled = !thread;
+  $("state").hidden = !running && !thread?.background && !questions.count(state.current);
+  $("input").disabled = !thread;
+  $("attach").disabled = !thread;
   // While the agent works the composer stays live: Enter steers it (or queues, for agents that cannot take input mid-turn)
-  const canSteer = !t?.operation && !!prov(t?.provider)?.steer;
   renderAction();
   $("cbox").classList.toggle("running", running);
-  $("input").placeholder = !t
-    ? "Message the agent"
-    : questions.count(t.id) || t.waiting
-      ? "Reply to the agent, or choose an option above…"
-      : running
-        ? t?.operation
-          ? "Queue a message to send after compaction…"
-          : "Queue a message for after this turn…"
-        : "Message the agent";
+  $("input").placeholder = composerPlaceholder(thread);
   renderQueue();
   renderCtx();
   renderUsage();
   updateWorking();
-  $("head").dataset.status = t?.status || "";
-  $("head").dataset.mode = t?.mode || "";
+  $("head").dataset.status = thread?.status || "";
+  $("head").dataset.mode = thread?.mode || "";
 }
 
 // One button does it all: Stop (red) while a turn runs and the composer is empty, otherwise Send (which queues mid-turn).
@@ -3694,66 +3776,56 @@ const usageName = (p) =>
         ? "DeepSeek"
         : p?.label || "";
 let usagePicker;
-function renderUsage() {
+function usageProviderEntries(provider) {
+  if (provider.id === "claude")
+    return claudeAccounts().map((account) => ({
+      id: account.id === "sunny" ? "claude" : `claude:${account.id}`,
+      label: account.label,
+      email: account.email,
+      claude: true,
+      ready: account.ready,
+    }));
+  const hasDeepseek =
+    provider.models?.some((model) => model.startsWith("deepseek/")) || state.usage["pi:deepseek"];
+  if (provider.id === "pi" && hasDeepseek)
+    return [provider, { id: "pi:deepseek", label: "DeepSeek" }];
+  return [provider];
+}
+function usageProviderList() {
   const providers = [...state.providers.values()]
-    .filter((p) => p.id !== "mock")
-    .flatMap((p) =>
-      p.id === "claude"
-        ? claudeAccounts().map((a) => ({
-            id: a.id === "sunny" ? "claude" : `claude:${a.id}`,
-            label: a.label,
-            email: a.email,
-            claude: true,
-            ready: a.ready,
-          }))
-        : p.id === "pi" &&
-            (p.models?.some((model) => model.startsWith("deepseek/")) || state.usage["pi:deepseek"])
-          ? [p, { id: "pi:deepseek", label: "DeepSeek" }]
-          : [p],
-    );
-  if (state.usage["pi:deepseek"] && !providers.some((p) => p.id === "pi:deepseek")) {
-    const codex = providers.findIndex((p) => p.id === "codex");
+    .filter((provider) => provider.id !== "mock")
+    .flatMap(usageProviderEntries);
+  if (state.usage["pi:deepseek"] && !providers.some((entry) => entry.id === "pi:deepseek")) {
+    const codex = providers.findIndex((entry) => entry.id === "codex");
     providers.splice(codex < 0 ? providers.length : codex, 0, {
       id: "pi:deepseek",
       label: "DeepSeek",
     });
   }
-  if (!providers.length) return;
-  if (!providers.some((p) => p.id === state.usageTab)) state.usageTab = providers[0].id;
-  const root = $("usage");
-  const focusedControl = root.contains(document.activeElement) ? document.activeElement.id : null;
+  return providers;
+}
+function ensureUsagePicker(root) {
   let picker = root.querySelector("#usage-provider");
-  if (!picker) {
-    picker = el("button", "btn field usage-picker");
-    picker.id = "usage-provider";
-    picker.type = "button";
-    usagePicker = createMenu({
-      trigger: picker,
-      label: "Usage account",
-      side: "top",
-      renderTrigger: (item, button) => {
-        fieldTrigger(item, button);
-        button.setAttribute("aria-label", `Usage account: ${item?.label || ""}`);
-      },
-      onSelect: (value) => {
-        state.usageTab = value;
-        renderUsage();
-      },
-    });
-  }
-  usagePicker.setItems(
-    providers.map((p) => ({
-      value: p.id,
-      label: p.claude ? `Claude · ${p.label}` : usageName(p),
-      ...(p.email ? { desc: p.email } : {}),
-    })),
-    state.usageTab,
-  );
-  const pane = el("div", "usage-pane");
-  pane.id = "usage-panel";
-  pane.setAttribute("role", "region");
-  pane.setAttribute("aria-labelledby", picker.id);
-  const sample = state.usage[state.usageTab];
+  if (picker) return picker;
+  picker = el("button", "btn field usage-picker");
+  picker.id = "usage-provider";
+  picker.type = "button";
+  usagePicker = createMenu({
+    trigger: picker,
+    label: "Usage account",
+    side: "top",
+    renderTrigger: (item, button) => {
+      fieldTrigger(item, button);
+      button.setAttribute("aria-label", `Usage account: ${item?.label || ""}`);
+    },
+    onSelect: (value) => {
+      state.usageTab = value;
+      renderUsage();
+    },
+  });
+  return picker;
+}
+function usageHead(sample, deepseek) {
   const head = el("div", "usage-head", "");
   const refresh = iconButton("refresh", "Refresh usage", "btn icon sm ghost usage-refresh");
   refresh.onclick = () => {
@@ -3776,66 +3848,76 @@ function renderUsage() {
     stamp.title = `Updated ${new Date(sample.updatedAt).toLocaleString()}`;
     refresh.setAttribute("aria-label", `Refresh usage (updated ${stamp.textContent})`);
   }
-  const selectedAccount = providers.find((p) => p.id === state.usageTab);
-  const deepseek = state.usageTab === "pi:deepseek";
   head.append(
     el("span", "usage-label", deepseek ? "Balance" : "Allowance"),
     ...(stamp ? [stamp] : []),
     refresh,
   );
-  pane.append(head);
-  if (deepseek && sample?.balances?.length) {
-    for (const balance of sample.balances) {
-      const money = (amount) => `${balance.currency} ${amount.toFixed(2)}`;
-      pane.append(
-        el("div", "usage-label", `${money(balance.total)} total balance`),
-        el(
-          "div",
-          "usage-note",
-          `${money(balance.granted)} granted · ${money(balance.toppedUp)} topped up`,
-        ),
-      );
-    }
-    if (sample.available === false)
-      pane.append(el("div", "usage-note", "Insufficient balance for API requests."));
-  } else if (sample?.windows?.length) {
-    for (const w of sample.windows)
-      pane.append(usageMeter(w.label, w.used, w.limit, w.unit || "requests", w.resetsAt));
-  } else
+  return head;
+}
+function usageEmptyNote(sample, deepseek, selectedAccount) {
+  if (sample?.note) return sample.note;
+  if (deepseek) return "DeepSeek balance not loaded yet. Tap refresh.";
+  if (!selectedAccount?.claude) return "No allowance telemetry yet. Tap refresh.";
+  return selectedAccount.ready
+    ? "Claude reports this account’s allowance after each turn."
+    : "Sign in to this account on the server to see its allowance.";
+}
+function appendDeepseekBalances(pane, sample) {
+  for (const balance of sample.balances) {
+    const money = (amount) => `${balance.currency} ${amount.toFixed(2)}`;
     pane.append(
+      el("div", "usage-label", `${money(balance.total)} total balance`),
       el(
         "div",
         "usage-note",
-        sample?.note ||
-          (deepseek
-            ? "DeepSeek balance not loaded yet. Tap refresh."
-            : selectedAccount?.claude
-              ? selectedAccount.ready
-                ? "Claude reports this account’s allowance after each turn."
-                : "Sign in to this account on the server to see its allowance."
-              : "No allowance telemetry yet. Tap refresh."),
+        `${money(balance.granted)} granted · ${money(balance.toppedUp)} topped up`,
       ),
     );
-  if (sample?.windows?.some((w) => w.resetsAt && w.resetsAt < Date.now()))
+  }
+  if (sample.available === false)
+    pane.append(el("div", "usage-note", "Insufficient balance for API requests."));
+}
+function appendUsageAllowance(pane, sample, deepseek, selectedAccount) {
+  if (deepseek && sample?.balances?.length) {
+    appendDeepseekBalances(pane, sample);
+  } else if (sample?.windows?.length) {
+    for (const window of sample.windows)
+      pane.append(
+        usageMeter(
+          window.label,
+          window.used,
+          window.limit,
+          window.unit || "requests",
+          window.resetsAt,
+        ),
+      );
+  } else pane.append(el("div", "usage-note", usageEmptyNote(sample, deepseek, selectedAccount)));
+  if (sample?.windows?.some((window) => window.resetsAt && window.resetsAt < Date.now()))
     pane.append(el("div", "usage-note", "Last reported usage · reset passed; awaiting refresh."));
   if (sample?.spendToday != null)
     pane.append(el("div", "usage-note", `$${sample.spendToday.toFixed(4)} spent today`));
-  const t =
-    cur() && threadUsageKey(cur()) === state.usageTab
-      ? cur()
-      : [...state.threads.values()]
-          .filter((t) => threadUsageKey(t) === state.usageTab)
-          .sort((a, b) => b.updatedAt - a.updatedAt)[0];
-  const hasCtx = t?.context?.used != null && t.context.max;
-  const detail = hasCtx
-    ? `${fmtTok(t.context.used)} of ${fmtTok(t.context.max)} tokens`
-    : t?.context?.used != null
-      ? `${fmtTok(t.context.used)} tokens · window not reported`
-      : t?.lastCompactedAt
-        ? "Compacted · token usage updates on the next request."
-        : "Context not reported yet.";
+}
+function usageContextThread() {
+  const current = cur();
+  if (current && threadUsageKey(current) === state.usageTab) return current;
+  return [...state.threads.values()]
+    .filter((thread) => threadUsageKey(thread) === state.usageTab)
+    .sort((left, right) => right.updatedAt - left.updatedAt)[0];
+}
+function usageContextDetail(thread, hasCtx) {
+  if (hasCtx) return `${fmtTok(thread.context.used)} of ${fmtTok(thread.context.max)} tokens`;
+  if (thread?.context?.used != null)
+    return `${fmtTok(thread.context.used)} tokens · window not reported`;
+  return thread?.lastCompactedAt
+    ? "Compacted · token usage updates on the next request."
+    : "Context not reported yet.";
+}
+function usageContextGroup(thread) {
+  const hasCtx = thread?.context?.used != null && thread.context.max;
+  const detail = usageContextDetail(thread, hasCtx);
   const ctxRow = hasCtx
-    ? usageMeter("Context", t.context.used, t.context.max, "tokens")
+    ? usageMeter("Context", thread.context.used, thread.context.max, "tokens")
     : el("div", "u u-empty", "");
   ctxRow.classList.add("u-ctx");
   if (!hasCtx)
@@ -3845,7 +3927,7 @@ function renderUsage() {
   info.setAttribute("aria-haspopup", "dialog");
   info.title = "Compare continuing versus compacting";
   const openForecast = (trigger) =>
-    openContextEconomics({ getThread: () => state.threads.get(t?.id), send, trigger });
+    openContextEconomics({ getThread: () => state.threads.get(thread?.id), send, trigger });
   info.onclick = () => openForecast(info);
   ctxRow.setAttribute("role", "button");
   ctxRow.tabIndex = 0;
@@ -3864,21 +3946,54 @@ function renderUsage() {
   const line = el("div", "usage-ctx-line");
   line.append(ctxRow, info);
   ctxWrap.append(line);
-  pane.append(ctxWrap);
-  if (hasCtx && t.context.used / t.context.max >= 0.7) {
-    const note = el(
-      "div",
-      "usage-note",
-      "Long context increases repeated input. Compact this task, or start a fresh thread for unrelated work.",
-    );
-    if (t.status === "idle") {
-      const compact = el("button", "btn sm ghost", "Compact context");
-      compact.type = "button";
-      compact.onclick = () => send({ t: "compact", thread: t.id });
-      note.append(compact);
-    }
-    pane.append(note);
+  return ctxWrap;
+}
+function usageLongContextNote(thread) {
+  const note = el(
+    "div",
+    "usage-note",
+    "Long context increases repeated input. Compact this task, or start a fresh thread for unrelated work.",
+  );
+  if (thread.status === "idle") {
+    const compact = el("button", "btn sm ghost", "Compact context");
+    compact.type = "button";
+    compact.onclick = () => send({ t: "compact", thread: thread.id });
+    note.append(compact);
   }
+  return note;
+}
+function renderUsage() {
+  const providers = usageProviderList();
+  if (!providers.length) return;
+  if (!providers.some((entry) => entry.id === state.usageTab)) state.usageTab = providers[0].id;
+  const root = $("usage");
+  const focusedControl = root.contains(document.activeElement) ? document.activeElement.id : null;
+  const picker = ensureUsagePicker(root);
+  usagePicker.setItems(
+    providers.map((entry) => ({
+      value: entry.id,
+      label: entry.claude ? `Claude · ${entry.label}` : usageName(entry),
+      ...(entry.email ? { desc: entry.email } : {}),
+    })),
+    state.usageTab,
+  );
+  const pane = el("div", "usage-pane");
+  pane.id = "usage-panel";
+  pane.setAttribute("role", "region");
+  pane.setAttribute("aria-labelledby", picker.id);
+  const sample = state.usage[state.usageTab];
+  const selectedAccount = providers.find((entry) => entry.id === state.usageTab);
+  const deepseek = state.usageTab === "pi:deepseek";
+  pane.append(usageHead(sample, deepseek));
+  appendUsageAllowance(pane, sample, deepseek, selectedAccount);
+  const thread = usageContextThread();
+  pane.append(usageContextGroup(thread));
+  if (
+    thread?.context?.used != null &&
+    thread.context.max &&
+    thread.context.used / thread.context.max >= 0.7
+  )
+    pane.append(usageLongContextNote(thread));
   if (!picker.isConnected) root.replaceChildren(picker, pane);
   else root.querySelector(".usage-pane").replaceWith(pane);
   if (focusedControl) $(focusedControl)?.focus({ preventScroll: true });
@@ -4093,51 +4208,60 @@ function dropPending(p) {
   forgetAttachment(p);
   if (state.current === p.thread) renderThumbs();
 }
-function startUpload(p) {
-  p.busy = true;
-  p.error = false;
-  p.ready = (async () => {
-    // Persist the original file before image decoding, resizing, or networking.
-    await attachmentStorage.save(p);
-    if (p.removed) return;
-    if (!p.prepared) {
-      const prep = await prepare(p.blob);
-      if (p.removed) return;
-      Object.assign(p, prep, { size: prep.blob.size, prepared: true });
-      if (p.kind === "image" && !p.n) {
-        p.n = Math.max(0, ...(attachmentDrafts.get(p.thread) || []).map((item) => item.n || 0)) + 1;
-        p.labelPending = true;
-      }
-      await attachmentStorage.save(p);
-    } else if (p.kind === "image") p.url = await readDataUrl(p.blob);
-    if (p.removed) return;
-    if (p.labelPending) {
-      const token = `[Image #${p.n}]`;
-      if (state.current === p.thread) {
-        imageCount = p.n;
-        if (!$("input").value.includes(token)) insertToken(token);
-      } else {
-        const text = drafts.get(p.thread) || "";
-        if (!text.includes(token))
-          writeDraft(p.thread, `${text}${text && !/\s$/.test(text) ? " " : ""}${token} `);
-      }
-      p.labelPending = false;
-      await attachmentStorage.save(p);
-    }
-    if (p.removed) return;
-    if (state.current === p.thread) renderThumbs();
-    const result = await upload(p.thread, p.blob, p.name);
-    Object.assign(p, { id: result.id, name: result.name, kind: result.kind });
-    if (!p.removed) await attachmentStorage.save(p);
-    delete p.blob;
-  })()
+async function prepareUploadFile(pending) {
+  if (pending.prepared) {
+    if (pending.kind === "image") pending.url = await readDataUrl(pending.blob);
+    return;
+  }
+  const prep = await prepare(pending.blob);
+  if (pending.removed) return;
+  Object.assign(pending, prep, { size: prep.blob.size, prepared: true });
+  if (pending.kind === "image" && !pending.n) {
+    const siblings = attachmentDrafts.get(pending.thread) || [];
+    pending.n = Math.max(0, ...siblings.map((item) => item.n || 0)) + 1;
+    pending.labelPending = true;
+  }
+  await attachmentStorage.save(pending);
+}
+async function insertUploadLabel(pending) {
+  const token = `[Image #${pending.n}]`;
+  if (state.current === pending.thread) {
+    imageCount = pending.n;
+    if (!$("input").value.includes(token)) insertToken(token);
+  } else {
+    const text = drafts.get(pending.thread) || "";
+    if (!text.includes(token))
+      writeDraft(pending.thread, `${text}${text && !/\s$/.test(text) ? " " : ""}${token} `);
+  }
+  pending.labelPending = false;
+  await attachmentStorage.save(pending);
+}
+async function runPendingUpload(pending) {
+  // Persist the original file before image decoding, resizing, or networking.
+  await attachmentStorage.save(pending);
+  if (pending.removed) return;
+  await prepareUploadFile(pending);
+  if (pending.removed) return;
+  if (pending.labelPending) await insertUploadLabel(pending);
+  if (pending.removed) return;
+  if (state.current === pending.thread) renderThumbs();
+  const result = await upload(pending.thread, pending.blob, pending.name);
+  Object.assign(pending, { id: result.id, name: result.name, kind: result.kind });
+  if (!pending.removed) await attachmentStorage.save(pending);
+  delete pending.blob;
+}
+function startUpload(pending) {
+  pending.busy = true;
+  pending.error = false;
+  pending.ready = runPendingUpload(pending)
     .catch((error) => {
-      p.error = true;
-      if (!p.removed && state.current === p.thread) toast(`${p.name}: ${error.message}`);
+      pending.error = true;
+      if (!pending.removed && state.current === pending.thread)
+        toast(`${pending.name}: ${error.message}`);
     })
     .finally(() => {
-      p.busy = false;
-      if (state.current === p.thread) renderThumbs();
+      pending.busy = false;
+      if (state.current === pending.thread) renderThumbs();
     });
 }
 
