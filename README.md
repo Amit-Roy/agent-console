@@ -62,6 +62,8 @@ The benchmark dashboard shows your two Claude account fees and Codex fee separat
 
 **Auto titles.** Threads rename themselves from the first message. Every 3-word-plus prompt renames again from the last two messages (unless you chose the title). Powered by NVIDIA Nemotron → OpenRouter free, never blocks the turn.
 
+**Auto-continue.** When a turn ends announcing its next step ("Next: I implement…") without doing it, the Console sends one "Continue" prompt per user message, for every provider. Skipped while background tasks, questions or queued messages are pending. `AGENT_CONSOLE_AUTO_CONTINUE=0` to disable.
+
 **Readable tool cards.** Bash cards show what a command is *for*, not the raw command. `AGENT_CONSOLE_LABELS=0` to disable.
 
 **Attachments detail.** Images go to the model as vision input; other files are listed by absolute path and the agent opens them with its own tools. Claude gets `--add-dir` for the upload folder in Plan/Accept-edits mode.

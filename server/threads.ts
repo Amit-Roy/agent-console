@@ -11,6 +11,7 @@ import {
 import { repairAccounting } from "./accounting-repair.ts";
 import { backfill, readTurns, recordTurn, restoreAccounting, type Turn } from "./analytics.ts";
 import { DATA_DIR } from "./auth.ts";
+import { AUTO_CONTINUE_PROMPT, announcesNextStep, autoContinueEnabled } from "./auto-continue.ts";
 import { assertAutomationSandbox } from "./automation/sandbox.ts";
 import { CONSOLE_COMMANDS, commandList, parseCommand } from "./commands.ts";
 import { recentPreamble, replayPreamble } from "./export.ts";
@@ -278,6 +279,8 @@ interface TurnState {
   clock?: TurnClock;
   failureCode?: string; // codexErrorInfo kind of that console_error
   failure?: string; // newest console_error text; Codex and Pi report a failed turn there, not on the result
+  lastText?: string; // the newest assistant text with no tool call after it: what the turn ended on
+  bgTools?: Set<string>; // run_in_background tool calls that have not returned yet
 }
 
 const QUOTA_ERROR =
@@ -311,6 +314,7 @@ export class Threads {
   private threads = new Map<string, Thread>();
   private live = new Map<string, Live>();
   private turns = new Map<string, TurnState>(); // the turn in flight, per thread
+  private continueArmed = new Set<string>(); // threads whose newest turn came from the user: one auto-continue allowed
   // Replaying every Claude log takes a few hundred ms; only a finished turn needs the baselines, so boot leaves it to warmAccounting()
   private restoredAccounting?: SessionAccounting;
   private get accounting() {
@@ -1280,8 +1284,11 @@ export class Threads {
       if (turn)
         for (const b of ev.message?.content ?? [])
           if (b?.type === "tool_use") turn.tools[b.name] = (turn.tools[b.name] ?? 0) + 1;
+      if (turn) this.trackBlocks(turn, ev.message?.content ?? []);
     }
+    if (ev.type === "user") this.trackResults(this.turns.get(t.id), ev.message?.content);
     if (ev.type === "result") {
+      const questionOpen = this.questions.list(t.id).length > 0; // cancelled just below; the turn still ended on it
       this.cancelQuestions(t.id);
       const live = this.live.get(t.id);
       // Claude answers /compact with an empty result straight away, then compacts and sends compact_boundary and the real result
@@ -1307,6 +1314,8 @@ export class Threads {
       }
       const failedTurn = this.turns.get(t.id);
       const failure = failedTurn?.failure;
+      const endedText = failedTurn?.lastText;
+      const unfinished = questionOpen || !!failedTurn?.bgTools?.size;
       this.finishTurn(t, ev);
       const stop = ev.is_error
         ? detectUsageStop(t.provider, ev, failure, failedTurn?.failureCode)
@@ -1386,6 +1395,7 @@ export class Threads {
       )
         this.drain(t.id);
       if (t.status === "idle" && !ev.is_error) this.wake(t);
+      if (t.status === "idle") this.autoContinue(t, ev, endedText, unfinished);
     }
     this.publish(t.id, ev, ev.type !== "stream_event");
     if (ev.type === "result" && t.schedule && t.status === "idle")
@@ -1415,6 +1425,64 @@ export class Threads {
         }
       }
     }
+  }
+
+  // Remember what a turn ends on: text replaces the last text, a tool call clears it. Background Bash calls count until they return.
+  private trackBlocks(turn: TurnState, blocks: any[]) {
+    for (const block of blocks) {
+      if (block?.type === "text" && typeof block.text === "string") turn.lastText = block.text;
+      if (block?.type !== "tool_use") continue;
+      delete turn.lastText;
+      if (block.name === "Bash" && block.input?.run_in_background === true && block.id)
+        (turn.bgTools ??= new Set()).add(String(block.id));
+    }
+  }
+
+  private trackResults(turn: TurnState | undefined, content: any) {
+    if (!turn?.bgTools?.size || !Array.isArray(content)) return;
+    for (const block of content)
+      if (block?.type === "tool_result") turn.bgTools.delete(String(block.tool_use_id));
+  }
+
+  private continueBlocked(thread: Thread, event: any, unfinished: boolean) {
+    const live = this.live.get(thread.id);
+    return (
+      !!event.is_error ||
+      thread.status !== "idle" ||
+      !!thread.operation ||
+      !!thread.background ||
+      unfinished ||
+      !!live?.wakes?.length ||
+      !!this.queues.get(thread.id)?.length ||
+      !!this.questions.list(thread.id).length
+    );
+  }
+
+  private continueParked(thread: Thread) {
+    return !!(
+      thread.waiting ||
+      thread.issueRun ||
+      thread.quotaPaused ||
+      thread.usageStop ||
+      thread.archived
+    );
+  }
+
+  // A turn that ended by announcing its next step gets one "Continue" nudge; the nudge's own turn never gets another.
+  private autoContinue(thread: Thread, event: any, text: string | undefined, unfinished: boolean) {
+    if (!this.continueArmed.has(thread.id)) return;
+    if (Number(event.queued_turn_count) > 0) return;
+    this.continueArmed.delete(thread.id);
+    if (!autoContinueEnabled() || !text || !announcesNextStep(text)) return;
+    if (this.continueBlocked(thread, event, unfinished) || this.continueParked(thread)) return;
+    const live = this.live.get(thread.id);
+    setTimeout(() => {
+      if (this.live.get(thread.id) !== live || this.threads.get(thread.id) !== thread) return;
+      if (this.continueBlocked(thread, {}, false) || this.continueParked(thread)) return;
+      try {
+        this.send(thread.id, AUTO_CONTINUE_PROMPT, { auto: "continue" });
+      } catch {}
+    }, 250);
   }
 
   // Give finished subagent results to an agent that does not wake itself (Codex). Waits behind a running turn or queued messages.
@@ -1604,7 +1672,7 @@ export class Threads {
     id: string,
     text: string,
     opts: {
-      auto?: "brain" | "subagent" | "quota-resume";
+      auto?: "brain" | "subagent" | "quota-resume" | "continue";
       attachments?: unknown;
       mode?: "steer" | "queue";
       delivery?: "queued";
@@ -1641,6 +1709,7 @@ export class Threads {
       }
     }
     if (!opts.auto) {
+      this.continueArmed.add(id);
       delete t.quotaPaused; // the user continued by hand: no auto "Continue." later
       t.lastUserActivityAt = Math.max(Date.now(), (t.lastUserActivityAt ?? 0) + 1);
       this.idleCompactionTimers.cancel(id);
@@ -1757,6 +1826,7 @@ export class Threads {
     }
     if (t.operation !== "compact" && opts.mode !== "queue" && agent?.steer) {
       const accepted = () => {
+        this.continueArmed.add(t.id);
         this.notificationTurns.add(t.id);
         this.notePrompt(t, text);
         this.publish(t.id, {
@@ -1988,6 +2058,7 @@ export class Threads {
 
   abort(id: string) {
     this.notificationTurns.delete(id);
+    this.continueArmed.delete(id);
     const t = this.threads.get(id);
     const live = this.live.get(id);
     if (!t) return;
@@ -2027,6 +2098,7 @@ export class Threads {
 
   private kill(id: string, reason = "kill", rewarm = false) {
     this.notificationTurns.delete(id);
+    this.continueArmed.delete(id);
     this.cancelQuestions(id);
     const live = this.live.get(id);
     if (live) {
