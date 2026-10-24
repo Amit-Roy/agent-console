@@ -1,5 +1,13 @@
 #!/usr/bin/env bash
+# Wrapper: refuses non-Instagram links, then delegates to share-fetch.
 set -eu
 DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
-export PATH="$HOME/.local/bin:$PATH"
-exec node "$DIR/scripts/instagram-fetch.ts" "$@"
+for arg in "$@"; do
+  case "$arg" in
+    http*) case "$arg" in
+      https://instagram.com/*|https://www.instagram.com/*|https://m.instagram.com/*) ;;
+      *) echo "instagram-fetch only handles Instagram links; use share-fetch for other links." >&2; exit 1 ;;
+    esac ;;
+  esac
+done
+exec "$DIR/bin/share-fetch" "$@"

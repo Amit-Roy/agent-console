@@ -1,0 +1,17 @@
+{
+  "tweetID": "99",
+  "text": "vx text",
+  "user_name": "Jack",
+  "user_screen_name": "jack",
+  "date_epoch": 1666809958,
+  "likes": 5,
+  "replies": 1,
+  "qrt": null,
+  "media_extended": [
+    {
+      "type": "video",
+      "url": "https://video.twimg.com/hi.mp4",
+      "thumbnail_url": "https://pbs.twimg.com/t.jpg"
+    }
+  ]
+}

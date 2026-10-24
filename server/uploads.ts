@@ -114,6 +114,15 @@ export function saveUpload(
   };
 }
 
+const FILE_MEDIA_TYPES: Record<string, string> = {
+  ".mp4": "video/mp4",
+  ".webm": "video/webm",
+  ".md": "text/markdown",
+  ".vtt": "text/vtt",
+};
+const fileMediaType = (name: string) =>
+  FILE_MEDIA_TYPES[path.extname(name).toLowerCase()] ?? "text/plain";
+
 /** Moves a server-side file into a thread's uploads (used by share targets). Same layout and id format as saveUpload. */
 export function adoptUpload(
   thread: string,
@@ -142,7 +151,7 @@ export function adoptUpload(
     id: uploadId,
     name,
     kind: image ? "image" : "file",
-    media_type: image ?? (name.endsWith(".mp4") ? "video/mp4" : "text/plain"),
+    media_type: image ?? fileMediaType(name),
     size,
   };
 }

@@ -78,7 +78,7 @@ try {
     const sends: unknown[] = [];
     page.on("pageerror", (error) => errors.push(error.message));
     page.on("request", (request) => {
-      if (request.url().includes("/api/share/instagram")) posts.push(request.postData() || "");
+      if (request.url().includes("/api/share")) posts.push(request.postData() || "");
     });
     page.on("websocket", (socket) =>
       socket.on("framesent", (frame) => {
@@ -126,7 +126,7 @@ try {
   const threads = JSON.parse(fs.readFileSync(path.join(data, "threads.json"), "utf8"));
   assert.equal(threads.length, 1, "only the dialog thread exists");
   assert.equal(threads[0].provider, "mock");
-  console.log("instagram-share-ui ok");
+  console.log("share-ui ok");
 } finally {
   await closeBrowser();
   if (server.exitCode === null) {
