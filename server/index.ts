@@ -1487,6 +1487,9 @@ wss.on("connection", (ws) => {
         case "warm":
           if (typeof m.thread === "string") threads.warm(m.thread);
           return;
+        case "read":
+          if (typeof m.id === "string") threads.markRead(m.id);
+          return;
         case "update": {
           return threads.update(m.thread, {
             mode: typeof m.mode === "string" ? m.mode : undefined,

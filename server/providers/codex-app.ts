@@ -525,7 +525,13 @@ export function startCodexApp(t: ThreadSpec, ctx: AgentCtx, translate: (row: any
           }),
         );
       } else if (r.method === "error" && !v.willRetry) {
-        ctx.event({ type: "console_error", text: v.error?.message || "Codex error." });
+        const info = v.error?.codexErrorInfo,
+          code = info && typeof info === "object" ? Object.keys(info)[0] : info;
+        ctx.event({
+          type: "console_error",
+          text: v.error?.message || "Codex error.",
+          ...(typeof code === "string" ? { code } : {}),
+        });
       }
     },
   );
