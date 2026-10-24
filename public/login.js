@@ -8,6 +8,6 @@ f.addEventListener("submit", async (e) => {
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ password: document.getElementById("pw").value }),
   });
-  if (r.ok) location.href = "/";
+  if (r.ok) location.href = `/${location.search}`;
   else err.textContent = (await r.json().catch(() => ({}))).error || "Sign-in failed.";
 });
