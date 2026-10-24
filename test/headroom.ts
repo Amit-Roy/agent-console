@@ -10,8 +10,12 @@ import { diagnostic, ResourceGuard } from "../server/headroom-diagnostics.ts";
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "ac-headroom-"));
 const inheritedHeadroomCommand = process.env.AGENT_CONSOLE_HEADROOM_COMMAND;
 const inheritedHeadroomKompress = process.env.AGENT_CONSOLE_HEADROOM_KOMPRESS;
+const inheritedEnvFiles = process.env.AGENT_CONSOLE_ENV_FILES;
 delete process.env.AGENT_CONSOLE_HEADROOM_COMMAND;
 delete process.env.AGENT_CONSOLE_HEADROOM_KOMPRESS;
+const fixtureEnvFile = path.join(scratch, "agent-console.env");
+fs.writeFileSync(fixtureEnvFile, "");
+process.env.AGENT_CONSOLE_ENV_FILES = fixtureEnvFile;
 const socket = net.createServer();
 await new Promise<void>((resolve) => socket.listen(0, "127.0.0.1", resolve));
 const port = (socket.address() as net.AddressInfo).port;
@@ -138,15 +142,17 @@ try {
     assert.equal(launch.args[launch.args.indexOf(flag) + 1], "1");
   assert.deepEqual(Object.values(launch.env), ["1", "1", "1", "1", "1", "1", "false", "0"]);
   await headroom.stop();
-  process.env.AGENT_CONSOLE_HEADROOM_COMMAND = customCommand;
-  process.env.AGENT_CONSOLE_HEADROOM_KOMPRESS = "1";
+  fs.writeFileSync(
+    fixtureEnvFile,
+    `AGENT_CONSOLE_HEADROOM_COMMAND=${customCommand}\nAGENT_CONSOLE_HEADROOM_KOMPRESS=1\n`,
+  );
   await headroom.start();
   const optInLaunch = fs
     .readFileSync(process.env.CAPTURE, "utf8")
     .trim()
     .split("\n")
     .map((line) => JSON.parse(line))[1];
-  assert.equal(optInLaunch.command, customCommand, "Configured executable path is spawned");
+  assert.equal(optInLaunch.command, customCommand, "Environment file executable path is spawned");
   assert.ok(!optInLaunch.args.includes("--disable-kompress"));
   assert.ok(optInLaunch.args.includes("--disable-kompress-fallback"));
   assert.ok(optInLaunch.args.includes("--no-ccr"));
@@ -196,4 +202,6 @@ try {
   else process.env.AGENT_CONSOLE_HEADROOM_COMMAND = inheritedHeadroomCommand;
   if (inheritedHeadroomKompress === undefined) delete process.env.AGENT_CONSOLE_HEADROOM_KOMPRESS;
   else process.env.AGENT_CONSOLE_HEADROOM_KOMPRESS = inheritedHeadroomKompress;
+  if (inheritedEnvFiles === undefined) delete process.env.AGENT_CONSOLE_ENV_FILES;
+  else process.env.AGENT_CONSOLE_ENV_FILES = inheritedEnvFiles;
 }

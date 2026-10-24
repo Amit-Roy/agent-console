@@ -1,6 +1,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { diagnostic, ResourceGuard, resource } from "./headroom-diagnostics.ts";
 import { privacyEnv } from "./privacy.ts";
+import { fileEnv } from "./providers/env.ts";
 
 // Headroom defaults on: its CPU/RSS guard is a circuit breaker, not an OS quota.
 const PORT = Number(process.env.AGENT_CONSOLE_HEADROOM_PORT) || 8790;
@@ -55,6 +56,7 @@ function spawnProxy() {
   attempts++;
   guard = new ResourceGuard();
   stdoutBytes = stderrBytes = 0;
+  const settings = fileEnv();
   const env = {
     ...process.env,
     ...privacyEnv,
@@ -70,7 +72,10 @@ function spawnProxy() {
   if (env.ANTHROPIC_BASE_URL?.replace(/\/+$/, "") === URL_) delete env.ANTHROPIC_BASE_URL;
   // Provider clients cannot call Headroom's injected retrieval tool. Keep compression,
   // but never replace tool output with CCR markers that the agent cannot resolve.
-  const headroomCommand = env.AGENT_CONSOLE_HEADROOM_COMMAND || "headroom";
+  const headroomCommand =
+    process.env.AGENT_CONSOLE_HEADROOM_COMMAND ??
+    settings.AGENT_CONSOLE_HEADROOM_COMMAND ??
+    "headroom";
   const args = [
     "-n",
     "15",
@@ -87,7 +92,11 @@ function spawnProxy() {
     "--workers",
     "1",
   ];
-  if (env.AGENT_CONSOLE_HEADROOM_KOMPRESS !== "1") args.push("--disable-kompress");
+  if (
+    (process.env.AGENT_CONSOLE_HEADROOM_KOMPRESS ?? settings.AGENT_CONSOLE_HEADROOM_KOMPRESS) !==
+    "1"
+  )
+    args.push("--disable-kompress");
   args.push("--disable-kompress-fallback", "--anthropic-pre-upstream-concurrency", "1");
   const p = spawn("nice", args, {
     env,

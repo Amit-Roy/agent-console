@@ -86,6 +86,8 @@ Headroom proxy defaults remain conservative: Kompress disabled, fallback disable
 CCR disabled, one worker. To opt into tested Kompress, set
 `AGENT_CONSOLE_HEADROOM_KOMPRESS=1`. `AGENT_CONSOLE_HEADROOM_COMMAND` selects the
 executable (default `headroom`); it can point to a specific virtual environment.
+Both settings can go in the Console environment file (`~/.config/agent-console/env`);
+process environment values take precedence.
 
 | Agent | How it runs | Login | Modes |
 | --- | --- | --- | --- |
