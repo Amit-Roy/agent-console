@@ -130,7 +130,8 @@ class BenchTests(unittest.TestCase):
         self.assertEqual(names, ["current", "stable", "stable+swe-chat-prior"])
         for item in summary["candidates"]:
             self.assertEqual(
-                {"name", "pinball", "coverage", "nodes", "gap", "sizeKb", "fitSec"}, set(item)
+                {"name", "pinball", "coverage", "nodes", "gap", "sizeKb", "fitSec", "offsets"},
+                set(item),
             )
             self.assertGreater(item["nodes"], 0)
             self.assertTrue(math.isfinite(item["pinball"]))
@@ -159,6 +160,21 @@ class BenchTests(unittest.TestCase):
         self.assertRegex(
             self.forest_stdout.split("\n")[0], r"^qrf pinball .* nodes n/a kb \d+ fit "
         )
+
+    def test_offsets_mirror_the_served_model(self):
+        by_name = {item["name"]: item for item in self.pooled["candidates"]}
+        levels = list(bench.fit.QUANTILE_LEVELS)
+        self.assertEqual(set(by_name["current"]["offsets"]), set(levels))
+        self.assertTrue(all(value == 0.0 for value in by_name["current"]["offsets"].values()))
+        self.assertTrue(
+            all(value == 0.0 for value in self.forest["candidates"][0]["offsets"].values())
+        )
+        train, _, ceiling = bench.split_ceiling(bench.load_samples(self.dataset))
+        expected = bench.fit.conformal_offsets(train, ceiling)[0]
+        self.assertEqual(by_name["stable"]["offsets"], expected)
+        prior = by_name["stable+swe-chat-prior"]["offsets"]
+        self.assertEqual(set(prior), set(levels))
+        self.assertTrue(all(abs(value) <= bench.fit.OFFSET_LIMIT for value in prior.values()))
 
     def test_unknown_candidate_is_rejected(self):
         stderr = io.StringIO()

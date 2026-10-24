@@ -204,17 +204,49 @@ def split_ceiling(samples):
     return train, held, ceiling
 
 
+def pooled_offsets(train, spec):
+    """CQR offsets from out-of-fold residuals on OUR rows; external rows only join the fits."""
+    count = min(fit.OFFSET_FOLDS, len(fit.groups(train)))
+    assigned = numpy.array(fit.fold_assignment(train, count))
+    oof = numpy.zeros((len(train), len(fit.QUANTILE_LEVELS)))
+    for fold in range(count):
+        inside = [row for row, which in zip(train, assigned, strict=True) if which != fold]
+        position = numpy.flatnonzero(assigned == fold)
+        rows = [train[index] for index in position]
+        oof[position] = fit_heads(inside, rows, spec["params"], spec["external"])[0]
+    actual = target_of(train)
+    offsets = {}
+    for index, (name, level) in enumerate(fit.QUANTILE_LEVELS.items()):
+        raw = float(numpy.quantile(actual - oof[:, index], level))
+        offsets[name] = float(numpy.clip(raw, -fit.OFFSET_LIMIT, fit.OFFSET_LIMIT))
+    return offsets
+
+
+def candidate_offsets(train, ceiling, spec):
+    """Per-level offsets as served: the fitter's own routine, or the pooled variant, else zeros."""
+    if spec["offsets"] == "fitter":
+        return fit.conformal_offsets(train, ceiling)[0]
+    if spec["offsets"] == "own-rows":
+        return pooled_offsets(train, spec)
+    return {name: 0.0 for name in fit.QUANTILE_LEVELS}
+
+
 def run_candidate(samples, spec):
     train, held, ceiling = split_ceiling(samples)
     started = time.monotonic()
     logs, nodes, size = fit_predict(train, held, spec)
+    offsets = candidate_offsets(train, ceiling, spec)
     elapsed = time.monotonic() - started
+    logs = logs + numpy.array([offsets[name] for name in fit.QUANTILE_LEVELS])
     result = score(logs, held, math.log1p(ceiling))
-    return {**result, "nodes": nodes, "sizeKb": size / 1024, "fitSec": elapsed}
+    return {**result, "nodes": nodes, "sizeKb": size / 1024, "fitSec": elapsed, "offsets": offsets}
 
 
 def cut_gap(samples, fraction, spec):
-    """Pinball change at one cut-point when the newest training rows are dropped."""
+    """Pinball change at one cut-point when the newest training rows are dropped.
+
+    Raw heads only: offsets cost OFFSET_FOLDS extra fits per refit, about 6x per cut-point.
+    """
     grouped = fit.groups(samples)
     prefix = [
         sample for group in grouped[: int(round(len(grouped) * fraction))] for sample in group
@@ -268,8 +300,15 @@ def candidate_specs(artifact_path, external):
             "kind": "trees",
             "params": current_params(artifact_path),
             "external": None,
+            "offsets": "none",
         },
-        {"name": "stable", "kind": "trees", "params": fit.TREE_PARAMS, "external": None},
+        {
+            "name": "stable",
+            "kind": "trees",
+            "params": fit.TREE_PARAMS,
+            "external": None,
+            "offsets": "fitter",
+        },
     ]
     if external is not None:
         specs.append(
@@ -278,10 +317,13 @@ def candidate_specs(artifact_path, external):
                 "kind": "trees",
                 "params": fit.TREE_PARAMS,
                 "external": external,
+                "offsets": "own-rows",
             }
         )
     if forest_available():
-        specs.append({"name": "qrf", "kind": "forest", "params": None, "external": None})
+        specs.append(
+            {"name": "qrf", "kind": "forest", "params": None, "external": None, "offsets": "none"}
+        )
     else:
         print("effort-model: qrf: quantile-forest not installed, skipped", file=sys.stderr)
     return specs
