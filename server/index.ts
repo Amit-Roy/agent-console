@@ -761,6 +761,9 @@ app.post("/api/share/instagram", sameOrigin, express.json({ limit: "4kb" }), asy
   const link = extractInstagramUrl(req.body?.text, req.body?.url);
   if (!link)
     return void res.status(422).json({ error: "No Instagram reel link found in that share." });
+  const target: unknown = req.body?.thread;
+  if (target !== undefined && (typeof target !== "string" || !isId(target) || !threads.get(target)))
+    return void res.status(404).json({ error: "Unknown thread." });
   const abort = new AbortController();
   res.on("close", () => {
     if (!res.writableEnded) abort.abort();
@@ -768,12 +771,16 @@ app.post("/api/share/instagram", sameOrigin, express.json({ limit: "4kb" }), asy
   let download: Downloaded | undefined;
   try {
     download = await downloadInstagram(link, { signal: abort.signal });
-    const thread = threads.create({
-      provider: "claude",
-      claudeAccount: "sunny",
-      cwd: path.join(os.homedir(), "repos"),
-      title: `Instagram ${link.kind} ${link.code}`,
-    });
+    // an existing thread is never removed on failure; only a thread created here is
+    const existing = typeof target === "string";
+    const thread = existing
+      ? threads.get(target)!
+      : threads.create({
+          provider: "claude",
+          claudeAccount: "sunny",
+          cwd: path.join(os.homedir(), "repos"),
+          title: `Instagram ${link.kind} ${link.code}`,
+        });
     try {
       const video = adoptUpload(thread.id, download.videoPath, "video.mp4", MAX_SHARE_BYTES);
       const caption = adoptUpload(
@@ -782,11 +789,13 @@ app.post("/api/share/instagram", sameOrigin, express.json({ limit: "4kb" }), asy
         "instagram.txt",
         MAX_SHARE_BYTES,
       );
+      // same as a normal client send: a running turn queues the message instead of being interrupted
       threads.send(thread.id, SHARE_PROMPT, {
         attachments: [{ id: video.id }, { id: caption.id }],
+        mode: "queue",
       });
     } catch (error) {
-      threads.remove(thread.id);
+      if (!existing) threads.remove(thread.id);
       throw error;
     }
     res.json({ thread: thread.id });
