@@ -38,143 +38,189 @@ const result = (id: string, text: string, isError: boolean) => ({
 // codex reports harmless ~/.codex/config.toml warnings as "error" items before every turn; the user can't act on them from here
 const CONFIG_WARNING = /^Codex is ignoring \d+ unrecognized configuration setting/;
 
-export function codexTranslator(emit: (ev: any) => void) {
-  let started = 0;
-  const begun = new Set<string>();
-  const web = new Map<string, string>();
-  const asked = new Set<string>();
-  const finish = (failure?: string) => {
-    if (failure) emit({ type: "console_error", text: failure });
-    emit({
-      type: "result",
-      subtype: failure ? "error" : "success",
-      is_error: !!failure,
-      duration_ms: started ? Date.now() - started : 0,
-    });
-    started = 0;
-    begun.clear();
-    web.clear();
+type CodexState = {
+  emit: (event: any) => void;
+  started: number;
+  begun: Set<string>;
+  web: Map<string, string>;
+  asked: Set<string>;
+};
+
+function codexFinish(state: CodexState, failure?: string) {
+  if (failure) state.emit({ type: "console_error", text: failure });
+  state.emit({
+    type: "result",
+    subtype: failure ? "error" : "success",
+    is_error: !!failure,
+    duration_ms: state.started ? Date.now() - state.started : 0,
+  });
+  state.started = 0;
+  state.begun.clear();
+  state.web.clear();
+}
+
+function codexTool(state: CodexState, toolId: string, name: string, input: Record<string, any>) {
+  if (state.begun.has(toolId)) return;
+  state.begun.add(toolId);
+  state.emit(asst({ type: "tool_use", id: toolId, name, input }));
+}
+
+function asyncQuestions(item: any) {
+  const raw = Array.isArray(item.questions) ? item.questions : [];
+  return cleanQuestions(
+    raw
+      .map((entry: any, index: number) => ({
+        id: String(index),
+        question: entry?.title,
+        options: Array.isArray(entry?.options)
+          ? entry.options.map((label: string) => ({ label }))
+          : [],
+        allowOther: true,
+      }))
+      .filter((entry: any) => typeof entry.question === "string" && entry.question.trim()),
+  );
+}
+
+function codexAgentMessage(state: CodexState, item: any, done: boolean) {
+  if (!done) return;
+  // request_user_input_async is an agentMessage with question metadata,
+  // not a blocking app-server request. Its text is only a fallback for text clients.
+  const questions = asyncQuestions(item);
+  if (!questions.length) {
+    state.emit(asst({ type: "text", text: String(item.text ?? "") }));
+    return;
+  }
+  const questionId = `codex-async-${item.id || randomUUID()}`;
+  if (state.asked.has(questionId)) return;
+  state.asked.add(questionId);
+  state.emit({ type: "question", id: questionId, async: true, questions, ts: Date.now() });
+}
+
+function codexReasoning(state: CodexState, item: any, done: boolean) {
+  if (done && item.text) state.emit(asst({ type: "thinking", thinking: String(item.text) }));
+}
+
+function codexCommand(state: CodexState, item: any, done: boolean) {
+  codexTool(state, item.id, "Bash", {
+    command: unwrapShell(item.command),
+    ...(typeof item.cwd === "string" ? { cwd: item.cwd } : {}),
+  });
+  if (!done) return;
+  state.emit(
+    result(
+      item.id,
+      String(item.aggregated_output ?? ""),
+      item.status === "failed" || (item.exit_code ?? 0) !== 0,
+    ),
+  );
+}
+
+function codexFileChange(state: CodexState, item: any, done: boolean) {
+  const changes = item.changes ?? [];
+  codexTool(state, item.id, "Edit", { file_path: changes[0]?.path, changes });
+  if (!done) return;
+  state.emit(
+    result(
+      item.id,
+      changes.map((change: any) => `${change.kind} ${change.path}`).join("\n") || "no changes",
+      item.status === "failed",
+    ),
+  );
+}
+
+function codexMcpCall(state: CodexState, item: any, done: boolean) {
+  codexTool(state, item.id, `${item.server}:${item.tool}`, item.arguments ?? {});
+  if (!done) return;
+  state.emit(
+    result(
+      item.id,
+      JSON.stringify(item.result ?? item.error ?? "", null, 1),
+      item.status === "failed",
+    ),
+  );
+}
+
+function webOutput(item: any, failed: boolean) {
+  const reported = item.error?.message ?? item.error;
+  if (reported !== undefined && reported !== null) return reported;
+  if (failed) return `Web action ${item.status}`;
+  return item.results ? JSON.stringify(item.results, null, 2) : "";
+}
+
+function codexWebSearch(state: CodexState, item: any, done: boolean) {
+  const details = codexWebTool(item);
+  const signature = JSON.stringify(details);
+  if (!state.begun.has(item.id)) codexTool(state, item.id, details.name, details.input);
+  else if (state.web.get(item.id) !== signature)
+    state.emit({ type: "tool_update", tool_use_id: item.id, ...details });
+  state.web.set(item.id, signature);
+  if (!done) return;
+  const failed = ["failed", "incomplete", "cancelled"].includes(item.status) || !!item.error;
+  state.emit(result(item.id, String(webOutput(item, failed)), failed));
+}
+
+function codexItemError(state: CodexState, item: any, done: boolean) {
+  if (done && !CONFIG_WARNING.test(String(item.message)))
+    state.emit({ type: "console_error", text: String(item.message ?? "error") });
+}
+
+const CODEX_ITEM_HANDLERS: Record<string, (state: CodexState, item: any, done: boolean) => void> =
+  Object.assign(Object.create(null), {
+    agent_message: codexAgentMessage,
+    reasoning: codexReasoning,
+    command_execution: codexCommand,
+    file_change: codexFileChange,
+    mcp_tool_call: codexMcpCall,
+    web_search: codexWebSearch,
+    error: codexItemError,
+  });
+
+function codexItemEvent(state: CodexState, rec: any) {
+  const item = rec.item ?? {};
+  CODEX_ITEM_HANDLERS[item.type]?.(state, item, rec.type === "item.completed");
+}
+
+const CODEX_HANDLERS: Record<string, (state: CodexState, rec: any) => void> = Object.assign(
+  Object.create(null),
+  {
+    "thread.started": (state: CodexState, rec: any) =>
+      state.emit({
+        type: "system",
+        subtype: "init",
+        session_id: rec.thread_id,
+        ...(rec.model ? { model: rec.model } : {}),
+      }), // resolved model id for turn timing
+    "turn.started": (state: CodexState) => {
+      state.started ||= Date.now();
+      state.emit({ type: "stream_event", event: { type: "message_start" } });
+    },
+    "item.started": codexItemEvent,
+    "item.updated": codexItemEvent,
+    "item.completed": codexItemEvent,
+    "turn.completed": (state: CodexState, rec: any) => {
+      // exec usage is cumulative across tool-loop requests, never current context.
+      if (rec.usage) state.emit({ type: "token_usage", ...rec.usage });
+      codexFinish(state);
+    },
+    "turn.failed": (state: CodexState, rec: any) =>
+      codexFinish(state, String(rec.error?.message ?? "turn failed")),
+    error: (state: CodexState, rec: any) => {
+      if (!state.started)
+        state.emit({ type: "console_error", text: String(rec.message ?? "error") });
+    },
+  },
+);
+
+export function codexTranslator(emit: (event: any) => void) {
+  const state: CodexState = {
+    emit,
+    started: 0,
+    begun: new Set<string>(),
+    web: new Map<string, string>(),
+    asked: new Set<string>(),
   };
-  const tool = (id: string, name: string, input: Record<string, any>) => {
-    if (begun.has(id)) return;
-    begun.add(id);
-    emit(asst({ type: "tool_use", id, name, input }));
-  };
-  return (r: any) => {
-    switch (r?.type) {
-      case "thread.started":
-        emit({
-          type: "system",
-          subtype: "init",
-          session_id: r.thread_id,
-          ...(r.model ? { model: r.model } : {}),
-        }); // resolved model id for turn timing
-        break;
-      case "turn.started":
-        started ||= Date.now();
-        emit({ type: "stream_event", event: { type: "message_start" } });
-        break;
-      case "item.started":
-      case "item.updated":
-      case "item.completed": {
-        const it = r.item ?? {};
-        const done = r.type === "item.completed";
-        if (it.type === "agent_message" && done) {
-          // request_user_input_async is an agentMessage with question metadata,
-          // not a blocking app-server request. Its text is only a fallback for text clients.
-          const questions = cleanQuestions(
-            Array.isArray(it.questions)
-              ? it.questions
-                  .map((q: any, i: number) => ({
-                    id: String(i),
-                    question: q?.title,
-                    options: Array.isArray(q?.options)
-                      ? q.options.map((label: string) => ({ label }))
-                      : [],
-                    allowOther: true,
-                  }))
-                  .filter((q: any) => typeof q.question === "string" && q.question.trim())
-              : [],
-          );
-          if (questions.length) {
-            const id = `codex-async-${it.id || randomUUID()}`;
-            if (!asked.has(id)) {
-              asked.add(id);
-              emit({ type: "question", id, async: true, questions, ts: Date.now() });
-            }
-          } else emit(asst({ type: "text", text: String(it.text ?? "") }));
-        } else if (it.type === "reasoning" && done && it.text)
-          emit(asst({ type: "thinking", thinking: String(it.text) }));
-        else if (it.type === "command_execution") {
-          tool(it.id, "Bash", {
-            command: unwrapShell(it.command),
-            ...(typeof it.cwd === "string" ? { cwd: it.cwd } : {}),
-          });
-          if (done)
-            emit(
-              result(
-                it.id,
-                String(it.aggregated_output ?? ""),
-                it.status === "failed" || (it.exit_code ?? 0) !== 0,
-              ),
-            );
-        } else if (it.type === "file_change") {
-          const changes = it.changes ?? [];
-          tool(it.id, "Edit", { file_path: changes[0]?.path, changes });
-          if (done)
-            emit(
-              result(
-                it.id,
-                changes.map((c: any) => `${c.kind} ${c.path}`).join("\n") || "no changes",
-                it.status === "failed",
-              ),
-            );
-        } else if (it.type === "mcp_tool_call") {
-          tool(it.id, `${it.server}:${it.tool}`, it.arguments ?? {});
-          if (done)
-            emit(
-              result(
-                it.id,
-                JSON.stringify(it.result ?? it.error ?? "", null, 1),
-                it.status === "failed",
-              ),
-            );
-        } else if (it.type === "web_search") {
-          const details = codexWebTool(it);
-          const signature = JSON.stringify(details);
-          if (!begun.has(it.id)) tool(it.id, details.name, details.input);
-          else if (web.get(it.id) !== signature)
-            emit({ type: "tool_update", tool_use_id: it.id, ...details });
-          web.set(it.id, signature);
-          if (done) {
-            const failed = ["failed", "incomplete", "cancelled"].includes(it.status) || !!it.error;
-            const output =
-              it.error?.message ??
-              it.error ??
-              (failed
-                ? `Web action ${it.status}`
-                : it.results
-                  ? JSON.stringify(it.results, null, 2)
-                  : "");
-            emit(result(it.id, String(output), failed));
-          }
-        } else if (it.type === "error" && done && !CONFIG_WARNING.test(String(it.message)))
-          emit({ type: "console_error", text: String(it.message ?? "error") });
-        break;
-      }
-      case "turn.completed": {
-        // exec usage is cumulative across tool-loop requests, never current context.
-        if (r.usage) emit({ type: "token_usage", ...r.usage });
-        finish();
-        break;
-      }
-      case "turn.failed":
-        finish(String(r.error?.message ?? "turn failed"));
-        break;
-      case "error":
-        if (!started) emit({ type: "console_error", text: String(r.message ?? "error") });
-        break;
-    }
+  return (rec: any) => {
+    CODEX_HANDLERS[rec?.type]?.(state, rec);
   };
 }
 
