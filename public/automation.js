@@ -1,6 +1,8 @@
 // Automation page: a sidebar of workflows, the selected workflow's phases and steps, its triggers and failures, and a
 // drawer with one step's log. Everything comes from GET /api/automation (see server/automation/contracts.ts); security
 // rows come from GET /api/security/automations. The page holds no state beyond the selected workflow.
+import { createMenu } from "/menu.js";
+
 const $ = (id) => document.getElementById(id);
 const el = (tag, cls, text) => {
   const n = document.createElement(tag);
@@ -45,6 +47,7 @@ const ICONS = {
   layers: "M8 2.5 14 6l-6 3.5L2 6zM2 9.5 8 13l6-3.5M2 12l6 3.5 6-3.5",
   chart: "M3 13V8M6.5 13V5M10 13V9M13.5 13V3",
   plus: "M8 3v10M3 8h10",
+  chev: "m4.5 6.5 3.5 3.5 3.5-3.5",
 };
 const icon = (name) => {
   const s = svg("svg", { class: "ico", viewBox: "0 0 16 16", "aria-hidden": "true" });
@@ -368,26 +371,25 @@ function buildNav() {
     nav.append(box);
   }
 }
+let wfMenu;
+const wfItems = () =>
+  navItems().map((item) => ({
+    value: item.id,
+    label: `${item.label} · ${pipelineStatus(item.id)}`,
+    group:
+      item.group === "workflow" ? "Workflows" : item.group === "security" ? "Security" : "Console",
+  }));
+const wfTrigger = (item, button) =>
+  button.replaceChildren(el("span", "", item?.label ?? "Choose workflow"), icon("chev"));
 function buildPicker() {
-  const sel = $("wf-select");
-  if (!sel || sel.childElementCount) return;
-  for (const [group, title] of [
-    ["workflow", "Workflows"],
-    ["security", "Security"],
-    ["console", "Console"],
-  ]) {
-    const items = navItems().filter((i) => i.group === group);
-    if (!items.length) continue;
-    const box = el("optgroup");
-    box.label = title;
-    for (const item of items) {
-      const o = el("option", "", item.label);
-      o.value = item.id;
-      box.append(o);
-    }
-    sel.append(box);
-  }
-  sel.onchange = () => select(sel.value);
+  if (wfMenu) return;
+  wfMenu = createMenu({
+    trigger: $("wf-select"),
+    label: "Workflow",
+    getItems: wfItems,
+    renderTrigger: wfTrigger,
+    onSelect: (id) => select(id),
+  });
 }
 function updateNav() {
   for (const b of document.querySelectorAll("[data-wf]")) {
@@ -399,19 +401,12 @@ function updateNav() {
   }
   const hidden = document.querySelectorAll("[data-wf]").length <= 1;
   $("wf-nav").hidden = hidden;
-  const sel = $("wf-select");
-  if (sel) {
-    for (const o of sel.options) {
-      const item = navItems().find((i) => i.id === o.value);
-      const status = pipelineStatus(o.value);
-      o.textContent = item && status ? `${item.label} · ${status}` : (item?.label ?? o.textContent);
-    }
-    sel.value = selected;
-    const p = $("wf-picker");
-    p.hidden = hidden;
-    p.dataset.tone = statusTone(selected);
-    const item = navItems().find((i) => i.id === selected);
-    if (item) $("wf-picker-ic").replaceChildren(icon(item.icon));
+  const button = $("wf-select");
+  if (button && wfMenu) {
+    wfMenu.setItems(wfItems(), selected);
+    button.dataset.value = selected;
+    button.dataset.tone = statusTone(selected);
+    $("wf-picker").hidden = hidden;
   }
 }
 
