@@ -2,10 +2,15 @@
 export type RaisedPr = { repo: string; number: number; url: string };
 
 // A command position, not a quoted mention such as `grep "gh pr create"`.
-const CREATE = /(?:^|[;&|(]|\n)\s*(?:\w+=\S+\s+)*gh\s+pr\s+create\b/;
+// Wrapper CLIs open PRs/issues too: `pr-evidence create ...` or `pr-evidence ... --create` (PR), `task-issue ...` (issue).
+const COMMAND_START = String.raw`(?:^|[;&|(]|\n)\s*(?:\w+=\S+\s+)*(?:[\w.~/-]*/)?`;
+const PR_CREATE_FORMS = String.raw`gh\s+pr\s+create\b|pr-evidence(?![\w-])(?:\s+create\b|[^;&|\n]*?\s--create\b)`;
+const CREATE = new RegExp(`${COMMAND_START}(?:${PR_CREATE_FORMS})`);
 const PR_URL = /https:\/\/github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\/pull\/(\d{1,9})(?!\d)/g;
 
-const CREATE_ITEM = /(?:^|[;&|(]|\n)\s*(?:\w+=\S+\s+)*gh\s+(?:pr|issue)\s+create\b/;
+const CREATE_ITEM = new RegExp(
+  `${COMMAND_START}(?:gh\\s+issue\\s+create\\b|task-issue(?![\\w-])|${PR_CREATE_FORMS})`,
+);
 const ITEM_URL =
   /https:\/\/github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\/(?:pull|issues)\/(\d{1,9})(?!\d)/g;
 
