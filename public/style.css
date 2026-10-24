@@ -719,7 +719,7 @@ main {
   background: var(--accent);
   animation: none;
 }
-.thread-list .meta .limit-tag {
+.thread-list .meta .tag.limit-tag {
   color: var(--warn);
 }
 .thread-list .meta {
