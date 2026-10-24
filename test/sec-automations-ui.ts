@@ -178,8 +178,6 @@ try {
       posts.includes("POST quick") && posts.includes("POST tool-watch"),
       posts.join(),
     );
-    await openWf("other");
-    check(`${name}: other triggers list`, (await page.locator("ul#triggers").count()) === 1);
 
     current = "green";
     await openWf("cve");

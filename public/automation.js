@@ -302,18 +302,15 @@ function updateFlow(s) {
 }
 
 // ---------- sidebar ----------
-const OTHER = { id: "other", label: "Other triggers", icon: "clock", group: "console" };
 function navItems() {
-  return [
-    ...snap.flow.pipelines.map((p) => ({ id: p.id, label: p.label, icon: p.icon, group: p.group })),
-    OTHER,
-  ];
+  return snap.flow.pipelines.map((p) => ({
+    id: p.id,
+    label: p.label,
+    icon: p.icon,
+    group: p.group,
+  }));
 }
 function pipelineStatus(id) {
-  if (id === "other") {
-    const n = (snap?.triggers || []).filter((t) => !t.pipeline && t.kind === "cron").length;
-    return n ? `${n} scheduled` : "None";
-  }
   const p = pipelineOf(id);
   if (!p) return "";
   if (isSecurity(p)) {
@@ -354,7 +351,6 @@ function buildNav() {
   for (const [group, title] of [
     ["workflow", "Workflows"],
     ["security", "Security"],
-    ["console", "Console"],
   ]) {
     const items = navItems().filter((i) => i.group === group);
     if (!items.length) continue;
@@ -376,8 +372,7 @@ const wfItems = () =>
   navItems().map((item) => ({
     value: item.id,
     label: `${item.label} · ${pipelineStatus(item.id)}`,
-    group:
-      item.group === "workflow" ? "Workflows" : item.group === "security" ? "Security" : "Console",
+    group: item.group === "security" ? "Security" : "Workflows",
   }));
 const wfTrigger = (item, button) =>
   button.replaceChildren(el("span", "", item?.label ?? "Choose workflow"), icon("chev"));
@@ -436,21 +431,14 @@ function panel(title, sub) {
 const empty = (text) => el("div", "empty-c", text);
 
 function triggersPanel(s, p) {
-  const trig = p
-    ? s.triggers.filter((t) => t.pipeline === p.id)
-    : s.triggers.filter((t) => !t.pipeline);
-  const box = panel(
-    p ? "Triggers" : "Other triggers",
-    p ? "What starts this workflow" : "Scheduled prompts and manual starts outside the workflows",
-  );
+  const trig = s.triggers.filter((t) => t.pipeline === p.id);
+  const box = panel("Triggers", "What starts this workflow");
   if (!trig.length) {
-    box.append(
-      empty(p ? "No trigger is attached to this workflow." : "Nothing else is scheduled."),
-    );
+    box.append(empty("No trigger is attached to this workflow."));
     return box;
   }
   const ul = el("ul", "ptrig");
-  if (!p) ul.id = "triggers";
+  ul.id = "triggers";
   for (const t of trig) {
     const li = el("li", t.enabled ? "" : "off");
     li.dataset.trigger = t.id;
@@ -526,12 +514,13 @@ function hooksPanel(s) {
   return p;
 }
 
-function runsPanel(s) {
-  const p = panel("Runs", "Threads the automation started");
+function runsPanel(s, p) {
+  const list = p.id === "pr" ? s.runs.filter((r) => r.role !== "debug") : [];
+  const box = panel("Runs", "Threads this workflow started");
   const ul = el("ul", "rows");
   ul.id = "runs";
-  if (!s.runs.length) p.append(empty("No automated threads yet."));
-  for (const r of s.runs) {
+  if (!list.length) box.append(empty("No runs from this workflow yet."));
+  for (const r of list) {
     const li = el("li");
     const a = el("a", "a", r.title);
     a.href = `/#thread=${encodeURIComponent(r.thread)}`;
@@ -544,27 +533,34 @@ function runsPanel(s) {
     );
     ul.append(li);
   }
-  if (s.runs.length) p.append(ul);
-  return p;
+  if (list.length) box.append(ul);
+  return box;
 }
 
-function configPanel(s) {
-  const p = panel("Settings", "~/.config/agent-console/window-dispatch.json");
+function configPanel(s, section) {
+  const dispatch = section === "dispatch";
+  const p = panel(
+    "Settings",
+    `${dispatch ? "Window dispatch" : "Window opener"} · ~/.config/agent-console/window-dispatch.json`,
+  );
   const dl = el("dl", "kv");
   const add = (k, v) =>
     dl.append(el("dt", "", k), el("dd", "", Array.isArray(v) ? v.join(", ") : String(v)));
   const d = s.config.dispatch,
     o = s.config.opener;
-  add("Dispatcher", d.enabled ? (d.dryRun ? "dry run" : "live") : "off");
-  add("Last minutes of a window", d.leadMinutes);
-  add("Skip windows used above", `${d.maxUsedPct}%`);
-  add("Issues per window", d.perWindow);
-  add("Repositories", d.repos);
-  add("Issue authors", d.authors);
-  add("Routing", `${d.routing?.mode}${d.routing?.bauOnPi ? ", BAU on Pi" : ""}`);
-  add("Opener", o.enabled ? (o.dryRun ? "dry run" : "live") : "off");
-  add("Opener hours", `${o.from}–${o.to} ${o.tz}`);
-  add("Opener providers", o.providers);
+  if (dispatch) {
+    add("Dispatcher", d.enabled ? (d.dryRun ? "dry run" : "live") : "off");
+    add("Last minutes of a window", d.leadMinutes);
+    add("Skip windows used above", `${d.maxUsedPct}%`);
+    add("Issues per window", d.perWindow);
+    add("Repositories", d.repos);
+    add("Issue authors", d.authors);
+    add("Routing", `${d.routing?.mode}${d.routing?.bauOnPi ? ", BAU on Pi" : ""}`);
+  } else {
+    add("Opener", o.enabled ? (o.dryRun ? "dry run" : "live") : "off");
+    add("Opener hours", `${o.from}–${o.to} ${o.tz}`);
+    add("Opener providers", o.providers);
+  }
   p.append(dl);
   return p;
 }
@@ -715,24 +711,15 @@ function buildDetail(s) {
     const cols = el("div", "cols");
     cols.append(tagged(triggersPanel(s, p), "triggers"), tagged(failuresPanel(s, p), "failures"));
     const cols2 = el("div", "cols");
-    cols2.append(
-      tagged(runsPanel(s), "runs"),
-      tagged(hooksPanel(s), "hooks"),
-      tagged(configPanel(s), "config"),
-    );
-    nodes.push(cols, cols2);
+    cols2.append(tagged(runsPanel(s, p), "runs"), tagged(hooksPanel(s), "hooks"));
+    nodes.push(cols, cols2, tagged(configPanel(s, "dispatch"), "config"));
   } else if (p && p.id === "windows") {
     const cols = el("div", "cols");
     cols.append(tagged(triggersPanel(s, p), "triggers"), tagged(failuresPanel(s, p), "failures"));
-    nodes.push(cols, tagged(configPanel(s), "config"));
+    nodes.push(cols, tagged(configPanel(s, "opener"), "config"));
   } else if (p) {
     const cols = el("div", "cols");
     cols.append(tagged(triggersPanel(s, p), "triggers"), tagged(failuresPanel(s, p), "failures"));
-    nodes.push(cols);
-  } else {
-    nodes.push(tagged(triggersPanel(s, null), "triggers"));
-    const cols = el("div", "cols");
-    cols.append(tagged(runsPanel(s), "runs"), tagged(configPanel(s), "config"));
     nodes.push(cols);
   }
   main.replaceChildren(...nodes);
@@ -777,11 +764,16 @@ function render(s) {
     }
     // Refresh the panels in place: the step boxes keep their pulse and keyboard focus.
     const make = {
-      triggers: () => triggersPanel(s, !p ? null : p),
+      triggers: () => (p ? triggersPanel(s, p) : null),
       failures: () => failuresPanel(s, p),
-      runs: () => runsPanel(s),
+      runs: () => (p?.id === "pr" ? runsPanel(s, p) : null),
       hooks: () => hooksPanel(s),
-      config: () => configPanel(s),
+      config: () =>
+        p?.id === "pr"
+          ? configPanel(s, "dispatch")
+          : p?.id === "windows"
+            ? configPanel(s, "opener")
+            : null,
       checks: () => securityChecks(p),
     };
     for (const zone of document.querySelectorAll("[data-zone]")) {
@@ -929,7 +921,7 @@ async function refresh() {
     snap = s;
     if (!selected) {
       const hash = location.hash.slice(1);
-      selected = s.flow.pipelines.some((p) => p.id === hash) || hash === "other" ? hash : "pr";
+      selected = s.flow.pipelines.some((p) => p.id === hash) ? hash : "pr";
     }
     render(s);
     if (openStep) loadLog().catch(() => {});
