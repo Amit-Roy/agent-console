@@ -6,6 +6,7 @@ const P80_MIN = 0.75;
 const P80_MAX = 0.92;
 const P95_MIN = 0.9;
 const PINBALL_TOLERANCE = 1.02;
+const PINBALL_HARD_CAP = 1.1;
 const MIN_CHAMPION_SAMPLES = 20;
 
 export type PromotionMetrics = {
@@ -56,6 +57,36 @@ function coverageReasons(value: Challenger): string[] {
     reasons.push(`p80 coverage ${fixed(value.p80Coverage)} is above ${fixed(P80_MAX)}.`);
   if (value.p95Coverage < P95_MIN)
     reasons.push(`p95 coverage ${fixed(value.p95Coverage)} is below ${fixed(P95_MIN)}.`);
+  return reasons;
+}
+
+type PairedDelta = { mean: number; lower90: number; upper90: number };
+
+function readPairedDelta(champion: unknown): PairedDelta | null {
+  const delta = record(champion) ? champion.pairedDelta : null;
+  if (!record(delta)) return null;
+  const { mean, lower90, upper90 } = delta;
+  return finite(mean) && finite(lower90) && finite(upper90) ? { mean, lower90, upper90 } : null;
+}
+
+/** Statistical gate when a paired bootstrap exists, else the plain ratio tolerance. */
+function pinballReasons(value: Challenger, baseline: number, model: Record<string, unknown>) {
+  const reasons: string[] = [];
+  const delta = readPairedDelta(model.champion);
+  if (delta) {
+    if (delta.lower90 > 0)
+      reasons.push(
+        `pinball worse: delta ${fixed(delta.mean)} [${fixed(delta.lower90)},${fixed(delta.upper90)}]`,
+      );
+    if (value.meanPinball > PINBALL_HARD_CAP * baseline)
+      reasons.push(
+        `pinball ratio ${fixed(value.meanPinball / baseline)} above cap ${fixed(PINBALL_HARD_CAP)}`,
+      );
+  } else if (value.meanPinball > PINBALL_TOLERANCE * baseline) {
+    reasons.push(
+      `challenger mean pinball ${fixedPinball(value.meanPinball)} exceeds ${PINBALL_TOLERANCE} times champion ${fixedPinball(baseline)}.`,
+    );
+  }
   return reasons;
 }
 
@@ -110,10 +141,7 @@ function decide(artifact: unknown, compareChampion: boolean): PromotionDecision 
     } else {
       metrics.championMeanPinball = baseline.mean;
       metrics.championSampleCount = baseline.samples;
-      if (value.meanPinball > PINBALL_TOLERANCE * baseline.mean)
-        failures.push(
-          `challenger mean pinball ${fixedPinball(value.meanPinball)} exceeds ${PINBALL_TOLERANCE} times champion ${fixedPinball(baseline.mean)}.`,
-        );
+      failures.push(...pinballReasons(value, baseline.mean, model));
     }
   }
   return { promote: failures.length === 0, reasons: [...failures, ...notes], bootstrap, metrics };
