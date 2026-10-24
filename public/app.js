@@ -503,18 +503,9 @@ function handle(m) {
       }
       renderThreads();
       break;
-    case "created": {
-      openThread(m.thread.id);
-      if (workflowBrief) {
-        writeDraft(m.thread.id, workflowBrief);
-        $("input").value = workflowBrief;
-        sizeInput();
-        workflowBrief = null;
-        $("input").focus();
-        toast("Workflow brief ready. Edit it, then send.");
-      }
+    case "created":
+      handleCreated(m.thread.id);
       break;
-    }
     case "tasks":
       state.tasks = new Map(m.tasks.map((t) => [t.id, t]));
       renderThreads();
@@ -4551,13 +4542,14 @@ async function maybeShareInstagram() {
   const query = params.toString();
   history.replaceState(null, "", `${location.pathname}${query ? `?${query}` : ""}${location.hash}`);
   try {
-    const choice = await pickShareTarget();
+    let choice = await pickShareTarget();
+    if (choice === "") choice = await createShareThread();
     if (choice === null) return void toast("Share cancelled");
     toast("Fetching Instagram reel…");
     const response = await apiFetch("/api/share/instagram", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(choice ? { text, url, title, thread: choice } : { text, url, title }),
+      body: JSON.stringify({ text, url, title, thread: choice }),
     });
     const body = await response.json().catch(() => ({}));
     if (!response.ok || !body.thread) return void toast(body.error || "Could not fetch that reel.");
@@ -4568,6 +4560,43 @@ async function maybeShareInstagram() {
     sharingInstagram = false;
   }
 }
+function handleCreated(threadId) {
+  if (shareCreate?.submitted) return resolveShareCreate(threadId);
+  openThread(threadId);
+  if (!workflowBrief) return;
+  writeDraft(threadId, workflowBrief);
+  $("input").value = workflowBrief;
+  sizeInput();
+  workflowBrief = null;
+  $("input").focus();
+  toast("Workflow brief ready. Edit it, then send.");
+}
+// Share + compose: the normal New thread dialog picks provider, account, model and folder. Only the `created` that follows this
+// dialog's own submit resolves the share (flag set on submit, consumed once); cancelling the dialog resolves null.
+let shareCreate = null;
+function resolveShareCreate(value) {
+  const pendingShare = shareCreate;
+  if (!pendingShare) return;
+  shareCreate = null;
+  clearTimeout(pendingShare.timer);
+  pendingShare.resolve(value);
+}
+function createShareThread() {
+  return new Promise((resolve) => {
+    shareCreate = { submitted: false, resolve, timer: 0 };
+    openNewDialog();
+    $("dlg-sub").textContent += " The shared post will be attached to the new thread as a draft.";
+  });
+}
+$("dlg").addEventListener("close", () => {
+  if (shareCreate && !shareCreate.submitted) resolveShareCreate(null);
+});
+$("dform").addEventListener("submit", (e) => {
+  if (!shareCreate || e.submitter?.value !== "ok" || dialogTask !== null) return;
+  if (dialogAssignment || dialogFork) return;
+  shareCreate.submitted = true;
+  shareCreate.timer = setTimeout(() => resolveShareCreate(null), 30_000);
+});
 // The thread can reach the client over the WebSocket slightly after the POST resolves.
 async function waitForThread(id) {
   for (let tries = 0; tries < 50 && !state.threads.has(id); tries++)
@@ -4675,7 +4704,6 @@ setLane(state.lane);
 $("new").onclick = () => {
   if (!shareResolve) return openNewDialog();
   finishShare("");
-  setNav(false);
 };
 $("archive-toggle").onclick = () => {
   state.archiveOpen = !state.archiveOpen;
