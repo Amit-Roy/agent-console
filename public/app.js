@@ -478,8 +478,10 @@ function handle(m) {
     case "thread":
       state.threads.set(m.thread.id, m.thread);
       renderThreads();
-      if (m.thread.id === state.current) renderHead();
-      else renderUsage();
+      if (m.thread.id === state.current) {
+        renderHead();
+        markRead(m.thread.id);
+      } else renderUsage();
       break;
     case "removed":
       state.threads.delete(m.thread);
@@ -1180,6 +1182,15 @@ let rowMenuOpen = false; // rebuilding the list would pull the trigger out from 
 let renderPending = false;
 // Pending share-target picker; set while the drawer is in share mode.
 let shareResolve = null;
+const isUnreadReply = (t) => !!t && (t.replyAt || 0) > (t.readAt ?? 0);
+const isUnread = (t) =>
+  isUnreadReply(t) &&
+  !t.archived &&
+  !(t.id === state.current && document.visibilityState === "visible");
+function markRead(id) {
+  const t = state.threads.get(id);
+  if (id && isUnreadReply(t) && document.visibilityState === "visible") send({ t: "read", id });
+}
 function renderThreads() {
   if (rowMenuOpen) {
     renderPending = true;
@@ -1206,13 +1217,17 @@ function renderThreads() {
   for (const t of list) dirs.set(base(t.cwd), (dirs.get(base(t.cwd)) || 0) + 1);
   const usualDir = [...dirs].sort((a, b) => b[1] - a[1])[0]?.[0];
   for (const t of list) {
-    const li = el("li", t.id === state.current ? "sel" : "");
+    const unread = isUnread(t);
+    const li = el("li", `${t.id === state.current ? "sel" : ""}${unread ? " unread" : ""}`.trim());
     li.tabIndex = 0;
     li.title = `${t.title}\n${t.cwd}\n${provLabel(t.provider)} · ${modelMeta(t.model).label}${t.mode === "bypassPermissions" ? " · Bypass" : ""} · ${t.costMeasured ? `$${t.cost.toFixed(3)} recorded API-equivalent` : "cost not measured"}`;
     if (t.id === state.current) li.setAttribute("aria-current", "true");
     const waiting = questions.count(t.id) || t.waiting;
     // background subagents keep working after the turn ends: show the thread as busy until they finish
-    const dot = el("span", `dot ${waiting ? "waiting" : t.background ? "running" : t.status}`);
+    const dot = el(
+      "span",
+      `dot ${waiting ? "waiting" : t.background ? "running" : t.status}${unread ? " unread" : ""}`,
+    );
     dot.setAttribute("aria-hidden", "true");
     const meta = el("div", "meta");
     if (base(t.cwd) !== usualDir) meta.append(el("span", "dir", base(t.cwd)));
@@ -1224,6 +1239,14 @@ function renderThreads() {
       meta.append(tag);
     }
     if (waiting) meta.append(el("span", "tag question-tag", "Needs input"));
+    if (t.usageStop) {
+      const stop = t.usageStop;
+      const limit = el("span", "tag warn limit-tag");
+      const resets = stop.resetsAt ? `Resets ${new Date(stop.resetsAt).toLocaleString()}` : "";
+      limit.title = [resets, stop.text].filter(Boolean).join("\n");
+      limit.append(icon("alert"), el("span", "", "Usage limit"));
+      meta.append(limit);
+    }
     const time = el("time", "", ago(t.updatedAt));
     time.dateTime = new Date(t.updatedAt).toISOString();
     meta.append(time);
@@ -1260,6 +1283,7 @@ function renderThreads() {
     if (waiting) li.append(el("span", "sr-only", "Needs your input"));
     else if (t.status === "running") li.append(el("span", "sr-only", "Running"));
     else if (t.background) li.append(el("span", "sr-only", "Subagents working"));
+    else if (unread) li.append(el("span", "sr-only", "Unread reply"));
     const pick = () => {
       if (shareResolve) finishShare(t.id);
       setNav(false);
@@ -1276,9 +1300,13 @@ function renderThreads() {
   }
   if (list.length === filed)
     ul.append(el("li", "empty-list", list.length ? "Everything is archived." : "No threads yet."));
-  $("lane-threads-dot").hidden = !list.some(
+  const busy = list.some(
     (t) => questions.count(t.id) || t.waiting || t.background || t.status === "running",
   );
+  const laneDot = $("lane-threads-dot");
+  laneDot.hidden = !busy && !list.some(isUnread);
+  laneDot.classList.toggle("running", busy);
+  laneDot.classList.toggle("unread", !busy);
   schedules.render();
   autoLane.render();
 }
@@ -1429,6 +1457,10 @@ function restoreDraft(id) {
 addEventListener("pagehide", saveDraft);
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) saveDraft();
+  else {
+    renderThreads();
+    markRead(state.current);
+  }
 });
 
 function openThread(id) {
@@ -1501,6 +1533,7 @@ function openThread(id) {
   state.pendingLive = [];
   state.into = null;
   renderThreads();
+  markRead(id);
   renderHead();
   clearChat();
   warmSoon();
