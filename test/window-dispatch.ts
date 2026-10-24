@@ -305,6 +305,20 @@ for (const [repo, effort] of [
   assert.doesNotMatch(text, /what is left/, `${effort} prompt does not invite stopping early`);
 }
 
+// guard rejections: name the evidence skill, cap retries, then draft PR plus guard error
+{
+  const text = issuePrompt(dec("o/webapp", "bau"), "b", "main");
+  assert.match(text, /pr-evidence\/SKILL\.md/, "prompt names the evidence skill");
+  assert.match(text, /pr-evidence-guard validate-body/, "prompt names the validation command");
+  assert.match(text, /rejects[\s\S]*twice[\s\S]*--draft/, "two rejections lead to a draft PR");
+  assert.match(text, /gh pr comment[\s\S]*guard/, "guard error goes into a PR comment");
+  assert.doesNotMatch(
+    issuePrompt(dec("o/agent-console", "deep"), "b", "main"),
+    /--draft/,
+    "direct pushes open no PR",
+  );
+}
+
 // startIssue: own worktree and branch, a locked-title thread inside it, one prompt
 {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "ac-issue-"));

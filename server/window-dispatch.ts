@@ -275,6 +275,13 @@ export function threadTitle(issue: Pick<Issue, "repo" | "number" | "title">): st
   return fitTitle({ prefix, text }).title;
 }
 
+function evidenceGuardBlock(repo: string): string {
+  return [
+    `PR evidence: before gh pr create, read /home/coder/repos/brain/skills/pr-evidence/SKILL.md and build the body with the tools it names. Check the exact body with pr-evidence-guard validate-body <body-file> before each gh pr create.`,
+    `If the guard rejects the body twice, stop retrying. Fix nothing more: open the PR with gh pr create --draft --repo ${repo} using the best body you have, then add the guard's error text with gh pr comment so a reviewer sees what is missing. Never bypass the guard with APIs or scripts. Never end the run without an open PR.`,
+  ].join("\n");
+}
+
 export function issuePrompt(d: Decision, branch: string, base: string): string {
   const { issue, effort } = d,
     repo = issue.repo.split("/")[1];
@@ -289,6 +296,7 @@ export function issuePrompt(d: Decision, branch: string, base: string): string {
       ? `When done and verified, commit, rebase onto origin/${base} and push to ${base}. Put \`Closes #${issue.number}\` in the commit message only when every acceptance criterion is met; otherwise put \`Refs #${issue.number}\` plus the follow-up issue links.`
       : `When done and verified, push the branch and open a pull request into ${base} that references the issue. The PR body must contain \`Closes #${issue.number}\` only when every acceptance criterion is met; otherwise it must contain \`Refs #${issue.number}\` plus the follow-up issue links. Do not merge it.${effort !== "deep" ? " A Sonnet or Sol review must approve it before merge: say so in the PR body and stop." : ""}`,
     selfReviewBlock(skillDir(), base),
+    ...(direct ? [] : [evidenceGuardBlock(issue.repo)]),
     `Unattended run: do not ask questions. End with a short summary: what changed, how it was checked, a checklist of each acceptance criterion with its evidence, and any follow-up issue links.`,
   ].join("\n\n");
 }
