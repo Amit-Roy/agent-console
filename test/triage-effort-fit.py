@@ -235,6 +235,45 @@ class EffortFitTests(unittest.TestCase):
                 quoted["inputTokens"][level] + quoted["outputTokens"][level],
             )
 
+    def test_session_scenarios_never_price_more_than_observed_training_maximum(self):
+        fixture = dataset()
+        fixture["scope"] = "completed-session"
+        for index, sample in enumerate(fixture["samples"]):
+            sample["outcomes"].update(
+                toolCalls=0,
+                toolRounds=None,
+                inputTokens=1000 + index * 10,
+                outputTokens=100 + index,
+                cachedInputTokens=None,
+                nonCachedInputTokens=None,
+            )
+        artifact, report = fit.build_artifact(fixture)
+        totals = {
+            s["sampleId"]: s["outcomes"]["inputTokens"] + s["outcomes"]["outputTokens"]
+            for s in fixture["samples"]
+        }
+        training_max = max(totals[sample_id] for sample_id in artifact["training"]["sampleIds"])
+        self.assertEqual(artifact["workloadCeiling"], training_max)
+        self.assertEqual(report["workloadCeiling"], training_max)
+        samples = fixture["samples"]
+        quotes = fit.quote(
+            artifact["workload"],
+            artifact["scenarios"],
+            samples,
+            "workload",
+            artifact["workloadCeiling"],
+        )
+        for row in quotes:
+            for level in fit.QUANTILES:
+                self.assertLessEqual(row["totalTokens"][level], training_max)
+                self.assertLessEqual(row["work"][level], training_max)
+                self.assertLessEqual(row["inputTokens"][level], training_max)
+
+    def test_legacy_actions_artifacts_keep_no_usage_ceiling(self):
+        artifact, report = fit.build_artifact(dataset())
+        self.assertIsNone(artifact["workloadCeiling"])
+        self.assertIsNone(report["workloadCeiling"])
+
     def test_session_holdout_usage_never_enters_fit_or_residuals(self):
         fixture = dataset()
         fixture["scope"] = "completed-session"

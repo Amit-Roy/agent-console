@@ -343,7 +343,7 @@ def scenario(sample, prediction, token_yield_basis="actions"):
     return result
 
 
-def quote(model, scenarios, samples, token_yield_basis="actions"):
+def quote(model, scenarios, samples, token_yield_basis="actions", ceiling=None):
     result = []
     for work in predict_work(model, samples):
         row = {}
@@ -355,6 +355,9 @@ def quote(model, scenarios, samples, token_yield_basis="actions"):
             else max(0, math.expm1(min(30, math.log1p(float(work)) + s["logResidual"])))
             for s in scenarios
         ]
+        # A residual tail must not price more work than any observed session.
+        if ceiling is not None and token_yield_basis == "workload":
+            adjusted = [min(float(ceiling), value) for value in adjusted]
         row["work"] = quantiles(adjusted)
         for channel, field in [
             ("outputTokens", "outputPerWork"),
@@ -449,7 +452,10 @@ def build_artifact(dataset):
     work = [observed_work(s, workload_metric) for s in train]
     observed = [observed_work(s, workload_metric) for s in heldout]
     output = [s["outcomes"]["outputTokens"] for s in heldout]
-    quotes = quote(model, scenarios, heldout, token_yield_basis)
+    # The training maximum bounds scenario pricing, so a fat residual tail cannot
+    # quote usage beyond anything ever measured. Actions artifacts keep no ceiling.
+    ceiling = float(max(work)) if work and token_yield_basis == "workload" else None
+    quotes = quote(model, scenarios, heldout, token_yield_basis, ceiling)
     predicted = [q["work"]["p50"] for q in quotes]
     predicted_output = [q["outputTokens"]["p50"] for q in quotes]
     baseline_work = float(np.median(work))
@@ -631,7 +637,7 @@ def build_artifact(dataset):
         )
         cohort_audit["activeScenarios"] = len(scenarios)
         cohort_audit["activeZeroUsageScenarios"] = sum(bool(s.get("zeroWork")) for s in scenarios)
-        active_quotes = quote(model, scenarios, heldout, token_yield_basis)
+        active_quotes = quote(model, scenarios, heldout, token_yield_basis, ceiling)
         active_channels = [
             ("Work", "work", observed),
             ("OutputTokens", "outputTokens", output),
@@ -676,6 +682,7 @@ def build_artifact(dataset):
             "trivialMax": float(np.quantile(work, 1 / 3)),
             "deepMin": float(np.quantile(work, 2 / 3)),
         },
+        "workloadCeiling": ceiling,
         "training": training,
         "validation": validation,
     }
@@ -692,6 +699,7 @@ def build_artifact(dataset):
         "featureNames": FEATURES,
         "workload": model,
         "workCutoffs": artifact["workCutoffs"],
+        "workloadCeiling": ceiling,
         "training": {k: v for k, v in training.items() if k != "sampleIds"},
         "validation": {k: v for k, v in validation.items() if k != "sampleIds"},
     }

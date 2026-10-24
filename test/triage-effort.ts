@@ -78,6 +78,21 @@ assert.equal(directUsage.output.p50, 200);
 assert.equal(directUsage.total!.p50, 1000);
 assert.equal(directUsage.freshInput, null, "Unknown cache split must not erase a known total");
 assert.equal(directUsage.rounds, null, "Tool telemetry is not required to quote session usage");
+const ceilinged = structuredClone(sessionTotals);
+ceilinged.workloadCeiling = 1000;
+ceilinged.scenarios = ceilinged.scenarios.map((row) => ({ ...row, logResidual: 5 }));
+const ceilingQuote = predict(features(1), ceilinged);
+assert.equal(
+  ceilingQuote.total!.p95,
+  1000,
+  "A residual tail never prices more session usage than training observed",
+);
+assert.equal(ceilingQuote.total!.p50, 1000);
+assert.equal(ceilingQuote.output.p50, 200, "Capped usage keeps paired channel shares");
+assert.equal(ceilingQuote.input!.p50, 800);
+const invalidCeiling = structuredClone(sessionTotals);
+invalidCeiling.workloadCeiling = 0;
+assert.equal(validateEffortModel(invalidCeiling).status, "unavailable");
 const cappedModel = structuredClone(sessionTotals);
 cappedModel.workload.intercept = 40;
 assert.ok(
