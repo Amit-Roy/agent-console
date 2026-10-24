@@ -67,6 +67,7 @@ import { LatencyStore } from "./latency.ts";
 import { createWorkspaceMonitor } from "./monitor-wire.ts";
 import { Notifications } from "./notifications.ts";
 import { researchToolText, runPiResearch } from "./pi-subagent-worker.ts";
+import { mountPromptImprove } from "./prompt-improve.ts";
 import { promptOverhead } from "./prompt-overhead.ts";
 import { BRAIN_BIN } from "./providers/brain.ts";
 import { claudeAccounts, claudeUsageKey } from "./providers/claude-accounts.ts";
@@ -75,7 +76,7 @@ import { effortModelPath } from "./providers/triage-effort.ts";
 import { describe, Schedules } from "./schedules.ts";
 import { mountSecurity } from "./security.ts";
 import { SessionSearch } from "./session-search.ts";
-import { sharePrompt, shareTitle } from "./share/prompt.ts";
+import { isSandboxedShareProvider, sharePrompt, shareTitle } from "./share/prompt.ts";
 import { resolveShare } from "./share/registry.ts";
 import { downloadShare } from "./share/run.ts";
 import { ShareError } from "./share/types.ts";
@@ -93,6 +94,7 @@ import {
   adoptUpload,
   isId,
   MAX_FILE_BYTES,
+  markUntrusted,
   removeUpload,
   SAFE_NAME,
   saveUpload,
@@ -869,15 +871,18 @@ function attachShare(
       });
   const files: ReturnType<typeof adoptUpload>[] = [];
   try {
-    for (const item of result.items)
-      files.push(adoptUpload(thread.id, item.path, item.name, MAX_SHARE_BYTES));
+    for (const item of result.items) {
+      const adopted = adoptUpload(thread.id, item.path, item.name, MAX_SHARE_BYTES);
+      if (isSandboxedShareProvider(link.provider)) markUntrusted(thread.id, adopted.id);
+      files.push(adopted);
+    }
     const noteName = shareNoteName(link.provider);
     files.push(adoptUpload(thread.id, result.notePath, noteName, MAX_SHARE_BYTES));
   } catch (error) {
     if (!existing) threads.remove(thread.id);
     throw error;
   }
-  return { thread: thread.id, files };
+  return { thread: thread.id, threadProvider: thread.provider, files };
 }
 async function handleShare(req: express.Request, res: express.Response, only?: string) {
   let link: ReturnType<typeof resolveShare>;
@@ -905,7 +910,7 @@ async function handleShare(req: express.Request, res: express.Response, only?: s
     // the client fills the composer with the prompt and these uploads; nothing is sent until the user taps Send
     res.json({
       thread: saved.thread,
-      prompt: sharePrompt(link, result),
+      prompt: sharePrompt(link, result, saved.threadProvider),
       attachments: saved.files.map(({ id: uploadId, name, kind, media_type, size }) => ({
         id: uploadId,
         name,
@@ -1310,6 +1315,8 @@ if (process.env.AGENT_CONSOLE_MOCK !== "1") toolWatch.start();
 mountSecurity(app, sameOrigin, toolWatch);
 // Vault: write-only API token management (metadata out, values in; writes are same-origin only).
 mountVault(app, sameOrigin);
+// Improve prompt: Haiku rewrite + before/after effort quotes (same-origin only; capped Haiku spend).
+mountPromptImprove(app, sameOrigin);
 // App ideas: index.md + one markdown file per idea in a private git repo (server/ideas.ts). Adding commits, so same-origin only.
 const ideaError = (res: express.Response, e: any) =>
   res

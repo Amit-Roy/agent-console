@@ -51,6 +51,7 @@ export interface Attachment {
   kind: "image" | "file";
   media_type: string;
   size: number;
+  untrusted?: true; // server-assigned for sandboxed shares: listed by path only, never inlined as vision input
   n?: number; // images only: the "[Image #n]" label the user can refer to in the message
 }
 
