@@ -1268,6 +1268,7 @@ function renderThreads() {
     else if (t.status === "running") li.append(el("span", "sr-only", "Running"));
     else if (t.background) li.append(el("span", "sr-only", "Subagents working"));
     const pick = () => {
+      if (shareResolve) finishShare(t.id);
       setNav(false);
       openThread(t.id);
     };
@@ -1332,6 +1333,7 @@ setInterval(refreshSecurity, 5 * 60_000);
 document.addEventListener("visibilitychange", () => !document.hidden && void refreshSecurity());
 
 function setNav(open) {
+  if (!open) finishShare(null);
   document.body.classList.toggle("nav", open);
   $("menu").setAttribute("aria-expanded", String(open));
 }
@@ -4564,44 +4566,27 @@ async function maybeShareInstagram() {
     sharingInstagram = false;
   }
 }
-// Resolves "" for a new thread, a thread id, or null when cancelled.
+// Share mode: the left drawer doubles as the target picker. Resolves "" for a new thread, a thread id, or null when cancelled.
+let shareResolve = null;
+function finishShare(value) {
+  const resolve = shareResolve;
+  if (!resolve) return;
+  shareResolve = null;
+  document.body.classList.remove("sharing");
+  $("share-banner").hidden = true;
+  resolve(value);
+}
 function pickShareTarget() {
-  const dialog = $("share-picker"),
-    list = $("share-picker-list");
-  const recent = [...state.threads.values()]
-    .filter((t) => !t.archived && !(t.schedule && state.tasks.has(t.schedule.task)) && !t.issueRun)
-    .sort((a, b) => b.updatedAt - a.updatedAt)
-    .slice(0, 8);
-  const options = [{ id: "", title: "New thread", sub: "Fresh Claude thread in ~/repos" }].concat(
-    recent.map((t) => ({
-      id: t.id,
-      title: t.title,
-      sub: `${provLabel(t.provider || "claude")} · ${base(t.cwd)}`,
-    })),
-  );
-  list.replaceChildren(
-    ...options.map((o) => {
-      const btn = el("button", "share-opt");
-      btn.type = "button";
-      btn.dataset.id = o.id;
-      btn.append(el("span", "share-opt-title", o.title), el("span", "share-opt-sub", o.sub));
-      return btn;
-    }),
-  );
+  finishShare(null);
   return new Promise((resolve) => {
-    let picked = null;
-    list.onclick = (e) => {
-      const btn = e.target.closest(".share-opt");
-      if (!btn) return;
-      picked = btn.dataset.id;
-      dialog.close();
-    };
-    $("share-picker-cancel").onclick = () => dialog.close();
-    dialog.onclose = () => resolve(picked);
-    dialog.showModal();
-    list.querySelector(".share-opt").focus();
+    shareResolve = resolve;
+    setLane("threads");
+    document.body.classList.add("sharing");
+    $("share-banner").hidden = false;
+    setNav(true);
   });
 }
+$("share-cancel").onclick = () => setNav(false);
 function openTaskDialog(task) {
   setNav(false);
   setDialogKind(task || "new");
@@ -4644,7 +4629,11 @@ $("lanes").addEventListener("keydown", (e) => {
   );
 });
 setLane(state.lane);
-$("new").onclick = openNewDialog;
+$("new").onclick = () => {
+  if (!shareResolve) return openNewDialog();
+  finishShare("");
+  setNav(false);
+};
 $("archive-toggle").onclick = () => {
   state.archiveOpen = !state.archiveOpen;
   localStorage.setItem("ac_archive_open", state.archiveOpen ? "1" : "");
