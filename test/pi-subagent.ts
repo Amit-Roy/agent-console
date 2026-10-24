@@ -107,7 +107,10 @@ const out = ev => process.stdout.write(JSON.stringify(ev) + "\\n");
 readline.createInterface({ input: process.stdin }).on("line", line => {
   const r = JSON.parse(line);
   if (r.type !== "prompt") return;
-  fs.writeFileSync(${JSON.stringify(scratch)} + "/" + r.message + ".json", JSON.stringify({ args: process.argv.slice(2), pid: process.pid }));
+  // Write then rename, so a watcher never reads a created but still empty file
+  const record = ${JSON.stringify(scratch)} + "/" + r.message + ".json";
+  fs.writeFileSync(record + ".tmp", JSON.stringify({ args: process.argv.slice(2), pid: process.pid }));
+  fs.renameSync(record + ".tmp", record);
   if (r.message === "hang" || r.message === "shutdown") return;
   if (r.message === "reject") { out({ type: "response", command: "prompt", success: false, error: "bad model" }); return; }
   if (r.message === "crash") { console.error("child crashed"); process.exit(3); }
