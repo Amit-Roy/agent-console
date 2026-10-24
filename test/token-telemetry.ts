@@ -48,6 +48,40 @@ assert.deepEqual(
   [],
 );
 
+// --- wrapper CLIs (task-issue, pr-evidence) count like gh create ---
+const issueUrl = `https://github.com/${repo}/issues/244`;
+const prUrl = `https://github.com/${repo}/pull/245`;
+const nums = (command: string, out: string) =>
+  raisedItems(toolLog("w", command, out)).map((i) => i.number);
+assert.deepEqual(nums('task-issue "do x"', issueUrl), [244]);
+assert.deepEqual(nums('~/repos/brain/bin/task-issue -R o/r "x" | tail -3', issueUrl), [244]);
+assert.deepEqual(nums('cd x && ~/repos/brain/bin/task-issue "x" 2>&1 | tail -3', issueUrl), [244]);
+assert.deepEqual(nums("git push && pr-evidence create pr.md", `${prUrl}\nhash 8/8 ok`), [245]);
+assert.deepEqual(
+  nums('/b/bin/pr-evidence prepare --static a.png --create --title "t"', `${prUrl} | View posted`),
+  [245],
+);
+assert.deepEqual(
+  raisedPrs(toolLog("w", "git push && pr-evidence create pr.md", prUrl)).map((i) => i.number),
+  [245],
+);
+assert.deepEqual(
+  raisedPrs(toolLog("w", "pr-evidence prepare x --create --title t", prUrl)).map((i) => i.number),
+  [245],
+);
+assert.deepEqual(raisedPrs(toolLog("w", 'task-issue "x"', issueUrl)), []);
+for (const command of [
+  'grep "task-issue" x',
+  "grep 'pr-evidence create' y",
+  'echo "pr-evidence prepare --create"',
+  'task-issue-guard "x"',
+  "~/repos/brain/bin/pr-evidence-guard validate-body --create",
+  "pr-evidence validate pr.md",
+]) {
+  assert.deepEqual(nums(command, `${issueUrl} ${prUrl}`), [], command);
+  assert.deepEqual(raisedPrs(toolLog("w", command, prUrl)), [], command);
+}
+
 // --- linkage ---
 const run = { repo, number: 7, branch: "issue-7", pr: 9 };
 let l = linkThread({ thread: { id: "a", issueRun: run }, repos });
