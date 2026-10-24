@@ -1524,6 +1524,7 @@ function openThread(id) {
     views.set(old.id, snapshot);
     if (views.size > 5) views.delete(views.keys().next().value);
     state.cards = new Map();
+    state.lastTs = null;
     state.subs = new Map();
     state.subTools = new Map();
     state.doneTasks = null;
@@ -1713,6 +1714,7 @@ async function showHistory(m) {
     state.live = null;
     state.compact = null;
     state.cards = new Map();
+    state.lastTs = null;
     state.subs = new Map();
     state.subTools = new Map();
     state.doneTasks = null;
@@ -2511,7 +2513,7 @@ const fmtDur = (ms) => {
   const s = Math.round(ms / 1000);
   return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`;
 };
-// Live-only step timing: history events carry no timestamps, so replayed rows show no duration.
+// Step timing from server receive times (`ts`), so live and replayed rows both show durations.
 const stepDur = (ms) =>
   ms < 1000 ? `${Math.round(ms)}ms` : ms < 10000 ? `${(ms / 1000).toFixed(1)}s` : fmtDur(ms);
 const durChip = (ms) => el("span", "dur", stepDur(ms));
@@ -3204,6 +3206,8 @@ function watchFirstToken(e) {
 }
 
 function onEvent(e, live) {
+  const prevTs = state.lastTs;
+  if (typeof e.ts === "number" && !e.parent_tool_use_id) state.lastTs = e.ts;
   if (live && firstToken) watchFirstToken(e);
   // what a subagent says and does arrives with the id of the call that spawned it: it belongs inside that card, not in the main thread
   if (
@@ -3326,6 +3330,8 @@ function onEvent(e, live) {
           const sum = el("summary");
           sum.append(icon("sparkle"), el("span", "", "Reasoning"));
           if (live && state.thinkAt != null) sum.append(durChip(performance.now() - state.thinkAt));
+          else if (typeof e.ts === "number" && prevTs != null && e.ts >= prevTs)
+            sum.append(durChip(e.ts - prevTs));
           state.thinkAt = null;
           sum.append(icon("chev-right", "chev"));
           det.append(sum, el("div", "think-body", b.thinking));
@@ -3357,6 +3363,7 @@ function onEvent(e, live) {
           sum.title = summarize(b.name, b.input);
           card.toolInput = { name: b.name, input: b.input };
           if (live) card.startedAt = performance.now();
+          else if (typeof e.ts === "number") card.startedTs = e.ts;
           card.append(sum, el("div", "body")); // the open row wraps to show the whole label, so it is not repeated below
           card.addEventListener("toggle", () => {
             if (!card.open) return;
@@ -3381,6 +3388,8 @@ function onEvent(e, live) {
         card.classList.add(c.is_error ? "err" : "done");
         const st = card.querySelector(".st");
         if (card.startedAt != null) st.before(durChip(performance.now() - card.startedAt));
+        else if (card.startedTs != null && typeof e.ts === "number" && e.ts >= card.startedTs)
+          st.before(durChip(e.ts - card.startedTs));
         st.replaceChildren(
           icon(c.is_error ? "x" : "check"),
           el("span", "sr-only", c.is_error ? "error" : "done"),
