@@ -64,6 +64,14 @@ function checkVersion(v: unknown) {
   if (v !== undefined && v !== VERSION) throw new Error(`Unsupported request version ${String(v)}`);
 }
 
+/** The Effort model switches: `effort_schedule` is the weekly auto-start, the rest map to the steps of the same name. */
+function effortStepOn(cfg: Snapshot["config"], id: StepId): boolean {
+  if (!id.startsWith("effort_") || !cfg.effort) return true;
+  return id === "effort_schedule"
+    ? cfg.effort.enabled
+    : cfg.effort.steps[id.slice("effort_".length)] !== false;
+}
+
 export function automationApi(deps: ApiDeps) {
   const now = deps.now ?? Date.now;
 
@@ -78,7 +86,9 @@ export function automationApi(deps: ApiDeps) {
       const last = [...mine].reverse().find((e) => e.kind !== "start");
       const failures = mine.filter((e) => e.kind === "fail" && t - e.ts < DAY).length;
       const disabled =
-        (id === "dispatcher" && !cfg.dispatch.enabled) || (id === "opener" && !cfg.opener.enabled);
+        (id === "dispatcher" && !cfg.dispatch.enabled) ||
+        (id === "opener" && !cfg.opener.enabled) ||
+        !effortStepOn(cfg, id);
       const state: StepState = disabled
         ? "disabled"
         : live
@@ -135,6 +145,16 @@ export function automationApi(deps: ApiDeps) {
         enabled: o.enabled,
         lastAt: lastOf("opener"),
         pipeline: "windows",
+      },
+      {
+        id: "effort-weekly",
+        kind: "timer",
+        label: "Effort model weekly retrain",
+        detail:
+          "Every 7 days the triage worker retrains the effort model; Run now starts a retrain at once",
+        enabled: effortStepOn(cfg, "effort_schedule"),
+        lastAt: lastOf("effort_schedule"),
+        pipeline: "effort",
       },
       {
         id: "monitor-tick",

@@ -47,6 +47,7 @@ const ICONS = {
   activity: "M2.5 8.5h2l1.5-4 2 7 1.5-3h4",
   layers: "M8 2.5 14 6l-6 3.5L2 6zM2 9.5 8 13l6-3.5M2 12l6 3.5 6-3.5",
   chart: "M3 13V8M6.5 13V5M10 13V9M13.5 13V3",
+  scale: "M8 2.5v10.5M5 13h6M3 5h10M3 5.5 1.75 9.5h2.5zM13 5.5l-1.25 4h2.5z",
   plus: "M8 3v10M3 8h10",
   chev: "m4.5 6.5 3.5 3.5 3.5-3.5",
 };
@@ -185,7 +186,11 @@ function viewOf(id) {
   return snap?.steps.find((x) => x.id === id) || { state: "idle", open: 0, failures: 0 };
 }
 
-const TOGGLES = { "dispatch-tick": "dispatcher", "opener-tick": "opener" };
+const TOGGLES = {
+  "dispatch-tick": "dispatcher",
+  "opener-tick": "opener",
+  "effort-weekly": "effort_schedule",
+};
 async function toggle(target, enabled, btn) {
   btn.disabled = true;
   try {
@@ -574,6 +579,61 @@ function configPanel(s, section) {
   return p;
 }
 
+// ---------- effort model ----------
+async function runEffort(btn) {
+  btn.disabled = true;
+  try {
+    await getJson("/api/automation/run", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ pipeline: "effort" }),
+    });
+    await refresh();
+  } catch (e) {
+    alert(`Could not start the run: ${e.message}`);
+    btn.disabled = false;
+  }
+}
+function retrainPanel(s, p) {
+  const box = panel("Retrain", "Weekly, or at once · the triage worker runs it in the background");
+  const running = stepIdsOf(p).some((id) => viewOf(id).state === "active");
+  const b = el("button", "btn sm run-now", running ? "Running…" : "Run now");
+  b.type = "button";
+  b.id = "effort-run";
+  b.disabled = running;
+  b.onclick = () => runEffort(b);
+  const row = el("div", "effort-run");
+  row.append(b);
+  box.append(row);
+  return box;
+}
+function effortStepsPanel(s, p) {
+  const box = panel(
+    "Steps",
+    "Each step switches on its own · ~/.config/agent-console/effort-model.json",
+  );
+  const ul = el("ul", "ptrig steps-sw");
+  ul.id = "effort-steps";
+  for (const id of stepIdsOf(p).filter((x) => x !== "effort_schedule")) {
+    const node = s.flow.nodes.find((n) => n.id === id);
+    const on = viewOf(id).state !== "disabled";
+    const li = el("li", on ? "" : "off");
+    li.dataset.effortStep = id;
+    li.title = node?.hint || "";
+    li.append(el("span", "", node?.label || id));
+    const sw = el("button", "tog", on ? "On" : "Off");
+    sw.type = "button";
+    sw.setAttribute("role", "switch");
+    sw.setAttribute("aria-checked", String(on));
+    sw.setAttribute("aria-label", `${node?.label}: ${on ? "on" : "off"}`);
+    sw.onclick = () => toggle(id, !on, sw);
+    li.append(sw);
+    ul.append(li);
+  }
+  box.append(ul);
+  return box;
+}
+
 // ---------- security ----------
 async function runNow(kind, btn) {
   btn.disabled = true;
@@ -734,6 +794,12 @@ function buildDetail(s) {
     const cols = el("div", "cols");
     cols.append(tagged(triggersPanel(s, p), "triggers"), tagged(failuresPanel(s, p), "failures"));
     nodes.push(cols, tagged(configPanel(s, "opener"), "config"));
+  } else if (p && p.id === "effort") {
+    const cols = el("div", "cols");
+    cols.append(tagged(triggersPanel(s, p), "triggers"), tagged(failuresPanel(s, p), "failures"));
+    const cols2 = el("div", "cols");
+    cols2.append(tagged(retrainPanel(s, p), "retrain"), tagged(effortStepsPanel(s, p), "steps"));
+    nodes.push(cols, cols2);
   } else if (p) {
     const cols = el("div", "cols");
     cols.append(tagged(triggersPanel(s, p), "triggers"), tagged(failuresPanel(s, p), "failures"));
@@ -792,6 +858,8 @@ function render(s) {
             ? configPanel(s, "opener")
             : null,
       checks: () => securityChecks(p),
+      retrain: () => (p?.id === "effort" ? retrainPanel(s, p) : null),
+      steps: () => (p?.id === "effort" ? effortStepsPanel(s, p) : null),
     };
     for (const zone of document.querySelectorAll("[data-zone]")) {
       const fresh = make[zone.dataset.zone]?.();

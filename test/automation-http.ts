@@ -23,6 +23,23 @@ fs.writeFileSync(
   path.join(data, "automation-events.jsonl"),
   seed.map((e) => JSON.stringify(e)).join("\n") + "\n",
 );
+// the triage worker's calibration events, written beside the model while the Console was down
+fs.writeFileSync(
+  path.join(data, "triage-calibration-events.jsonl"),
+  [
+    { ts: now - 9000, run: "w1", step: "effort_fit", kind: "ok", msg: "fit done" },
+    {
+      ts: now - 8000,
+      run: "w1",
+      step: "effort_gate",
+      kind: "fail",
+      msg: "p80 coverage 0.70 is below 0.75",
+    },
+    { ts: now - 7000, run: "w1", step: "triage", kind: "ok", msg: "not an effort step" },
+  ]
+    .map((e) => JSON.stringify(e))
+    .join("\n") + "\n",
+);
 fs.writeFileSync(
   path.join(data, "window-dispatch.json"),
   JSON.stringify({ enabled: true, dryRun: true }),
@@ -129,7 +146,19 @@ try {
     "abandoned",
     "a run left open by a previous process is closed at start-up",
   );
-  assert.equal(snap.failures[0].msg, "no checkout");
+  assert.equal(step("effort_fit").state, "ok", "the bridge reads calibration events at start-up");
+  assert.equal(step("effort_fit").lastMsg, "fit done");
+  assert.equal(step("effort_gate").state, "failed");
+  assert.equal(
+    step("triage").state,
+    "idle",
+    "lines for steps that are not effort steps are ignored",
+  );
+  assert.equal(snap.flow.pipelines.find((p: any) => p.id === "effort").group, "workflow");
+  assert.equal(snap.config.effort.enabled, true);
+  assert.ok(snap.triggers.some((t: any) => t.id === "effort-weekly" && t.pipeline === "effort"));
+  assert.equal(snap.failures[0].msg, "p80 coverage 0.70 is below 0.75");
+  assert.equal(snap.failures.at(-1).msg, "no checkout");
   assert.ok(snap.triggers.some((t: any) => t.kind === "webhook"));
   assert.equal(typeof snap.config.dispatch.enabled, "boolean");
 
@@ -154,6 +183,47 @@ try {
   assert.equal((await on.json()).config.opener.enabled, true);
   const off = await postToggle({ target: "dispatcher", enabled: false });
   assert.equal((await off.json()).config.dispatch.enabled, false);
+  // Effort model switches: weekly auto-start plus one per step, persisted to effort-model.json
+  const effortOff = await postToggle({ target: "effort_schedule", enabled: false });
+  assert.equal(effortOff.status, 200);
+  const offSnap = await effortOff.json();
+  assert.equal(offSnap.config.effort.enabled, false);
+  assert.equal(offSnap.steps.find((s: any) => s.id === "effort_schedule").state, "disabled");
+  assert.equal(offSnap.triggers.find((t: any) => t.id === "effort-weekly").enabled, false);
+  assert.equal(
+    offSnap.steps.find((s: any) => s.id === "effort_fit").state,
+    "ok",
+    "other steps keep their state",
+  );
+  const gateOff = await (await postToggle({ target: "effort_gate", enabled: false })).json();
+  assert.equal(gateOff.steps.find((s: any) => s.id === "effort_gate").state, "disabled");
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(data, "effort-model.json"), "utf8")), {
+    enabled: false,
+    steps: { sessions: true, features: true, fit: true, gate: false, promote: true, reprice: true },
+  });
+  assert.equal(
+    (await postToggle({ target: "effort_gate", enabled: true }, "https://example.invalid")).status,
+    403,
+  );
+  assert.equal((await postToggle({ target: "effort_nope", enabled: true })).status, 400);
+  assert.equal((await postToggle({ target: "effort_fit", enabled: "yes" })).status, 400);
+  await postToggle({ target: "effort_schedule", enabled: true });
+  await postToggle({ target: "effort_gate", enabled: true });
+  // Run now: same-origin only, only the effort pipeline; a mock server records the request and starts nothing
+  const postRun = (body: object, origin_ = origin) =>
+    fetch(origin + "/api/automation/run", {
+      method: "POST",
+      headers: { ...headers, "content-type": "application/json", Origin: origin_ },
+      body: JSON.stringify(body),
+    });
+  assert.equal((await postRun({ pipeline: "effort" }, "https://example.invalid")).status, 403);
+  assert.equal((await postRun({ pipeline: "pr" })).status, 400);
+  assert.equal((await postRun({})).status, 400);
+  const started = await postRun({ pipeline: "effort" });
+  assert.equal(started.status, 202);
+  assert.equal((await started.json()).started, false, "mock servers never spawn the triage script");
+  const runLog = await (await get("/api/automation/log?step=effort_schedule")).json();
+  assert.match(runLog.entries[0].msg, /Run now requested/);
   // the Debug button: same-origin only, validated, one worktree and thread
   const postDebug = (body: object, origin_ = origin) =>
     fetch(origin + "/api/automation/debug", {

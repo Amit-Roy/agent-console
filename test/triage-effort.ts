@@ -542,6 +542,28 @@ assert.ok(total.p95 <= total.p99, "Quantiles must never cross");
 assert.equal(treeQuote.output.p50, Math.ceil(total.p50 * 0.2));
 assert.equal(treeQuote.input!.p50, Math.ceil(total.p50 * 0.8));
 assert.equal(treeQuote.input!.p50 + treeQuote.output.p50 >= total.p50, true);
+// Tree confidence follows the quantile heads' own validation, never the ridge fit.
+const treeConfidence = (ridge: "experimental" | "validated", tree?: string): string => {
+  const model = structuredClone(withTrees);
+  model.validation = {
+    status: ridge,
+    ...(tree === undefined ? {} : { quantileModel: { status: tree } }),
+  };
+  const result = quoteEffort(features(1), validateEffortModel(model), "fix the parser");
+  assert.equal(result.status, "ready");
+  assert.equal((result as EffortQuote).method, "boosted-trees-quantile-v1");
+  return (result as EffortQuote).confidence;
+};
+assert.equal(treeConfidence("experimental", "validated"), "validated");
+assert.equal(treeConfidence("validated", "experimental"), "experimental");
+assert.equal(treeConfidence("validated"), "experimental", "Missing tree status is not validated");
+const ridgeConfidence = structuredClone(withTrees);
+ridgeConfidence.validation = { status: "experimental", quantileModel: { status: "validated" } };
+assert.equal(
+  (quoteEffort(features(1), validateEffortModel(ridgeConfidence)) as EffortQuote).confidence,
+  "experimental",
+  "Without request text the ridge status still applies",
+);
 // Without request text the tree estimator cannot run; the legacy equation still answers.
 const legacyOnly = quoteEffort(features(1), validateEffortModel(withTrees));
 assert.equal(legacyOnly.status, "ready");

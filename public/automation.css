@@ -389,6 +389,17 @@ body.auto {
   color: var(--t3);
   font-variant-numeric: tabular-nums;
 }
+/* Effort model: one switch per step; a pill takes the row on a phone */
+.ptrig.steps-sw li {
+  flex: 1 1 14rem;
+  justify-content: space-between;
+  padding-left: var(--sp-3);
+}
+.effort-run {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
 .phases {
   display: grid;
   gap: var(--sp-4);

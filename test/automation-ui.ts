@@ -139,6 +139,15 @@ try {
     { step: "worker", kind: "start", run: "work:w1", ref: "o/r#5", msg: "pi/default" },
     { step: "worktree", kind: "fail", ref: "o/r#6", msg: "No local checkout of o/missing" },
     { step: "review", kind: "start", run: "review:r1", ref: "o/r#5", msg: "claude/sonnet" },
+    { step: "effort_sessions", kind: "ok", run: "effort:w1", msg: "420 sessions read" },
+    { step: "effort_features", kind: "ok", run: "effort:w1", msg: "dataset rebuilt" },
+    { step: "effort_fit", kind: "ok", run: "effort:w1", msg: "challenger fitted" },
+    {
+      step: "effort_gate",
+      kind: "fail",
+      run: "effort:w1",
+      msg: "p80 coverage 0.70 is below 0.75. Keeping the current model",
+    },
   ])
     assert.equal((await post(e)).status, 200);
 
@@ -345,7 +354,17 @@ try {
     ok(
       "the left panel lists every workflow",
       JSON.stringify(navIds) ===
-        JSON.stringify(["pr", "windows", "monitor", "dream", "cve", "runtime", "scans", "deadman"]),
+        JSON.stringify([
+          "pr",
+          "windows",
+          "monitor",
+          "dream",
+          "effort",
+          "cve",
+          "runtime",
+          "scans",
+          "deadman",
+        ]),
       JSON.stringify(navIds),
     );
     const pageText = await page.locator("body").innerText();
@@ -375,7 +394,7 @@ try {
       ok(
         "phone workflow menu uses the console popover",
         (await page.locator('.menu[role="listbox"]').isVisible()) &&
-          (await page.locator(".menu [role=option]").count()) === 8 &&
+          (await page.locator(".menu [role=option]").count()) === 9 &&
           (await page.locator(".menu .m-group").allInnerTexts()).join("|") === "Workflows|Security",
       );
       await page.keyboard.press("Escape");
@@ -427,6 +446,106 @@ try {
       "workspace monitor is its own workflow",
       JSON.stringify(await inPipe("monitor")) === JSON.stringify(["monitor", "escalate"]),
     );
+    // Effort model: weekly retrain, four phases left to right, a switch per step, Run now
+    await openWf("effort");
+    ok(
+      "effort model: steps in order",
+      JSON.stringify(await inPipe("effort")) ===
+        JSON.stringify([
+          "effort_schedule",
+          "effort_sessions",
+          "effort_features",
+          "effort_fit",
+          "effort_gate",
+          "effort_promote",
+          "effort_reprice",
+        ]),
+      JSON.stringify(await inPipe("effort")),
+    );
+    ok(
+      "effort model: phases are labelled",
+      (await page.locator('[data-pipeline="effort"] .phase h3').allInnerTexts())
+        .map((t) => t.toLowerCase())
+        .join("|") === "1. schedule|2. data|3. train|4. ship",
+    );
+    ok(
+      "effort model: the drawn arrow names its condition",
+      (
+        await page.locator('[data-pipeline="effort"] .link[data-to="effort_reprice"]').innerText()
+      ).trim() === "new revision",
+    );
+    const effortEdges: { from: string; to: string; label?: string }[] = await page.evaluate(
+      async () => (await (await fetch("/api/automation")).json()).flow.edges,
+    );
+    ok(
+      "effort model: every transition carries its condition in the flow data",
+      effortEdges.find((e) => e.from === "effort_schedule" && e.to === "effort_sessions")?.label ===
+        "model 7 days old or Run now" &&
+        effortEdges.find((e) => e.from === "effort_gate" && e.to === "effort_promote")?.label ===
+          "challenger not worse",
+    );
+    const effortState = (s: string) => page.getAttribute(`[data-step="${s}"]`, "data-state");
+    ok(
+      "effort model: states come from the calibration events",
+      (await effortState("effort_fit")) === "ok" &&
+        (await effortState("effort_gate")) === "failed" &&
+        (await effortState("effort_promote")) === "idle",
+    );
+    ok(
+      "effort model: the rejected gate is a failure of this workflow",
+      (await page.locator("#failures").innerText()).includes("Keeping the current model"),
+    );
+    ok(
+      "effort model: the weekly trigger and a switch per step",
+      (await page.locator('[data-trigger="effort-weekly"] .tog').getAttribute("aria-checked")) ===
+        "true" &&
+        (
+          await page
+            .locator("#effort-steps [data-effort-step]")
+            .evaluateAll((ns) => ns.map((n) => (n as HTMLElement).dataset.effortStep))
+        ).join() ===
+          "effort_sessions,effort_features,effort_fit,effort_gate,effort_promote,effort_reprice",
+    );
+    // a step switched off is drawn as off, and the switch survives the next refresh
+    await page.click('[data-effort-step="effort_reprice"] .tog');
+    await page.waitForSelector('[data-effort-step="effort_reprice"].off');
+    await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+    ok(
+      "effort model: a step switched off is dashed and off",
+      (await effortState("effort_reprice")) === "disabled" &&
+        (await page
+          .locator('[data-effort-step="effort_reprice"] .tog')
+          .getAttribute("aria-checked")) === "false",
+    );
+    await page.click('[data-trigger="effort-weekly"] .tog');
+    await page.waitForSelector('[data-trigger="effort-weekly"].off');
+    ok(
+      "effort model: the weekly switch turns the schedule step off",
+      (await effortState("effort_schedule")) === "disabled",
+    );
+    ok(
+      "effort model: no horizontal overflow",
+      !(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)),
+    );
+    await page.screenshot({
+      path: `${OUT}/effort-automation-${name.startsWith("phone") ? "phone" : "desktop"}.png`,
+      fullPage: true,
+    });
+    await page.click('[data-trigger="effort-weekly"] .tog');
+    await page.waitForSelector('[data-trigger="effort-weekly"]:not(.off)');
+    await page.click('[data-effort-step="effort_reprice"] .tog');
+    await page.waitForSelector('[data-effort-step="effort_reprice"]:not(.off)');
+    // Run now: the mock server records the request and starts nothing
+    await page.click("#effort-run");
+    await page.click('[data-step="effort_schedule"]');
+    await page.waitForSelector("#drawer:not([hidden])");
+    await page.waitForFunction(
+      () => document.querySelector("#drawer-log")?.textContent?.includes("Run now requested"),
+      null,
+      { timeout: 15_000 },
+    );
+    ok("effort model: Run now is logged on the schedule step", true);
+    await page.keyboard.press("Escape");
     // security workflows draw their real architecture, not one summary row
     for (const [id, steps] of [
       ["cve", ["opencve", "receiver", "tool_watch", "tool_patch", "digest", "push"]],

@@ -7,7 +7,7 @@ import {
 import { quoteStructure, type StructureQuote } from "./triage-structure.ts";
 
 /** Initial-request complexity predicts observed session usage; later outcomes are not features. */
-export const TRIAGE_SCORECARD_VERSION = 11;
+export const TRIAGE_SCORECARD_VERSION = 12;
 export const METRIC_MAX = {
   breadth: 3,
   complexity: 3,

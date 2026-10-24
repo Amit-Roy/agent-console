@@ -115,4 +115,20 @@ for (const suggestion of [
 assert.deepEqual(quoteStructure(sparse, price).flags, requestStructure(sparse));
 assert.equal(quoteStructure(sparse, price).inferredFromRepo, false);
 
+// Tree quotes never name a ridge cost driver; ridge quotes keep theirs.
+{
+  const ridgeDriver = quoteStructure(sparse, price).costDriver;
+  const heavy = structuredClone(price);
+  heavy.contributions = heavy.contributions.map((item, index) => ({
+    ...item,
+    logWork: index === 0 ? 5 : 0.1,
+  }));
+  assert.notEqual(quoteStructure(sparse, heavy).costDriver, null, "Ridge quote keeps its driver");
+  const tree = { ...heavy, method: "boosted-trees-quantile-v1" as const };
+  assert.equal(quoteStructure(sparse, tree).costDriver, null);
+  assert.equal(quoteStructure(sparse, { ...tree, recommendedBudget: "p95" }).costDriver, null);
+  assert.equal(quoteStructure(sparse, { ...tree, total: null }).costDriver, null);
+  assert.ok(ridgeDriver === null || typeof ridgeDriver === "string");
+}
+
 console.log("triage-structure ok");

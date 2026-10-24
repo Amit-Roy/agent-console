@@ -369,4 +369,84 @@ assert.ok(
   "Structured input shows no missing-item claim",
 );
 
+// Tree quotes: the quantile heads are the only source of coverage and fit warnings.
+const treeDecision = { ...derived, model: "pi/test" };
+treeDecision.scorecard = structuredClone(derived.scorecard);
+treeDecision.scorecard.pricing.method = "boosted-trees-quantile-v1";
+treeDecision.scorecard.pricing.estimator = "historical-baseline";
+const treeValidation = (p80: number, p95: number) => ({
+  sampleCount: 34,
+  groupCount: 32,
+  hasLearnedComplexitySignal: false,
+  activeCoverage: { work: { p80: 0.1, p95: 0.1 }, output: { p80: 0.1, p95: 0.1 } },
+  workCoverage: { p80: 0.1, p95: 0.1 },
+  quantileModel: {
+    status: "validated",
+    quantiles: { p80: { coverage: p80 }, p95: { coverage: p95 } },
+  },
+});
+treeDecision.scorecard.pricing.validation = treeValidation(0.82, 0.96);
+const treeVisible = renderTriageComment(treeDecision).split("<details>")[0];
+assert.ok(!treeVisible.includes("under-covered"), "Tree coverage is adequate");
+assert.ok(!treeVisible.includes("Historical quotes are not task-specific."));
+assert.ok(!treeVisible.includes("Initial-request features have not established predictive value."));
+assert.ok(treeVisible.includes("not success probabilities"));
+treeDecision.scorecard.pricing.validation = treeValidation(0.6, 0.96);
+assert.ok(
+  renderTriageComment(treeDecision).split("<details>")[0].includes("Ranges under-covered"),
+  "Weak tree p80 coverage warns",
+);
+treeDecision.scorecard.pricing.validation = treeValidation(0.82, 0.9);
+assert.ok(
+  renderTriageComment(treeDecision).split("<details>")[0].includes("Ranges under-covered"),
+  "Weak tree p95 coverage warns",
+);
+treeDecision.scorecard.pricing.estimator = "complexity";
+assert.ok(
+  !renderTriageComment(treeDecision).split("<details>")[0].includes("have not established"),
+  "No ridge learned-signal warning on tree quotes",
+);
+// Tree quotes show the boosted heads' held-out stats and no ridge contributions or MAE.
+const treeStats = (extra: Record<string, unknown> = {}) => ({
+  ...treeValidation(0.82, 0.96),
+  work: { mae: 1000 },
+  activeWork: { mae: 1000 },
+  quantileModel: {
+    status: "validated",
+    sampleCount: 12,
+    groupCount: 10,
+    quantiles: {
+      p50: { pinball: 0.2, coverage: 0.5 },
+      p80: { pinball: 0.4, coverage: 0.82 },
+      p95: { pinball: 0.6, coverage: 0.96 },
+    },
+    baselinePinball: { p50: 0.4, p80: 0.6, p95: 0.8 },
+    ...extra,
+  },
+});
+treeDecision.scorecard.pricing.validation = treeStats();
+const treeFull = renderTriageComment(treeDecision);
+assert.ok(treeFull.includes("Held-out check: 12 outcomes; 10 thread groups."));
+assert.ok(treeFull.includes("Mean pinball: 0.4; baseline 0.6."));
+assert.ok(treeFull.includes("observed hit rate: P80 82%; P95 96%."));
+assert.ok(!treeFull.includes("MAE"), "No ridge MAE on tree quotes");
+assert.ok(!treeFull.includes("Pricing contributions"), "No ridge contributions on tree quotes");
+assert.ok(!treeFull.includes("log-work"));
+treeDecision.scorecard.pricing.validation = treeStats({ meanPinball: 0.33 });
+assert.ok(renderTriageComment(treeDecision).includes("Mean pinball: 0.33; baseline 0.6."));
+treeDecision.scorecard.pricing.validation = treeValidation(0.82, 0.96);
+// Ridge quotes keep the old behavior.
+const ridgeDecision = structuredClone(treeDecision);
+ridgeDecision.scorecard.pricing.method = "nonnegative-ridge-log-work-v1";
+assert.ok(
+  renderTriageComment(ridgeDecision).split("<details>")[0].includes("Ranges under-covered"),
+  "Ridge quotes still read ridge coverage",
+);
+assert.ok(renderTriageComment(ridgeDecision).includes("Pricing contributions"));
+assert.ok(
+  renderTriageComment(ridgeDecision)
+    .split("<details>")[0]
+    .includes("Initial-request features have not established predictive value."),
+);
+
 console.log("triage-comment: pass");

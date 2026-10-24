@@ -25,7 +25,7 @@ assert.equal(health.stale, false);
 assert.equal(health.degraded, true);
 assert.equal(health.sampleCount, 34);
 assert.equal(health.groupCount, 32);
-assert.equal(calibrationHealth({ model, now, updatedAt: now - 24 * 60 * 60_000 }).stale, true);
+assert.equal(calibrationHealth({ model, now, updatedAt: now - 24 * 60 * 60_000 }).stale, false);
 assert.equal(calibrationHealth({ model, now, updatedAt: now + 1 }).ageMs, null);
 assert.equal(calibrationHealth({ model, now, updatedAt: now + 1 }).stale, true);
 
@@ -43,6 +43,52 @@ adequate.model.validation.activeCoverage = { work: { p80: 0.9, p95: 0.96 } };
 assert.equal(calibrationHealth({ model: adequate, now, updatedAt: now }).p80Coverage, 0.9);
 adequate.model.validation.activeCoverage = {};
 assert.equal(calibrationHealth({ model: adequate, now, updatedAt: now }).p80Coverage, null);
+
+// Eight-day freshness: weekly retraining must not read as stale mid-week.
+assert.equal(calibrationHealth({ model, now, updatedAt: now - 7 * 24 * 60 * 60_000 }).stale, false);
+assert.equal(calibrationHealth({ model, now, updatedAt: now - 8 * 24 * 60 * 60_000 }).stale, true);
+
+// A tree artifact reads the boosted quantile heads, never the ridge active coverage.
+const tree = structuredClone(model);
+tree.model.validation = {
+  status: "validated",
+  workCoverage: { p80: 0.1, p95: 0.1 },
+  activeCoverage: { total: { p80: 0.1, p95: 0.1 } },
+  quantileModel: {
+    status: "validated",
+    quantiles: { p80: { coverage: 0.82 }, p95: { coverage: 0.96 } },
+  },
+};
+const treeHealth = calibrationHealth({ model: tree, now, updatedAt: now });
+assert.equal(treeHealth.p80Coverage, 0.82);
+assert.equal(treeHealth.p95Coverage, 0.96);
+assert.equal(treeHealth.underCovered, false);
+tree.model.validation.quantileModel = {
+  status: "experimental",
+  quantiles: { p80: { coverage: 0.6 }, p95: { coverage: 0.96 } },
+};
+assert.equal(calibrationHealth({ model: tree, now, updatedAt: now }).underCovered, true);
+// Status and degradation follow the quantile block when it exists, not the ridge status.
+tree.model.validation.status = "experimental";
+tree.model.validation.quantileModel = {
+  status: "validated",
+  quantiles: { p80: { coverage: 0.82 }, p95: { coverage: 0.96 } },
+};
+const treeStatus = calibrationHealth({ model: tree, now, updatedAt: now });
+assert.equal(treeStatus.validationStatus, "validated");
+assert.equal(treeStatus.degraded, false);
+tree.model.validation.status = "validated";
+tree.model.validation.quantileModel = {
+  status: "experimental",
+  quantiles: { p80: { coverage: 0.82 }, p95: { coverage: 0.96 } },
+};
+const treeWeak = calibrationHealth({ model: tree, now, updatedAt: now });
+assert.equal(treeWeak.validationStatus, "experimental");
+assert.equal(treeWeak.degraded, true);
+tree.model.validation.quantileModel = { status: "validated", quantiles: {} };
+const treeMissing = calibrationHealth({ model: tree, now, updatedAt: now });
+assert.equal(treeMissing.p80Coverage, null, "Malformed tree coverage never falls back to ridge");
+assert.equal(treeMissing.underCovered, null);
 
 const revision = assessmentRevision({ model, scorecardVersion: 5 });
 assert.equal(assessmentRevision({ model: structuredClone(model), scorecardVersion: 5 }), revision);

@@ -474,6 +474,99 @@ def score_tree(tree, features, baseline):
     return baseline + tree["v"][node]
 
 
+def quantile_cap(ceiling):
+    """Runtime cap in log space: a finite ceiling bounds every head, otherwise none."""
+    if (
+        isinstance(ceiling, (int, float))
+        and not isinstance(ceiling, bool)
+        and math.isfinite(ceiling)
+    ):
+        return math.log1p(max(0.0, ceiling))
+    return math.inf
+
+
+def score_quantile_model(model, rows, cap):
+    """Per-quantile pinball (log1p space) and coverage on rows, as the runtime would price them."""
+    actual = np.array([observed_work(sample, "totalTokens") for sample in rows])
+    features = [quantile_text(sample) for sample in rows]
+    logs = []
+    for name in QUANTILE_LEVELS:
+        start = model["baseline"][name] + model["offsets"][name]
+        logs.append(
+            [
+                min(cap, start + sum(score_tree(tree, row, 0.0) for tree in model["trees"][name]))
+                for row in features
+            ]
+        )
+    stacked = np.maximum.accumulate(np.column_stack(logs), axis=1)
+    metrics = {}
+    for index, (name, level) in enumerate(QUANTILE_LEVELS.items()):
+        delta = np.log1p(actual) - stacked[:, index]
+        metrics[name] = {
+            "pinball": float(np.mean(np.maximum(level * delta, (level - 1) * delta))),
+            "coverage": float(np.mean(actual <= np.expm1(stacked[:, index]))),
+        }
+    return metrics
+
+
+def mean_pinball(metrics):
+    return float(np.mean([entry["pinball"] for entry in metrics.values()]))
+
+
+def unscoreable_champion(reason):
+    return {
+        "scoreable": False,
+        "reason": reason,
+        "sampleCount": 0,
+        "quantiles": {},
+        "meanPinball": None,
+    }
+
+
+def load_champion_model(path):
+    """Return (quantileModel, trainingIds, reason). Any failure yields an unscoreable reason."""
+    try:
+        with open(path) as handle:
+            artifact = json.load(handle)
+    except (OSError, ValueError):
+        return None, None, "champion artifact missing or unreadable"
+    model = artifact.get("quantileModel") if isinstance(artifact, dict) else None
+    if not isinstance(model, dict):
+        return None, None, "champion artifact has no quantileModel"
+    if model.get("features") != QUANTILE_FEATURES:
+        return None, None, "champion features differ from QUANTILE_FEATURES"
+    training = artifact.get("training")
+    ids = training.get("sampleIds") if isinstance(training, dict) else None
+    return model, ids if isinstance(ids, list) else None, None
+
+
+def score_champion(path, heldout):
+    """Score the installed champion on held-out rows it did not train on."""
+    model, training_ids, reason = load_champion_model(path)
+    if model is None:
+        return unscoreable_champion(reason)
+    note = None
+    rows = heldout
+    if training_ids is None:
+        note = "no training ids"
+    else:
+        seen = set(training_ids)
+        rows = [sample for sample in heldout if sample["sampleId"] not in seen]
+    if not rows:
+        return unscoreable_champion("no held-out rows outside champion training ids")
+    try:
+        metrics = score_quantile_model(model, rows, quantile_cap(model.get("ceiling")))
+    except (KeyError, IndexError, TypeError, ValueError):
+        return unscoreable_champion("champion quantileModel is malformed")
+    return {
+        "scoreable": True,
+        "reason": note,
+        "sampleCount": len(rows),
+        "quantiles": metrics,
+        "meanPinball": mean_pinball(metrics),
+    }
+
+
 def fit_quantile_model(train, heldout, ceiling):
     """Fit independent quantile tree heads and verify the exported arrays reproduce sklearn."""
     matrix = np.array([quantile_text(s) for s in train], dtype=float)
@@ -506,31 +599,8 @@ def fit_quantile_model(train, heldout, ceiling):
         "parameters": TREE_PARAMS,
     }
     actual = np.array([observed_work(s, "totalTokens") for s in heldout])
-    predicted = {"log": {}, "tokens": {}}
     cap = math.log1p(ceiling) if ceiling is not None else 30.0
-    for name in QUANTILE_LEVELS:
-        logs = np.array(
-            [
-                min(
-                    cap,
-                    baseline[name]
-                    + sum(score_tree(tree, quantile_text(s), 0.0) for tree in trees[name]),
-                )
-                for s in heldout
-            ]
-        )
-        predicted["log"][name] = logs
-    order = [predicted["log"][name] for name in QUANTILE_LEVELS]
-    stacked = np.maximum.accumulate(np.column_stack(order), axis=1)
-    for index, name in enumerate(QUANTILE_LEVELS):
-        predicted["tokens"][name] = np.expm1(stacked[:, index])
-    metrics = {}
-    for index, (name, q) in enumerate(QUANTILE_LEVELS.items()):
-        delta = np.log1p(actual) - stacked[:, index]
-        metrics[name] = {
-            "pinball": float(np.mean(np.maximum(q * delta, (q - 1) * delta))),
-            "coverage": float(np.mean(actual <= predicted["tokens"][name])),
-        }
+    metrics = score_quantile_model(model, heldout, cap)
     median_log = float(np.median(target))
     baseline_pinball = {
         name: float(
@@ -547,14 +617,13 @@ def fit_quantile_model(train, heldout, ceiling):
         metrics[name]["coverage"] >= target_coverage
         for name, target_coverage in (("p80", 0.8), ("p95", 0.95))
     )
-    improves = float(np.mean([m["pinball"] for m in metrics.values()])) < float(
-        np.mean(list(baseline_pinball.values()))
-    )
+    improves = mean_pinball(metrics) < float(np.mean(list(baseline_pinball.values())))
     validation = {
         "status": "validated" if covered and improves else "experimental",
         "sampleCount": len(heldout),
         "groupCount": len(groups(heldout)),
         "quantiles": metrics,
+        "meanPinball": mean_pinball(metrics),
         "baselinePinball": baseline_pinball,
         "beatsPinballBaseline": improves,
         "nodeCount": params,
@@ -567,39 +636,41 @@ def fit_quantile_model(train, heldout, ceiling):
     return model, validation
 
 
-def build_artifact(dataset):
-    samples, rejected = validate_dataset(dataset)
-    scope = dataset_scope(dataset)
-    token_yield_basis = "workload" if scope == "completed-session" else "actions"
-    workload_metric = "totalTokens" if scope == "completed-session" else "toolCalls"
-    train, heldout, purged = frozen_split(samples)
-    cv = list(folds(train))
-    if not cv:
+def select_alpha(train, workload_metric):
+    """Pick the ridge alpha by older-group out-of-fold log MSE; ties prefer the larger alpha."""
+    folds_list = list(folds(train))
+    if not folds_list:
         raise ValueError("No strict older-group folds available for residual calibration")
     scores, residuals_by_alpha = [], {}
     for alpha in ALPHAS:
         residuals = []
-        for older, validation in cv:
+        for older, validation in folds_list:
             prediction = predict_work(fit_model(older, alpha, workload_metric), validation)
-            residuals.extend((s, float(p)) for s, p in zip(validation, prediction, strict=True))
+            residuals.extend(
+                (sample, float(value)) for sample, value in zip(validation, prediction, strict=True)
+            )
         mse = float(
             np.mean(
                 [
-                    (math.log1p(observed_work(s, workload_metric)) - math.log1p(p)) ** 2
-                    for s, p in residuals
+                    (math.log1p(observed_work(sample, workload_metric)) - math.log1p(value)) ** 2
+                    for sample, value in residuals
                 ]
             )
         )
         scores.append({"alpha": alpha, "oofLogMse": mse})
         residuals_by_alpha[alpha] = residuals
-    alpha = min(scores, key=lambda score: (score["oofLogMse"], -score["alpha"]))["alpha"]
-    model = fit_model(train, alpha, workload_metric)
-    scenarios = [scenario(s, p, token_yield_basis) for s, p in residuals_by_alpha[alpha]]
-    model["residualQuantiles"] = quantiles([s["logResidual"] for s in scenarios])
-    model["featureRanges"] = []
+    best = min(scores, key=lambda score: (score["oofLogMse"], -score["alpha"]))["alpha"]
+    return best, scores, residuals_by_alpha
+
+
+def feature_ranges(train):
+    """Training min/max and known/missing counts per feature."""
+    ranges = []
     for name in FEATURES:
-        values = [s["features"][name] for s in train if s["features"][name] is not None]
-        model["featureRanges"].append(
+        values = [
+            sample["features"][name] for sample in train if sample["features"][name] is not None
+        ]
+        ranges.append(
             {
                 "min": min(values) if values else None,
                 "max": max(values) if values else None,
@@ -607,6 +678,67 @@ def build_artifact(dataset):
                 "missing": len(train) - len(values),
             }
         )
+    return ranges
+
+
+def add_session_channel_validation(validation, train, heldout, quotes):
+    """Input and total token error, baseline and coverage for completed-session artifacts."""
+    validation["limitations"].append(
+        "Observed zero-usage calibration sessions contribute a fixed empirical point mass at zero, with zero component fractions; its frequency is not learned from request features."
+    )
+    channels = [
+        ("inputTokens", lambda sample: sample["outcomes"]["inputTokens"]),
+        (
+            "totalTokens",
+            lambda sample: sample["outcomes"]["inputTokens"] + sample["outcomes"]["outputTokens"],
+        ),
+    ]
+    for channel, outcome in channels:
+        observed_channel = [outcome(sample) for sample in heldout]
+        baseline_channel = float(np.median([outcome(sample) for sample in train]))
+        validation[channel] = errors(observed_channel, [row[channel]["p50"] for row in quotes])
+        validation[f"baseline{channel[0].upper()}{channel[1:]}"] = errors(
+            observed_channel, [baseline_channel] * len(heldout)
+        )
+        validation[f"{channel.removesuffix('Tokens')}Coverage"] = {
+            name: float(
+                np.mean(
+                    [
+                        value <= row[channel][name]
+                        for value, row in zip(observed_channel, quotes, strict=True)
+                    ]
+                )
+            )
+            for name in QUANTILES
+        }
+
+
+def fit_quantile_section(eligible, split, validation, champion_path):
+    """Fit the quantile trees and attach validation; without trees no quantile validation exists."""
+    if not eligible:
+        # Without trees there is nothing to compare; a gate must see no quantile validation.
+        validation.pop("quantileModel", None)
+        return None, None
+    model, quantile_validation = fit_quantile_model(*split)
+    validation["quantileModel"] = quantile_validation
+    if champion_path is not None:
+        quantile_validation["champion"] = score_champion(champion_path, split[1])
+    return model, quantile_validation
+
+
+def build_artifact(dataset, champion_path=None):
+    samples, rejected = validate_dataset(dataset)
+    scope = dataset_scope(dataset)
+    token_yield_basis = "workload" if scope == "completed-session" else "actions"
+    workload_metric = "totalTokens" if scope == "completed-session" else "toolCalls"
+    train, heldout, purged = frozen_split(samples)
+    alpha, scores, residuals_by_alpha = select_alpha(train, workload_metric)
+    model = fit_model(train, alpha, workload_metric)
+    scenarios = [
+        scenario(sample, value, token_yield_basis) for sample, value in residuals_by_alpha[alpha]
+    ]
+    model["residualQuantiles"] = quantiles([row["logResidual"] for row in scenarios])
+    model["featureRanges"] = feature_ranges(train)
     work = [observed_work(s, workload_metric) for s in train]
     observed = [observed_work(s, workload_metric) for s in heldout]
     output = [s["outcomes"]["outputTokens"] for s in heldout]
@@ -706,30 +838,7 @@ def build_artifact(dataset):
         "rejected": rejected,
     }
     if scope == "completed-session":
-        validation["limitations"].append(
-            "Observed zero-usage calibration sessions contribute a fixed empirical point mass at zero, with zero component fractions; its frequency is not learned from request features."
-        )
-        for channel, outcome in [
-            ("inputTokens", lambda s: s["outcomes"]["inputTokens"]),
-            ("totalTokens", lambda s: s["outcomes"]["inputTokens"] + s["outcomes"]["outputTokens"]),
-        ]:
-            observed_channel = [outcome(s) for s in heldout]
-            baseline_channel = float(np.median([outcome(s) for s in train]))
-            validation[channel] = errors(observed_channel, [q[channel]["p50"] for q in quotes])
-            validation[f"baseline{channel[0].upper()}{channel[1:]}"] = errors(
-                observed_channel, [baseline_channel] * len(heldout)
-            )
-            validation[f"{channel.removesuffix('Tokens')}Coverage"] = {
-                name: float(
-                    np.mean(
-                        [
-                            value <= q[channel][name]
-                            for value, q in zip(observed_channel, quotes, strict=True)
-                        ]
-                    )
-                )
-                for name in QUANTILES
-            }
+        add_session_channel_validation(validation, train, heldout, quotes)
     oof_ids = {s["sampleId"] for s, _ in residuals_by_alpha[alpha]}
     cohort_audit = {
         "sourceSamples": len(dataset["samples"]),
@@ -823,10 +932,12 @@ def build_artifact(dataset):
         validation["limitations"].append(
             "The held-out block selected the active estimator; its active metrics are validation-selection results, not independent test performance."
         )
-    quantile_model = quantile_validation = None
-    if scope == "completed-session" and all(quantile_text(s) for s in samples):
-        quantile_model, quantile_validation = fit_quantile_model(train, heldout, ceiling)
-        validation["quantileModel"] = quantile_validation
+    quantile_model, quantile_validation = fit_quantile_section(
+        scope == "completed-session" and all(quantile_text(sample) for sample in samples),
+        (train, heldout, ceiling),
+        validation,
+        champion_path,
+    )
     artifact = {
         "schemaVersion": 1,
         "method": "nonnegative-ridge-log-work-v1",
@@ -900,10 +1011,11 @@ def main():
     parser.add_argument("--dataset", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--report", required=True)
+    parser.add_argument("--champion", help="installed artifact whose quantileModel is scored")
     args = parser.parse_args()
     with open(args.dataset) as handle:
         dataset = json.load(handle)
-    artifact, report = build_artifact(dataset)
+    artifact, report = build_artifact(dataset, args.champion)
     private_write(args.output, artifact)
     private_write(args.report, report)
     print(
