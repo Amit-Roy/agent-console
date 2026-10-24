@@ -403,201 +403,270 @@ $("chat").addEventListener("click", openRefLink);
 $("chat").addEventListener("click", openFileLink);
 $("chat").addEventListener("auxclick", openFileLink);
 
-function handle(m) {
-  switch (m.t) {
-    case "usage":
-      state.usage[m.provider] = m.usage;
-      renderUsage();
-      break;
-    case "providers": {
-      state.providers = new Map(m.providers.map((p) => [p.id, p]));
-      menus.model.provider = null;
-      menus.dProv.setItems(
-        m.providers.map((p) => ({
-          value: p.id,
-          label: p.label,
-          desc: p.ok ? undefined : p.hint,
-          disabled: !p.ok,
-        })),
-        menus.dProv.value,
-      );
-      const p = prov(menus.dProv.value);
-      if (p) {
-        menus.dModel.setItems(modelItems(p.models, p), menus.dModel.value || p.defaultModel);
-        fillEffort(menus.dEffort, p, menus.dModel.value, menus.dEffort.value);
-      }
-      renderHead();
-      break;
-    }
-    case "commands":
-      state.commands[m.provider] = m.commands;
-      updateSlash();
-      break;
-    case "hello": {
-      // the server was swapped for a new build (restart-when-idle): reload to match, unless that would lose a draft
-      if (state.build && m.build && m.build !== state.build) {
-        if (!$("input").value && !queueEditor && !outbox.length) return void location.reload();
-        state.features = m.features || {};
-        flushOutbox();
-        banner("Updated. Send or clear your draft, then reload for the new version.");
-        break;
-      }
-      state.build = m.build || state.build;
-      state.features = m.features || {};
-      flushOutbox();
-      latency.flush();
-      for (const view of views.values()) view.stale = true;
-      state.commands = m.commands || {};
-      state.usage = m.usage || {};
-      state.queues = m.queues || {};
-      for (const t of m.threads) {
-        const events = m.questions?.[t.id] || [];
-        questions.sync(t.id, Array.isArray(events) ? events : [events]);
-      }
-      state.dirs = m.dirs;
-      state.providers = new Map(m.providers.map((p) => [p.id, p]));
-      menus.model.provider = null; // re-read per-agent model lists below
-      state.threads = new Map(m.threads.map((t) => [t.id, t]));
-      state.tasks = new Map((m.tasks || []).map((t) => [t.id, t]));
-      menus.dProv.setItems(
-        m.providers.map((p) => ({
-          value: p.id,
-          label: p.label,
-          desc: p.ok ? undefined : p.hint,
-          disabled: !p.ok,
-        })),
-        m.providers.find((p) => p.ok)?.id,
-      );
-      menus.dCwd.setItems(
-        m.dirs.map((d) => ({
-          value: d,
-          label: d.replace(/^.*\/repos\/?/, "~/repos/") || d,
-          icon: "folder",
-        })),
-        m.dirs[0],
-      );
-      fillDialog(menus.dProv.value);
-      state.ready = true; // until the first hello there is nothing true to say, so the chat stays blank rather than "No thread"
-      renderThreads();
-      let last = null;
-      try {
-        last = localStorage.getItem("ac_thread");
-      } catch {}
-      const linked = linkedThread();
-      if (linked && state.threads.has(linked)) openThread(linked);
-      else if (state.current && state.threads.has(state.current)) openThread(state.current);
-      else if (last && state.threads.has(last))
-        openThread(last); // first load: reopen the thread the reader last had open
-      else if (state.threads.size) openThread([...state.threads.values()][0].id);
-      else {
-        clearChat();
-        renderHead();
-        warmFileViewer();
-      }
-      maybeOpenWorkflowDialog();
-      void maybeShareLink();
-      break;
-    }
-    case "thread":
-      state.threads.set(m.thread.id, m.thread);
-      renderThreads();
-      if (m.thread.id === state.current) {
-        renderHead();
-        markRead(m.thread.id);
-      } else renderUsage();
-      break;
-    case "removed":
-      state.threads.delete(m.thread);
-      views.delete(m.thread);
-      for (const item of [...outbox]) if (item.thread === m.thread) acked(item.cid);
-      writeDraft(m.thread, "");
-      for (const p of attachmentDrafts.get(m.thread) || []) forgetAttachment(p);
-      attachmentDrafts.delete(m.thread);
-      if (state.current === m.thread) {
-        pending = [];
-        renderThumbs();
-      }
-      if (state.current === m.thread) {
-        state.current = null;
-        $("input").value = "";
-        sizeInput();
-        clearChat();
-        renderHead();
-        const first = [...state.threads.values()][0];
-        if (first) openThread(first.id);
-      }
-      renderThreads();
-      break;
-    case "created":
-      handleCreated(m.thread.id);
-      break;
-    case "tasks":
-      state.tasks = new Map(m.tasks.map((t) => [t.id, t]));
-      renderThreads();
-      break;
-    case "task_saved":
-      toast(
-        m.task.repeat === "manual"
-          ? `Saved “${m.task.title}”. Run it from ⋯ → Run now.`
-          : m.task.enabled && m.task.nextRunAt
-            ? `Saved “${m.task.title}”. Next run ${new Date(m.task.nextRunAt).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" })}.`
-            : `Saved “${m.task.title}”.`,
-      );
-      break;
-    case "history":
-      if (m.thread !== state.current || (m.request != null && m.request !== state.request)) break;
-      if (m.before == null && m.questions) questions.sync(m.thread, m.questions);
-      void (m.before != null ? showEarlier(m) : m.delta ? showDelta(m) : showHistory(m));
-      break;
-    case "answer_done":
-    case "answer_error":
-      questions.reply(m);
-      break;
-    case "queue":
-      state.queues[m.thread] = m.items;
-      if (m.thread === state.current) renderQueue();
-      break;
-    case "create_issue_done":
-    case "create_issue_error":
-      issueDraftReply(m);
-      break;
-    case "queue_edit":
-    case "queue_edit_done":
-    case "queue_edit_error":
-      queuedEditReply(m);
-      break;
-    case "event":
-      if (m.event.type === "question" || m.event.type === "question_answer") {
-        questions.receive(m.thread, m.event, true);
-        renderThreads();
-        updateWorking();
-      }
-      if (views.has(m.thread)) views.get(m.thread).stale = true;
-      if (m.event.type === "rate_limit_event")
-        setUsage(m.event, threadUsageKey(state.threads.get(m.thread)));
-      if (m.thread !== state.current) break;
-      if (state.revalidating && (!state.rendering || state.deferredRefresh)) {
-        // Durable events before the history reply are already in its snapshot; deltas are never persisted.
-        if (m.event.type === "stream_event") state.waitingLive.push(m.event);
-        else if (m.event.type === "assistant" || m.event.type === "result") state.waitingLive = [];
-        break;
-      }
-      if (m.seq) state.end = Math.max(state.end || 0, m.seq);
-      if (state.rendering)
-        state.pendingLive.push(m.event); // history is still being drawn: keep order, replay these after
-      else onEvent(m.event, true);
-      break;
-    case "invalidate":
-      if (views.has(m.thread)) views.get(m.thread).stale = true;
-      break;
-    case "ack":
-      acked(m.cid);
-      break;
-    case "error":
-      if (m.cid) acked(m.cid, false);
-      addNote(m.message, "errtxt");
-      break;
+function onUsageMessage(message) {
+  state.usage[message.provider] = message.usage;
+  renderUsage();
+}
+
+function providerMenuItems(providers) {
+  return providers.map((provider) => ({
+    value: provider.id,
+    label: provider.label,
+    desc: provider.ok ? undefined : provider.hint,
+    disabled: !provider.ok,
+  }));
+}
+
+function onProvidersMessage(message) {
+  state.providers = new Map(message.providers.map((provider) => [provider.id, provider]));
+  menus.model.provider = null;
+  menus.dProv.setItems(providerMenuItems(message.providers), menus.dProv.value);
+  const provider = prov(menus.dProv.value);
+  if (provider) {
+    menus.dModel.setItems(
+      modelItems(provider.models, provider),
+      menus.dModel.value || provider.defaultModel,
+    );
+    fillEffort(menus.dEffort, provider, menus.dModel.value, menus.dEffort.value);
   }
+  renderHead();
+}
+
+function onCommandsMessage(message) {
+  state.commands[message.provider] = message.commands;
+  updateSlash();
+}
+
+function syncHelloQuestions(threads, questionMap) {
+  for (const thread of threads) {
+    const events = questionMap?.[thread.id] || [];
+    questions.sync(thread.id, Array.isArray(events) ? events : [events]);
+  }
+}
+
+function initialThreadId() {
+  let last = null;
+  try {
+    last = localStorage.getItem("ac_thread");
+  } catch {}
+  const linked = linkedThread();
+  if (linked && state.threads.has(linked)) return linked;
+  if (state.current && state.threads.has(state.current)) return state.current;
+  if (last && state.threads.has(last)) return last; // first load: reopen the thread the reader last had open
+  return state.threads.size ? [...state.threads.values()][0].id : null;
+}
+
+function openInitialThread() {
+  const threadId = initialThreadId();
+  if (threadId) return openThread(threadId);
+  clearChat();
+  renderHead();
+  warmFileViewer();
+}
+
+function onHelloMessage(message) {
+  // the server was swapped for a new build (restart-when-idle): reload to match, unless that would lose a draft
+  if (state.build && message.build && message.build !== state.build) {
+    if (!$("input").value && !queueEditor && !outbox.length) return void location.reload();
+    state.features = message.features || {};
+    flushOutbox();
+    banner("Updated. Send or clear your draft, then reload for the new version.");
+    return;
+  }
+  state.build = message.build || state.build;
+  state.features = message.features || {};
+  flushOutbox();
+  latency.flush();
+  for (const view of views.values()) view.stale = true;
+  state.commands = message.commands || {};
+  state.usage = message.usage || {};
+  state.queues = message.queues || {};
+  syncHelloQuestions(message.threads, message.questions);
+  state.dirs = message.dirs;
+  state.providers = new Map(message.providers.map((provider) => [provider.id, provider]));
+  menus.model.provider = null; // re-read per-agent model lists below
+  state.threads = new Map(message.threads.map((thread) => [thread.id, thread]));
+  state.tasks = new Map((message.tasks || []).map((task) => [task.id, task]));
+  menus.dProv.setItems(
+    providerMenuItems(message.providers),
+    message.providers.find((provider) => provider.ok)?.id,
+  );
+  menus.dCwd.setItems(
+    message.dirs.map((dir) => ({
+      value: dir,
+      label: dir.replace(/^.*\/repos\/?/, "~/repos/") || dir,
+      icon: "folder",
+    })),
+    message.dirs[0],
+  );
+  fillDialog(menus.dProv.value);
+  state.ready = true; // until the first hello there is nothing true to say, so the chat stays blank rather than "No thread"
+  renderThreads();
+  openInitialThread();
+  maybeOpenWorkflowDialog();
+  void maybeShareLink();
+}
+
+function onThreadMessage(message) {
+  state.threads.set(message.thread.id, message.thread);
+  renderThreads();
+  if (message.thread.id === state.current) {
+    renderHead();
+    markRead(message.thread.id);
+  } else renderUsage();
+}
+
+function onRemovedMessage(message) {
+  state.threads.delete(message.thread);
+  views.delete(message.thread);
+  for (const item of [...outbox]) if (item.thread === message.thread) acked(item.cid);
+  writeDraft(message.thread, "");
+  for (const path of attachmentDrafts.get(message.thread) || []) forgetAttachment(path);
+  attachmentDrafts.delete(message.thread);
+  if (state.current === message.thread) {
+    pending = [];
+    renderThumbs();
+  }
+  if (state.current === message.thread) {
+    state.current = null;
+    $("input").value = "";
+    sizeInput();
+    clearChat();
+    renderHead();
+    const first = [...state.threads.values()][0];
+    if (first) openThread(first.id);
+  }
+  renderThreads();
+}
+
+function onCreatedMessage(message) {
+  handleCreated(message.thread.id);
+}
+
+function onTasksMessage(message) {
+  state.tasks = new Map(message.tasks.map((task) => [task.id, task]));
+  renderThreads();
+}
+
+function savedTaskText(task) {
+  if (task.repeat === "manual") return `Saved “${task.title}”. Run it from ⋯ → Run now.`;
+  if (task.enabled && task.nextRunAt) {
+    const when = new Date(task.nextRunAt).toLocaleString([], {
+      weekday: "short",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+    return `Saved “${task.title}”. Next run ${when}.`;
+  }
+  return `Saved “${task.title}”.`;
+}
+
+function onTaskSavedMessage(message) {
+  toast(savedTaskText(message.task));
+}
+
+function onHistoryMessage(message) {
+  if (
+    message.thread !== state.current ||
+    (message.request != null && message.request !== state.request)
+  )
+    return;
+  if (message.before == null && message.questions)
+    questions.sync(message.thread, message.questions);
+  void (message.before != null
+    ? showEarlier(message)
+    : message.delta
+      ? showDelta(message)
+      : showHistory(message));
+}
+
+function onAnswerReply(message) {
+  questions.reply(message);
+}
+
+function onQueueMessage(message) {
+  state.queues[message.thread] = message.items;
+  if (message.thread === state.current) renderQueue();
+}
+
+function onIssueReply(message) {
+  issueDraftReply(message);
+}
+
+function onQueueEditReply(message) {
+  queuedEditReply(message);
+}
+
+function noteLiveQuestion(message) {
+  if (message.event.type !== "question" && message.event.type !== "question_answer") return;
+  questions.receive(message.thread, message.event, true);
+  renderThreads();
+  updateWorking();
+}
+
+function holdLiveEvent(message) {
+  if (!state.revalidating || (state.rendering && !state.deferredRefresh)) return false;
+  // Durable events before the history reply are already in its snapshot; deltas are never persisted.
+  if (message.event.type === "stream_event") state.waitingLive.push(message.event);
+  else if (message.event.type === "assistant" || message.event.type === "result")
+    state.waitingLive = [];
+  return true;
+}
+
+function onLiveEventMessage(message) {
+  noteLiveQuestion(message);
+  if (views.has(message.thread)) views.get(message.thread).stale = true;
+  if (message.event.type === "rate_limit_event")
+    setUsage(message.event, threadUsageKey(state.threads.get(message.thread)));
+  if (message.thread !== state.current) return;
+  if (holdLiveEvent(message)) return;
+  if (message.seq) state.end = Math.max(state.end || 0, message.seq);
+  if (state.rendering)
+    state.pendingLive.push(message.event); // history is still being drawn: keep order, replay these after
+  else onEvent(message.event, true);
+}
+
+function onInvalidateMessage(message) {
+  if (views.has(message.thread)) views.get(message.thread).stale = true;
+}
+
+function onAckMessage(message) {
+  acked(message.cid);
+}
+
+function onErrorMessage(message) {
+  if (message.cid) acked(message.cid, false);
+  addNote(message.message, "errtxt");
+}
+
+const MESSAGE_HANDLERS = {
+  __proto__: null,
+  usage: onUsageMessage,
+  providers: onProvidersMessage,
+  commands: onCommandsMessage,
+  hello: onHelloMessage,
+  thread: onThreadMessage,
+  removed: onRemovedMessage,
+  created: onCreatedMessage,
+  tasks: onTasksMessage,
+  task_saved: onTaskSavedMessage,
+  history: onHistoryMessage,
+  answer_done: onAnswerReply,
+  answer_error: onAnswerReply,
+  queue: onQueueMessage,
+  create_issue_done: onIssueReply,
+  create_issue_error: onIssueReply,
+  queue_edit: onQueueEditReply,
+  queue_edit_done: onQueueEditReply,
+  queue_edit_error: onQueueEditReply,
+  event: onLiveEventMessage,
+  invalidate: onInvalidateMessage,
+  ack: onAckMessage,
+  error: onErrorMessage,
+};
+
+function handle(message) {
+  return MESSAGE_HANDLERS[message.t]?.(message);
 }
 
 // ---------- menus (model + mode chips in the composer, thread actions, new-thread fields) ----------
@@ -3207,293 +3276,339 @@ function watchFirstToken(e) {
   });
 }
 
-function onEvent(e, live) {
+const AUTO_NOTES = {
+  brain: "Reminder sent: save anything durable to the shared brain.",
+  continue: "Auto-continued: the agent announced a next step without doing it.",
+  subagent: "Background subagent finished. Its result was sent to the agent.",
+};
+
+function hasQuestionCard(host, id) {
+  return [...host.querySelectorAll(".question-card")].some(
+    (card) => card.dataset.questionId === id,
+  );
+}
+
+function onQuestionEvent(event, ctx) {
+  push(questions.mount(state.current, event), ctx.live);
+}
+
+function onQuestionAnswer(event, ctx) {
+  questions.receive(state.current, event);
+  const host = state.into || $("chat");
+  const exists = hasQuestionCard(host, event.id);
+  if (!exists && !hasQuestionCard($("chat"), event.id))
+    push(questions.mount(state.current, event), ctx.live);
+  questions.refresh(host);
+}
+
+function onCommandStatus(event, ctx) {
+  if (event.command === "compact") return void compactCard(event, ctx.live);
+  addNote(event.text, event.status === "failed" ? "errtxt" : "note command-note");
+}
+
+function scheduledLabel(scheduled) {
+  if (scheduled === "catch-up") return "Scheduled run · catch-up for a missed time";
+  if (scheduled === "manual") return "Scheduled task · run now";
+  return "Scheduled run";
+}
+
+function userBubbleRow(event) {
+  const rows = [];
+  const bubble = el("div", "bubble");
+  bubble.append(userText(event.text, event.attachments));
+  rows.push(bubble);
+  if (event.delivery)
+    rows.push(
+      el(
+        "div",
+        "delivery",
+        event.delivery === "steer" ? "Sent while the agent was working" : "Was queued",
+      ),
+    );
+  if (event.scheduled) rows.push(el("div", "delivery", scheduledLabel(event.scheduled)));
+  rows.push(copyActions(() => event.text));
+  return rows;
+}
+
+function onUserInput(event, ctx) {
+  const { live } = ctx;
+  if (event.questionAnswer) return; // The inline answered card already shows this async reply.
+  if (event.command) return; // /compact is shown as its progress card, not as a message bubble
+  if (Object.hasOwn(AUTO_NOTES, event.auto))
+    return void push(el("div", "msg note", AUTO_NOTES[event.auto]), live);
+  const row = el("div", "msg user");
+  if (event.attachments?.length) row.append(...attachmentRows(event.attachments, live));
+  if (event.text?.trim()) row.append(...userBubbleRow(event));
+  push(row, live);
+}
+
+function onMessageStart() {
+  state.live = null;
+  state.thinkAt = null;
+}
+
+function onContentDelta(streamEvent) {
+  if (streamEvent.delta?.type === "text_delta") {
+    renderLive("text");
+    state.live.text += streamEvent.delta.text;
+  } else if (streamEvent.delta?.type === "thinking_delta") {
+    renderLive("thinking");
+    state.thinkAt ??= performance.now();
+    state.live.thinking += streamEvent.delta.thinking;
+  }
+}
+
+function onStreamEvent(event) {
+  const streamEvent = event.event;
+  if (!streamEvent) return;
+  if (streamEvent.type === "message_start") onMessageStart();
+  if (streamEvent.type === "content_block_delta") onContentDelta(streamEvent);
+}
+
+function onAssistantText(block, ctx) {
+  dropLive("text");
+  dropLive("thinking");
+  push(asstMsg(block.text, true).root, ctx.live);
+}
+
+function onAssistantThinking(block, event, ctx) {
+  const { live, prevTs } = ctx;
+  dropLive("thinking");
+  const det = el("details", "msg think");
+  const sum = el("summary");
+  sum.append(icon("sparkle"), el("span", "", "Reasoning"));
+  if (live && state.thinkAt != null) sum.append(durChip(performance.now() - state.thinkAt));
+  else if (typeof event.ts === "number" && prevTs != null && event.ts >= prevTs)
+    sum.append(durChip(event.ts - prevTs));
+  state.thinkAt = null;
+  sum.append(icon("chev-right", "chev"));
+  det.append(sum, el("div", "think-body", block.thinking));
+  push(det, live);
+}
+
+function toolCardSummary(block) {
+  const sum = el("summary");
+  const tool = icon(TOOL_ICON[block.name] || "code", "tool");
+  const status = el("span", "st");
+  status.append(el("i", "spin"), el("span", "sr-only", "running"));
+  const why = describedAs(block.name, block.input);
+  sum.append(
+    tool,
+    el("span", "name", toolName(block.name, block.input)),
+    el("span", why ? "sum human" : "sum", why || summarize(block.name, block.input)),
+    ...fileView(block.name, block.input),
+    status,
+    icon("chev-right", "chev"),
+  );
+  sum.title = summarize(block.name, block.input);
+  return sum;
+}
+
+function onToolCardToggle(card) {
+  if (!card.open) return;
+  materializeTool(card);
+  for (const code of card.querySelectorAll("code[data-highlight-pending]")) {
+    highlightInto(code, code.textContent, code.dataset.highlightPending);
+    delete code.dataset.highlightPending;
+  }
+  fitOutputs(card);
+}
+
+function onAssistantToolUse(block, event, ctx) {
+  const { live } = ctx;
+  dropLive("text");
+  dropLive("thinking");
+  if (isAgent(block.name)) {
+    const agentEl = agentCard(block);
+    state.cards.set(block.id, agentEl);
+    push(agentEl, live);
+    updateWorking();
+    return;
+  }
+  const card = el("details", "msg card pending");
+  const sum = toolCardSummary(block);
+  card.toolInput = { name: block.name, input: block.input };
+  if (live) card.startedAt = performance.now();
+  else if (typeof event.ts === "number") card.startedTs = event.ts;
+  card.append(sum, el("div", "body")); // the open row wraps to show the whole label, so it is not repeated below
+  card.addEventListener("toggle", () => onToolCardToggle(card));
+  state.cards.set(block.id, card);
+  push(card, live);
+}
+
+function onAssistantBlock(block, event, ctx) {
+  if (block.type === "thinking" || block.type === "redacted_thinking") dropLive("thinking");
+  if (block.type === "text" && block.text?.trim()) onAssistantText(block, ctx);
+  else if (block.type === "thinking" && block.thinking?.trim())
+    onAssistantThinking(block, event, ctx);
+  else if (block.type === "tool_use") onAssistantToolUse(block, event, ctx);
+}
+
+function onAssistant(event, ctx) {
+  for (const block of event.message?.content ?? []) onAssistantBlock(block, event, ctx);
+}
+
+function toolResultText(part) {
+  if (typeof part.content === "string") return part.content;
+  return (part.content ?? []).map((piece) => piece.text ?? "").join("\n");
+}
+
+function settleToolResult(card, part, event) {
+  card.classList.remove("pending");
+  card.classList.add(part.is_error ? "err" : "done");
+  const status = card.querySelector(".st");
+  if (card.startedAt != null) status.before(durChip(performance.now() - card.startedAt));
+  else if (card.startedTs != null && typeof event.ts === "number" && event.ts >= card.startedTs)
+    status.before(durChip(event.ts - card.startedTs));
+  status.replaceChildren(
+    icon(part.is_error ? "x" : "check"),
+    el("span", "sr-only", part.is_error ? "error" : "done"),
+  );
+  const text = toolResultText(part);
+  // a background subagent's launch receipt is harness bookkeeping; its status chip and activity say the same
+  const launched =
+    card.classList.contains("agent") &&
+    (card.querySelector(".task-chip:not([hidden])") || /^Async agent launched/.test(text));
+  if (text && !launched) {
+    const out = toolOutput(text, !!part.is_error);
+    card.querySelector(".body").append(out);
+    if (card.open) fitOutput(out);
+  }
+}
+
+function onUserEvent(event) {
+  for (const part of event.message?.content ?? []) {
+    if (part.type !== "tool_result") continue;
+    const card = state.cards.get(part.tool_use_id);
+    if (!card) continue;
+    settleToolResult(card, part, event);
+  }
+  updateWorking();
+}
+
+function resultStats(event) {
+  const bits = [];
+  const stamp = new Date(event.ts || Date.now());
+  const clock = stamp.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  bits.push(
+    stamp.toDateString() === new Date().toDateString()
+      ? clock
+      : `${stamp.toLocaleDateString([], { month: "short", day: "numeric" })} ${clock}`,
+  );
+  if (event.duration_ms) bits.push(`${(event.duration_ms / 1000).toFixed(1)}s`);
+  if (typeof event.total_cost_usd === "number") bits.push(`$${event.total_cost_usd.toFixed(4)}`);
+  // Claude CLI reports failed turns (expired login, API errors) as subtype "success" with is_error set.
+  if (event.is_error || (event.subtype && event.subtype !== "success"))
+    bits.push(event.subtype && event.subtype !== "success" ? event.subtype : "error");
+  return bits;
+}
+
+function onResult(event, ctx) {
+  dropLive("text");
+  dropLive("thinking");
+  state.live = null;
+  const bits = resultStats(event);
+  const last = (state.into || $("chat")).lastElementChild;
+  const row = last?.matches(".msg.asst") ? last.querySelector(".actions") : null;
+  const foot = el("span", "foot", bits.join(" · "));
+  if (row)
+    row.append(foot); // stats sit on the reply's action row
+  else push(el("div", "msg foot", bits.join(" · ")), ctx.live);
+  const thread = cur();
+  if (
+    event.is_error &&
+    thread?.provider === "claude" &&
+    CLAUDE_AUTH_FAILED.test(event.result || "")
+  )
+    (row ? foot : (state.into || $("chat")).lastElementChild).append(
+      " ",
+      signInButton(thread.claudeAccount || "sunny"),
+    );
+}
+
+function onSystemEvent(event) {
+  if (event.subtype?.startsWith("task_")) taskEvent(event);
+}
+
+function onToolUpdate(event) {
+  const card = state.cards.get(event.tool_use_id) ?? state.subTools.get(event.tool_use_id);
+  if (!card) return;
+  card.querySelector(".name").textContent = toolName(event.name, event.input);
+  const sumEl = card.querySelector(".sum");
+  sumEl.textContent = summarize(event.name, event.input);
+  if (!card.querySelector(".file-view")) sumEl.after(...fileView(event.name, event.input));
+  const summary = card.querySelector("summary") || card;
+  summary.title = summarize(event.name, event.input);
+  const body = card.querySelector(".body");
+  if (!body) return;
+  card.toolInput = { name: event.name, input: event.input };
+  if (!card.open) return;
+  body.replaceChildren(
+    ...toolBody(event.name, event.input).childNodes,
+    ...body.querySelectorAll(".tool-result"),
+  );
+  card.toolInput = null;
+}
+
+function onToolLabel(event) {
+  // The helper model's plain-English version of a command that came without a description; arrives a few seconds after the card
+  const sumEl = (
+    state.cards.get(event.tool_use_id) ?? state.subTools.get(event.tool_use_id)
+  )?.querySelector(".sum");
+  if (sumEl && !sumEl.classList.contains("human")) {
+    sumEl.textContent = event.label;
+    sumEl.classList.add("human");
+  }
+}
+
+function onAborted(_evt, ctx) {
+  state.live = null;
+  settleCompact("stopped");
+  push(el("div", "msg note", "Stopped."), ctx.live);
+}
+
+function onConsoleError(event, ctx) {
+  push(errBlock(event.text), ctx.live);
+}
+
+function onScheduleReport(event, ctx) {
+  push(schedules.reportCard(event), ctx.live);
+}
+
+function onRateLimitEvent(event, ctx) {
+  if (ctx.live) setUsage(event);
+}
+
+const EVENT_HANDLERS = {
+  __proto__: null,
+  question: onQuestionEvent,
+  question_answer: onQuestionAnswer,
+  command_status: onCommandStatus,
+  user_input: onUserInput,
+  stream_event: onStreamEvent,
+  assistant: onAssistant,
+  user: onUserEvent,
+  result: onResult,
+  system: onSystemEvent,
+  tool_update: onToolUpdate,
+  tool_label: onToolLabel,
+  aborted: onAborted,
+  console_error: onConsoleError,
+  schedule_report: onScheduleReport,
+  rate_limit_event: onRateLimitEvent,
+};
+
+function onEvent(event, live) {
   const prevTs = state.lastTs;
-  if (typeof e.ts === "number" && !e.parent_tool_use_id) state.lastTs = e.ts;
-  if (live && firstToken) watchFirstToken(e);
+  if (typeof event.ts === "number" && !event.parent_tool_use_id) state.lastTs = event.ts;
+  if (live && firstToken) watchFirstToken(event);
   // what a subagent says and does arrives with the id of the call that spawned it: it belongs inside that card, not in the main thread
   if (
-    e.parent_tool_use_id &&
-    (e.type === "assistant" || e.type === "user" || e.type === "stream_event")
+    event.parent_tool_use_id &&
+    (event.type === "assistant" || event.type === "user" || event.type === "stream_event")
   )
-    return subEvent(e, live);
-  switch (e.type) {
-    case "question":
-      push(questions.mount(state.current, e), live);
-      break;
-    case "question_answer": {
-      questions.receive(state.current, e);
-      const host = state.into || $("chat");
-      const exists = [...host.querySelectorAll(".question-card")].some(
-        (card) => card.dataset.questionId === e.id,
-      );
-      if (
-        !exists &&
-        ![...$("chat").querySelectorAll(".question-card")].some(
-          (card) => card.dataset.questionId === e.id,
-        )
-      )
-        push(questions.mount(state.current, e), live);
-      questions.refresh(host);
-      break;
-    }
-    case "command_status":
-      if (e.command === "compact") return void compactCard(e, live);
-      addNote(e.text, e.status === "failed" ? "errtxt" : "note command-note");
-      break;
-    case "user_input": {
-      if (e.questionAnswer) break; // The inline answered card already shows this async reply.
-      if (e.command) break; // /compact is shown as its progress card, not as a message bubble
-      if (e.auto === "brain") {
-        push(
-          el("div", "msg note", "Reminder sent: save anything durable to the shared brain."),
-          live,
-        );
-        break;
-      }
-      if (e.auto === "continue") {
-        push(
-          el(
-            "div",
-            "msg note",
-            "Auto-continued: the agent announced a next step without doing it.",
-          ),
-          live,
-        );
-        break;
-      }
-      if (e.auto === "subagent") {
-        push(
-          el("div", "msg note", "Background subagent finished. Its result was sent to the agent."),
-          live,
-        );
-        break;
-      }
-      const d = el("div", "msg user");
-      if (e.attachments?.length) d.append(...attachmentRows(e.attachments, live));
-      if (e.text?.trim()) {
-        const bubble = el("div", "bubble");
-        bubble.append(userText(e.text, e.attachments));
-        d.append(bubble);
-        if (e.delivery)
-          d.append(
-            el(
-              "div",
-              "delivery",
-              e.delivery === "steer" ? "Sent while the agent was working" : "Was queued",
-            ),
-          );
-        if (e.scheduled)
-          d.append(
-            el(
-              "div",
-              "delivery",
-              e.scheduled === "catch-up"
-                ? "Scheduled run · catch-up for a missed time"
-                : e.scheduled === "manual"
-                  ? "Scheduled task · run now"
-                  : "Scheduled run",
-            ),
-          );
-        d.append(copyActions(() => e.text));
-      }
-      push(d, live);
-      break;
-    }
-    case "stream_event": {
-      const ev = e.event;
-      if (!ev) break;
-      if (ev.type === "message_start") {
-        state.live = null;
-        state.thinkAt = null;
-      }
-      if (ev.type === "content_block_delta") {
-        if (ev.delta?.type === "text_delta") {
-          renderLive("text");
-          state.live.text += ev.delta.text;
-        } else if (ev.delta?.type === "thinking_delta") {
-          renderLive("thinking");
-          state.thinkAt ??= performance.now();
-          state.live.thinking += ev.delta.thinking;
-        }
-      }
-      break;
-    }
-    case "assistant":
-      for (const b of e.message?.content ?? []) {
-        if (b.type === "thinking" || b.type === "redacted_thinking") dropLive("thinking");
-        if (b.type === "text" && b.text?.trim()) {
-          dropLive("text");
-          dropLive("thinking");
-          push(asstMsg(b.text, true).root, live);
-        } else if (b.type === "thinking" && b.thinking?.trim()) {
-          dropLive("thinking");
-          const det = el("details", "msg think");
-          const sum = el("summary");
-          sum.append(icon("sparkle"), el("span", "", "Reasoning"));
-          if (live && state.thinkAt != null) sum.append(durChip(performance.now() - state.thinkAt));
-          else if (typeof e.ts === "number" && prevTs != null && e.ts >= prevTs)
-            sum.append(durChip(e.ts - prevTs));
-          state.thinkAt = null;
-          sum.append(icon("chev-right", "chev"));
-          det.append(sum, el("div", "think-body", b.thinking));
-          push(det, live);
-        } else if (b.type === "tool_use") {
-          dropLive("text");
-          dropLive("thinking");
-          if (isAgent(b.name)) {
-            const ac = agentCard(b);
-            state.cards.set(b.id, ac);
-            push(ac, live);
-            updateWorking();
-            continue;
-          }
-          const card = el("details", "msg card pending");
-          const sum = el("summary");
-          const tool = icon(TOOL_ICON[b.name] || "code", "tool");
-          const st = el("span", "st");
-          st.append(el("i", "spin"), el("span", "sr-only", "running"));
-          const why = describedAs(b.name, b.input);
-          sum.append(
-            tool,
-            el("span", "name", toolName(b.name, b.input)),
-            el("span", why ? "sum human" : "sum", why || summarize(b.name, b.input)),
-            ...fileView(b.name, b.input),
-            st,
-            icon("chev-right", "chev"),
-          );
-          sum.title = summarize(b.name, b.input);
-          card.toolInput = { name: b.name, input: b.input };
-          if (live) card.startedAt = performance.now();
-          else if (typeof e.ts === "number") card.startedTs = e.ts;
-          card.append(sum, el("div", "body")); // the open row wraps to show the whole label, so it is not repeated below
-          card.addEventListener("toggle", () => {
-            if (!card.open) return;
-            materializeTool(card);
-            for (const code of card.querySelectorAll("code[data-highlight-pending]")) {
-              highlightInto(code, code.textContent, code.dataset.highlightPending);
-              delete code.dataset.highlightPending;
-            }
-            fitOutputs(card);
-          });
-          state.cards.set(b.id, card);
-          push(card, live);
-        }
-      }
-      break;
-    case "user":
-      for (const c of e.message?.content ?? []) {
-        if (c.type !== "tool_result") continue;
-        const card = state.cards.get(c.tool_use_id);
-        if (!card) continue;
-        card.classList.remove("pending");
-        card.classList.add(c.is_error ? "err" : "done");
-        const st = card.querySelector(".st");
-        if (card.startedAt != null) st.before(durChip(performance.now() - card.startedAt));
-        else if (card.startedTs != null && typeof e.ts === "number" && e.ts >= card.startedTs)
-          st.before(durChip(e.ts - card.startedTs));
-        st.replaceChildren(
-          icon(c.is_error ? "x" : "check"),
-          el("span", "sr-only", c.is_error ? "error" : "done"),
-        );
-        const text =
-          typeof c.content === "string"
-            ? c.content
-            : (c.content ?? []).map((x) => x.text ?? "").join("\n");
-        // a background subagent's launch receipt is harness bookkeeping; its status chip and activity say the same
-        const launched =
-          card.classList.contains("agent") &&
-          (card.querySelector(".task-chip:not([hidden])") || /^Async agent launched/.test(text));
-        if (text && !launched) {
-          const out = toolOutput(text, !!c.is_error);
-          card.querySelector(".body").append(out);
-          if (card.open) fitOutput(out);
-        }
-      }
-      updateWorking();
-      break;
-    case "result": {
-      dropLive("text");
-      dropLive("thinking");
-      state.live = null;
-      const bits = [];
-      const at = new Date(e.ts || Date.now());
-      const clock = at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-      bits.push(
-        at.toDateString() === new Date().toDateString()
-          ? clock
-          : `${at.toLocaleDateString([], { month: "short", day: "numeric" })} ${clock}`,
-      );
-      if (e.duration_ms) bits.push(`${(e.duration_ms / 1000).toFixed(1)}s`);
-      if (typeof e.total_cost_usd === "number") bits.push(`$${e.total_cost_usd.toFixed(4)}`);
-      // Claude CLI reports failed turns (expired login, API errors) as subtype "success" with is_error set.
-      if (e.is_error || (e.subtype && e.subtype !== "success"))
-        bits.push(e.subtype && e.subtype !== "success" ? e.subtype : "error");
-      const last = (state.into || $("chat")).lastElementChild;
-      const row = last?.matches(".msg.asst") ? last.querySelector(".actions") : null;
-      const foot = el("span", "foot", bits.join(" · "));
-      if (row)
-        row.append(foot); // stats sit on the reply's action row
-      else push(el("div", "msg foot", bits.join(" · ")), live);
-      const t = cur();
-      if (e.is_error && t?.provider === "claude" && CLAUDE_AUTH_FAILED.test(e.result || ""))
-        (row ? foot : (state.into || $("chat")).lastElementChild).append(
-          " ",
-          signInButton(t.claudeAccount || "sunny"),
-        );
-      break;
-    }
-    case "system":
-      if (e.subtype?.startsWith("task_")) taskEvent(e);
-      break;
-    case "tool_update": {
-      const card = state.cards.get(e.tool_use_id) ?? state.subTools.get(e.tool_use_id);
-      if (!card) break;
-      card.querySelector(".name").textContent = toolName(e.name, e.input);
-      const sumEl = card.querySelector(".sum");
-      sumEl.textContent = summarize(e.name, e.input);
-      if (!card.querySelector(".file-view")) sumEl.after(...fileView(e.name, e.input));
-      const summary = card.querySelector("summary") || card;
-      summary.title = summarize(e.name, e.input);
-      const body = card.querySelector(".body");
-      if (body) {
-        card.toolInput = { name: e.name, input: e.input };
-        if (card.open) {
-          body.replaceChildren(
-            ...toolBody(e.name, e.input).childNodes,
-            ...body.querySelectorAll(".tool-result"),
-          );
-          card.toolInput = null;
-        }
-      }
-      break;
-    }
-    case "tool_label": {
-      // The helper model's plain-English version of a command that came without a description; arrives a few seconds after the card
-      const sumEl = (
-        state.cards.get(e.tool_use_id) ?? state.subTools.get(e.tool_use_id)
-      )?.querySelector(".sum");
-      if (sumEl && !sumEl.classList.contains("human")) {
-        sumEl.textContent = e.label;
-        sumEl.classList.add("human");
-      }
-      break;
-    }
-    case "aborted":
-      state.live = null;
-      settleCompact("stopped");
-      push(el("div", "msg note", "Stopped."), live);
-      break;
-    case "console_error":
-      push(errBlock(e.text), live);
-      break;
-    case "schedule_report":
-      push(schedules.reportCard(e), live);
-      break;
-    case "rate_limit_event":
-      if (live) setUsage(e);
-      break;
-  }
+    return subEvent(event, live);
+  return EVENT_HANDLERS[event.type]?.(event, { live, prevTs });
 }
 
 function meterColor(pct) {
