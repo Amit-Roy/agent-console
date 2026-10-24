@@ -57,6 +57,7 @@ import { headroom } from "./headroom.ts";
 import { hostKill, hostMetrics, hostPorts, hostProcessDetail, hostProcesses } from "./host.ts";
 import { hostDu, hostDuRescan, hostHistory, latestHost, startHostSampler } from "./host-history.ts";
 import { IdeaError, Ideas } from "./ideas.ts";
+import { type Downloaded, downloadInstagram, extractInstagramUrl, ShareError } from "./instagram.ts";
 import { createIssueDraft } from "./issue-draft.ts";
 import { createReviewer } from "./issue-review.ts";
 import { LatencyStore } from "./latency.ts";
@@ -73,7 +74,6 @@ import { Threads, turnTiming } from "./threads.ts";
 import { createTelemetryService } from "./token-telemetry.ts";
 import { startToolPriority } from "./tool-priority.ts";
 import { createToolWatch } from "./tool-watch.ts";
-import { downloadInstagram, extractInstagramUrl, ShareError } from "./instagram.ts";
 import {
   adoptUpload,
   isId,
@@ -759,7 +759,7 @@ app.post("/api/share/instagram", sameOrigin, express.json({ limit: "4kb" }), asy
   res.on("close", () => {
     if (!res.writableEnded) abort.abort();
   });
-  let download;
+  let download: Downloaded | undefined;
   try {
     download = await downloadInstagram(link, { signal: abort.signal });
     const thread = threads.create({
