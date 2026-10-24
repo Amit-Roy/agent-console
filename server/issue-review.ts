@@ -3,6 +3,7 @@ import path from "node:path";
 import type { EventLog } from "./automation/events.ts";
 import { DIRECT_REPOS, isProtected, mayMergeProtected } from "./automation/policy.ts";
 import {
+  boundIssueLine,
   pushPrompt,
   redoPrompt,
   reviewPrompt,
@@ -164,8 +165,8 @@ export function createReviewer(deps: ReviewDeps) {
           data: { thread: t.id },
         });
       const task = run.redoing
-        ? `Continue fixing the review findings on PR #${run.pr}. Read its comments first: gh pr view ${run.pr} --repo ${run.repo} --comments. Keep the same branch and PR; do not merge.`
-        : `Continue issue #${run.number} in ${run.repo}. Read it first: gh issue view ${run.number} --repo ${run.repo} --comments. Complete the task, verify it, push branch ${run.branch}, and open its PR into ${run.base ?? "main"}. Do not merge.`;
+        ? `Continue fixing the review findings on PR #${run.pr}. Read its comments first: gh pr view ${run.pr} --repo ${run.repo} --comments. Keep the same branch and PR; do not merge. ${boundIssueLine(run.repo, run.number)}`
+        : `Continue issue #${run.number} in ${run.repo}. Read it first: gh issue view ${run.number} --repo ${run.repo} --comments. Complete the task, verify it, push branch ${run.branch}, and open its PR into ${run.base ?? "main"}. Do not merge. ${boundIssueLine(run.repo, run.number)}`;
       deps.runner.send(
         t.id,
         `${task}\n\nThe previous turn stopped before completion. Inspect the existing diff and remote PR before acting; preserve completed work and do not repeat completed external actions. Follow the repository PR and self-review instructions. End with what changed, what you checked, and what remains.`,

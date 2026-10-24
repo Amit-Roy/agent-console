@@ -7,7 +7,7 @@ import { promisify } from "node:util";
 import { DATA_DIR } from "./auth.ts";
 import type { EventLog } from "./automation/events.ts";
 import { DIRECT_REPOS } from "./automation/policy.ts";
-import { selfReviewBlock, skillDir } from "./automation/review-prompts.ts";
+import { boundIssueLine, selfReviewBlock, skillDir } from "./automation/review-prompts.ts";
 import { route as routeWork } from "./automation/router.ts";
 import {
   EFFORT_LABELS,
@@ -156,7 +156,9 @@ export function plan(input: {
 }): Decision[] {
   const cfg = { ...DEFAULTS, ...input.cfg };
   const open = input.issues
-    .filter((i) => !input.done.has(issueKey(i)) && effortOf(i.labels))
+    .filter(
+      (i) => !input.done.has(issueKey(i)) && !i.labels.includes("manual") && effortOf(i.labels),
+    )
     .sort((a, b) => rank(a.labels) - rank(b.labels) || a.number - b.number);
   const room = new Map<string, { resetsAt: number; used: number; full: boolean; left: number }>();
   for (const p of ["claude", "codex"]) {
@@ -289,6 +291,7 @@ export function issuePrompt(d: Decision, branch: string, base: string): string {
   return [
     `Work GitHub issue ${issue.repo}#${issue.number}: ${issue.title}`,
     `Read it first: gh issue view ${issue.number} --repo ${issue.repo} --comments. The triage comment holds the book of work.`,
+    boundIssueLine(issue.repo, issue.number),
     `List every acceptance criterion from the issue and the triage comment. The job is done only when each acceptance criterion is met and checked with evidence (a test, command output, a measurement, or a screenshot). Do not stop at a partial slice.`,
     `If an acceptance criterion truly cannot be done in this run (it needs another repository, a manual human step, or a measurement only possible after deploy), open a follow-up issue for exactly that part with gh issue create --repo ${issue.repo} and link it, instead of leaving it silent.`,
     `You are in your own private Git checkout on branch ${branch} (from ${base}). Never touch the main checkout.`,

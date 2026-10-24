@@ -11,7 +11,7 @@ type AutoThread = {
   cwd: string;
   provider?: string;
   claudeAccount?: string;
-  issueRun?: { role: string };
+  issueRun?: { role: string; repo?: string; number?: number };
 };
 const launcher = fileURLToPath(new URL("../../scripts/auto-sandbox.py", import.meta.url));
 let capabilityChecked = false;
@@ -221,10 +221,45 @@ export function automationSandboxConfig(
   return { env: result, writable };
 }
 
+/**
+ * Auto runs are already tied to their issue (debug runs to none). Write the record bin/task-issue would write, from the
+ * host (the sandbox keeps ~/.local/state read-only), so task-issue-guard does not make the worker open another issue.
+ */
+export function bindTaskIssue(thread: AutoThread, env: NodeJS.ProcessEnv): void {
+  if (!automated(thread)) return;
+  if (!/^[a-zA-Z0-9_-]+$/.test(thread.id)) throw new Error("Invalid Auto thread ID.");
+  const { repo, number } = thread.issueRun ?? {};
+  if (typeof repo !== "string" || !repo || !Number.isInteger(number) || (number as number) < 0)
+    return;
+  // Debug runs (number 0) have no issue of their own; the run itself is the record, so they never open one.
+  const url = (number as number) > 0 ? `https://github.com/${repo}/issues/${number}` : "";
+  const state = env.XDG_STATE_HOME || path.join(os.homedir(), ".local", "state");
+  const dir = path.join(state, "task-issue");
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const record = {
+    repo,
+    url,
+    number,
+    title: "",
+    thread: thread.id,
+    created: Math.floor(Date.now() / 1000),
+    source: "auto",
+  };
+  try {
+    fs.writeFileSync(path.join(dir, `${thread.id}.json`), `${JSON.stringify(record)}\n`, {
+      flag: "wx",
+      mode: 0o600,
+    });
+  } catch (error: any) {
+    if (error.code !== "EEXIST") throw error;
+  }
+}
+
 /** Manual launches are untouched; all Auto roles use the kernel filesystem boundary. */
 export function launch(t: AutoThread, command: string, args: string[], env: NodeJS.ProcessEnv) {
   if (!automated(t)) return { command, args, env };
   assertAutomationSandbox(t);
+  bindTaskIssue(t, env);
   const config = automationSandboxConfig(
     { ...t, provider: t.provider ?? path.basename(command) },
     env,
