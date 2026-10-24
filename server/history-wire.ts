@@ -34,7 +34,7 @@ export function historyWireEvent(event: any) {
   switch (event.type) {
     case "assistant":
     case "user": {
-      const view = fields(event, ["type", "parent_tool_use_id"]);
+      const view = fields(event, ["type", "parent_tool_use_id", "ts"]); // ts: replayed rows show step durations
       if (event.message)
         view.message = {
           ...fields(event.message, ["role"]),
