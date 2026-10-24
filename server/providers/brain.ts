@@ -83,6 +83,7 @@ export function brainInstructions(): string {
     `Use the full CLI path ${BRAIN_BIN}; do not assume brain is on PATH.`,
     "Search existing pages first. Save only durable preferences, decisions, and non-obvious lessons; exclude code inventories, test status, and conversation dumps.",
     "Update flat wiki/<lowercase-kebab-slug>.md pages with required frontmatter and concise facts. Update wiki/index.md with one summary and explicit file reference per page.",
+    `Procedures and operating notes go in the ops/ layer. Tag every page with 1-8 atomic tags: run ${BRAIN_BIN} tags suggest for candidates, reuse existing tags before inventing one, and keep each tag a single concept.`,
     `Append the log using ${BRAIN_BIN} log, then run ${BRAIN_BIN} lint and fix findings before claiming the save is complete.`,
     "Never edit wiki/log.md by hand or run git in the brain repository. The console commits saved changes after each turn.",
     "Automatic recall below contains only the index. Open relevant referenced pages on demand.",

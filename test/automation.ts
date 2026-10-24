@@ -95,7 +95,10 @@ try {
     runs: () => [
       { thread: "T1", key: "o/r#2", role: "work", effort: "bau", state: "running", title: "r:2 x" },
     ],
-    schedules: () => [{ id: "s1", title: "Digest", schedule: "Daily 09:00", enabled: true }],
+    schedules: () => [
+      { id: "s1", title: "Digest", schedule: "Daily 09:00", enabled: true },
+      { id: "dream", title: "Dream: brain consolidation", schedule: "Daily 04:30", enabled: true },
+    ],
   });
   let snap = api.snapshot({});
   assert.equal(snap.v, 1);
@@ -120,8 +123,20 @@ try {
   assert.deepEqual([...placed].sort(), [...ids].sort(), "every step is drawn");
   assert.deepEqual(
     FLOW.pipelines.map((p) => p.id),
-    ["pr", "windows", "monitor", "cve", "runtime", "scans", "deadman"],
+    ["pr", "windows", "monitor", "dream", "cve", "runtime", "scans", "deadman"],
   );
+  const dream = FLOW.pipelines.find((p) => p.id === "dream")!;
+  assert.equal(dream.group, "workflow");
+  assert.equal(dream.icon, "database");
+  assert.deepEqual(
+    dream.phases.flatMap((ph) => ph.steps),
+    ["dream_gather", "dream_run", "dream_verify"],
+  );
+  assert.deepEqual(
+    FLOW.edges.filter((e) => e.from.startsWith("dream_")).map((e) => `${e.from}>${e.to}`),
+    ["dream_gather>dream_run", "dream_run>dream_verify"],
+  );
+  assert.equal(FLOW.nodes.find((n) => n.id === "dream_run")!.kind, "agent");
   assert.deepEqual(
     FLOW.pipelines.filter((p) => p.group === "security").map((p) => p.icon),
     ["shield", "eye", "scan", "activity"],
@@ -134,6 +149,10 @@ try {
     FLOW.edges.some((e) => e.from === "redo" && e.to === "review"),
     "redo loops back to review",
   );
+  // every step the server records by name is a real step: an unknown one throws, which once crashed a slow boot
+  const indexSource = fs.readFileSync(new URL("../server/index.ts", import.meta.url), "utf8");
+  for (const [, recorded] of indexSource.matchAll(/automationLog\.record\(\{\s*step:\s*"([^"]+)"/g))
+    assert.ok(ids.has(recorded as any), `server/index.ts records unknown step "${recorded}"`);
   // failures with step and (already redacted) message
   assert.equal(snap.failures[0].step, "worktree");
   assert.ok(!snap.failures[0].msg.includes("SEKRET"));
@@ -141,6 +160,12 @@ try {
   assert.ok(snap.triggers.some((t) => t.kind === "webhook"));
   assert.ok(snap.triggers.some((t) => t.kind === "timer" && /dispatch/i.test(t.label)));
   assert.ok(snap.triggers.some((t) => t.kind === "cron" && t.label === "Digest"));
+  assert.equal(
+    snap.triggers.find((t) => t.id === "cron-dream")!.pipeline,
+    "dream",
+    "the dream schedule belongs to the dream pipeline",
+  );
+  assert.equal(snap.triggers.find((t) => t.id === "cron-s1")!.pipeline, undefined);
   assert.equal(snap.hooks.length, 1);
   assert.equal(snap.runs[0].thread, "T1");
   assert.equal(snap.config.dispatch.dryRun, false);

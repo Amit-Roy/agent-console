@@ -372,6 +372,25 @@ export class SessionSearch {
     };
   }
 
+  /** Sessions whose log changed after `since` (epoch ms), newest first. Empty logs are left out. */
+  async recent(input: { since: number; limit?: number }) {
+    const since = Number(input?.since);
+    if (!Number.isFinite(since)) throw new Error("since must be a time in milliseconds.");
+    await this.sync();
+    return this.db
+      .prepare(
+        "SELECT thread AS id,provider,title,mtime,lines FROM sessions WHERE mtime>? AND lines>0 ORDER BY mtime DESC, thread LIMIT ?",
+      )
+      .all(since, bounded(input.limit, 50, 500))
+      .map((row) => ({
+        id: String(row.id),
+        provider: String(row.provider),
+        title: String(row.title),
+        mtime: Number(row.mtime),
+        lines: Number(row.lines),
+      }));
+  }
+
   /** PRs a session raised (by thread), or sessions that raised a PR (by `ref`: URL, `owner/repo#n` or number). */
   async prs(input: { thread?: string; ref?: string }) {
     await this.sync();

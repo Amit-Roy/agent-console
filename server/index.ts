@@ -35,6 +35,7 @@ import { createAutomationArchiver } from "./automation/archive.ts";
 import { canonicalIssue, createPremiumAssigner } from "./automation/assign.ts";
 import { watchClosed } from "./automation/closed-signal.ts";
 import { startDebug } from "./automation/debug.ts";
+import { createDream, DREAM_TASK_ID } from "./automation/dream.ts";
 import { createEventLog } from "./automation/events.ts";
 import { diagnoseJob, readJobError } from "./automation/job.ts";
 import { route as routeWork } from "./automation/router.ts";
@@ -70,6 +71,7 @@ import { createWorkspaceMonitor } from "./monitor-wire.ts";
 import { Notifications } from "./notifications.ts";
 import { researchToolText, runPiResearch } from "./pi-subagent-worker.ts";
 import { promptOverhead } from "./prompt-overhead.ts";
+import { BRAIN_BIN } from "./providers/brain.ts";
 import { claudeAccounts, claudeUsageKey } from "./providers/claude-accounts.ts";
 import { providerInfo, refreshPiModels } from "./providers/index.ts";
 import { describe, Schedules } from "./schedules.ts";
@@ -119,8 +121,7 @@ const boot = createBootTiming({
   onSlow: (r) => {
     const slowest = [...r.phases].sort((a, b) => b.ms - a.ms)[0]?.name;
     const msg = `slow boot: listening after ${r.totalMs} ms (limit 5000 ms); slowest phase ${slowest}`;
-    console.warn(msg);
-    automationLog.record({ step: "boot", kind: "info", msg, data: { phases: r.phases } });
+    console.warn(msg); // not an automation step: recording one under an unknown id throws and would crash a slow boot
   },
 });
 boot.mark("modules");
@@ -171,6 +172,24 @@ startToolPriority(); // tool commands below agents and this server: busy tests n
 // Every automation stage writes here; the dashboard reads it. A previous process's unfinished runs are closed as abandoned.
 const automationLog = createEventLog({ file: path.join(DATA_DIR, "automation-events.jsonl") });
 automationLog.recoverOpenRuns();
+// Nightly brain consolidation: the server gathers its signal file before the run and verifies what the agent changed after it
+const dream = createDream({
+  brainRoot: path.dirname(path.dirname(BRAIN_BIN)),
+  brainBin: BRAIN_BIN,
+  dataDir: DATA_DIR,
+  sessions: sessionSearch,
+  events: automationLog,
+});
+schedules.onRunStart = (task, run) =>
+  task.id === DREAM_TASK_ID ? dream.onRunStart(task, run) : undefined;
+schedules.onRunEnd = (task, run) => {
+  if (task.id === DREAM_TASK_ID) dream.onRunEnd(task, run);
+};
+try {
+  schedules.ensureTask(DREAM_TASK_ID, dream.spec);
+} catch (err: any) {
+  console.warn(`The dream task could not be created: ${err?.message || err}`);
+}
 boot.mark("threads-and-log");
 workspaceMonitor = createWorkspaceMonitor({
   dataDir: DATA_DIR,

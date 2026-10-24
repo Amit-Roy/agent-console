@@ -174,6 +174,33 @@ try {
     (await search.search({ query: "zebra" })).results.every((r) => r.thread !== "claude-one"),
     "deleted sessions excluded even when log remains",
   );
+  // recent(): sessions changed after a time, newest first, empty logs left out
+  threads.push(
+    { id: "old-one", provider: "claude", title: "Old work" },
+    { id: "new-one", provider: "pi", title: "New work" },
+  );
+  catalog();
+  write("old-one", [user("oldtopic"), assistant("done")]);
+  write("new-one", [user("newtopic"), assistant("done"), assistant("more")]);
+  fs.utimesSync(file("old-one"), 1_000, 1_000);
+  fs.utimesSync(file("new-one"), 3_000, 3_000);
+  fs.utimesSync(file("codex-one"), 2_000, 2_000);
+  const recent = await search.recent({ since: 1_500_000 });
+  assert.deepEqual(
+    recent.map((r) => r.id),
+    ["new-one", "codex-one"],
+    "newest first, nothing at or before since, empty log excluded",
+  );
+  assert.deepEqual(recent[0], {
+    id: "new-one",
+    provider: "pi",
+    title: "New work",
+    mtime: 3_000_000,
+    lines: 3,
+  });
+  assert.equal((await search.recent({ since: 0, limit: 1 })).length, 1);
+  await assert.rejects(search.recent({ since: Number.NaN }), /since/);
+  console.log("session-search: recent() orders by mtime, honors since and limit");
   console.log(
     "session-search: BM25 ranking, all providers, archived sessions, freshness, bounds, and malformed input passed",
   );

@@ -32,7 +32,10 @@ export type StepId =
   | "osv_check"
   | "report"
   | "heartbeat"
-  | "status_check";
+  | "status_check"
+  | "dream_gather"
+  | "dream_run"
+  | "dream_verify";
 export type StepState = "idle" | "active" | "ok" | "failed" | "abandoned" | "disabled";
 export type EventKind = "start" | "ok" | "fail" | "info" | "abandoned";
 
@@ -260,6 +263,27 @@ export const FLOW: { nodes: FlowNode[]; edges: FlowEdge[]; pipelines: Pipeline[]
       kind: "decision",
       hint: "One failed or overdue unit turns the check red and raises the owner alert",
     },
+    {
+      id: "dream_gather",
+      label: "Gather signal",
+      icon: "database",
+      kind: "action",
+      hint: "Server writes one signal file: sessions, brain log entries, commits and brain lint since the last good dream",
+    },
+    {
+      id: "dream_run",
+      label: "Dream agent",
+      icon: "bot",
+      kind: "agent",
+      hint: "Claude Sonnet consolidates the brain from the signal file. Up to 90 minutes, nobody watching",
+    },
+    {
+      id: "dream_verify",
+      label: "Verify changes",
+      icon: "check",
+      kind: "gate",
+      hint: "brain lint must pass and only wiki/, ops/ and tags/ may change; the cost, tokens and pages changed are recorded",
+    },
   ],
   edges: [
     { from: "triage", to: "dispatcher" },
@@ -290,6 +314,8 @@ export const FLOW: { nodes: FlowNode[]; edges: FlowEdge[]; pipelines: Pipeline[]
     { from: "report", to: "transport", label: "needs attention" },
     { from: "heartbeat", to: "status_check", label: "unit missed" },
     { from: "status_check", to: "transport", label: "failed or overdue" },
+    { from: "dream_gather", to: "dream_run", label: "signal file written" },
+    { from: "dream_run", to: "dream_verify", label: "run ended" },
   ],
   pipelines: [
     {
@@ -331,6 +357,18 @@ export const FLOW: { nodes: FlowNode[]; edges: FlowEdge[]; pipelines: Pipeline[]
       phases: [
         { label: "Signals to alerts", steps: ["monitor"] },
         { label: "Escalation chain", steps: ["escalate"] },
+      ],
+    },
+    {
+      id: "dream",
+      label: "Dream",
+      group: "workflow",
+      icon: "database",
+      hint: "Nightly 04:30: an agent consolidates the shared brain, and the server checks what it changed",
+      phases: [
+        { label: "Signal", steps: ["dream_gather"] },
+        { label: "Consolidate", steps: ["dream_run"] },
+        { label: "Check", steps: ["dream_verify"] },
       ],
     },
     {

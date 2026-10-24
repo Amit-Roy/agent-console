@@ -56,6 +56,14 @@ try {
   );
   assert.ok(instructions.includes("wiki/index.md"));
   assert.ok(instructions.includes("required frontmatter"));
+  assert.ok(instructions.includes("ops/ layer"), "the save text names the ops layer");
+  assert.ok(
+    instructions.includes(`${process.env.AGENT_CONSOLE_BRAIN} tags suggest`),
+    "the save text points to tag suggestions with the full CLI path",
+  );
+  assert.ok(
+    instructions.includes("reuse existing tags") && instructions.includes("1-8 atomic tags"),
+  );
   assert.ok(instructions.includes("Never edit wiki/log.md by hand or run git"));
   console.log("PASS  brain: cached while the index is unchanged");
 
