@@ -26,6 +26,7 @@ export interface Run {
   reason?: string; // why it was skipped or failed
   ms?: number;
   cost?: number;
+  tokens?: { input: number; output: number; cached: number }; // the thread's last turn, when the agent reported usage
   output?: { path: string; commit?: string };
 }
 
@@ -44,6 +45,8 @@ export interface Task {
   tz: string;
   enabled: boolean;
   saveOutput: boolean;
+  builtin?: boolean; // made by ensureTask: deleting it leaves a tombstone so it is not made again
+  limitMin?: number; // this task's own run limit in minutes, instead of RUN_LIMIT_MS
   createdAt: number;
   updatedAt: number;
   nextRunAt?: number;
@@ -65,11 +68,13 @@ export type TaskInput = Partial<
     | "tz"
     | "enabled"
     | "saveOutput"
+    | "limitMin"
   >
 > & { day?: number | string };
 
 const CATCH_UP_MS = 7 * 86_400_000;
 const MAX_SKIPPED = 20;
+const MAX_LIMIT_MIN = 24 * 60;
 const RUN_LIMIT_MS = 45 * 60_000; // a run that has not ended its turn by then is hung (e.g. a tool call that never returns)
 
 export function cronPattern(t: Pick<Task, "repeat" | "time" | "day">): string | null {
@@ -103,6 +108,21 @@ export const slug = (s: string) =>
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-|-$/g, "")
     .slice(0, 48) || "task";
+
+// A positive whole number of minutes, at most a day; anything else means "use the default limit"
+function limitField(minutes: unknown): { limitMin?: number } {
+  const n = Math.floor(Number(minutes));
+  return n >= 1 && n <= MAX_LIMIT_MIN ? { limitMin: n } : {};
+}
+
+function tokensOf(last: Thread["lastRun"]): Run["tokens"] {
+  const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
+  const input = num(last?.input_tokens),
+    output = num(last?.output_tokens),
+    cached = num(last?.cached_input_tokens);
+  if (input === undefined && output === undefined && cached === undefined) return undefined;
+  return { input: input ?? 0, output: output ?? 0, cached: cached ?? 0 };
+}
 
 function validZone(tz: unknown): string | undefined {
   if (typeof tz !== "string" || !tz) return undefined;
@@ -161,6 +181,7 @@ type Emit = (msg: unknown) => void;
 
 export class Schedules {
   private tasks = new Map<string, Task>();
+  private removedBuiltins = new Set<string>(); // ids of built-in tasks the user deleted
   private crons = new Map<string, Cron>();
   private tz: string; // the zone the user last scheduled in: the default for tasks agents create
   private file: string;
@@ -169,6 +190,10 @@ export class Schedules {
   private emit: Emit;
   private limit: number;
   private watchdogs = new Map<string, NodeJS.Timeout>(); // run id -> timer
+  /** Called before a run's thread is created. If it throws or its promise rejects, the run fails and nothing starts. */
+  onRunStart?: (task: Task, run: Run) => void | Promise<void>;
+  /** Called once a run has finished (done, failed or stopped), after its cost and tokens are recorded. A throw is ignored. */
+  onRunEnd?: (task: Task, run: Run) => void;
 
   constructor(
     threads: Threads,
@@ -187,6 +212,7 @@ export class Schedules {
     try {
       const saved = JSON.parse(fs.readFileSync(this.file, "utf8"));
       this.tz = validZone(saved.tz) ?? this.tz;
+      for (const id of saved.removedBuiltins ?? []) this.removedBuiltins.add(String(id));
       for (const t of saved.tasks ?? []) {
         // nothing survives a restart: a run still marked running lost its turn with the old process
         for (const r of t.runs ?? [])
@@ -213,9 +239,17 @@ export class Schedules {
   }
 
   private persist() {
-    fs.writeFileSync(this.file, JSON.stringify({ tz: this.tz, tasks: this.list() }, null, 1), {
-      mode: 0o600,
-    });
+    fs.writeFileSync(
+      this.file,
+      JSON.stringify(
+        { tz: this.tz, tasks: this.list(), removedBuiltins: [...this.removedBuiltins] },
+        null,
+        1,
+      ),
+      {
+        mode: 0o600,
+      },
+    );
   }
   private changed() {
     this.persist();
@@ -319,13 +353,14 @@ export class Schedules {
       tz,
       enabled: input.enabled ?? base?.enabled ?? true,
       saveOutput: input.saveOutput ?? base?.saveOutput ?? true,
+      ...limitField(input.limitMin ?? base?.limitMin),
     };
   }
 
-  create(input: TaskInput): Task {
+  create(input: TaskInput, id: string = crypto.randomUUID()): Task {
     const now = Date.now();
     const t: Task = {
-      id: crypto.randomUUID(),
+      id,
       ...this.validate(input),
       createdAt: now,
       updatedAt: now,
@@ -336,6 +371,19 @@ export class Schedules {
     this.arm(t);
     this.changed();
     return t;
+  }
+
+  /** A built-in task under a fixed id: created once, never touched again, so the user's edits and run history survive a restart.
+   *  createdAt is now, so catch-up does not run it for a time that passed before it existed.
+   *  A built-in the user deleted stays deleted (undefined); disabling it is the way to keep it around. */
+  ensureTask(id: string, input: TaskInput): Task | undefined {
+    const existing = this.tasks.get(id);
+    if (existing) return existing;
+    if (this.removedBuiltins.has(id)) return undefined;
+    const made = this.create(input, id);
+    made.builtin = true;
+    this.changed();
+    return made;
   }
 
   update(id: string, input: TaskInput): Task {
@@ -355,6 +403,7 @@ export class Schedules {
     this.crons.get(id)?.stop();
     this.crons.delete(id);
     this.tasks.delete(id);
+    if (t.builtin) this.removedBuiltins.add(id);
     for (const r of t.runs)
       if (r.thread && this.threads.get(r.thread)) {
         try {
@@ -370,7 +419,8 @@ export class Schedules {
     if (!t) throw new Error("Unknown scheduled task.");
     const now = Date.now();
     const busy = t.runs.find(
-      (r) => r.status === "running" && r.thread && this.threads.get(r.thread)?.status === "running",
+      (r) =>
+        r.status === "running" && (!r.thread || this.threads.get(r.thread)?.status === "running"), // no thread yet: still preparing
     );
     if (busy) {
       const run: Run = {
@@ -386,9 +436,36 @@ export class Schedules {
       this.changed();
       return run;
     }
-    const when = localParts(now, t.tz);
     const run: Run = { id: crypto.randomUUID(), at: now, trigger, status: "running" };
     t.runs.push(run);
+    let before: void | Promise<void>;
+    try {
+      before = this.onRunStart?.(t, run);
+    } catch (e: any) {
+      this.startFailed(t, run, e, false);
+      return run;
+    }
+    if (before && typeof before.then === "function") {
+      before.then(
+        () => this.launch(t, run),
+        (e: any) => this.startFailed(t, run, e, false),
+      );
+      this.changed(); // shown as running while the hook prepares
+    } else this.launch(t, run);
+    return run;
+  }
+
+  private startFailed(t: Task, run: Run, e: any, hooked: boolean) {
+    run.status = "failed";
+    run.reason = e?.message || "The run could not start.";
+    run.ms = Date.now() - run.at;
+    if (hooked) this.runEnded(t, run);
+    this.changed();
+  }
+
+  // The run's thread: created and sent the prompt
+  private launch(t: Task, run: Run) {
+    const when = localParts(run.at, t.tz);
     try {
       const thread = this.threads.create({
         provider: t.provider,
@@ -403,15 +480,12 @@ export class Schedules {
       this.changed();
       this.watch(t, run);
       this.threads.send(thread.id, t.prompt, {
-        instructions: this.instructions(t, trigger, when),
-        scheduled: trigger,
+        instructions: this.instructions(t, run.trigger, when),
+        scheduled: run.trigger,
       });
     } catch (e: any) {
-      run.status = "failed";
-      run.reason = e?.message || "The run could not start.";
-      this.changed();
+      this.startFailed(t, run, e, true);
     }
-    return run;
   }
 
   // Weaker models need the playbook spelled out: where the last report is, how to research, where output goes.
@@ -435,6 +509,12 @@ export class Schedules {
     );
   }
 
+  private runEnded(task: Task, run: Run) {
+    try {
+      this.onRunEnd?.(task, run);
+    } catch {}
+  }
+
   private findRun(thread: string): { task: Task; run: Run } | undefined {
     const tag = this.threads.get(thread)?.schedule;
     const task = tag && this.tasks.get(tag.task);
@@ -444,6 +524,7 @@ export class Schedules {
 
   // A hung tool call never yields a result, so turnEnded never fires. Past the limit, stop the thread and fail the run.
   private watch(task: Task, run: Run) {
+    const limit = task.limitMin ? task.limitMin * 60_000 : this.limit;
     const timer = setTimeout(() => {
       this.watchdogs.delete(run.id);
       if (run.status !== "running" || !run.thread) return;
@@ -451,8 +532,9 @@ export class Schedules {
         this.threads.abort(run.thread);
       } catch {}
       run.status = "failed";
-      run.reason = `The run was stopped after ${Math.round(this.limit / 60_000)} minutes without finishing.`;
+      run.reason = `The run was stopped after ${Math.round(limit / 60_000)} minutes without finishing.`;
       run.ms = Date.now() - run.at;
+      this.runEnded(task, run);
       this.changed();
       this.threads.note(run.thread, {
         type: "schedule_report",
@@ -461,7 +543,7 @@ export class Schedules {
         run: { ...run },
         ts: Date.now(),
       });
-    }, this.limit);
+    }, limit);
     timer.unref();
     this.watchdogs.set(run.id, timer);
   }
@@ -476,6 +558,7 @@ export class Schedules {
     if (ev.is_error) run.reason = "The agent ended the run with an error.";
     run.ms = Date.now() - run.at;
     run.cost = t.costMeasured ? t.cost : undefined;
+    run.tokens = tokensOf(t.lastRun);
     if (!run.output && task.saveOutput && !ev.is_error) {
       const text = finalText(this.threads.history(t.id) as any[]);
       if (text)
@@ -485,6 +568,7 @@ export class Schedules {
           run.reason = `The report could not be saved: ${e?.message || e}`;
         }
     }
+    this.runEnded(task, run);
     this.changed();
     this.threads.note(t.id, {
       type: "schedule_report",

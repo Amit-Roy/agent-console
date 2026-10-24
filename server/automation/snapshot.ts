@@ -16,6 +16,7 @@ import {
   type Trigger,
   VERSION,
 } from "./contracts.ts";
+import { DREAM_TASK_ID } from "./dream.ts";
 import { type EventLog, STALE_RUN_MS } from "./events.ts";
 
 const DAY = 86_400_000;
@@ -162,6 +163,7 @@ export function automationApi(deps: ApiDeps) {
           label: s.title,
           detail: s.schedule,
           enabled: s.enabled,
+          ...(s.id === DREAM_TASK_ID ? { pipeline: "dream", lastAt: lastOf("dream_run") } : {}),
         }),
       ),
       {
