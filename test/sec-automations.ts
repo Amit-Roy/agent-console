@@ -63,7 +63,10 @@ function make(answers: (() => unknown)[], bridge = BRIDGE) {
   );
   assert.equal(v.rows[0]!.runnable, "quick-scan");
   assert.equal(v.rows[1]!.runnable, "tool-watch");
-  assert.equal(v.rows.find((r) => r.id === "opencve-sync")!.link, "https://vps.example.ts.net:8443");
+  assert.equal(
+    v.rows.find((r) => r.id === "opencve-sync")!.link,
+    "https://vps.example.ts.net:8443",
+  );
 }
 
 // amber: more than 1.5 periods since the last run
