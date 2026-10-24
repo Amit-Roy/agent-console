@@ -102,29 +102,70 @@ export function genuineNativeRequest(content: unknown): string | undefined {
   return joined || undefined;
 }
 
+function readDirectory(directory: string): fs.Dirent[] | undefined {
+  try {
+    return fs.readdirSync(directory, { withFileTypes: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw Error("directory-unreadable");
+  }
+}
+function walkDirectory(directory: string, depth: number, files: string[], limit: number) {
+  if (depth > 16) throw Error("directory-depth-limit");
+  const entries = readDirectory(directory);
+  if (!entries) return;
+  for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+    const file = path.join(directory, entry.name);
+    if (entry.isDirectory()) walkDirectory(file, depth + 1, files, limit);
+    else if (entry.isFile() && entry.name.endsWith(".jsonl")) {
+      files.push(file);
+      if (files.length > limit) throw Error("file-count-limit");
+    }
+  }
+}
 function listFiles(root: string, limit: number): string[] {
   const files: string[] = [];
-  const walk = (directory: string, depth: number) => {
-    if (depth > 16) throw Error("directory-depth-limit");
-    let entries: fs.Dirent[];
-    try {
-      entries = fs.readdirSync(directory, { withFileTypes: true });
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
-      throw Error("directory-unreadable");
-    }
-    for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
-      const file = path.join(directory, entry.name);
-      if (entry.isDirectory()) walk(file, depth + 1);
-      else if (entry.isFile() && entry.name.endsWith(".jsonl")) {
-        files.push(file);
-        if (files.length > limit) throw Error("file-count-limit");
-      }
-    }
-  };
   if (fs.existsSync(root) && fs.lstatSync(root).isSymbolicLink()) throw Error("symlink-root");
-  walk(root, 0);
+  walkDirectory(root, 0, files, limit);
   return files;
+}
+function readDescriptor(descriptor: number, maxBytes: number) {
+  const before = fs.fstatSync(descriptor);
+  if (!before.isFile() || before.size > maxBytes) throw Error("file-size-limit");
+  const buffer = Buffer.alloc(before.size + 1);
+  let length = 0;
+  while (length < buffer.length) {
+    const bytes = fs.readSync(descriptor, buffer, length, buffer.length - length, null);
+    if (!bytes) break;
+    length += bytes;
+  }
+  const after = fs.fstatSync(descriptor);
+  if (
+    length !== before.size ||
+    before.size !== after.size ||
+    before.mtimeMs !== after.mtimeMs ||
+    before.ctimeMs !== after.ctimeMs
+  )
+    throw Error("file-changed-during-read");
+  const raw = buffer.subarray(0, length).toString("utf8");
+  if (!Buffer.from(raw).equals(buffer.subarray(0, length))) throw Error("invalid-encoding");
+  return raw;
+}
+function parseJsonlRows(raw: string): Row[] {
+  const rows: Row[] = [];
+  for (const line of raw.split("\n")) {
+    if (!line.trim()) continue;
+    let row: any;
+    try {
+      row = JSON.parse(line);
+    } catch {
+      throw Error("malformed-jsonl");
+    }
+    if (!row || typeof row !== "object" || Array.isArray(row)) throw Error("malformed-jsonl");
+    rows.push(row);
+    if (rows.length > 250_000) throw Error("record-count-limit");
+  }
+  return rows;
 }
 function readRows(file: string, maxBytes: number): Row[] {
   let fd: number | undefined;
@@ -133,39 +174,7 @@ function readRows(file: string, maxBytes: number): Row[] {
       file,
       fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK,
     );
-    const before = fs.fstatSync(fd);
-    if (!before.isFile() || before.size > maxBytes) throw Error("file-size-limit");
-    const buffer = Buffer.alloc(before.size + 1);
-    let length = 0;
-    while (length < buffer.length) {
-      const bytes = fs.readSync(fd, buffer, length, buffer.length - length, null);
-      if (!bytes) break;
-      length += bytes;
-    }
-    const after = fs.fstatSync(fd);
-    if (
-      length !== before.size ||
-      before.size !== after.size ||
-      before.mtimeMs !== after.mtimeMs ||
-      before.ctimeMs !== after.ctimeMs
-    )
-      throw Error("file-changed-during-read");
-    const raw = buffer.subarray(0, length).toString("utf8");
-    if (!Buffer.from(raw).equals(buffer.subarray(0, length))) throw Error("invalid-encoding");
-    const rows: Row[] = [];
-    for (const line of raw.split("\n")) {
-      if (!line.trim()) continue;
-      let row: any;
-      try {
-        row = JSON.parse(line);
-      } catch {
-        throw Error("malformed-jsonl");
-      }
-      if (!row || typeof row !== "object" || Array.isArray(row)) throw Error("malformed-jsonl");
-      rows.push(row);
-      if (rows.length > 250_000) throw Error("record-count-limit");
-    }
-    return rows;
+    return parseJsonlRows(readDescriptor(fd, maxBytes));
   } finally {
     if (fd !== undefined) fs.closeSync(fd);
   }
@@ -238,6 +247,58 @@ function claudeUsage(usage: any): Usage | undefined {
     fresh: usage.input_tokens + usage.cache_creation_input_tokens,
   };
 }
+interface ClaudeState {
+  result: Parsed;
+  usages: Map<string, Usage>;
+  missingIds: Set<string>;
+  toolRounds: Set<string>;
+}
+function claudeMessageId(message: any, row: Row): string | undefined {
+  if (idText(message.id)) return message.id;
+  return idText(row.requestId) ? row.requestId : undefined;
+}
+function recordClaudeUsage(state: ClaudeState, messageId: string | undefined, usage?: Usage) {
+  const { result, usages, missingIds } = state;
+  if (messageId && usage) {
+    if (usages.has(messageId)) result.duplicateUsageRecords++;
+    usages.set(messageId, mergeHighwater(usages.get(messageId), usage));
+    missingIds.delete(messageId);
+    return;
+  }
+  if (messageId) {
+    if (!usages.has(messageId)) missingIds.add(messageId);
+    return;
+  }
+  if (usage) result.missingUsage = true;
+}
+function recordClaudeToolUses(state: ClaudeState, message: any, messageId?: string) {
+  for (const block of Array.isArray(message.content) ? message.content : [])
+    if (block?.type === "tool_use" && idText(block.id)) {
+      state.result.calls.add(block.id);
+      if (messageId) state.toolRounds.add(messageId);
+    }
+}
+function handleClaudeAssistant(state: ClaudeState, row: Row, message: any) {
+  const messageId = claudeMessageId(message, row);
+  recordClaudeUsage(state, messageId, claudeUsage(message.usage));
+  recordClaudeToolUses(state, message, messageId);
+  if (["end_turn", "stop_sequence"].includes(message.stop_reason))
+    state.result.terminalStatus = "turn-finished";
+  else if (message.stop_reason === "tool_use")
+    state.result.terminalStatus = "inactive-after-tool-call";
+}
+function handleClaudeRow(state: ClaudeState, row: Row) {
+  const { result } = state;
+  const message = row.message;
+  if (row.type === "user" && !row.isMeta && row.promptSource !== "system" && !result.request)
+    result.request = genuineNativeRequest(message?.content);
+  if (row.type === "assistant" && message?.role === "assistant")
+    handleClaudeAssistant(state, row, message);
+  if (row.type === "system" && row.subtype === "api_error")
+    result.terminalStatus = "observed-error";
+  if (row.type === "user" && !row.isMeta && genuineNativeRequest(message?.content))
+    result.terminalStatus = "inactive-after-user";
+}
 function parseClaude(file: string, rows: Row[]): Parsed {
   const sessionIds = rows.map((row) => row.sessionId).filter(idText);
   const filenameId = path.basename(file, ".jsonl");
@@ -249,9 +310,12 @@ function parseClaude(file: string, rows: Row[]): Parsed {
     result.parent = parentMatch[1];
     result.id = path.basename(file, ".jsonl");
   }
-  const usages = new Map<string, Usage>();
-  const missingIds = new Set<string>();
-  const toolRounds = new Set<string>();
+  const state: ClaudeState = {
+    result,
+    usages: new Map<string, Usage>(),
+    missingIds: new Set<string>(),
+    toolRounds: new Set<string>(),
+  };
   for (const row of rows) {
     if (!result.child && idText(row.sessionId) && row.sessionId !== id) {
       // Copied native fork history is provenance, not a new API request.
@@ -259,40 +323,11 @@ function parseClaude(file: string, rows: Row[]): Parsed {
       result.copiedRows++;
       continue;
     }
-    const message = row.message;
-    if (row.type === "user" && !row.isMeta && row.promptSource !== "system" && !result.request)
-      result.request = genuineNativeRequest(message?.content);
-    if (row.type === "assistant" && message?.role === "assistant") {
-      const messageId = idText(message.id)
-        ? message.id
-        : idText(row.requestId)
-          ? row.requestId
-          : undefined;
-      const usage = claudeUsage(message.usage);
-      if (messageId && usage) {
-        if (usages.has(messageId)) result.duplicateUsageRecords++;
-        usages.set(messageId, mergeHighwater(usages.get(messageId), usage));
-        missingIds.delete(messageId);
-      } else if (messageId && !usages.has(messageId)) missingIds.add(messageId);
-      else if (!messageId && usage) result.missingUsage = true;
-      for (const block of Array.isArray(message.content) ? message.content : [])
-        if (block?.type === "tool_use" && idText(block.id)) {
-          result.calls.add(block.id);
-          if (messageId) toolRounds.add(messageId);
-        }
-      if (["end_turn", "stop_sequence"].includes(message.stop_reason))
-        result.terminalStatus = "turn-finished";
-      else if (message.stop_reason === "tool_use")
-        result.terminalStatus = "inactive-after-tool-call";
-    }
-    if (row.type === "system" && row.subtype === "api_error")
-      result.terminalStatus = "observed-error";
-    if (row.type === "user" && !row.isMeta && genuineNativeRequest(message?.content))
-      result.terminalStatus = "inactive-after-user";
+    handleClaudeRow(state, row);
   }
-  applyUsage(result, usages.entries());
-  result.rounds = toolRounds.size;
-  result.missingUsage ||= missingIds.size > 0;
+  applyUsage(result, state.usages.entries());
+  result.rounds = state.toolRounds.size;
+  result.missingUsage ||= state.missingIds.size > 0;
   return result;
 }
 function codexUsage(usage: any): Usage | undefined {
@@ -308,12 +343,83 @@ function codexUsage(usage: any): Usage | undefined {
     fresh: cached === null ? null : usage.input_tokens - cached,
   };
 }
-function parseCodex(file: string, rows: Row[]): Parsed {
+interface CodexState {
+  result: Parsed;
+  sessionId: string;
+  usages: Map<string, Usage>;
+  fallback: Usage[];
+  previous: Usage | undefined;
+}
+function codexMeta(file: string, rows: Row[]): Row {
   const metadata = rows.filter((row) => row.type === "session_meta");
-  const meta =
+  return (
     metadata.find(
       (row) => idText(row.payload?.id) && path.basename(file).includes(row.payload.id),
-    ) ?? metadata.at(-1);
+    ) ?? metadata.at(-1)!
+  );
+}
+function recordCodexUsage(state: CodexState, payload: any) {
+  const { result, usages } = state;
+  // Fork logs may contain cloned parent records. Thread attribution is mandatory.
+  if (payload.thread_id !== state.sessionId) {
+    result.copiedRows++;
+    return;
+  }
+  const usage = codexUsage(payload.usage);
+  if (!usage || !idText(payload.response_id)) {
+    result.missingUsage = true;
+    return;
+  }
+  if (usages.has(payload.response_id)) result.duplicateUsageRecords++;
+  usages.set(payload.response_id, mergeHighwater(usages.get(payload.response_id), usage));
+}
+function recordCodexResponse(result: Parsed, payload: any) {
+  if (payload.type === "message" && payload.role === "user" && !result.request)
+    result.request = genuineNativeRequest(payload.content);
+  if (
+    ["function_call", "custom_tool_call"].includes(payload.type) &&
+    idText(payload.call_id ?? payload.id)
+  )
+    result.calls.add(payload.call_id ?? payload.id);
+}
+function cumulativeDelta(total: Usage, previous: Usage | undefined): Usage {
+  const reset = previous && (total.input < previous.input || total.output < previous.output);
+  const carry = !reset && previous ? previous : undefined;
+  return {
+    input: total.input - (carry ? carry.input : 0),
+    output: total.output - (carry ? carry.output : 0),
+    cache:
+      total.cache === null || (previous && previous.cache === null)
+        ? null
+        : Math.max(0, total.cache - (carry ? carry.cache! : 0)),
+    fresh:
+      total.fresh === null || (previous && previous.fresh === null)
+        ? null
+        : Math.max(0, total.fresh - (carry ? carry.fresh! : 0)),
+  };
+}
+function recordCodexEvent(state: CodexState, payload: any) {
+  const { result } = state;
+  if (["task_complete", "turn_complete"].includes(payload.type))
+    result.terminalStatus = "turn-finished";
+  if (["turn_aborted", "task_aborted"].includes(payload.type))
+    result.terminalStatus = "observed-interruption";
+  if (payload.type === "task_started") result.terminalStatus = "inactive-unfinished-turn";
+  if (payload.type !== "token_count") return;
+  const total = codexUsage(payload.info?.total_token_usage);
+  if (!total) return;
+  state.fallback.push(cumulativeDelta(total, state.previous));
+  state.previous = total;
+}
+function handleCodexRow(state: CodexState, row: Row) {
+  const payload = row.payload;
+  if (!payload || typeof payload !== "object") return;
+  if (row.type === "token_usage_record") recordCodexUsage(state, payload);
+  else if (row.type === "response_item") recordCodexResponse(state.result, payload);
+  else if (row.type === "event_msg") recordCodexEvent(state, payload);
+}
+function parseCodex(file: string, rows: Row[]): Parsed {
+  const meta = codexMeta(file, rows);
   const id = meta?.payload?.id;
   if (!idText(id)) throw Error("missing-session-id");
   const result = base("codex", id, rows);
@@ -322,66 +428,15 @@ function parseCodex(file: string, rows: Row[]): Parsed {
   const parent = source?.subagent?.thread_spawn?.parent_thread_id ?? meta.payload.parent_thread_id;
   if (idText(parent)) result.parent = parent;
   if (idText(meta.payload.forked_from_id)) result.fork = meta.payload.forked_from_id;
-  const usages = new Map<string, Usage>();
-  const fallback: Usage[] = [];
-  let previous: Usage | undefined;
-  let started = false;
-  for (const row of rows) {
-    if (row === meta) started = true;
-    if (!started) continue;
-    const payload = row.payload;
-    if (!payload || typeof payload !== "object") continue;
-    if (row.type === "token_usage_record") {
-      // Fork logs may contain cloned parent records. Thread attribution is mandatory.
-      if (payload.thread_id !== id) {
-        result.copiedRows++;
-        continue;
-      }
-      const usage = codexUsage(payload.usage);
-      if (!usage || !idText(payload.response_id)) {
-        result.missingUsage = true;
-        continue;
-      }
-      if (usages.has(payload.response_id)) result.duplicateUsageRecords++;
-      usages.set(payload.response_id, mergeHighwater(usages.get(payload.response_id), usage));
-    }
-    if (row.type === "response_item") {
-      if (payload.type === "message" && payload.role === "user" && !result.request)
-        result.request = genuineNativeRequest(payload.content);
-      if (
-        ["function_call", "custom_tool_call"].includes(payload.type) &&
-        idText(payload.call_id ?? payload.id)
-      )
-        result.calls.add(payload.call_id ?? payload.id);
-    }
-    if (row.type === "event_msg") {
-      if (["task_complete", "turn_complete"].includes(payload.type))
-        result.terminalStatus = "turn-finished";
-      if (["turn_aborted", "task_aborted"].includes(payload.type))
-        result.terminalStatus = "observed-interruption";
-      if (payload.type === "task_started") result.terminalStatus = "inactive-unfinished-turn";
-      if (payload.type === "token_count") {
-        const total = codexUsage(payload.info?.total_token_usage);
-        if (total) {
-          const reset =
-            previous && (total.input < previous.input || total.output < previous.output);
-          fallback.push({
-            input: total.input - (!reset && previous ? previous.input : 0),
-            output: total.output - (!reset && previous ? previous.output : 0),
-            cache:
-              total.cache === null || (previous && previous.cache === null)
-                ? null
-                : Math.max(0, total.cache - (!reset && previous ? previous.cache! : 0)),
-            fresh:
-              total.fresh === null || (previous && previous.fresh === null)
-                ? null
-                : Math.max(0, total.fresh - (!reset && previous ? previous.fresh! : 0)),
-          });
-          previous = total;
-        }
-      }
-    }
-  }
+  const state: CodexState = {
+    result,
+    sessionId: id,
+    usages: new Map<string, Usage>(),
+    fallback: [],
+    previous: undefined,
+  };
+  for (const row of rows.slice(rows.indexOf(meta))) handleCodexRow(state, row);
+  const { usages, fallback } = state;
   applyUsage(
     result,
     usages.size
@@ -393,6 +448,47 @@ function parseCodex(file: string, rows: Row[]): Parsed {
   result.rounds = null;
   return result;
 }
+function piStatus(stopReason: unknown) {
+  if (stopReason === "error") return "observed-error";
+  return stopReason === "aborted" ? "observed-interruption" : "turn-finished";
+}
+function piUsage(usage: any): Usage {
+  return {
+    input: usage.input + usage.cacheRead + usage.cacheWrite,
+    output: usage.output,
+    cache: usage.cacheRead,
+    fresh: usage.input + usage.cacheWrite,
+  };
+}
+function validPiUsage(row: Row, usage: any) {
+  return (
+    idText(row.id) &&
+    finite(usage?.input) &&
+    finite(usage?.output) &&
+    finite(usage?.cacheRead) &&
+    finite(usage?.cacheWrite)
+  );
+}
+function handlePiAssistant(
+  result: Parsed,
+  usages: Map<string, Usage>,
+  rounds: Set<string>,
+  row: Row,
+) {
+  const message = row.message;
+  const usage = message.usage;
+  if (!validPiUsage(row, usage)) result.missingUsage = true;
+  else {
+    if (usages.has(row.id)) result.duplicateUsageRecords++;
+    usages.set(row.id, mergeHighwater(usages.get(row.id), piUsage(usage)));
+  }
+  for (const block of Array.isArray(message.content) ? message.content : [])
+    if (block?.type === "toolCall" && idText(block.id)) {
+      result.calls.add(block.id);
+      if (idText(row.id)) rounds.add(row.id);
+    }
+  result.terminalStatus = piStatus(message.stopReason);
+}
 function parsePi(file: string, rows: Row[]): Parsed {
   const session = rows.find((row) => row.type === "session");
   const result = base("pi", idText(session?.id) ? session.id : path.basename(file, ".jsonl"), rows);
@@ -403,39 +499,7 @@ function parsePi(file: string, rows: Row[]): Parsed {
     const message = row.message;
     if (message?.role === "user" && !result.request)
       result.request = genuineNativeRequest(message.content);
-    if (message?.role !== "assistant") continue;
-    const usage = message.usage;
-    if (
-      !idText(row.id) ||
-      !finite(usage?.input) ||
-      !finite(usage?.output) ||
-      !finite(usage?.cacheRead) ||
-      !finite(usage?.cacheWrite)
-    )
-      result.missingUsage = true;
-    else {
-      if (usages.has(row.id)) result.duplicateUsageRecords++;
-      usages.set(
-        row.id,
-        mergeHighwater(usages.get(row.id), {
-          input: usage.input + usage.cacheRead + usage.cacheWrite,
-          output: usage.output,
-          cache: usage.cacheRead,
-          fresh: usage.input + usage.cacheWrite,
-        }),
-      );
-    }
-    for (const block of Array.isArray(message.content) ? message.content : [])
-      if (block?.type === "toolCall" && idText(block.id)) {
-        result.calls.add(block.id);
-        if (idText(row.id)) rounds.add(row.id);
-      }
-    result.terminalStatus =
-      message.stopReason === "error"
-        ? "observed-error"
-        : message.stopReason === "aborted"
-          ? "observed-interruption"
-          : "turn-finished";
+    if (message?.role === "assistant") handlePiAssistant(result, usages, rounds, row);
   }
   applyUsage(result, usages.entries());
   result.rounds = rounds.size;
@@ -463,9 +527,9 @@ function runningSessionIds(): Set<string> {
   return ids;
 }
 
-/** Parse inactive observed snapshots, including failures. Never require commits or success. */
-export function buildNativeSessions(options: NativeSessionOptions = {}) {
-  const audit = {
+type NativeAudit = ReturnType<typeof newNativeAudit>;
+function newNativeAudit() {
+  return {
     files: 0,
     roots: 0,
     children: 0,
@@ -482,17 +546,45 @@ export function buildNativeSessions(options: NativeSessionOptions = {}) {
     sources: { claude: 0, codex: 0, pi: 0 },
     snapshotBasis: "inactive-observed-session" as const,
   };
-  const exclude = (provider: Provider, reason: string, nativeSessionId?: string) => {
-    audit.excluded[reason] = (audit.excluded[reason] ?? 0) + 1;
-    audit.exclusions.push({ provider, nativeSessionId, reason });
-  };
+}
+function excludeSession(
+  audit: NativeAudit,
+  provider: Provider,
+  reason: string,
+  nativeSessionId?: string,
+) {
+  audit.excluded[reason] = (audit.excluded[reason] ?? 0) + 1;
+  audit.exclusions.push({ provider, nativeSessionId, reason });
+}
+function parseByProvider(provider: Provider, file: string, rows: Row[]) {
+  if (provider === "claude") return parseClaude(file, rows);
+  return provider === "codex" ? parseCodex(file, rows) : parsePi(file, rows);
+}
+function ingestFile(
+  audit: NativeAudit,
+  sessions: Map<string, Parsed>,
+  provider: Provider,
+  file: string,
+  maxBytes: number,
+) {
+  audit.files++;
+  audit.sources[provider]++;
+  try {
+    const parsed = parseByProvider(provider, file, readRows(file, maxBytes));
+    const key = `${provider}:${parsed.id}`;
+    if (sessions.has(key)) {
+      audit.duplicateSessions++;
+      // Duplicate logs are never summed. Keep the most complete observed copy.
+      const old = sessions.get(key)!;
+      if (parsed.completedAt <= old.completedAt) return;
+    }
+    sessions.set(key, parsed);
+  } catch (error) {
+    excludeSession(audit, provider, (error as Error).message);
+  }
+}
+function loadSessions(audit: NativeAudit, options: NativeSessionOptions, maxBytes: number) {
   const sessions = new Map<string, Parsed>();
-  const active = new Set(options.activeNativeSessionIds ?? []);
-  if (options.detectRunningProcesses !== false)
-    for (const id of runningSessionIds()) active.add(id);
-  const maxBytes = options.maxFileBytes ?? 64 * 1024 * 1024;
-  if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > 256 * 1024 * 1024)
-    throw Error("Invalid native session file limit");
   for (const [provider, directory] of [
     ["claude", options.claudeDir],
     ["codex", options.codexDir],
@@ -503,46 +595,164 @@ export function buildNativeSessions(options: NativeSessionOptions = {}) {
     try {
       files = listFiles(directory, 5_000);
     } catch (error) {
-      exclude(provider, (error as Error).message);
+      excludeSession(audit, provider, (error as Error).message);
       continue;
     }
-    for (const file of files) {
-      audit.files++;
-      audit.sources[provider]++;
-      try {
-        const rows = readRows(file, maxBytes);
-        const parsed =
-          provider === "claude"
-            ? parseClaude(file, rows)
-            : provider === "codex"
-              ? parseCodex(file, rows)
-              : parsePi(file, rows);
-        const key = `${provider}:${parsed.id}`;
-        if (sessions.has(key)) {
-          audit.duplicateSessions++;
-          // Duplicate logs are never summed. Keep the most complete observed copy.
-          const old = sessions.get(key)!;
-          if (parsed.completedAt <= old.completedAt) continue;
-        }
-        sessions.set(key, parsed);
-      } catch (error) {
-        exclude(provider, (error as Error).message);
-      }
-    }
+    for (const file of files) ingestFile(audit, sessions, provider, file, maxBytes);
   }
+  return sessions;
+}
+function groupChildren(audit: NativeAudit, sessions: Map<string, Parsed>) {
   const children = new Map<string, Parsed[]>();
   for (const parsed of sessions.values()) {
-    if (parsed.child) {
-      audit.children++;
-      if (!parsed.parent || !sessions.has(`${parsed.provider}:${parsed.parent}`)) {
-        audit.orphanChildren++;
-        exclude(parsed.provider, "orphan-child", parsed.id);
-        continue;
-      }
-      const key = `${parsed.provider}:${parsed.parent}`;
-      children.set(key, [...(children.get(key) ?? []), parsed]);
-    } else audit.roots++;
+    if (!parsed.child) {
+      audit.roots++;
+      continue;
+    }
+    audit.children++;
+    if (!parsed.parent || !sessions.has(`${parsed.provider}:${parsed.parent}`)) {
+      audit.orphanChildren++;
+      excludeSession(audit, parsed.provider, "orphan-child", parsed.id);
+      continue;
+    }
+    const key = `${parsed.provider}:${parsed.parent}`;
+    children.set(key, [...(children.get(key) ?? []), parsed]);
   }
+  return children;
+}
+function collectFamily(
+  session: Parsed,
+  children: Map<string, Parsed[]>,
+  seen: Set<string>,
+  family: Parsed[],
+) {
+  const key = `${session.provider}:${session.id}`;
+  if (seen.has(key)) throw Error("child-cycle");
+  seen.add(key);
+  family.push(session);
+  for (const child of children.get(key) ?? []) collectFamily(child, children, seen, family);
+}
+function familyExclusion(root: Parsed, family: Parsed[], active: Set<string>) {
+  if (family.some((session) => active.has(session.id))) return "active-session";
+  if (!root.request) return "missing-initial-user-request";
+  if (family.some((session) => !session.startedAt || !session.completedAt))
+    return "missing-session-timestamps";
+  if (family.some((session) => session.missingUsage)) return "missing-usage-telemetry";
+  return undefined;
+}
+function rootLineage(root: Parsed, sessions: Map<string, Parsed>) {
+  let lineage = root.id;
+  let ancestor: Parsed | undefined = root;
+  const ancestors = new Set<string>();
+  while (ancestor?.fork && !ancestors.has(ancestor.fork)) {
+    ancestors.add(ancestor.fork);
+    lineage = ancestor.fork;
+    ancestor = sessions.get(`${root.provider}:${ancestor.fork}`);
+  }
+  return lineage;
+}
+function buildFamilyTask(
+  audit: NativeAudit,
+  sessions: Map<string, Parsed>,
+  root: Parsed,
+  family: Parsed[],
+): NativeSessionTask {
+  const usages = new Map<string, Usage>();
+  const calls = new Set<string>();
+  for (const session of family) {
+    for (const [usageId, usage] of session.usages)
+      usages.set(usageId, mergeHighwater(usages.get(usageId), usage));
+    for (const callId of session.calls) calls.add(callId);
+  }
+  const measurements = [...usages.values()];
+  audit.rolledUpDuplicateUsageRecords +=
+    family.reduce((sum, session) => sum + session.usages.size, 0) - usages.size;
+  audit.rolledUpDuplicateToolCalls +=
+    family.reduce((sum, session) => sum + session.calls.size, 0) - calls.size;
+  const total = (key: "input" | "output") =>
+    measurements.reduce((sum, usage) => sum + usage[key], 0);
+  const usageOptional = (key: "cache" | "fresh") =>
+    measurements.some((usage) => usage[key] === null)
+      ? null
+      : measurements.reduce((sum, usage) => sum + usage[key]!, 0);
+  const optional = (key: "cache" | "fresh" | "rounds") =>
+    family.some((session) => session[key] === null)
+      ? null
+      : family.reduce((sum, session) => sum + session[key]!, 0);
+  const lineage = rootLineage(root, sessions);
+  return {
+    id: `native:${root.provider}:${root.id}`,
+    group: `native:${root.provider}:${lineage}`,
+    startedAt: family.map((session) => session.startedAt).sort()[0],
+    completedAt: family
+      .map((session) => session.completedAt)
+      .sort()
+      .at(-1)!,
+    request: root.request!.slice(0, 12_000),
+    preworkContext: [],
+    provider: root.provider,
+    inputTokens: total("input"),
+    outputTokens: total("output"),
+    cacheReadTokens: usageOptional("cache"),
+    nonCachedInputTokens: usageOptional("fresh"),
+    toolCalls: calls.size,
+    toolRounds: optional("rounds"),
+    provenance: {
+      scope: "completed-session",
+      source: "native-session",
+      snapshot: true,
+      initialRequestCharacters: root.request!.length,
+      initialRequestTruncated: root.request!.length > 12_000,
+      nativeSessionIds: family.map((session) => session.id),
+      rootNativeSessionId: root.id,
+      childCount: family.length - 1,
+      terminalStatus: root.terminalStatus,
+      usageRecords: usages.size,
+      childUsageIncluded: true,
+    },
+  } as NativeSessionTask;
+}
+/** Returns the task for one root family, or records the exclusion and returns nothing. */
+function evaluateRoot(
+  audit: NativeAudit,
+  sessions: Map<string, Parsed>,
+  children: Map<string, Parsed[]>,
+  active: Set<string>,
+  root: Parsed,
+) {
+  const family: Parsed[] = [];
+  try {
+    collectFamily(root, children, new Set<string>(), family);
+  } catch {
+    excludeSession(audit, root.provider, "child-cycle", root.id);
+    return undefined;
+  }
+  const reason = familyExclusion(root, family, active);
+  if (reason) {
+    excludeSession(audit, root.provider, reason, root.id);
+    return undefined;
+  }
+  const task = buildFamilyTask(audit, sessions, root, family);
+  if (![task.inputTokens, task.outputTokens, task.toolCalls].every(finite)) {
+    excludeSession(audit, root.provider, "invalid-session-totals", root.id);
+    return undefined;
+  }
+  audit.included++;
+  audit.includedChildren += family.length - 1;
+  return task;
+}
+
+/** Parse inactive observed snapshots, including failures. Never require commits or success. */
+export function buildNativeSessions(options: NativeSessionOptions = {}) {
+  const audit = newNativeAudit();
+  const active = new Set(options.activeNativeSessionIds ?? []);
+  if (options.detectRunningProcesses !== false)
+    for (const runningId of runningSessionIds()) active.add(runningId);
+  const maxBytes = options.maxFileBytes ?? 64 * 1024 * 1024;
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > 256 * 1024 * 1024)
+    throw Error("Invalid native session file limit");
+  const sessions = loadSessions(audit, options, maxBytes);
+  const children = groupChildren(audit, sessions);
   const tasks: NativeSessionTask[] = [];
   for (const session of sessions.values()) {
     audit.copiedRowsIgnored += session.copiedRows;
@@ -550,108 +760,14 @@ export function buildNativeSessions(options: NativeSessionOptions = {}) {
   }
   for (const root of sessions.values()) {
     if (root.child) continue;
-    const family: Parsed[] = [];
-    const seen = new Set<string>();
-    const collect = (session: Parsed) => {
-      const key = `${session.provider}:${session.id}`;
-      if (seen.has(key)) throw Error("child-cycle");
-      seen.add(key);
-      family.push(session);
-      for (const child of children.get(key) ?? []) collect(child);
-    };
-    try {
-      collect(root);
-    } catch {
-      exclude(root.provider, "child-cycle", root.id);
-      continue;
-    }
-    if (family.some((session) => active.has(session.id))) {
-      exclude(root.provider, "active-session", root.id);
-      continue;
-    }
-    if (!root.request) {
-      exclude(root.provider, "missing-initial-user-request", root.id);
-      continue;
-    }
-    if (family.some((session) => !session.startedAt || !session.completedAt)) {
-      exclude(root.provider, "missing-session-timestamps", root.id);
-      continue;
-    }
-    if (family.some((session) => session.missingUsage)) {
-      exclude(root.provider, "missing-usage-telemetry", root.id);
-      continue;
-    }
-    const usages = new Map<string, Usage>();
-    const calls = new Set<string>();
-    for (const session of family) {
-      for (const [id, usage] of session.usages)
-        usages.set(id, mergeHighwater(usages.get(id), usage));
-      for (const id of session.calls) calls.add(id);
-    }
-    const measurements = [...usages.values()];
-    audit.rolledUpDuplicateUsageRecords +=
-      family.reduce((sum, session) => sum + session.usages.size, 0) - usages.size;
-    audit.rolledUpDuplicateToolCalls +=
-      family.reduce((sum, session) => sum + session.calls.size, 0) - calls.size;
-    const total = (key: "input" | "output") =>
-      measurements.reduce((sum, usage) => sum + usage[key], 0);
-    const usageOptional = (key: "cache" | "fresh") =>
-      measurements.some((usage) => usage[key] === null)
-        ? null
-        : measurements.reduce((sum, usage) => sum + usage[key]!, 0);
-    const optional = (key: "cache" | "fresh" | "rounds") =>
-      family.some((session) => session[key] === null)
-        ? null
-        : family.reduce((sum, session) => sum + session[key]!, 0);
-    let lineage = root.id;
-    let ancestor: Parsed | undefined = root;
-    const ancestors = new Set<string>();
-    while (ancestor?.fork && !ancestors.has(ancestor.fork)) {
-      ancestors.add(ancestor.fork);
-      lineage = ancestor.fork;
-      ancestor = sessions.get(`${root.provider}:${ancestor.fork}`);
-    }
-    const task: NativeSessionTask = {
-      id: `native:${root.provider}:${root.id}`,
-      group: `native:${root.provider}:${lineage}`,
-      startedAt: family.map((session) => session.startedAt).sort()[0],
-      completedAt: family
-        .map((session) => session.completedAt)
-        .sort()
-        .at(-1)!,
-      request: root.request.slice(0, 12_000),
-      preworkContext: [],
-      provider: root.provider,
-      inputTokens: total("input"),
-      outputTokens: total("output"),
-      cacheReadTokens: usageOptional("cache"),
-      nonCachedInputTokens: usageOptional("fresh"),
-      toolCalls: calls.size,
-      toolRounds: optional("rounds"),
-      provenance: {
-        scope: "completed-session",
-        source: "native-session",
-        snapshot: true,
-        initialRequestCharacters: root.request.length,
-        initialRequestTruncated: root.request.length > 12_000,
-        nativeSessionIds: family.map((session) => session.id),
-        rootNativeSessionId: root.id,
-        childCount: family.length - 1,
-        terminalStatus: root.terminalStatus,
-        usageRecords: usages.size,
-        childUsageIncluded: true,
-      },
-    };
-    if (![task.inputTokens, task.outputTokens, task.toolCalls].every(finite)) {
-      exclude(root.provider, "invalid-session-totals", root.id);
-      continue;
-    }
-    tasks.push(task);
-    audit.included++;
-    audit.includedChildren += family.length - 1;
+    const task = evaluateRoot(audit, sessions, children, active, root);
+    if (task) tasks.push(task);
   }
   return {
-    tasks: tasks.sort((a, b) => a.startedAt.localeCompare(b.startedAt) || a.id.localeCompare(b.id)),
+    tasks: tasks.sort(
+      (left, right) =>
+        left.startedAt.localeCompare(right.startedAt) || left.id.localeCompare(right.id),
+    ),
     audit,
   };
 }
