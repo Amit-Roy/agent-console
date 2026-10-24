@@ -317,9 +317,14 @@ export type IssueRun = {
   finishedAt?: number;
   premiumAssignment?: boolean; // Explicit premium owner started through the issue dialog.
   recoveries?: number; // Bounded resumptions of incomplete worker turns, preserved across restarts.
+  retryAttempts?: number; // Delivered retries, including infrastructure retries that do not spend task budget.
+  workerError?: string; // Redacted error from the latest worker turn, used as retry context.
+  infrastructure?: boolean; // The latest failed turn needs another approved model, without spending task budget.
+  premiumPending?: number; // Exhausted worker queued for the premium assigner, independently of the dispatch ledger.
+  premiumThread?: string; // Durable assignment receipt; prevents another premium dispatch after restart.
   retryAt?: number; // Earliest time another worker recovery may start.
   rerouted?: boolean; // work: its recoveries were reset once because its Pi model was retired upstream
-  stalled?: number; // work: recoveries ran out without a PR; the sweep leaves it until a person runs a turn
+  stalled?: number; // Work: recoveries ran out; eligible for premium re-dispatch.
   missingPr?: number; // work: when "no open PR" was logged, so a restart does not log it again
   reviews?: number; // Reserved review slots; attempts without a verdict return their slot after a cooldown.
   reviewThread?: string; // Work: the reviewer holding its current slot; rejects late refunds from older reviewers.

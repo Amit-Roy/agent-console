@@ -12,7 +12,7 @@ const wts = path.join(data, "worktrees");
 const OUT = process.env.OUT || "/tmp";
 const RECORD = process.env.RECORD_AUTO_ARCHIVE === "1";
 fs.mkdirSync(OUT, { recursive: true });
-const base = "http://127.0.0.1:17779";
+const base = "http://127.0.0.1:7075";
 const now = Date.now();
 const mk = (id: string, title: string, issueRun?: object, extra = {}) => ({
   id,
@@ -55,7 +55,11 @@ fs.writeFileSync(
       run("review", { key: "o/r#4", number: 4, pr: 8 }),
       { archived: true },
     ),
-    mk("22222222-2222-4222-8222-222222222222", "r:5 Fix the export", run("work")),
+    mk(
+      "22222222-2222-4222-8222-222222222222",
+      "r:5 Fix the export",
+      run("work", { retryAttempts: 5, recoveries: 2, premiumPending: now - 1000 }),
+    ),
     mk("33333333-3333-4333-8333-333333333333", "r:5 review PR#9", run("review", { pr: 9 }), {
       status: "running",
     }),
@@ -96,7 +100,7 @@ const { makeToken } = await import("../server/auth.ts");
 const server = spawn(process.execPath, ["server/index.ts"], {
   env: {
     ...process.env,
-    PORT: "17779",
+    PORT: "7075",
     AGENT_CONSOLE_MOCK: "1",
     AGENT_CONSOLE_RUN: path.join(data, "run"),
     AGENT_CONSOLE_WARM_MAX: "0",
@@ -198,11 +202,9 @@ try {
     // --- the Auto lane: auto-started threads live here, not in Threads -----------------------------------------
     await page.goto(base);
     await page.waitForSelector("#lane-auto", { state: "attached" });
-    // Restore the live issue after the previous viewport archived it.
-    if (name.startsWith("phone")) {
-      await archive("22222222-2222-4222-8222-222222222222", false);
-      await archive("33333333-3333-4333-8333-333333333333", false);
-    }
+    await page.waitForFunction(
+      () => document.querySelector("#threads li .t")?.textContent === "Plain chat",
+    );
     if (name.startsWith("phone")) await page.click("#menu");
     ok(
       "Threads lane shows only the plain chat",
@@ -265,7 +267,6 @@ try {
         (await page.locator("#archive").isHidden()),
     );
     await page.screenshot({ path: `${OUT}/auto-archive-collapsed-${name}.png` });
-    await page.waitForTimeout(400);
     await page.click("#auto-archive-toggle");
     const saved = page.locator('#auto-archived .auto-group[data-issue="o/r#4"]');
     ok(
@@ -273,7 +274,6 @@ try {
       (await saved.count()) === 1 && (await saved.locator("li[data-thread]").count()) === 2,
     );
     await saved.locator(".auto-group-toggle").click();
-    await page.waitForTimeout(400);
     await page.screenshot({ path: `${OUT}/auto-archive-expanded-${name}.png` });
     await saved.locator('li[data-thread="44444444-4444-4444-8444-444444444444"]').click();
     await page.waitForFunction(() =>
@@ -307,13 +307,34 @@ try {
       "live automated archive still leaves Threads archive empty",
       (await page.locator("#archived li[data-thread]").count()) === 0,
     );
-    await page.waitForTimeout(500);
     await page.screenshot({ path: `${OUT}/auto-archive-live-${name}.png` });
     const archiveClipSeconds = (Date.now() - recordedAt) / 1000;
 
     // --- the page --------------------------------------------------------------------------------------------------
+    await archive("22222222-2222-4222-8222-222222222222", false);
+    await archive("33333333-3333-4333-8333-333333333333", false);
     await page.goto(`${base}/automation`);
     await page.waitForSelector('[data-step="dispatcher"]');
+    const worker = page.locator("#runs li").filter({ hasText: "r:5 Fix the export" });
+    ok(
+      "worker retry budget and premium eligibility are visible",
+      /Retries 5/.test(await worker.innerText()) &&
+        /Task budget: 2 used, 0 remaining/.test(await worker.innerText()) &&
+        /Premium eligible/.test(await worker.innerText()),
+      await worker.innerText(),
+    );
+    ok(
+      "review rows do not show worker retry counters",
+      !(await page.locator("#runs li").filter({ hasText: "r:5 review PR#9" }).innerText()).includes(
+        "Task budget",
+      ),
+    );
+    await page.locator("#runs").scrollIntoViewIfNeeded();
+    ok(
+      "retry counters fit the viewport",
+      !(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)),
+    );
+    await page.screenshot({ path: `${OUT}/retry-budget-${name}.png` });
     const inPipe = async (p: string) =>
       page
         .locator(`[data-pipeline="${p}"] [data-step]`)
@@ -324,7 +345,7 @@ try {
     ok(
       "the left panel lists every workflow",
       JSON.stringify(navIds) ===
-        JSON.stringify(["pr", "windows", "monitor", "cve", "runtime", "scans", "deadman"]),
+        JSON.stringify(["pr", "windows", "monitor", "dream", "cve", "runtime", "scans", "deadman"]),
       JSON.stringify(navIds),
     );
     const pageText = await page.locator("body").innerText();
@@ -354,7 +375,7 @@ try {
       ok(
         "phone workflow menu uses the console popover",
         (await page.locator('.menu[role="listbox"]').isVisible()) &&
-          (await page.locator(".menu [role=option]").count()) === 7 &&
+          (await page.locator(".menu [role=option]").count()) === 8 &&
           (await page.locator(".menu .m-group").allInnerTexts()).join("|") === "Workflows|Security",
       );
       await page.keyboard.press("Escape");

@@ -465,6 +465,10 @@ export interface RunView {
   effort: string;
   state: string;
   title: string;
+  retryAttempts?: number;
+  recoveries?: number;
+  retriesRemaining?: number;
+  premiumStatus?: "eligible" | "assigned";
 }
 export interface FailureView {
   ts: number;

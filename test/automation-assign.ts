@@ -5,6 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { createPremiumAssigner } from "../server/automation/assign.ts";
 import { premiumCompletionInstructions } from "../server/automation/review-prompts.ts";
+import { route } from "../server/automation/router.ts";
+import { createReviewer, MAX_RECOVERIES } from "../server/issue-review.ts";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "ac-assign-"));
 const git = (cwd: string, ...args: string[]) =>
@@ -242,6 +244,126 @@ try {
     created.length,
     before,
     "invalid requests and unavailable evidence start no threads",
+  );
+
+  // Recovery bypasses the initial dispatch ledger while retaining the failed worker's evidence.
+  const ledger = path.join(root, "window-dispatch.jsonl");
+  const initialDispatch = `${JSON.stringify({ key: "owner/project#7", dryRun: false, thread: rows[0].id })}\n`;
+  fs.writeFileSync(ledger, initialDispatch);
+  const workerLog = path.join(root, "logs", `${rows[0].id}.jsonl`);
+  fs.mkdirSync(path.dirname(workerLog));
+  fs.writeFileSync(
+    workerLog,
+    `${JSON.stringify({ type: "console_error", text: "pending feature work" })}\n`,
+  );
+  const exhausted = {
+    ...rows[0],
+    cwd: main,
+    issueRun: { ...rows[0].issueRun, recoveries: MAX_RECOVERIES },
+  };
+  const recoveryRows = [exhausted];
+  const recoveryCreated: any[] = [],
+    recoverySent: any[] = [];
+  const recoveryAssigner = createPremiumAssigner({
+    ...deps,
+    threads: () => recoveryRows,
+    github: async (method: string, endpoint: string) =>
+      endpoint.includes("/pulls?") ? [] : github(method, endpoint),
+    runner: {
+      create(options: any) {
+        recoveryCreated.push(options);
+        recoveryRows.push({ ...options, id: "premium-recovery", status: "running" });
+        return { id: "premium-recovery" };
+      },
+      send(id: string, prompt: string) {
+        recoverySent.push({ id, prompt });
+      },
+      remove() {},
+    },
+  });
+  const now = 1_000_000;
+  const exhaustedUsage = {
+    windows: [{ label: "5-hour", used: 100, limit: 100, resetsAt: now + 60_000 }],
+  };
+  let premiumAvailable = false,
+    premiumAttempts = 0;
+  const recoveryDeps: any = {
+    threads: () => recoveryRows,
+    now: () => now,
+    runner: {
+      create() {
+        throw new Error("an exhausted worker must use the premium assigner");
+      },
+      send() {
+        throw new Error("an exhausted worker must not resume on Pi");
+      },
+      mark(id: string, patch: any) {
+        const thread = recoveryRows.find((thread) => thread.id === id);
+        assert.ok(thread);
+        thread.issueRun = { ...thread.issueRun, ...patch };
+      },
+    },
+    route() {
+      throw new Error("an exhausted worker must not start a reviewer");
+    },
+    premium: async ({ repo, number }: { repo: string; number: number }) => {
+      premiumAttempts++;
+      const answer = route({
+        role: "work",
+        effort: "deep",
+        active: [],
+        now,
+        usage: { claude: exhaustedUsage, ...(premiumAvailable ? {} : { codex: exhaustedUsage }) },
+      });
+      if (answer.decision !== "route" || !answer.route) return;
+      assert.equal(answer.route.provider, "codex");
+      return recoveryAssigner({ repo, number, ...answer.route, mode: "bypassPermissions" });
+    },
+  };
+  await createReviewer(recoveryDeps).sweep(recoveryRows);
+  assert.equal(recoveryCreated.length, 0, "exhausted premium capacity defers recovery");
+  assert.equal(exhausted.issueRun.premiumPending, now, "deferred recovery remains durable");
+  premiumAvailable = true;
+  await createReviewer(recoveryDeps).sweep(recoveryRows);
+  assert.equal(
+    recoveryCreated.length,
+    1,
+    "exhausted worker starts a premium owner despite its initial dispatch receipt",
+  );
+  const owner = recoveryCreated[0];
+  assert.equal(owner.provider, "codex");
+  assert.equal(owner.model, "gpt-6.1-sol");
+  assert.equal(owner.effort, "high");
+  assert.equal(owner.issueRun.premiumAssignment, true);
+  assert.equal(owner.issueRun.pr, undefined, "a missing PR does not strand premium recovery");
+  assert.notEqual(owner.cwd, main);
+  assert.equal(git(owner.cwd, "rev-parse", "--git-common-dir"), ".git");
+  assert.equal(
+    fs.readFileSync(path.join(owner.cwd, ".git", "agent-console-auto"), "utf8"),
+    "private-checkout-v1\n",
+  );
+  assert.match(git(owner.cwd, "branch", "--show-current"), /^premium-issue-7-/);
+  assert.ok(
+    recoverySent[0].prompt.includes(main),
+    "premium owner receives the original working directory",
+  );
+  assert.ok(
+    recoverySent[0].prompt.includes(workerLog),
+    "premium owner receives the prior worker log path",
+  );
+  assert.match(recoverySent[0].prompt, /port relevant changes into this private checkout/);
+  assert.equal(exhausted.issueRun.premiumThread, "premium-recovery");
+  await createReviewer(recoveryDeps).sweep(recoveryRows);
+  assert.equal(
+    recoveryCreated.length,
+    1,
+    "durable premium receipt prevents a duplicate owner after restart",
+  );
+  assert.equal(premiumAttempts, 2, "a successful premium handoff is never submitted again");
+  assert.equal(
+    fs.readFileSync(ledger, "utf8"),
+    initialDispatch,
+    "recovery preserves the initial dispatch ledger",
   );
   console.log(
     "PASS premium assignment: selected settings, canonical issue context, failed runs, legacy PR, isolated branch, guards",

@@ -399,6 +399,26 @@ try {
     assert.equal(f.created.length, 1, "migration cannot start a second premium owner");
   });
 
+  await check(
+    "exhausted push reminders transfer the unchanged PR to premium ownership",
+    async () => {
+      const f = fixture();
+      f.reviewer.issueRun.outcome = "changes";
+      f.worker.issueRun.reviewedAt = undefined;
+      f.worker.issueRun.nudges = 2;
+      f.comments("Review: CHANGES REQUESTED\nFix the totals");
+      await f.rv.sweep(f.threads);
+      assert.equal(f.worker.issueRun.reviews, 2);
+      assert.equal(f.sent.length, 0, "no third push reminder");
+      await f.rv.sweep(f.threads);
+      assert.equal(f.created.length, 1);
+      assert.equal(f.created[0].issueRun.takeover, true);
+      assert.equal(f.created[0].provider, "codex");
+      await f.rv.sweep(f.threads);
+      assert.equal(f.created.length, 1, "premium takeover owns the pending work exactly once");
+    },
+  );
+
   for (const state of ["takeover", "unjudged", "running"]) {
     await check(`legacy migration excludes ${state} reviewer`, async () => {
       const f = fixture(3);

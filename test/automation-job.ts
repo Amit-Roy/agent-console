@@ -57,6 +57,14 @@ assert.doesNotMatch(JSON.stringify(result), /private|unrelated/);
 assert.equal(result.workflow.find((s) => s.id === "pr")?.state, "failed");
 assert.equal(result.workflow.find((s) => s.id === "merge")?.state, "unobserved");
 assert.match(result.historyNote, /not proof/i);
+row.issueRun.premiumPending = 30;
+assert.equal(
+  diagnoseJob(request, deps).state,
+  "paused",
+  "premium queue is waiting, not permanently blocked",
+);
+assert.match(diagnoseJob(request, deps).threads[0].reason, /premium re-dispatch/i);
+delete row.issueRun.premiumPending;
 events.push({ seq: 4, ts: 4, step: "merge", kind: "ok", ref: "owner/repo#7", msg: "PR #8 merged" });
 assert.equal(
   diagnoseJob(request, deps).state,
