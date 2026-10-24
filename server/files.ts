@@ -70,36 +70,42 @@ export function reachable(root: string, file: string): boolean {
 
 const DENIED = "This file is outside your home folder or contains private credentials.";
 
-// Agents often cite paths relative to a subproject they cd'd into (public/render.js while the thread cwd is ~/repos).
-// When a relative path is missing under cwd, accept it if exactly one immediate subfolder holds it.
-async function resolveRelative(cwd: string, requested: string, threadId?: string) {
-  const direct = path.resolve(cwd, requested);
-  const exists = (file: string) =>
-    access(file).then(
-      () => true,
-      () => false,
-    );
-  if (await exists(direct)) return direct;
-  // Folders the thread's tool calls worked in (cd targets, edited files), newest first.
-  if (threadId)
-    for (const dir of contextDirs(threadId, cwd)) {
-      const child = path.join(dir, requested);
-      if (!sensitive(child) && (await exists(child))) return child;
-    }
+function pathExists(file: string) {
+  return access(file).then(
+    () => true,
+    () => false,
+  );
+}
+
+// Folders the thread's tool calls worked in (cd targets, edited files), newest first.
+async function contextMatch(cwd: string, requested: string, threadId?: string) {
+  if (!threadId) return undefined;
+  for (const dir of contextDirs(threadId, cwd)) {
+    const child = path.join(dir, requested);
+    if (!sensitive(child) && (await pathExists(child))) return child;
+  }
+  return undefined;
+}
+
+async function subfolderHits(cwd: string, requested: string) {
   const hits: string[] = [];
   for (const entry of await readdir(cwd, { withFileTypes: true }).catch(() => [])) {
     if (!entry.isDirectory() || entry.name.startsWith(".") || entry.name === "node_modules")
       continue;
     const child = path.join(cwd, entry.name, requested);
-    if (
-      !sensitive(child) &&
-      (await access(child).then(
-        () => true,
-        () => false,
-      ))
-    )
-      hits.push(child);
+    if (!sensitive(child) && (await pathExists(child))) hits.push(child);
   }
+  return hits;
+}
+
+// Agents often cite paths relative to a subproject they cd'd into (public/render.js while the thread cwd is ~/repos).
+// When a relative path is missing under cwd, accept it if exactly one immediate subfolder holds it.
+async function resolveRelative(cwd: string, requested: string, threadId?: string) {
+  const direct = path.resolve(cwd, requested);
+  if (await pathExists(direct)) return direct;
+  const fromContext = await contextMatch(cwd, requested, threadId);
+  if (fromContext) return fromContext;
+  const hits = await subfolderHits(cwd, requested);
   return hits.length === 1 ? hits[0] : direct;
 }
 
@@ -236,6 +242,53 @@ function mediaType(file: string, head: Buffer): string | null {
   return type && mediaMagic(ext, head) ? type : null;
 }
 
+const identity = (root: string, target: string) => ({
+  root,
+  path: target,
+  name: path.basename(target),
+});
+
+function tooLarge(limit: number) {
+  return new ViewError(413, `The file is too large to preview (maximum ${limit >> 20} MB).`);
+}
+
+async function readWhole(handle: FileHandle, statSize: number, limit: number) {
+  const buffer = Buffer.alloc(Math.min(statSize + 1, limit + 1));
+  let size = 0;
+  while (size < buffer.length) {
+    const { bytesRead } = await handle.read(buffer, size, buffer.length - size, size);
+    if (!bytesRead) break;
+    size += bytesRead;
+  }
+  if (size > limit) throw tooLarge(limit);
+  if (size > statSize) throw new ViewError(409, "This file changed while opening. Open it again.");
+  return { buffer, size };
+}
+
+function decodeText(bytes: Buffer): string {
+  let content: string;
+  try {
+    content = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    throw new ViewError(415, "Only UTF-8 text files can be viewed.");
+  }
+  if (/[\u0000-\u0008\u000b\u000e-\u001f\u007f]/.test(content))
+    throw new ViewError(415, "Only text files can be viewed.");
+  // Needs key body on the next line, so code that only mentions the header (tests, docs) stays viewable.
+  if (/-----BEGIN (?:[A-Z]+ )*PRIVATE KEY-----\r?\n[A-Za-z0-9+/=]{40}/.test(content))
+    throw new ViewError(403, "Private keys cannot be previewed.");
+  return content;
+}
+
+async function sniffFile(handle: FileHandle, target: string) {
+  const head = Buffer.alloc(16);
+  const peek = await handle.read(head, 0, head.length, 0);
+  const media_type = imageType(head.subarray(0, peek.bytesRead));
+  // Audio and video stream from /api/file-media with Range, so they have no preview size limit.
+  const stream_type = media_type ? null : mediaType(target, head.subarray(0, peek.bytesRead));
+  return { media_type, stream_type };
+}
+
 async function readProjectFile(cwd: string, requested: string, binary = false, threadId?: string) {
   const { root, target, candidate } = await scopedPath(cwd, requested, threadId);
   const handle = await openScoped(root, target);
@@ -244,75 +297,42 @@ async function readProjectFile(cwd: string, requested: string, binary = false, t
     const meta = fileMeta(stat, await linkChain(root, candidate));
     if (!stat.isFile())
       throw new ViewError(415, "Only regular text and image files can be viewed.");
-    const head = Buffer.alloc(16);
-    const peek = await handle.read(head, 0, head.length, 0);
-    const media_type = imageType(head.subarray(0, peek.bytesRead));
-    // Audio and video stream from /api/file-media with Range, so they have no preview size limit.
-    const stream_type = media_type ? null : mediaType(target, head.subarray(0, peek.bytesRead));
+    const { media_type, stream_type } = await sniffFile(handle, target);
     if (stream_type && !binary)
       return {
         kind: "media" as const,
-        root,
-        path: target,
-        name: path.basename(target),
+        ...identity(root, target),
         media_type: stream_type,
         bytes: stat.size,
         meta,
       };
     const limit = media_type ? MAX_PREVIEW_IMAGE_BYTES : MAX_VIEW_BYTES;
-    if (stat.size > limit)
-      throw new ViewError(413, `The file is too large to preview (maximum ${limit >> 20} MB).`);
+    if (stat.size > limit) throw tooLarge(limit);
     if (binary && !media_type)
       throw new ViewError(415, "Only PNG, JPEG, GIF and WebP images can be previewed.");
     // Metadata does not read the whole image; the authenticated image request does.
     if (media_type && !binary)
       return {
         kind: "image" as const,
-        root,
-        path: target,
-        name: path.basename(target),
+        ...identity(root, target),
         media_type,
         bytes: stat.size,
         meta,
       };
-    const buffer = Buffer.alloc(Math.min(stat.size + 1, limit + 1));
-    let size = 0;
-    while (size < buffer.length) {
-      const { bytesRead } = await handle.read(buffer, size, buffer.length - size, size);
-      if (!bytesRead) break;
-      size += bytesRead;
-    }
-    if (size > limit)
-      throw new ViewError(413, `The file is too large to preview (maximum ${limit >> 20} MB).`);
-    if (size > stat.size)
-      throw new ViewError(409, "This file changed while opening. Open it again.");
+    const { buffer, size } = await readWhole(handle, stat.size, limit);
     if (media_type)
       return {
         kind: "image" as const,
-        root,
-        path: target,
-        name: path.basename(target),
+        ...identity(root, target),
         media_type,
         bytes: size,
         meta,
         data: buffer.subarray(0, size),
       };
-    let content: string;
-    try {
-      content = new TextDecoder("utf-8", { fatal: true }).decode(buffer.subarray(0, size));
-    } catch {
-      throw new ViewError(415, "Only UTF-8 text files can be viewed.");
-    }
-    if (/[\u0000-\u0008\u000b\u000e-\u001f\u007f]/.test(content))
-      throw new ViewError(415, "Only text files can be viewed.");
-    // Needs key body on the next line, so code that only mentions the header (tests, docs) stays viewable.
-    if (/-----BEGIN (?:[A-Z]+ )*PRIVATE KEY-----\r?\n[A-Za-z0-9+/=]{40}/.test(content))
-      throw new ViewError(403, "Private keys cannot be previewed.");
+    const content = decodeText(buffer.subarray(0, size));
     return {
       kind: "text" as const,
-      root,
-      path: target,
-      name: path.basename(target),
+      ...identity(root, target),
       content,
       bytes: size,
       meta,
@@ -425,6 +445,38 @@ export function parseRange(
   return { start, end };
 }
 
+function assertMediaExtension(target: string) {
+  if (!MEDIA_TYPES[path.extname(target).toLowerCase()])
+    throw new ViewError(
+      415,
+      "Only MP4, WebM and MOV video or MP3, WAV, M4A, AAC, Ogg and FLAC audio can be played.",
+    );
+}
+
+async function sniffMedia(handle: FileHandle, target: string): Promise<string> {
+  const head = Buffer.alloc(16);
+  const peek = await handle.read(head, 0, head.length, 0);
+  const type = mediaType(target, head.subarray(0, peek.bytesRead));
+  if (!type) throw new ViewError(415, "This file is not playable media.");
+  return type;
+}
+
+function applyMediaHeaders(
+  res: Parameters<RequestHandler>[1],
+  type: string,
+  range: { start: number; end: number } | null,
+  size: number,
+) {
+  const [start, end] = range ? [range.start, range.end] : [0, size - 1];
+  res.status(range ? 206 : 200);
+  if (range) res.setHeader("Content-Range", `bytes ${start}-${end}/${size}`);
+  res.setHeader("Accept-Ranges", "bytes");
+  res.setHeader("Content-Type", type);
+  res.setHeader("Content-Disposition", "inline");
+  res.setHeader("Content-Security-Policy", "default-src 'none'; sandbox");
+  return { start, end };
+}
+
 // Audio and video for inline players. Same scope and secret rules as the viewer; streamed from the verified descriptor with HTTP Range
 // so phones can seek. Only known media containers (extension + magic bytes) are served, always inline under a locked-down CSP.
 export function fileMedia(lookup: Lookup): RequestHandler {
@@ -439,30 +491,17 @@ export function fileMedia(lookup: Lookup): RequestHandler {
         requestPath(req.query.path),
         scope.threadId,
       );
-      if (!MEDIA_TYPES[path.extname(target).toLowerCase()])
-        throw new ViewError(
-          415,
-          "Only MP4, WebM and MOV video or MP3, WAV, M4A, AAC, Ogg and FLAC audio can be played.",
-        );
+      assertMediaExtension(target);
       handle = await openScoped(root, target);
       const stat = await handle.stat();
       if (!stat.isFile()) throw new ViewError(415, "Only regular media files can be played.");
-      const head = Buffer.alloc(16);
-      const peek = await handle.read(head, 0, head.length, 0);
-      const type = mediaType(target, head.subarray(0, peek.bytesRead));
-      if (!type) throw new ViewError(415, "This file is not playable media.");
+      const type = await sniffMedia(handle, target);
       const range = parseRange(req.headers.range, stat.size);
       if (range === "bad") {
         res.setHeader("Content-Range", `bytes */${stat.size}`);
         throw new ViewError(416, "Invalid byte range.");
       }
-      const [start, end] = range ? [range.start, range.end] : [0, stat.size - 1];
-      res.status(range ? 206 : 200);
-      if (range) res.setHeader("Content-Range", `bytes ${start}-${end}/${stat.size}`);
-      res.setHeader("Accept-Ranges", "bytes");
-      res.setHeader("Content-Type", type);
-      res.setHeader("Content-Disposition", "inline");
-      res.setHeader("Content-Security-Policy", "default-src 'none'; sandbox");
+      const { start, end } = applyMediaHeaders(res, type, range, stat.size);
       if (stat.size === 0 || req.method === "HEAD") {
         res.setHeader("Content-Length", stat.size === 0 ? 0 : end - start + 1);
         await handle.close();
@@ -482,6 +521,105 @@ export function fileMedia(lookup: Lookup): RequestHandler {
   };
 }
 
+type TreeEntry = { name: string; path: string; kind: "directory" | "file"; link?: string };
+
+function treeOffset(rawCursor: unknown): number {
+  const offset =
+    rawCursor === undefined
+      ? 0
+      : typeof rawCursor === "string" && /^\d{1,6}$/.test(rawCursor)
+        ? Number(rawCursor)
+        : -1;
+  if (offset < 0 || offset > MAX_TREE_OFFSET) throw new ViewError(400, "Invalid folder cursor.");
+  return offset;
+}
+
+async function entryKind(entry: fs.Dirent, child: string, root: string) {
+  let kind: "directory" | "file" | undefined = entry.isDirectory()
+    ? "directory"
+    : entry.isFile()
+      ? "file"
+      : undefined;
+  // Symlinks (CLAUDE.md, AGENTS.md, .mcp.json in ~/repos) list as their target kind; opening still enforces realpath scope.
+  if (!kind && entry.isSymbolicLink()) {
+    const real = await realpath(child).catch(() => undefined);
+    if (real && reachable(root, real)) {
+      const info = await statPath(real).catch(() => undefined);
+      kind = info?.isDirectory() ? "directory" : info?.isFile() ? "file" : undefined;
+    }
+  }
+  return kind;
+}
+
+async function treeEntry(entry: fs.Dirent, child: string, kind: "directory" | "file") {
+  return {
+    name: entry.name,
+    path: child,
+    kind,
+    ...(entry.isSymbolicLink() ? { link: await readlink(child).catch(() => undefined) } : {}),
+  } as TreeEntry;
+}
+
+async function scanTree(dir: fs.Dir, target: string, root: string, offset: number) {
+  const entries: TreeEntry[] = [];
+  let index = 0,
+    done = false;
+  while (index < offset) {
+    if (!(await dir.read())) {
+      done = true;
+      break;
+    }
+    index++;
+  }
+  while (
+    !done &&
+    index < offset + TREE_SCAN_SIZE &&
+    index < MAX_TREE_OFFSET &&
+    entries.length < TREE_PAGE_SIZE
+  ) {
+    const entry = await dir.read();
+    if (!entry) {
+      done = true;
+      break;
+    }
+    index++;
+    const child = path.join(target, entry.name);
+    if (sensitive(child)) continue;
+    const kind = await entryKind(entry, child, root);
+    if (kind) entries.push(await treeEntry(entry, child, kind));
+  }
+  return { entries, index, done };
+}
+
+async function listTree(root: string, target: string, offset: number) {
+  const handle = await openScoped(root, target, true);
+  try {
+    const dir = await opendir(
+      process.platform === "linux" ? `/proc/self/fd/${handle.fd}` : target,
+      {
+        bufferSize: 64,
+      },
+    );
+    try {
+      return await scanTree(dir, target, root, offset);
+    } finally {
+      await dir.close();
+    }
+  } finally {
+    await handle.close();
+  }
+}
+
+// Include the complete decoded JSON payload size (including this field).
+function encodeSized(result: { bytes: number }) {
+  let encoded = JSON.stringify(result);
+  while (result.bytes !== Buffer.byteLength(encoded)) {
+    result.bytes = Buffer.byteLength(encoded);
+    encoded = JSON.stringify(result);
+  }
+  return encoded;
+}
+
 // One level only, using Dirent types (stat only for symlinks). Special files
 // are omitted; opening a symlink still enforces realpath scope.
 // The cursor counts raw directory entries so filtered entries cannot stall paging.
@@ -496,76 +634,8 @@ export function fileTree(lookup: Lookup): RequestHandler {
         requestPath(req.query.path ?? "."),
         scope.threadId,
       );
-      const rawCursor = req.query.cursor;
-      const offset =
-        rawCursor === undefined
-          ? 0
-          : typeof rawCursor === "string" && /^\d{1,6}$/.test(rawCursor)
-            ? Number(rawCursor)
-            : -1;
-      if (offset < 0 || offset > MAX_TREE_OFFSET)
-        throw new ViewError(400, "Invalid folder cursor.");
-      const handle = await openScoped(root, target, true);
-      const entries: { name: string; path: string; kind: "directory" | "file"; link?: string }[] =
-        [];
-      let index = 0,
-        done = false;
-      try {
-        const dir = await opendir(
-          process.platform === "linux" ? `/proc/self/fd/${handle.fd}` : target,
-          { bufferSize: 64 },
-        );
-        try {
-          while (index < offset) {
-            if (!(await dir.read())) {
-              done = true;
-              break;
-            }
-            index++;
-          }
-          while (
-            !done &&
-            index < offset + TREE_SCAN_SIZE &&
-            index < MAX_TREE_OFFSET &&
-            entries.length < TREE_PAGE_SIZE
-          ) {
-            const entry = await dir.read();
-            if (!entry) {
-              done = true;
-              break;
-            }
-            index++;
-            const child = path.join(target, entry.name);
-            if (sensitive(child)) continue;
-            let kind: "directory" | "file" | undefined = entry.isDirectory()
-              ? "directory"
-              : entry.isFile()
-                ? "file"
-                : undefined;
-            // Symlinks (CLAUDE.md, AGENTS.md, .mcp.json in ~/repos) list as their target kind; opening still enforces realpath scope.
-            if (!kind && entry.isSymbolicLink()) {
-              const real = await realpath(child).catch(() => undefined);
-              if (real && reachable(root, real)) {
-                const target = await statPath(real).catch(() => undefined);
-                kind = target?.isDirectory() ? "directory" : target?.isFile() ? "file" : undefined;
-              }
-            }
-            if (kind)
-              entries.push({
-                name: entry.name,
-                path: child,
-                kind,
-                ...(entry.isSymbolicLink()
-                  ? { link: await readlink(child).catch(() => undefined) }
-                  : {}),
-              });
-          }
-        } finally {
-          await dir.close();
-        }
-      } finally {
-        await handle.close();
-      }
+      const offset = treeOffset(req.query.cursor);
+      const { entries, index, done } = await listTree(root, target, offset);
       const read_ms = timing(res, start, "tree");
       const result = {
         root,
@@ -578,13 +648,7 @@ export function fileTree(lookup: Lookup): RequestHandler {
         bytes: 0,
         read_ms,
       };
-      // Include the complete decoded JSON payload size (including this field).
-      let encoded = JSON.stringify(result);
-      while (result.bytes !== Buffer.byteLength(encoded)) {
-        result.bytes = Buffer.byteLength(encoded);
-        encoded = JSON.stringify(result);
-      }
-      res.type("json").send(encoded);
+      res.type("json").send(encodeSized(result));
     } catch (error) {
       timing(res, start, "tree");
       const result = failure(error);

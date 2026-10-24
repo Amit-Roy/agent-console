@@ -241,43 +241,45 @@
     navigate(payload);
   }
 
-  function attachFile(endpoint, remote, token, openedFile) {
-    const path = remote.path || remote.name || "file.txt";
-    const key = endpoint + "\n" + path;
-    const existing = files.get(key);
-    if (existing) {
-      // Refresh access without replacing any edits already open on the phone.
-      existing.token = token;
-      if (remote.uri && existing.file.uri !== remote.uri) existing.file.uri = remote.uri;
-      existing.file.makeActive();
-      if (!existing.file.isUnsaved && !existing.saving) {
-        existing.file.session.setValue(remote.content);
-        existing.revision = remote.revision;
-        existing.baseline = remote.content;
-        existing.file[baselineKey] = { key, content: remote.content, revision: remote.revision };
-        if (typeof existing.file.markSaved === "function") existing.file.markSaved();
-        else existing.file.isUnsaved = false;
-      } else if (!existing.saving && remote.content === existing.baseline) {
-        existing.revision = remote.revision;
-        existing.file[baselineKey] = { key, content: existing.baseline, revision: remote.revision };
-      }
-      return;
+  function markFileSaved(file) {
+    if (typeof file.markSaved === "function") file.markSaved();
+    else file.isUnsaved = false;
+  }
+
+  function refreshExisting(existing, key, remote, token) {
+    // Refresh access without replacing any edits already open on the phone.
+    existing.token = token;
+    if (remote.uri && existing.file.uri !== remote.uri) existing.file.uri = remote.uri;
+    existing.file.makeActive();
+    if (!existing.file.isUnsaved && !existing.saving) {
+      existing.file.session.setValue(remote.content);
+      existing.revision = remote.revision;
+      existing.baseline = remote.content;
+      existing.file[baselineKey] = { key, content: remote.content, revision: remote.revision };
+      markFileSaved(existing.file);
+    } else if (!existing.saving && remote.content === existing.baseline) {
+      existing.revision = remote.revision;
+      existing.file[baselineKey] = { key, content: existing.baseline, revision: remote.revision };
     }
-    const EditorFile = acode.require("editorFile");
-    const id = "agent-console:" + key;
-    // Acode's constructor returns a partial object when this tab already exists.
-    const retained =
+  }
+
+  function findRetained(openedFile, key, id, remote) {
+    return (
       openedFile ||
       editorManager.files?.find(
         (file) =>
           file[baselineKey]?.key === key ||
           file.id === id ||
           (remote.uri && file.uri === remote.uri),
-      );
+      )
+    );
+  }
+
+  function openEditorFile(EditorFile, retained, id, remote, filePath) {
     constructingFile = true;
     const file =
       retained ||
-      new EditorFile(remote.name || path.split("/").pop(), {
+      new EditorFile(remote.name || filePath.split("/").pop(), {
         id,
         uri: remote.uri,
         text: remote.content,
@@ -288,33 +290,42 @@
     constructingFile = false;
     // Do not persist short-lived access credentials in Acode's restored sessions.
     file.persistInSession = false;
+    return file;
+  }
+
+  function baselineRevision(file, prior, remote, unknownDirty) {
+    if (unknownDirty) return null;
+    if (file.isUnsaved && prior && prior.content !== remote.content) return prior.revision;
+    return remote.revision;
+  }
+
+  function trackFile(key, file, token, remote, retained) {
     const prior = file[baselineKey];
     const unknownDirty = retained && file.isUnsaved && !prior && textOf(file) !== remote.content;
     const state = {
       file,
       token,
-      revision: unknownDirty
-        ? null
-        : file.isUnsaved && prior && prior.content !== remote.content
-          ? prior.revision
-          : remote.revision,
+      revision: baselineRevision(file, prior, remote, unknownDirty),
       baseline: unknownDirty ? undefined : file.isUnsaved && prior ? prior.content : remote.content,
       saving: null,
     };
     if (!unknownDirty)
       file[baselineKey] = { key, content: state.baseline, revision: state.revision };
     files.set(key, state);
-    if (retained) {
-      if (remote.uri && file.uri !== remote.uri) file.uri = remote.uri;
-      file.makeActive();
-      if (!file.isUnsaved) {
-        file.session.setValue(remote.content);
-        if (typeof file.markSaved === "function") file.markSaved();
-        else file.isUnsaved = false;
-      }
-    }
+    return state;
+  }
 
-    const save = async () => {
+  function syncRetained(file, remote) {
+    if (remote.uri && file.uri !== remote.uri) file.uri = remote.uri;
+    file.makeActive();
+    if (!file.isUnsaved) {
+      file.session.setValue(remote.content);
+      markFileSaved(file);
+    }
+  }
+
+  function createSave(state, file, key, endpoint) {
+    return async () => {
       if (!state.revision)
         throw new Error(
           "This open tab has unsaved edits from an older plugin session. Copy your edits before closing it, then tap Edit again to compare changes.",
@@ -339,7 +350,10 @@
       }
       return true;
     };
-    state.onSave = (event) => {
+  }
+
+  function createOnSave(state, save) {
+    return (event) => {
       event.preventDefault();
       if (!state.saving) {
         state.saving = save()
@@ -353,13 +367,36 @@
       }
       if (typeof event.respondWith === "function") event.respondWith(state.saving);
     };
-    state.onClose = () => {
+  }
+
+  function createOnClose(key, file) {
+    return () => {
       files.delete(key);
       if (accepts(file.uri) && projects.size) {
         const { project, path: relative } = resolveUri(file.uri);
         project.loaded.delete(relative);
       }
     };
+  }
+
+  function attachFile(endpoint, remote, token, openedFile) {
+    const path = remote.path || remote.name || "file.txt";
+    const key = endpoint + "\n" + path;
+    const existing = files.get(key);
+    if (existing) {
+      refreshExisting(existing, key, remote, token);
+      return;
+    }
+    const EditorFile = acode.require("editorFile");
+    const id = "agent-console:" + key;
+    // Acode's constructor returns a partial object when this tab already exists.
+    const retained = findRetained(openedFile, key, id, remote);
+    const file = openEditorFile(EditorFile, retained, id, remote, path);
+    const state = trackFile(key, file, token, remote, retained);
+    if (retained) syncRetained(file, remote);
+
+    state.onSave = createOnSave(state, createSave(state, file, key, endpoint));
+    state.onClose = createOnClose(key, file);
     file.on("save", state.onSave);
     file.on("close", state.onClose);
   }
