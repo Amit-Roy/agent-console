@@ -104,36 +104,44 @@ export function parseTriageReply(
   return extracted ? deriveAssessment(extracted, input, model) : undefined;
 }
 
+function parsePiEventLine(line: string): any {
+  let event: any;
+  try {
+    event = JSON.parse(line);
+  } catch {
+    throw Error("Pi returned invalid events");
+  }
+  if (!event || typeof event !== "object" || Array.isArray(event))
+    throw Error("Pi returned invalid events");
+  if (event.type === "auto_retry_end" && event.success === false) throw Error("Pi provider failed");
+  return event;
+}
+
+function piAssistantAnswer(message: any): string {
+  if (["error", "aborted", "toolUse"].includes(message.stopReason) || message.errorMessage) {
+    throw Error(
+      /\b429\b|too many requests/i.test(String(message.errorMessage ?? ""))
+        ? "Pi provider rate limited"
+        : "Pi provider failed",
+    );
+  }
+  if (message.content?.some((block: any) => block.type === "toolCall"))
+    throw Error("Pi attempted a tool call");
+  return (message.content || [])
+    .filter((block: any) => block.type === "text")
+    .map((block: any) => block.text)
+    .join("");
+}
+
 /** Pi can exit zero after an API error; only a completed assistant message counts. */
 export function parsePiTriageOutput(stdout: string): string {
   let answer: string | undefined;
   for (const line of stdout.split("\n")) {
     if (!line.trim()) continue;
-    let event: any;
-    try {
-      event = JSON.parse(line);
-    } catch {
-      throw Error("Pi returned invalid events");
-    }
-    if (!event || typeof event !== "object" || Array.isArray(event))
-      throw Error("Pi returned invalid events");
-    if (event.type === "auto_retry_end" && event.success === false)
-      throw Error("Pi provider failed");
+    const event = parsePiEventLine(line);
     const message = event.type === "message_end" ? event.message : undefined;
     if (message?.role !== "assistant") continue;
-    if (["error", "aborted", "toolUse"].includes(message.stopReason) || message.errorMessage) {
-      throw Error(
-        /\b429\b|too many requests/i.test(String(message.errorMessage ?? ""))
-          ? "Pi provider rate limited"
-          : "Pi provider failed",
-      );
-    }
-    if (message.content?.some((block: any) => block.type === "toolCall"))
-      throw Error("Pi attempted a tool call");
-    answer = (message.content || [])
-      .filter((block: any) => block.type === "text")
-      .map((block: any) => block.text)
-      .join("");
+    answer = piAssistantAnswer(message);
   }
   if (!answer) throw Error("Pi returned no answer");
   return answer;
@@ -188,6 +196,58 @@ export function createPiEventCollector(maxBytes = 192_000, maxTrafficBytes = 32 
   };
 }
 
+interface TriageRun {
+  child: ReturnType<typeof spawn>;
+  stdout: string;
+  bytes: number;
+  maxBytes: number;
+  collector: ReturnType<typeof createPiEventCollector> | undefined;
+  failure: Error | undefined;
+  timer: NodeJS.Timeout | undefined;
+}
+
+function stopTriageRun(run: TriageRun, message: string) {
+  run.failure ??= Error(message);
+  try {
+    process.kill(-run.child.pid!, "SIGKILL");
+  } catch {
+    run.child.kill("SIGKILL");
+  }
+}
+
+function onTriageStdout(run: TriageRun, chunk: string) {
+  if (run.failure) return;
+  if (run.collector) {
+    try {
+      run.collector.push(chunk);
+    } catch (error) {
+      stopTriageRun(run, (error as Error).message);
+    }
+    return;
+  }
+  run.bytes += Buffer.byteLength(chunk);
+  if (run.bytes > run.maxBytes) stopTriageRun(run, "Triage model exceeded output limit");
+  else run.stdout += chunk;
+}
+
+function onTriageClose(
+  run: TriageRun,
+  code: number | null,
+  resolve: (value: string) => void,
+  reject: (reason: unknown) => void,
+) {
+  clearTimeout(run.timer);
+  if (run.failure) reject(run.failure);
+  else if (code !== 0) reject(Error("Triage model process failed"));
+  else {
+    try {
+      resolve(run.collector ? run.collector.finish() : run.stdout);
+    } catch (error) {
+      reject(error);
+    }
+  }
+}
+
 export function runTriageCommand(
   command: string,
   args: string[],
@@ -205,54 +265,27 @@ export function runTriageCommand(
       stdio: ["pipe", "pipe", "pipe"],
       detached: true,
     });
-    let stdout = "";
-    let bytes = 0;
-    const collector = outputMode === "pi-events" ? createPiEventCollector(maxBytes) : undefined;
-    let failure: Error | undefined;
-    const stop = (message: string) => {
-      failure ??= Error(message);
-      try {
-        process.kill(-child.pid!, "SIGKILL");
-      } catch {
-        child.kill("SIGKILL");
-      }
+    const run: TriageRun = {
+      child,
+      stdout: "",
+      bytes: 0,
+      maxBytes,
+      collector: outputMode === "pi-events" ? createPiEventCollector(maxBytes) : undefined,
+      failure: undefined,
+      timer: undefined,
     };
-    const timer = setTimeout(() => stop("Triage model timed out"), timeoutMs);
+    run.timer = setTimeout(() => stopTriageRun(run, "Triage model timed out"), timeoutMs);
     child.stdout.setEncoding("utf8");
-    child.stdout.on("data", (chunk: string) => {
-      if (failure) return;
-      if (collector) {
-        try {
-          collector.push(chunk);
-        } catch (error) {
-          stop((error as Error).message);
-        }
-      } else {
-        bytes += Buffer.byteLength(chunk);
-        if (bytes > maxBytes) stop("Triage model exceeded output limit");
-        else stdout += chunk;
-      }
-    });
+    child.stdout.on("data", (chunk: string) => onTriageStdout(run, chunk));
     child.stderr.on("data", (chunk) => {
-      bytes += chunk.length;
-      if (bytes > maxBytes) stop("Triage model exceeded output limit");
+      run.bytes += chunk.length;
+      if (run.bytes > maxBytes) stopTriageRun(run, "Triage model exceeded output limit");
     });
     child.on("error", () => {
-      clearTimeout(timer);
+      clearTimeout(run.timer);
       reject(Error("Triage model could not start"));
     });
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      if (failure) reject(failure);
-      else if (code !== 0) reject(Error("Triage model process failed"));
-      else {
-        try {
-          resolve(collector ? collector.finish() : stdout);
-        } catch (error) {
-          reject(error);
-        }
-      }
-    });
+    child.on("close", (code) => onTriageClose(run, code, resolve, reject));
     child.stdin.on("error", () => {});
     child.stdin.end(input);
   });
@@ -483,6 +516,83 @@ export function defaultTriageEngines(): LabelEngine[] {
   ];
 }
 
+type TriageComplete = ReturnType<typeof createLabelCompletion>;
+
+function readTriageDecision(raw: string | undefined) {
+  if (!raw) return;
+  return JSON.parse(raw) as TriageDecision;
+}
+
+function allPlanningUnknown(decision: TriageDecision): boolean {
+  const planning = decision.scorecard?.planningMetrics;
+  return !!planning && Object.values(planning).every((item) => item.value === null);
+}
+
+// Small models often return every planning metric as unknown for a substantive request.
+// Treat that as unusable so a stronger fallback gets one try; keep it if none does better.
+async function completeTriageDecision(
+  complete: TriageComplete,
+  input: TriageInput,
+): Promise<TriageDecision | undefined> {
+  let sparse: TriageDecision | undefined;
+  const substantive = (input.title + input.body).length >= 120;
+  const decision = await complete(triagePrompt(input), TRIAGE_SYSTEM, (raw) => {
+    const read = readTriageDecision(raw);
+    if (read && substantive && allPlanningUnknown(read)) {
+      sparse ??= read;
+      return;
+    }
+    return read;
+  }).catch((error) => {
+    if (sparse) return undefined;
+    throw error;
+  });
+  return decision ?? sparse;
+}
+
+const EVIDENCE_REVIEW_NOTE =
+  "\nEvidence-completeness review: the previous answer left every planning metric unknown despite an explicit failure or integration request. Re-read the exact initial request once. Apply the planning skill's inference rules for investigation, named provider scope, and broken workflow impact when supported. Keep unsupported recurrence, deadline, architecture, and risk unknown. Do not change the frozen metrics contract or fabricate facts. Return the complete JSON with planningMetrics and work.";
+const FREQUENCY_REVIEW_NOTE =
+  "\nFrequency review: the previous answer left workflow frequency unknown although repoContext is present. Find where the affected feature sits in the repoContext workflow description. If a quote supports it, return frequency with basis inferred and that quote in context; otherwise keep it null. Keep every other field unchanged and return the complete JSON.";
+
+async function reviewTriageDecision(
+  complete: TriageComplete,
+  input: TriageInput,
+  decision: TriageDecision,
+): Promise<TriageDecision> {
+  let current = decision;
+  if (needsEvidenceReview(current, input)) {
+    const reviewed = await complete(
+      triagePrompt(input),
+      TRIAGE_SYSTEM + EVIDENCE_REVIEW_NOTE,
+      readTriageDecision,
+    );
+    if (reviewed) current = reviewed;
+  }
+  if (needsFrequencyReview(current, input)) {
+    const reviewed = await complete(
+      triagePrompt(input),
+      TRIAGE_SYSTEM + FREQUENCY_REVIEW_NOTE,
+      readTriageDecision,
+    );
+    if (reviewed) current = reviewed;
+  }
+  return current;
+}
+
+// One cheap extra call may read expected behavior from the repository description; it never blocks the quote.
+async function attachStructure(
+  decision: TriageDecision,
+  input: TriageInput,
+  extract: typeof extractStructure,
+) {
+  const score = decision.scorecard;
+  if (!score?.structure || !score.pricing) return;
+  const text = input.body.trim() ? `${input.title}\n${input.body}` : input.title;
+  const extraction = await extract({ text, repoContext: input.repoContext }).catch(() => undefined);
+  score.structure = quoteStructure(text, score.pricing, extraction);
+}
+
 export function createTriageClassifier(
   engines: LabelEngine[] = defaultTriageEngines(),
   modelFor: () => LoadedEffortModel = loadEffortModel,
@@ -501,60 +611,10 @@ export function createTriageClassifier(
   return async (input: TriageInput): Promise<TriageDecision> => {
     if (modelFor().status !== "ready")
       throw Error("Effort-pricing model is unavailable. Run bin/github-triage calibrate.");
-    const readDecision = (raw: string | undefined) => {
-      if (!raw) return;
-      return JSON.parse(raw) as TriageDecision;
-    };
-    // Small models often return every planning metric as unknown for a substantive request.
-    // Treat that as unusable so a stronger fallback gets one try; keep it if none does better.
-    let sparse: TriageDecision | undefined;
-    const substantive = (input.title + input.body).length >= 120;
-    let decision = await complete(triagePrompt(input), TRIAGE_SYSTEM, (raw) => {
-      const read = readDecision(raw);
-      const planning = read?.scorecard?.planningMetrics;
-      if (
-        read &&
-        substantive &&
-        planning &&
-        Object.values(planning).every((item) => item.value === null)
-      ) {
-        sparse ??= read;
-        return;
-      }
-      return read;
-    }).catch((error) => {
-      if (sparse) return undefined;
-      throw error;
-    });
-    decision ??= sparse;
-    if (decision && needsEvidenceReview(decision, input)) {
-      const reviewed = await complete(
-        triagePrompt(input),
-        TRIAGE_SYSTEM +
-          "\nEvidence-completeness review: the previous answer left every planning metric unknown despite an explicit failure or integration request. Re-read the exact initial request once. Apply the planning skill's inference rules for investigation, named provider scope, and broken workflow impact when supported. Keep unsupported recurrence, deadline, architecture, and risk unknown. Do not change the frozen metrics contract or fabricate facts. Return the complete JSON with planningMetrics and work.",
-        readDecision,
-      );
-      if (reviewed) decision = reviewed;
-    }
-    if (decision && needsFrequencyReview(decision, input)) {
-      const reviewed = await complete(
-        triagePrompt(input),
-        TRIAGE_SYSTEM +
-          "\nFrequency review: the previous answer left workflow frequency unknown although repoContext is present. Find where the affected feature sits in the repoContext workflow description. If a quote supports it, return frequency with basis inferred and that quote in context; otherwise keep it null. Keep every other field unchanged and return the complete JSON.",
-        readDecision,
-      );
-      if (reviewed) decision = reviewed;
-    }
-    if (!decision) throw Error("All triage models unavailable or returned invalid decisions");
-    // One cheap extra call may read expected behavior from the repository description; it never blocks the quote.
-    const score = decision.scorecard;
-    if (score?.structure && score.pricing) {
-      const text = input.body.trim() ? `${input.title}\n${input.body}` : input.title;
-      const extraction = await extract({ text, repoContext: input.repoContext }).catch(
-        () => undefined,
-      );
-      score.structure = quoteStructure(text, score.pricing, extraction);
-    }
+    const first = await completeTriageDecision(complete, input);
+    if (!first) throw Error("All triage models unavailable or returned invalid decisions");
+    const decision = await reviewTriageDecision(complete, input, first);
+    await attachStructure(decision, input, extract);
     return decision;
   };
 }

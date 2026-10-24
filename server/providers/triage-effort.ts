@@ -185,11 +185,10 @@ function treeValidationStatus(validation: EffortModel["validation"]): "experimen
   return record(heads) && heads.status === "validated" ? "validated" : "experimental";
 }
 
-/** Reject the whole artifact: partial loading could silently change its learned equation. */
-export function validateEffortModel(value: unknown): LoadedEffortModel {
-  const invalid = () => unavailable("The effort model is malformed or unsupported.");
-  if (
-    !record(value) ||
+type LooseRecord = Record<string, any>;
+
+function malformedHeader(value: LooseRecord): boolean {
+  return (
     value.schemaVersion !== 1 ||
     value.method !== "nonnegative-ridge-log-work-v1" ||
     (value.scope !== undefined &&
@@ -198,7 +197,12 @@ export function validateEffortModel(value: unknown): LoadedEffortModel {
     (value.tokenYieldBasis !== undefined &&
       !["actions", "actions-plus-one", "workload"].includes(value.tokenYieldBasis as string)) ||
     (value.workloadMetric !== undefined &&
-      !["toolCalls", "totalTokens"].includes(value.workloadMetric as string)) ||
+      !["toolCalls", "totalTokens"].includes(value.workloadMetric as string))
+  );
+}
+
+function malformedEstimator(value: LooseRecord): boolean {
+  return (
     (value.estimator !== undefined &&
       !["complexity", "historical-baseline", "quantile-trees"].includes(
         value.estimator as string,
@@ -211,11 +215,11 @@ export function validateEffortModel(value: unknown): LoadedEffortModel {
       (names) => JSON.stringify(value.featureNames) === JSON.stringify(names),
     ) ||
     !record(value.workload)
-  )
-    return invalid();
-  const work = value.workload;
-  const size = (value.featureNames as string[]).length;
-  if (
+  );
+}
+
+function malformedWorkload(work: LooseRecord, size: number): boolean {
+  return (
     !finite(work.intercept, -40, 40) ||
     !vector(work.coefficients, 0, 40, size) ||
     !vector(work.missingCoefficients, -40, 40, size) ||
@@ -224,86 +228,98 @@ export function validateEffortModel(value: unknown): LoadedEffortModel {
     !Array.isArray(work.featureRanges) ||
     work.featureRanges.length !== size ||
     !record(work.residualQuantiles)
-  )
-    return invalid();
-  if (
+  );
+}
+
+function malformedBaseline(value: LooseRecord, work: LooseRecord): boolean {
+  return (
     value.estimator === "historical-baseline" &&
     (value.workloadMetric !== "totalTokens" ||
       (work.coefficients as number[]).some((n) => n !== 0) ||
       (work.missingCoefficients as number[]).some((n) => n !== 0))
-  )
-    return invalid();
-  if (
-    !work.featureRanges.every(
-      (range) =>
-        record(range) &&
-        count(range.known) &&
-        count(range.missing) &&
-        ((range.known === 0 && range.min === null && range.max === null) ||
-          (finite(range.min, 0, 3) && finite(range.max, range.min, 3))),
-    )
-  )
-    return invalid();
-  const residual = work.residualQuantiles;
-  if (
+  );
+}
+
+function malformedRange(range: unknown): boolean {
+  const item = range as LooseRecord;
+  return !(
+    record(range) &&
+    count(item.known) &&
+    count(item.missing) &&
+    ((item.known === 0 && item.min === null && item.max === null) ||
+      (finite(item.min, 0, 3) && finite(item.max, item.min, 3)))
+  );
+}
+
+function malformedResidual(residual: LooseRecord): boolean {
+  return (
     !finite(residual.p50, -40, 40) ||
     !finite(residual.p80, residual.p50, 40) ||
     !finite(residual.p95, residual.p80, 40)
+  );
+}
+
+function malformedWorkloadScenario(scenario: LooseRecord): boolean {
+  if (!finite(scenario.inputPerWork, 0, 1) || !finite(scenario.outputPerWork, 0, 1)) return true;
+  const share = scenario.inputPerWork + scenario.outputPerWork;
+  if (scenario.zeroWork === true ? share !== 0 : Math.abs(share - 1) > 1e-8) return true;
+  for (const channel of ["freshInputPerWork", "cachedInputPerWork"] as const) {
+    if (scenario[channel] !== null && !finite(scenario[channel], 0, scenario.inputPerWork + 1e-8))
+      return true;
+  }
+  return (
+    scenario.freshInputPerWork !== null &&
+    scenario.cachedInputPerWork !== null &&
+    Math.abs(scenario.freshInputPerWork + scenario.cachedInputPerWork - scenario.inputPerWork) >
+      1e-8
+  );
+}
+
+function malformedScenario(scenario: unknown, seen: Set<string>, yieldBasis: unknown): boolean {
+  const item = scenario as LooseRecord;
+  if (
+    !record(scenario) ||
+    !identifier(item.sampleId) ||
+    seen.has(item.sampleId) ||
+    !finite(item.logResidual, -40, 40) ||
+    !finite(item.outputPerWork, 0, 1e9)
   )
-    return invalid();
+    return true;
+  if (
+    item.zeroWork !== undefined &&
+    (typeof item.zeroWork !== "boolean" || yieldBasis !== "workload")
+  )
+    return true;
+  if (
+    item.inputPerWork !== undefined &&
+    item.inputPerWork !== null &&
+    !finite(item.inputPerWork, 0, 1e12)
+  )
+    return true;
+  for (const channel of ["freshInputPerWork", "cachedInputPerWork", "roundsPerWork"] as const) {
+    if (item[channel] !== null && !finite(item[channel], 0, 1e12)) return true;
+  }
+  return yieldBasis === "workload" && malformedWorkloadScenario(item);
+}
+
+/** Returns the validated sample ids, or undefined when any scenario is malformed. */
+function validScenarioIds(value: LooseRecord): Set<string> | undefined {
   if (
     !Array.isArray(value.scenarios) ||
     value.scenarios.length < 3 ||
     value.scenarios.length > MAX_ROWS
   )
-    return invalid();
+    return undefined;
   const seen = new Set<string>();
   for (const scenario of value.scenarios) {
-    if (
-      !record(scenario) ||
-      !identifier(scenario.sampleId) ||
-      seen.has(scenario.sampleId) ||
-      !finite(scenario.logResidual, -40, 40) ||
-      !finite(scenario.outputPerWork, 0, 1e9)
-    )
-      return invalid();
-    if (
-      scenario.zeroWork !== undefined &&
-      (typeof scenario.zeroWork !== "boolean" || value.tokenYieldBasis !== "workload")
-    )
-      return invalid();
-    if (
-      scenario.inputPerWork !== undefined &&
-      scenario.inputPerWork !== null &&
-      !finite(scenario.inputPerWork, 0, 1e12)
-    )
-      return invalid();
-    for (const channel of ["freshInputPerWork", "cachedInputPerWork", "roundsPerWork"] as const) {
-      if (scenario[channel] !== null && !finite(scenario[channel], 0, 1e12)) return invalid();
-    }
-    if (value.tokenYieldBasis === "workload") {
-      if (!finite(scenario.inputPerWork, 0, 1) || !finite(scenario.outputPerWork, 0, 1))
-        return invalid();
-      const share = scenario.inputPerWork + scenario.outputPerWork;
-      if (scenario.zeroWork === true ? share !== 0 : Math.abs(share - 1) > 1e-8) return invalid();
-      for (const channel of ["freshInputPerWork", "cachedInputPerWork"] as const) {
-        if (
-          scenario[channel] !== null &&
-          !finite(scenario[channel], 0, scenario.inputPerWork + 1e-8)
-        )
-          return invalid();
-      }
-      if (
-        scenario.freshInputPerWork !== null &&
-        scenario.cachedInputPerWork !== null &&
-        Math.abs(scenario.freshInputPerWork + scenario.cachedInputPerWork - scenario.inputPerWork) >
-          1e-8
-      )
-        return invalid();
-    }
-    seen.add(scenario.sampleId);
+    if (malformedScenario(scenario, seen, value.tokenYieldBasis)) return undefined;
+    seen.add((scenario as EffortScenario).sampleId);
   }
-  if (
+  return seen;
+}
+
+function malformedTrailer(value: LooseRecord, seen: Set<string>): boolean {
+  return (
     !record(value.workCutoffs) ||
     !finite(value.workCutoffs.trivialMax, 0, 1e9) ||
     !finite(value.workCutoffs.deepMin, value.workCutoffs.trivialMax, 1e9) ||
@@ -321,16 +337,30 @@ export function validateEffortModel(value: unknown): LoadedEffortModel {
     !value.training.sampleIds.every(identifier) ||
     new Set(value.training.sampleIds).size !== value.training.sampleIds.length ||
     [...seen].some((id) => !(value.training.sampleIds as string[]).includes(id))
-  )
-    return invalid();
-  if (
-    !work.featureRanges.every(
-      (range) =>
-        (range as FeatureRange).known + (range as FeatureRange).missing ===
-        (value.training as EffortModel["training"]).sampleIds.length,
-    )
-  )
-    return invalid();
+  );
+}
+
+/** Stages run in the original order; the first failing stage rejects the artifact. */
+function malformedEffortModel(value: LooseRecord): boolean {
+  const work = value.workload;
+  const size = (value.featureNames as string[]).length;
+  if (malformedWorkload(work, size) || malformedBaseline(value, work)) return true;
+  if (work.featureRanges.some(malformedRange) || malformedResidual(work.residualQuantiles))
+    return true;
+  const seen = validScenarioIds(value);
+  if (!seen || malformedTrailer(value, seen)) return true;
+  const sampleTotal = (value.training as EffortModel["training"]).sampleIds.length;
+  return !work.featureRanges.every(
+    (range: FeatureRange) => range.known + range.missing === sampleTotal,
+  );
+}
+
+/** Reject the whole artifact: partial loading could silently change its learned equation. */
+export function validateEffortModel(value: unknown): LoadedEffortModel {
+  if (!record(value) || malformedHeader(value) || malformedEstimator(value))
+    return unavailable("The effort model is malformed or unsupported.");
+  if (malformedEffortModel(value))
+    return unavailable("The effort model is malformed or unsupported.");
   return { status: "ready", model: value as unknown as EffortModel };
 }
 
@@ -405,62 +435,136 @@ const quantiles = (values: number[], round = true): EffortQuantiles => {
     : result;
 };
 
-/** The small model supplies four evidence-backed features; it never selects labels or prices. */
-export function quoteEffort(
-  metrics: ComplexityInput,
-  loaded: LoadedEffortModel = loadEffortModel(),
-  requestText?: string,
-): EffortQuote | EffortUnavailable {
-  if (loaded.status !== "ready") return loaded;
-  const validated = validateEffortModel(loaded.model);
-  if (validated.status !== "ready") return validated;
-  if (!record(metrics)) return unavailable("Pre-work complexity features are invalid.");
-  const model = validated.model;
-  const scope = model.scope ?? "completed-delivery-run";
-  const tokenYieldBasis = model.tokenYieldBasis ?? "actions";
-  const workloadMetric = model.workloadMetric ?? "toolCalls";
-  const estimator = model.estimator ?? "complexity";
-  const unknowns: EffortFeature[] = [];
-  const outOfRange: EffortFeature[] = [];
-  const contributions: EffortQuote["contributions"] = [];
-  let logWork = model.workload.intercept;
+type TreeQuantiles = ReturnType<typeof predictQuantiles>;
+
+interface FeatureTally {
+  unknowns: EffortFeature[];
+  outOfRange: EffortFeature[];
+  contributions: EffortQuote["contributions"];
+  logWork: number;
+}
+
+interface ScenarioValues {
+  activity: number[];
+  output: number[];
+  input: number[];
+  total: number[];
+  fresh: number[];
+  cached: number[];
+  rounds: number[];
+}
+
+interface PricedChannels {
+  total: EffortQuantiles | null;
+  activity: EffortQuantiles;
+  output: EffortQuantiles | null;
+  input: EffortQuantiles | null;
+  fresh: EffortQuantiles | null;
+  cached: EffortQuantiles | null;
+  rounds: EffortQuantiles | null;
+}
+
+interface QuoteSettings {
+  scope: EffortScope;
+  tokenYieldBasis: TokenYieldBasis;
+  workloadMetric: EffortWorkloadMetric;
+  estimator: EffortEstimator;
+}
+
+const RANGE_ERROR = "The effort prediction exceeds its supported range.";
+
+function validMetric(metric: unknown): metric is { value: number | null } {
+  return (
+    record(metric) &&
+    !(metric.value !== null && (!Number.isInteger(metric.value) || !finite(metric.value, 0, 3)))
+  );
+}
+
+function outsideRange(value: number | null, range: FeatureRange): boolean {
+  return (
+    value !== null &&
+    (!range.known ||
+      range.min === null ||
+      range.max === null ||
+      value < range.min ||
+      value > range.max)
+  );
+}
+
+/** Returns undefined when any feature is malformed. */
+function tallyFeatures(model: EffortModel, metrics: ComplexityInput): FeatureTally | undefined {
+  const tally: FeatureTally = {
+    unknowns: [],
+    outOfRange: [],
+    contributions: [],
+    logWork: model.workload.intercept,
+  };
   for (let index = 0; index < model.featureNames.length; index++) {
     const feature = model.featureNames[index];
     const metric = metrics[feature];
-    if (
-      !record(metric) ||
-      (metric.value !== null && (!Number.isInteger(metric.value) || !finite(metric.value, 0, 3)))
-    )
-      return unavailable("Pre-work complexity features are invalid.");
+    if (!validMetric(metric)) return undefined;
     const value = metric.value as number | null;
-    if (value === null) unknowns.push(feature);
+    if (value === null) tally.unknowns.push(feature);
     const imputed = value ?? model.workload.imputation[index];
-    const range = model.workload.featureRanges[index];
-    if (
-      value !== null &&
-      (!range.known ||
-        range.min === null ||
-        range.max === null ||
-        value < range.min ||
-        value > range.max)
-    )
-      outOfRange.push(feature);
+    if (outsideRange(value, model.workload.featureRanges[index])) tally.outOfRange.push(feature);
     const contribution =
       (model.workload.coefficients[index] * imputed) / model.workload.scale[index];
     const missing = value === null ? model.workload.missingCoefficients[index] : 0;
-    contributions.push({ feature, value, imputed, logWork: contribution, missingLogWork: missing });
-    logWork += contribution + missing;
+    tally.contributions.push({
+      feature,
+      value,
+      imputed,
+      logWork: contribution,
+      missingLogWork: missing,
+    });
+    tally.logWork += contribution + missing;
   }
-  // No extrapolation is hidden: range and missing-feature warnings remain in the quote.
-  const activityValues: number[] = [];
-  const outputValues: number[] = [];
-  const inputValues: number[] = [];
-  const totalValues: number[] = [];
-  const freshValues: number[] = [];
-  const cachedValues: number[] = [];
-  const roundValues: number[] = [];
-  // Match the offline fitter's numerical bounds before applying paired residuals.
-  const predictedLogWork = Math.max(0, Math.min(30, logWork));
+  return tally;
+}
+
+function scenarioInputYield(scenario: EffortScenario): number | null {
+  return (
+    scenario.inputPerWork ??
+    (scenario.freshInputPerWork !== null && scenario.cachedInputPerWork !== null
+      ? scenario.freshInputPerWork + scenario.cachedInputPerWork
+      : null)
+  );
+}
+
+function pushScenarioChannels(
+  values: ScenarioValues,
+  scenario: EffortScenario,
+  yieldWork: number,
+  output: number,
+) {
+  if (scenario.freshInputPerWork !== null)
+    values.fresh.push(yieldWork * scenario.freshInputPerWork);
+  if (scenario.cachedInputPerWork !== null)
+    values.cached.push(yieldWork * scenario.cachedInputPerWork);
+  const inputYield = scenarioInputYield(scenario);
+  if (inputYield !== null) {
+    const input = yieldWork * inputYield;
+    values.input.push(input);
+    values.total.push(input + output);
+  }
+  if (scenario.roundsPerWork !== null) values.rounds.push(yieldWork * scenario.roundsPerWork);
+}
+
+/** Returns undefined when a scenario prices outside the supported range. */
+function scenarioValues(
+  model: EffortModel,
+  tokenYieldBasis: TokenYieldBasis,
+  predictedLogWork: number,
+): ScenarioValues | undefined {
+  const values: ScenarioValues = {
+    activity: [],
+    output: [],
+    input: [],
+    total: [],
+    fresh: [],
+    cached: [],
+    rounds: [],
+  };
   // A residual tail must not price more session usage than training ever observed.
   const ceiling =
     tokenYieldBasis === "workload" && typeof model.workloadCeiling === "number"
@@ -476,110 +580,126 @@ export function quoteEffort(
     // is explicit so legacy per-action artifacts keep their original arithmetic.
     const yieldWork = activity + (tokenYieldBasis === "actions-plus-one" ? 1 : 0);
     const output = yieldWork * scenario.outputPerWork;
-    if (!finite(activity, 0, 1e15) || !finite(output, 0, 1e15))
-      return unavailable("The effort prediction exceeds its supported range.");
-    activityValues.push(activity);
-    outputValues.push(output);
-    if (scenario.freshInputPerWork !== null)
-      freshValues.push(yieldWork * scenario.freshInputPerWork);
-    if (scenario.cachedInputPerWork !== null)
-      cachedValues.push(yieldWork * scenario.cachedInputPerWork);
-    const inputYield =
-      scenario.inputPerWork ??
-      (scenario.freshInputPerWork !== null && scenario.cachedInputPerWork !== null
-        ? scenario.freshInputPerWork + scenario.cachedInputPerWork
-        : null);
-    if (inputYield !== null) {
-      const input = yieldWork * inputYield;
-      inputValues.push(input);
-      totalValues.push(input + output);
-    }
-    if (scenario.roundsPerWork !== null) roundValues.push(yieldWork * scenario.roundsPerWork);
+    if (!finite(activity, 0, 1e15) || !finite(output, 0, 1e15)) return undefined;
+    values.activity.push(activity);
+    values.output.push(output);
+    pushScenarioChannels(values, scenario, yieldWork, output);
   }
-  if (
-    ![inputValues, totalValues, freshValues, cachedValues, roundValues].every((values) =>
-      values.every((item) => finite(item, 0, 1e15)),
-    )
-  )
-    return unavailable("The effort prediction exceeds its supported range.");
-  // Keep work continuous for the learned tercile policy; round only token budgets.
-  const activity = quantiles(activityValues, false);
-  const output = quantiles(outputValues);
-  // A channel with missing measurements is unavailable, rather than silently changing cohorts.
-  const complete = (values: number[], round = true) =>
-    values.length === model.scenarios.length ? quantiles(values, round) : null;
-  const input = complete(inputValues);
-  // Tree heads price the whole session directly. Channel splits keep the observed paired
-  // shares, so any printed input/output budget still sums to the priced total.
-  const tree =
-    model.quantileModel && typeof requestText === "string" && requestText.trim()
-      ? predictQuantiles(model.quantileModel, requestFeatures(requestText))
-      : null;
-  const median = (values: number[]): number | null => {
-    if (!values.length) return null;
-    const sorted = [...values].sort((a, b) => a - b);
-    const middle = Math.floor(sorted.length / 2);
-    return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+  const channels = [values.input, values.total, values.fresh, values.cached, values.rounds];
+  return channels.every((list) => list.every((item) => finite(item, 0, 1e15))) ? values : undefined;
+}
+
+// A channel with missing measurements is unavailable, rather than silently changing cohorts.
+function completeQuantiles(expected: number, values: number[], round = true) {
+  return values.length === expected ? quantiles(values, round) : null;
+}
+
+function medianOf(values: number[]): number | null {
+  if (!values.length) return null;
+  const sorted = [...values].sort((left, right) => left - right);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+}
+
+function scaledQuantiles(
+  values: (number | null)[],
+  total: EffortQuantiles,
+): EffortQuantiles | null {
+  const ratio = medianOf(values.filter((value): value is number => value !== null));
+  if (ratio === null) return null;
+  const round = (value: number) => Math.ceil(value);
+  return {
+    p50: round(total.p50 * ratio),
+    ...(total.p75 === undefined ? {} : { p75: round(total.p75 * ratio) }),
+    p80: round(total.p80 * ratio),
+    p95: round(total.p95 * ratio),
+    ...(total.p99 === undefined ? {} : { p99: round(total.p99 * ratio) }),
   };
-  const scaled = (values: (number | null)[], total: EffortQuantiles): EffortQuantiles | null => {
-    const ratio = median(values.filter((value): value is number => value !== null));
-    if (ratio === null) return null;
-    const round = (value: number) => Math.ceil(value);
-    return {
-      p50: round(total.p50 * ratio),
-      ...(total.p75 === undefined ? {} : { p75: round(total.p75 * ratio) }),
-      p80: round(total.p80 * ratio),
-      p95: round(total.p95 * ratio),
-      ...(total.p99 === undefined ? {} : { p99: round(total.p99 * ratio) }),
-    };
+}
+
+// Tree heads price the whole session directly. Channel splits keep the observed paired
+// shares, so any printed input/output budget still sums to the priced total.
+function treeChannels(model: EffortModel, tree: TreeQuantiles): PricedChannels {
+  const total: EffortQuantiles = {
+    p50: tree.p50,
+    p75: tree.p75,
+    p80: tree.p80,
+    p95: tree.p95,
+    p99: tree.p99,
   };
-  const pricedTotal: EffortQuantiles | null = tree
-    ? { p50: tree.p50, p75: tree.p75, p80: tree.p80, p95: tree.p95, p99: tree.p99 }
-    : complete(totalValues);
-  const pricedActivity: EffortQuantiles = tree
-    ? { p50: tree.p50, p75: tree.p75, p80: tree.p80, p95: tree.p95, p99: tree.p99 }
-    : activity;
-  const pricedOutput =
-    tree && pricedTotal
-      ? scaled(
-          model.scenarios.map((row) => row.outputPerWork),
-          pricedTotal,
-        )
-      : output;
-  const pricedInput =
-    tree && pricedTotal
-      ? scaled(
-          model.scenarios.map(
-            (row) =>
-              row.inputPerWork ??
-              (row.freshInputPerWork !== null && row.cachedInputPerWork !== null
-                ? row.freshInputPerWork + row.cachedInputPerWork
-                : null),
-          ),
-          pricedTotal,
-        )
-      : input;
-  const pricedFresh =
-    tree && pricedTotal
-      ? scaled(
-          model.scenarios.map((row) => row.freshInputPerWork),
-          pricedTotal,
-        )
-      : complete(freshValues);
-  const pricedCached =
-    tree && pricedTotal
-      ? scaled(
-          model.scenarios.map((row) => row.cachedInputPerWork),
-          pricedTotal,
-        )
-      : complete(cachedValues);
-  const pricedRounds =
-    tree && pricedTotal
-      ? scaled(
-          model.scenarios.map((row) => row.roundsPerWork),
-          pricedTotal,
-        )
-      : complete(roundValues, false);
+  const share = (pick: (row: EffortScenario) => number | null) =>
+    scaledQuantiles(model.scenarios.map(pick), total);
+  return {
+    total,
+    activity: { p50: tree.p50, p75: tree.p75, p80: tree.p80, p95: tree.p95, p99: tree.p99 },
+    output: share((row) => row.outputPerWork),
+    input: share(scenarioInputYield),
+    fresh: share((row) => row.freshInputPerWork),
+    cached: share((row) => row.cachedInputPerWork),
+    rounds: share((row) => row.roundsPerWork),
+  };
+}
+
+function scenarioChannels(model: EffortModel, values: ScenarioValues): PricedChannels {
+  const expected = model.scenarios.length;
+  return {
+    total: completeQuantiles(expected, values.total),
+    // Keep work continuous for the learned tercile policy; round only token budgets.
+    activity: quantiles(values.activity, false),
+    output: quantiles(values.output),
+    input: completeQuantiles(expected, values.input),
+    fresh: completeQuantiles(expected, values.fresh),
+    cached: completeQuantiles(expected, values.cached),
+    rounds: completeQuantiles(expected, values.rounds, false),
+  };
+}
+
+function effortTier(
+  thresholds: EffortModel["workCutoffs"],
+  activity: EffortQuantiles,
+  basis: "p50" | "p95",
+) {
+  if (thresholds.trivialMax === thresholds.deepMin) return "bau";
+  if (activity[basis] <= thresholds.trivialMax) return "trivial";
+  return activity[basis] >= thresholds.deepMin ? "deep" : "bau";
+}
+
+function featureNarrative(featureNames: readonly EffortFeature[]): string {
+  if (featureNames.length > 4)
+    return "breadth, complexity, uncertainty, risk, and request shape (size, lines, references, action verbs)";
+  return featureNames[0] === "requestSize"
+    ? "shape (size, lines, references, action verbs)"
+    : "breadth, complexity, uncertainty, and risk";
+}
+
+function quoteFormula(model: EffortModel, settings: QuoteSettings, tree: boolean): string {
+  const { scope, tokenYieldBasis, workloadMetric, estimator } = settings;
+  if (tree)
+    return `Boosted quantile tree heads predict five session-total quantiles from the initial request text (length, structure, references, action verbs, code fences, paths, tests, checklists) plus the request-shape buckets. Heads are rearranged into a monotone set and capped at the largest observed training total. Input, generated, and cached channels reuse the median observed share of the priced total. P50 routes complete in-range scope; unknown or extrapolated scope routes through P95 by policy. Those are observed session snapshots, including later follow-ups, not human hours.`;
+  if (estimator === "historical-baseline")
+    return "The complexity fit did not beat the training-median baseline on held-out session totals. This quote uses the empirical training-session usage distribution and paired observed token shares. It does not claim task-specific predictive accuracy. All measured zero-usage sessions remain in that distribution. Total input includes cached replay once; input plus generated output defines total session usage. Initial requests remain the only candidate predictors. Unknown scope selects the P95 reserve by policy. These are historical session snapshots, including later follow-ups, not human hours or guarantees about future resumption.";
+  if (workloadMetric === "totalTokens")
+    return `Initial-request ${featureNarrative(model.featureNames)} predict log(1 + total session tokens) with nonnegative ridge coefficients. Total session tokens are recorded input plus generated output, including cached replay once. Chronological out-of-fold residuals produce usage scenarios; paired observed input/output/cache shares split those scenarios. Explicitly measured zero-total sessions retain an empirical point mass at zero. Tool counts are optional diagnostics, never the fitted target. Effort tiers compare predicted session tokens against training-session terciles. P50 routes complete in-range scope; unknown or extrapolated scope routes through P95 by policy. Only initial user messages supply predictors; later follow-ups are part of the outcome and add unexplained variance. Raw usage and later conversation never enter the predictors. Unknowns use training-only imputation and remain flagged. These are observed session snapshots, not human hours or guarantees about future resumption.`;
+  return `Initial-request breadth, complexity, uncertainty, and risk predict log(1 + tool calls) with nonnegative ridge coefficients. Tool calls are an observed, agent-style-dependent work proxy. Chronological out-of-fold work residuals and observed usage divided by ${tokenYieldBasis === "actions-plus-one" ? "(1 + tool calls)" : "tool calls"} produce P50/P80/P95 budgets. Effort compares predicted tool calls against training ${scope === "completed-session" ? "session" : "delivery-run"} lower/upper terciles; equal cutoffs mean BAU. Explicit routing policy uses P50 effort and P80 planning for complete in-range features, or P95 effort and planning when any feature is unknown or outside training ranges. This policy does not change model budgets or confidence. Input context replay never sets effort. Unknowns use learned imputation and are flagged. ${scope === "completed-session" ? "Scope is one entire completed session/thread, including later follow-ups. Only initial user requests supply predictors; later prompts are unseen at prediction time and add variance. Human hours and unmeasured child agents are not priced." : "Scope is one completed logged delivery run, not a whole issue or human hours."}`;
+}
+
+function quoteConfidence(
+  model: EffortModel,
+  incomplete: boolean,
+  tree: boolean,
+): "experimental" | "validated" {
+  if (incomplete) return "experimental";
+  return tree ? treeValidationStatus(model.validation) : model.validation.status;
+}
+
+function assembleQuote(
+  model: EffortModel,
+  settings: QuoteSettings,
+  tally: FeatureTally,
+  channels: PricedChannels,
+  values: ScenarioValues,
+  tree: boolean,
+): EffortQuote {
   const thresholds = model.workCutoffs;
   // Out-of-sample residuals already include the usual share of unknown model-extracted metrics, so
   // when request-shape features exist only unknown shape features (never expected) or extrapolation force P95.
@@ -588,56 +708,71 @@ export function quoteEffort(
   )
     ? SHAPE_FEATURES
     : model.featureNames;
-  const incomplete = unknowns.some((name) => required.includes(name)) || outOfRange.length > 0;
+  const incomplete =
+    tally.unknowns.some((name) => required.includes(name)) || tally.outOfRange.length > 0;
   const effortBasis = incomplete ? "p95" : "p50";
-  const recommendedBudget = incomplete ? "p95" : "p80";
-  const effort =
-    thresholds.trivialMax === thresholds.deepMin
-      ? "bau"
-      : pricedActivity[effortBasis] <= thresholds.trivialMax
-        ? "trivial"
-        : pricedActivity[effortBasis] >= thresholds.deepMin
-          ? "deep"
-          : "bau";
+  const output = channels.output ?? quantiles(values.output);
   return {
     status: "ready",
-    confidence: incomplete
-      ? "experimental"
-      : tree
-        ? treeValidationStatus(model.validation)
-        : model.validation.status,
-    scope,
-    tokenYieldBasis,
-    workloadMetric,
-    estimator,
+    confidence: quoteConfidence(model, incomplete, tree),
+    scope: settings.scope,
+    tokenYieldBasis: settings.tokenYieldBasis,
+    workloadMetric: settings.workloadMetric,
+    estimator: settings.estimator,
     method: tree ? "boosted-trees-quantile-v1" : model.method,
-    effort,
+    effort: effortTier(thresholds, channels.activity, effortBasis),
     effortBasis,
-    recommendedBudget,
-    activity: pricedActivity,
-    output: pricedOutput ?? output,
-    total: pricedTotal,
-    input: pricedInput,
-    freshInput: pricedFresh,
-    cachedInput: pricedCached,
-    rounds: pricedRounds,
+    recommendedBudget: incomplete ? "p95" : "p80",
+    activity: channels.activity,
+    output,
+    total: channels.total,
+    input: channels.input,
+    freshInput: channels.fresh,
+    cachedInput: channels.cached,
+    rounds: channels.rounds,
     riskPremium: {
-      work: pricedActivity.p80 - pricedActivity.p50,
-      output: (pricedOutput ?? output).p80 - (pricedOutput ?? output).p50,
-      input: pricedInput ? pricedInput.p80 - pricedInput.p50 : null,
+      work: channels.activity.p80 - channels.activity.p50,
+      output: output.p80 - output.p50,
+      input: channels.input ? channels.input.p80 - channels.input.p50 : null,
     },
-    contributions,
-    unknowns,
-    outOfRange,
+    contributions: tally.contributions,
+    unknowns: tally.unknowns,
+    outOfRange: tally.outOfRange,
     thresholds,
     training: model.training,
     validation: model.validation,
-    formula: tree
-      ? `Boosted quantile tree heads predict five session-total quantiles from the initial request text (length, structure, references, action verbs, code fences, paths, tests, checklists) plus the request-shape buckets. Heads are rearranged into a monotone set and capped at the largest observed training total. Input, generated, and cached channels reuse the median observed share of the priced total. P50 routes complete in-range scope; unknown or extrapolated scope routes through P95 by policy. Those are observed session snapshots, including later follow-ups, not human hours.`
-      : estimator === "historical-baseline"
-        ? "The complexity fit did not beat the training-median baseline on held-out session totals. This quote uses the empirical training-session usage distribution and paired observed token shares. It does not claim task-specific predictive accuracy. All measured zero-usage sessions remain in that distribution. Total input includes cached replay once; input plus generated output defines total session usage. Initial requests remain the only candidate predictors. Unknown scope selects the P95 reserve by policy. These are historical session snapshots, including later follow-ups, not human hours or guarantees about future resumption."
-        : workloadMetric === "totalTokens"
-          ? `Initial-request ${model.featureNames.length > 4 ? "breadth, complexity, uncertainty, risk, and request shape (size, lines, references, action verbs)" : model.featureNames[0] === "requestSize" ? "shape (size, lines, references, action verbs)" : "breadth, complexity, uncertainty, and risk"} predict log(1 + total session tokens) with nonnegative ridge coefficients. Total session tokens are recorded input plus generated output, including cached replay once. Chronological out-of-fold residuals produce usage scenarios; paired observed input/output/cache shares split those scenarios. Explicitly measured zero-total sessions retain an empirical point mass at zero. Tool counts are optional diagnostics, never the fitted target. Effort tiers compare predicted session tokens against training-session terciles. P50 routes complete in-range scope; unknown or extrapolated scope routes through P95 by policy. Only initial user messages supply predictors; later follow-ups are part of the outcome and add unexplained variance. Raw usage and later conversation never enter the predictors. Unknowns use training-only imputation and remain flagged. These are observed session snapshots, not human hours or guarantees about future resumption.`
-          : `Initial-request breadth, complexity, uncertainty, and risk predict log(1 + tool calls) with nonnegative ridge coefficients. Tool calls are an observed, agent-style-dependent work proxy. Chronological out-of-fold work residuals and observed usage divided by ${tokenYieldBasis === "actions-plus-one" ? "(1 + tool calls)" : "tool calls"} produce P50/P80/P95 budgets. Effort compares predicted tool calls against training ${scope === "completed-session" ? "session" : "delivery-run"} lower/upper terciles; equal cutoffs mean BAU. Explicit routing policy uses P50 effort and P80 planning for complete in-range features, or P95 effort and planning when any feature is unknown or outside training ranges. This policy does not change model budgets or confidence. Input context replay never sets effort. Unknowns use learned imputation and are flagged. ${scope === "completed-session" ? "Scope is one entire completed session/thread, including later follow-ups. Only initial user requests supply predictors; later prompts are unseen at prediction time and add variance. Human hours and unmeasured child agents are not priced." : "Scope is one completed logged delivery run, not a whole issue or human hours."}`,
+    formula: quoteFormula(model, settings, tree),
   };
+}
+
+/** The small model supplies four evidence-backed features; it never selects labels or prices. */
+export function quoteEffort(
+  metrics: ComplexityInput,
+  loaded: LoadedEffortModel = loadEffortModel(),
+  requestText?: string,
+): EffortQuote | EffortUnavailable {
+  if (loaded.status !== "ready") return loaded;
+  const validated = validateEffortModel(loaded.model);
+  if (validated.status !== "ready") return validated;
+  if (!record(metrics)) return unavailable("Pre-work complexity features are invalid.");
+  const model = validated.model;
+  const settings: QuoteSettings = {
+    scope: model.scope ?? "completed-delivery-run",
+    tokenYieldBasis: model.tokenYieldBasis ?? "actions",
+    workloadMetric: model.workloadMetric ?? "toolCalls",
+    estimator: model.estimator ?? "complexity",
+  };
+  const tally = tallyFeatures(model, metrics);
+  if (!tally) return unavailable("Pre-work complexity features are invalid.");
+  // No extrapolation is hidden: range and missing-feature warnings remain in the quote.
+  // Match the offline fitter's numerical bounds before applying paired residuals.
+  const predictedLogWork = Math.max(0, Math.min(30, tally.logWork));
+  const values = scenarioValues(model, settings.tokenYieldBasis, predictedLogWork);
+  if (!values) return unavailable(RANGE_ERROR);
+  const tree =
+    model.quantileModel && typeof requestText === "string" && requestText.trim()
+      ? predictQuantiles(model.quantileModel, requestFeatures(requestText))
+      : null;
+  const channels = tree ? treeChannels(model, tree) : scenarioChannels(model, values);
+  return assembleQuote(model, settings, tally, channels, values, !!tree);
 }

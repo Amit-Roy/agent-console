@@ -18,6 +18,7 @@ import {
   clip,
   type Provider,
   type QuestionReply,
+  type Settings,
   type ThreadSpec,
 } from "./types.ts";
 
@@ -70,97 +71,149 @@ export function normalizeCommands(raw: any[]): Command[] {
 // Without a host, headless Claude drops AskUserQuestion from its tools altogether. AskUserQuestion becomes a question card; its
 // answer goes back as updatedInput.answers {question text: "label, label"} (verified on CLI 2.1.301: the tool result reads
 // `"Which color?"="Green"`). Every other prompt is denied, exactly as without a host, so the permission mode still decides.
-export function claudeControl(write: (msg: object) => void, emit: (ev: any) => void, mode: string) {
-  const pending = new Map<string, { input: any; questions: ReturnType<typeof cleanQuestions> }>();
-  const respond = (request_id: string, response: object) =>
-    write({ type: "control_response", response: { subtype: "success", request_id, response } });
+interface PendingControl {
+  input: any;
+  questions: ReturnType<typeof cleanQuestions>;
+}
+
+interface ControlContext {
+  pending: Map<string, PendingControl>;
+  write: (msg: object) => void;
+  emit: (event: any) => void;
+  mode: string;
+}
+
+const AUTO_ALLOWED_TOOLS = [
+  "mcp__agent_console__session_search",
+  "mcp__agent_console__session_read",
+  "mcp__agent_console__pi_research",
+  "mcp__agent_console__cli_search",
+];
+
+function respondControl(ctx: ControlContext, requestId: string, response: object) {
+  ctx.write({
+    type: "control_response",
+    response: { subtype: "success", request_id: requestId, response },
+  });
+}
+
+function askControlQuestions(ctx: ControlContext, event: any, req: any) {
+  const questions = cleanQuestions(
+    req.input.questions.map((question: any, idx: number) => ({
+      ...question,
+      id: String(idx),
+      allowOther: true,
+    })),
+  );
+  if (!questions.length) {
+    respondControl(ctx, event.request_id, {
+      behavior: "deny",
+      message: "No questions were provided. Continue with your best judgment.",
+    });
+    return;
+  }
+  ctx.pending.set(event.request_id, { input: req.input, questions });
+  ctx.emit({
+    type: "question",
+    id: event.request_id,
+    tool_use_id: req.tool_use_id,
+    questions,
+    ts: Date.now(),
+  });
+}
+
+function handleControlRequest(ctx: ControlContext, event: any) {
+  const req = event.request ?? {};
+  if (req.subtype !== "can_use_tool") {
+    ctx.write({
+      type: "control_response",
+      response: {
+        subtype: "error",
+        request_id: event.request_id,
+        error: `Unsupported control request: ${req.subtype}`,
+      },
+    });
+    return;
+  }
+  // Session history tools are read-only and authenticated by the Console bridge.
+  // Allow only these exact names in Plan/acceptEdits; all other permission prompts retain their policy.
+  if (AUTO_ALLOWED_TOOLS.includes(req.tool_name)) {
+    respondControl(ctx, event.request_id, { behavior: "allow", updatedInput: req.input ?? {} });
+    return;
+  }
+  if (req.tool_name === "AskUserQuestion" && Array.isArray(req.input?.questions)) {
+    askControlQuestions(ctx, event, req);
+    return;
+  }
+  respondControl(ctx, event.request_id, {
+    behavior: "deny",
+    message: `Permission for ${req.tool_name} was not granted: this console does not approve tool prompts in ${ctx.mode} mode. Continue without it or ask the user to switch the thread to Bypass.`,
+  });
+}
+
+function handleControlMessage(ctx: ControlContext, event: any): boolean {
+  if (event?.type === "control_cancel_request") {
+    if (ctx.pending.delete(event.request_id))
+      ctx.emit({ type: "question_answer", id: event.request_id, cancelled: true });
+    return true;
+  }
+  if (event?.type === "control_response") return true; // replies to host requests; we send none
+  if (event?.type !== "control_request") return false;
+  handleControlRequest(ctx, event);
+  return true;
+}
+
+function answerControl(ctx: ControlContext, questionId: string, reply: QuestionReply): boolean {
+  const entry = ctx.pending.get(questionId);
+  if (!entry) throw new Error("This question is no longer waiting for an answer.");
+  if (reply.skip || reply.note !== undefined) {
+    const message =
+      reply.note !== undefined
+        ? `The user did not pick an option and replied in chat instead: ${reply.note}`
+        : "The user skipped these questions without answering. Continue with your best judgment and do not ask the same questions again.";
+    respondControl(ctx, questionId, { behavior: "deny", message });
+    ctx.pending.delete(questionId);
+    return reply.note !== undefined;
+  }
+  const answers: Record<string, string> = {};
+  entry.questions.forEach((question, idx) => {
+    const picked = (reply.answers[question.id] ?? [])
+      .map((part) => String(part).trim())
+      .filter(Boolean);
+    if (picked.length)
+      answers[String(entry.input.questions[idx]?.question ?? question.question)] =
+        picked.join(", ");
+  });
+  respondControl(ctx, questionId, { behavior: "allow", updatedInput: { ...entry.input, answers } });
+  ctx.pending.delete(questionId);
+  return false;
+}
+
+// The SDK control protocol (`--permission-prompt-tool stdio`): the CLI asks its host before any tool that needs the user, as
+//   {"type":"control_request","request_id":R,"request":{"subtype":"can_use_tool","tool_name":T,"input":{...},"tool_use_id":U}}
+// and blocks until {"type":"control_response","response":{"subtype":"success","request_id":R,"response":{"behavior":"allow"|"deny",...}}}.
+// Without a host, headless Claude drops AskUserQuestion from its tools altogether. AskUserQuestion becomes a question card; its
+// answer goes back as updatedInput.answers {question text: "label, label"} (verified on CLI 2.1.301: the tool result reads
+// `"Which color?"="Green"`). Every other prompt is denied, exactly as without a host, so the permission mode still decides.
+export function claudeControl(
+  write: (msg: object) => void,
+  emit: (event: any) => void,
+  mode: string,
+) {
+  const ctx: ControlContext = { pending: new Map(), write, emit, mode };
   return {
-    pending,
+    pending: ctx.pending,
     cancelAll() {
-      for (const id of pending.keys()) emit({ type: "question_answer", id, cancelled: true });
-      pending.clear();
+      for (const questionId of ctx.pending.keys())
+        emit({ type: "question_answer", id: questionId, cancelled: true });
+      ctx.pending.clear();
     },
     // true when the line was a control message (never shown or logged)
-    handle(ev: any): boolean {
-      if (ev?.type === "control_cancel_request") {
-        if (pending.delete(ev.request_id))
-          emit({ type: "question_answer", id: ev.request_id, cancelled: true });
-        return true;
-      }
-      if (ev?.type === "control_response") return true; // replies to host requests; we send none
-      if (ev?.type !== "control_request") return false;
-      const r = ev.request ?? {};
-      if (r.subtype !== "can_use_tool") {
-        write({
-          type: "control_response",
-          response: {
-            subtype: "error",
-            request_id: ev.request_id,
-            error: `Unsupported control request: ${r.subtype}`,
-          },
-        });
-        return true;
-      }
-      // Session history tools are read-only and authenticated by the Console bridge.
-      // Allow only these exact names in Plan/acceptEdits; all other permission prompts retain their policy.
-      if (
-        [
-          "mcp__agent_console__session_search",
-          "mcp__agent_console__session_read",
-          "mcp__agent_console__pi_research",
-          "mcp__agent_console__cli_search",
-        ].includes(r.tool_name)
-      ) {
-        respond(ev.request_id, { behavior: "allow", updatedInput: r.input ?? {} });
-        return true;
-      }
-      if (r.tool_name === "AskUserQuestion" && Array.isArray(r.input?.questions)) {
-        const questions = cleanQuestions(
-          r.input.questions.map((q: any, i: number) => ({ ...q, id: String(i), allowOther: true })),
-        );
-        if (!questions.length) {
-          respond(ev.request_id, {
-            behavior: "deny",
-            message: "No questions were provided. Continue with your best judgment.",
-          });
-          return true;
-        }
-        pending.set(ev.request_id, { input: r.input, questions });
-        emit({
-          type: "question",
-          id: ev.request_id,
-          tool_use_id: r.tool_use_id,
-          questions,
-          ts: Date.now(),
-        });
-        return true;
-      }
-      respond(ev.request_id, {
-        behavior: "deny",
-        message: `Permission for ${r.tool_name} was not granted: this console does not approve tool prompts in ${mode} mode. Continue without it or ask the user to switch the thread to Bypass.`,
-      });
-      return true;
+    handle(event: any): boolean {
+      return handleControlMessage(ctx, event);
     },
-    answer(id: string, reply: QuestionReply): boolean {
-      const p = pending.get(id);
-      if (!p) throw new Error("This question is no longer waiting for an answer.");
-      if (reply.skip || reply.note !== undefined) {
-        const message =
-          reply.note !== undefined
-            ? `The user did not pick an option and replied in chat instead: ${reply.note}`
-            : "The user skipped these questions without answering. Continue with your best judgment and do not ask the same questions again.";
-        respond(id, { behavior: "deny", message });
-        pending.delete(id);
-        return reply.note !== undefined;
-      }
-      const answers: Record<string, string> = {};
-      p.questions.forEach((q, i) => {
-        const a = (reply.answers[q.id] ?? []).map((x) => String(x).trim()).filter(Boolean);
-        if (a.length) answers[String(p.input.questions[i]?.question ?? q.question)] = a.join(", ");
-      });
-      respond(id, { behavior: "allow", updatedInput: { ...p.input, answers } });
-      pending.delete(id);
-      return false;
+    answer(questionId: string, reply: QuestionReply): boolean {
+      return answerControl(ctx, questionId, reply);
     },
   };
 }
@@ -192,6 +245,141 @@ export function claudeRoutingEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return routed;
 }
 
+interface ClaudeRun {
+  proc: ReturnType<typeof spawnLines> | undefined;
+  requests: number;
+}
+
+function claudeStartArgs(thread: ThreadSpec): string[] {
+  const args = [
+    "-p",
+    "--input-format",
+    "stream-json",
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--include-partial-messages",
+    "--permission-mode",
+    thread.mode,
+    "--permission-prompt-tool",
+    "stdio", // host answers prompts over stdin/stdout: enables AskUserQuestion (see claudeControl)
+    "--add-dir",
+    threadDir(thread.id), // attachments live outside the project; without this plan/accept-edits could not read them
+    "--model",
+    thread.model,
+  ];
+  if (thread.effort && thread.effort !== "default") args.push("--effort", thread.effort);
+  args.push(...claudeConsoleSettingsArgs(thread.advisor));
+  args.push(...leanMcpArgs());
+  const style = [stylePreamble(), SESSION_INSTRUCTIONS].filter(Boolean).join("\n\n");
+  if (style) args.push("--append-system-prompt", style); // brain index arrives via the user hook
+  fs.mkdirSync(threadDir(thread.id), { recursive: true, mode: 0o700 });
+  if (thread.sessionId) args.push("--resume", thread.sessionId);
+  else if (thread.forkFrom) args.push("--resume", thread.forkFrom, "--fork-session"); // a forked thread: continue a copy of the parent session
+  return args;
+}
+
+function claudeStartEnv(thread: ThreadSpec, account: ReturnType<typeof requireClaudeAccount>) {
+  const env = claudeRoutingEnv(process.env);
+  env.AGENT_CONSOLE_THREAD = thread.id;
+  const toolEnv = toolEnvFile();
+  if (toolEnv && !env.CLAUDE_ENV_FILE) env.CLAUDE_ENV_FILE = toolEnv; // Bash commands start at the lower tool priority
+  if (account === "nefro") env.CLAUDE_CONFIG_DIR = claudeConfigDir(account);
+  for (const name of SCRUBBED_ENV) delete env[name];
+  return env;
+}
+
+function clipToolResults(event: any) {
+  delete event.tool_use_result; // duplicate of message.content, can be huge
+  for (const block of event.message?.content ?? []) {
+    if (block?.type === "tool_result" && typeof block.content === "string")
+      block.content = clip(block.content);
+  }
+}
+
+// How full the context is: the last main-thread request's whole input (cached + new) plus what it produced. Subagents have their own.
+function emitContextUsage(ctx: AgentCtx, event: any) {
+  const usage = event.message?.usage;
+  const used =
+    (usage?.input_tokens ?? 0) +
+    (usage?.cache_creation_input_tokens ?? 0) +
+    (usage?.cache_read_input_tokens ?? 0) +
+    (usage?.output_tokens ?? 0);
+  if (used > 0) ctx.event({ type: "context_usage", used });
+}
+
+function emitContextWindow(ctx: AgentCtx, event: any, model: string) {
+  const wins = Object.entries<any>(event.modelUsage);
+  const mine = wins.find(([name]) => name.includes(model)) ?? wins[0];
+  if (mine?.[1]?.contextWindow) ctx.event({ type: "context_usage", max: mine[1].contextWindow });
+}
+
+function handleClaudeLine(
+  thread: ThreadSpec,
+  ctx: AgentCtx,
+  control: ReturnType<typeof claudeControl>,
+  line: string,
+) {
+  const event = parseJson(line);
+  if (!event) return;
+  if (control.handle(event)) return;
+  if (event.type === "result") control.cancelAll();
+  if (event.type === "user") clipToolResults(event);
+  if (event.type === "system" && event.subtype === "init" && Array.isArray(event.slash_commands))
+    ctx.commands(normalizeCommands(event.slash_commands));
+  if (event.type === "system" && event.subtype === "commands_changed")
+    return ctx.commands(normalizeCommands(event.commands));
+  if (event.type === "assistant" && !event.parent_tool_use_id) emitContextUsage(ctx, event);
+  if (event.type === "result" && event.modelUsage) emitContextWindow(ctx, event, thread.model);
+  ctx.event(event);
+}
+
+// plain string when there is nothing to attach; otherwise the Messages API block form
+function writeClaudeUser(proc: NonNullable<ClaudeRun["proc"]>, text: string, images: Attachment[]) {
+  const content = images.length
+    ? [
+        ...images.map((image) => ({
+          type: "image",
+          source: {
+            type: "base64",
+            media_type: image.media_type,
+            data: fs.readFileSync(image.path).toString("base64"),
+          },
+        })),
+        ...(text.trim() ? [{ type: "text", text }] : []),
+      ]
+    : text;
+  proc.write(JSON.stringify({ type: "user", message: { role: "user", content } }));
+}
+
+function claudeEffortLevel(effort?: string) {
+  return !!effort && effort !== "default" && effort !== "ultracode"; // default/ultracode change flags, not a level
+}
+
+function configureClaude(run: ClaudeRun, from: Settings, target: Settings): boolean {
+  // the CLI refuses to enter bypassPermissions unless launched in it ("bypass_not_launched"): restart for that
+  if (target.mode === "bypassPermissions" && from.mode !== target.mode) return false;
+  if (
+    from.advisor !== target.advisor ||
+    (from.effort !== target.effort &&
+      !(claudeEffortLevel(from.effort) && claudeEffortLevel(target.effort)))
+  )
+    return false;
+  const ask = (request: object) =>
+    run.proc!.write(
+      JSON.stringify({
+        type: "control_request",
+        request_id: `cfg-${++run.requests}`,
+        request,
+      }),
+    );
+  if (from.model !== target.model) ask({ subtype: "set_model", model: target.model });
+  if (from.mode !== target.mode) ask({ subtype: "set_permission_mode", mode: target.mode });
+  if (from.effort !== target.effort)
+    ask({ subtype: "apply_flag_settings", settings: { effortLevel: target.effort } });
+  return true;
+}
+
 export const claude: Provider = {
   id: "claude",
   label: "Claude Code",
@@ -214,40 +402,12 @@ export const claude: Provider = {
   status: () => ({ ok: true }),
   start(t: ThreadSpec, ctx: AgentCtx): Agent {
     const account = requireClaudeAccount(t.claudeAccount);
-    const args = [
-      "-p",
-      "--input-format",
-      "stream-json",
-      "--output-format",
-      "stream-json",
-      "--verbose",
-      "--include-partial-messages",
-      "--permission-mode",
-      t.mode,
-      "--permission-prompt-tool",
-      "stdio", // host answers prompts over stdin/stdout: enables AskUserQuestion (see claudeControl)
-      "--add-dir",
-      threadDir(t.id), // attachments live outside the project; without this plan/accept-edits could not read them
-      "--model",
-      t.model,
-    ];
-    if (t.effort && t.effort !== "default") args.push("--effort", t.effort);
-    args.push(...claudeConsoleSettingsArgs(t.advisor));
-    args.push(...leanMcpArgs());
-    const style = [stylePreamble(), SESSION_INSTRUCTIONS].filter(Boolean).join("\n\n");
-    if (style) args.push("--append-system-prompt", style); // brain index arrives via the user hook
-    fs.mkdirSync(threadDir(t.id), { recursive: true, mode: 0o700 });
-    if (t.sessionId) args.push("--resume", t.sessionId);
-    else if (t.forkFrom) args.push("--resume", t.forkFrom, "--fork-session"); // a forked thread: continue a copy of the parent session
-    const env = claudeRoutingEnv(process.env);
-    env.AGENT_CONSOLE_THREAD = t.id;
-    const toolEnv = toolEnvFile();
-    if (toolEnv && !env.CLAUDE_ENV_FILE) env.CLAUDE_ENV_FILE = toolEnv; // Bash commands start at the lower tool priority
-    if (account === "nefro") env.CLAUDE_CONFIG_DIR = claudeConfigDir(account);
-    for (const k of SCRUBBED_ENV) delete env[k];
-    const control = claudeControl((msg) => p.write(JSON.stringify(msg)), ctx.event, t.mode);
+    const args = claudeStartArgs(t);
+    const env = claudeStartEnv(t, account);
+    const run: ClaudeRun = { proc: undefined, requests: 0 };
+    const control = claudeControl((msg) => run.proc!.write(JSON.stringify(msg)), ctx.event, t.mode);
     const launch = sandboxLaunch(t, "claude", args, env);
-    const p = spawnLines(
+    const proc = spawnLines(
       "claude",
       launch.command,
       launch.args,
@@ -259,108 +419,40 @@ export const claude: Provider = {
           ctx.exited(info);
         },
       },
-      (line) => {
-        const ev = parseJson(line);
-        if (!ev) return;
-        if (control.handle(ev)) return;
-        if (ev.type === "result") control.cancelAll();
-        if (ev.type === "user") {
-          delete ev.tool_use_result; // duplicate of message.content, can be huge
-          for (const c of ev.message?.content ?? []) {
-            if (c?.type === "tool_result" && typeof c.content === "string")
-              c.content = clip(c.content);
-          }
-        }
-        if (ev.type === "system" && ev.subtype === "init" && Array.isArray(ev.slash_commands))
-          ctx.commands(normalizeCommands(ev.slash_commands));
-        if (ev.type === "system" && ev.subtype === "commands_changed")
-          return ctx.commands(normalizeCommands(ev.commands));
-        // How full the context is: the last main-thread request's whole input (cached + new) plus what it produced. Subagents have their own.
-        if (ev.type === "assistant" && !ev.parent_tool_use_id) {
-          const u = ev.message?.usage;
-          const used =
-            (u?.input_tokens ?? 0) +
-            (u?.cache_creation_input_tokens ?? 0) +
-            (u?.cache_read_input_tokens ?? 0) +
-            (u?.output_tokens ?? 0);
-          if (used > 0) ctx.event({ type: "context_usage", used });
-        }
-        if (ev.type === "result" && ev.modelUsage) {
-          const wins = Object.entries<any>(ev.modelUsage);
-          const mine = wins.find(([k]) => k.includes(t.model)) ?? wins[0];
-          if (mine?.[1]?.contextWindow)
-            ctx.event({ type: "context_usage", max: mine[1].contextWindow });
-        }
-        ctx.event(ev);
-      },
+      (line) => handleClaudeLine(t, ctx, control, line),
     );
-    // plain string when there is nothing to attach; otherwise the Messages API block form
-    const write = (text: string, images: Attachment[]) => {
-      const content = images.length
-        ? [
-            ...images.map((i) => ({
-              type: "image",
-              source: {
-                type: "base64",
-                media_type: i.media_type,
-                data: fs.readFileSync(i.path).toString("base64"),
-              },
-            })),
-            ...(text.trim() ? [{ type: "text", text }] : []),
-          ]
-        : text;
-      p.write(JSON.stringify({ type: "user", message: { role: "user", content } }));
-    };
-    let requests = 0;
+    run.proc = proc;
     return {
       get alive() {
-        return p.alive();
+        return proc.alive();
       },
-      send: (text, images = []) => write(text, images),
+      send: (text, images = []) => writeClaudeUser(proc, text, images),
       compact: (instructions = "") =>
-        write(`/compact${instructions ? " " + instructions : ""}`, []),
+        writeClaudeUser(proc, `/compact${instructions ? " " + instructions : ""}`, []),
       // Claude takes a user message mid-turn on stdin and folds it in after the running tool call (verified: it dropped the
       // remaining commands and answered the new message within the same turn).
-      steer: (text, images = []) => write(text, images),
+      steer: (text, images = []) => writeClaudeUser(proc, text, images),
       answer: (id, reply) => control.answer(id, reply),
       // Verified on CLI 2.1.302: `interrupt` ends the turn with a zero-usage error result and the process stays up;
       // set_model, set_permission_mode (except into bypass) and apply_flag_settings {effortLevel} change the next request, no model call.
       interrupt: () => {
         control.cancelAll();
-        p.write(
+        proc.write(
           JSON.stringify({
             type: "control_request",
-            request_id: `int-${++requests}`,
+            request_id: `int-${++run.requests}`,
             request: { subtype: "interrupt" },
           }),
         );
       },
-      configure: (from, to) => {
-        const level = (e?: string) => !!e && e !== "default" && e !== "ultracode"; // default/ultracode change flags, not a level
-        // the CLI refuses to enter bypassPermissions unless launched in it ("bypass_not_launched"): restart for that
-        if (to.mode === "bypassPermissions" && from.mode !== to.mode) return false;
-        if (
-          from.advisor !== to.advisor ||
-          (from.effort !== to.effort && !(level(from.effort) && level(to.effort)))
-        )
-          return false;
-        const ask = (request: object) =>
-          p.write(
-            JSON.stringify({ type: "control_request", request_id: `cfg-${++requests}`, request }),
-          );
-        if (from.model !== to.model) ask({ subtype: "set_model", model: to.model });
-        if (from.mode !== to.mode) ask({ subtype: "set_permission_mode", mode: to.mode });
-        if (from.effort !== to.effort)
-          ask({ subtype: "apply_flag_settings", settings: { effortLevel: to.effort } });
-        return true;
-      },
+      configure: (from, target) => configureClaude(run, from, target),
       abort: () => {
         control.cancelAll();
-        p.abort();
+        proc.abort();
       },
       kill: () => {
         control.cancelAll();
-        p.kill();
+        proc.kill();
       },
     };
   },

@@ -103,13 +103,117 @@ const timestamp = (value: unknown): value is string =>
 const groupCount = (tasks: readonly HistoricalTask[]) =>
   new Set(tasks.map((task) => task.group)).size;
 
+interface HistorySeen {
+  ids: Set<string>;
+  commitGroups: Map<string, string>;
+  observations: Set<string>;
+}
+
+type HistoryRowResult = { error: string } | { task: HistoricalTask };
+type HistoryCommitsResult = { error: string } | { commits: HistoricalTask["commits"] };
+
+const isPlainRecord = (value: unknown): value is Record<string, unknown> =>
+  !!value && typeof value === "object" && !Array.isArray(value);
+
+function validTokenCount(value: unknown): boolean {
+  return Number.isSafeInteger(value) && (value as number) >= 0 && (value as number) <= 1e12;
+}
+
+function validRowFields(row: Record<string, unknown>): boolean {
+  return !(
+    !safeIdentifier(row.id, 200) ||
+    !safeIdentifier(row.group, 200) ||
+    !timestamp(row.startedAt) ||
+    !timestamp(row.completedAt) ||
+    Date.parse(row.completedAt) < Date.parse(row.startedAt) ||
+    !safeText(row.request, 12_000) ||
+    !safeIdentifier(row.provider, 120) ||
+    !validTokenCount(row.inputTokens) ||
+    !validTokenCount(row.outputTokens) ||
+    (row.inputTokens as number) + (row.outputTokens as number) <= 0 ||
+    !Array.isArray(row.commits) ||
+    !row.commits.length ||
+    row.commits.length > 100
+  );
+}
+
+function validCommitFields(commit: Record<string, unknown>): boolean {
+  return !(
+    !safeIdentifier(commit.repo, 500) ||
+    typeof commit.sha !== "string" ||
+    !/^[a-f\d]{7,64}$/i.test(commit.sha) ||
+    (commit.title !== undefined && !safeIdentifier(commit.title, 500))
+  );
+}
+
+function validateCommits(
+  rawCommits: unknown[],
+  group: string,
+  commitGroups: Map<string, string>,
+): HistoryCommitsResult {
+  const commits: HistoricalTask["commits"] = [];
+  const seenCommits = new Set<string>();
+  for (const rawCommit of rawCommits) {
+    if (!isPlainRecord(rawCommit) || !validCommitFields(rawCommit))
+      return { error: "History contains invalid commit provenance." };
+    const sha = (rawCommit.sha as string).toLowerCase();
+    const key = `${rawCommit.repo}:${sha}`;
+    if (commitGroups.has(key) && commitGroups.get(key) !== group)
+      return { error: "The same commit appears in independent history groups." };
+    commitGroups.set(key, group);
+    if (!seenCommits.has(key))
+      commits.push({
+        repo: rawCommit.repo as string,
+        sha,
+        ...(rawCommit.title === undefined ? {} : { title: rawCommit.title as string }),
+      });
+    seenCommits.add(key);
+  }
+  return { commits };
+}
+
+function validateHistoryRow(raw: unknown, seen: HistorySeen): HistoryRowResult {
+  if (!isPlainRecord(raw)) return { error: "History contains an invalid run." };
+  const row = raw;
+  if (!validRowFields(row))
+    return { error: "History contains invalid measurements or provenance." };
+  const runId = row.id as string;
+  if (seen.ids.has(runId)) return { error: "History contains duplicate run IDs." };
+  seen.ids.add(runId);
+  const observationKey = JSON.stringify([
+    row.group,
+    row.startedAt,
+    row.completedAt,
+    row.request,
+    row.inputTokens,
+    row.outputTokens,
+  ]);
+  if (seen.observations.has(observationKey))
+    return { error: "History contains duplicate measurements." };
+  seen.observations.add(observationKey);
+  const checked = validateCommits(row.commits as unknown[], row.group as string, seen.commitGroups);
+  if ("error" in checked) return checked;
+  return {
+    task: {
+      id: runId,
+      group: row.group as string,
+      startedAt: new Date(row.startedAt as string).toISOString(),
+      completedAt: new Date(row.completedAt as string).toISOString(),
+      request: row.request as string,
+      provider: row.provider as string,
+      inputTokens: row.inputTokens as number,
+      outputTokens: row.outputTokens as number,
+      commits: checked.commits,
+    },
+  };
+}
+
 /** Reject the entire dataset on bad records; silently dropping failures would bias calibration. */
 export function validateHistory(
   value: unknown,
 ): { status: "ready"; tasks: HistoricalTask[] } | HistoryInsufficient {
-  if (!value || typeof value !== "object" || Array.isArray(value))
-    return insufficient("History must be a versioned dataset.");
-  const document = value as Record<string, unknown>;
+  if (!isPlainRecord(value)) return insufficient("History must be a versioned dataset.");
+  const document = value;
   if (
     document.version !== 1 ||
     document.scope !== "completed-delivery-run" ||
@@ -119,82 +223,11 @@ export function validateHistory(
   if (document.tasks.length > HISTORY_POLICY.maximumRows)
     return insufficient("History exceeds the record limit.");
   const tasks: HistoricalTask[] = [];
-  const ids = new Set<string>();
-  const commitGroups = new Map<string, string>();
-  const observations = new Set<string>();
+  const seen: HistorySeen = { ids: new Set(), commitGroups: new Map(), observations: new Set() };
   for (const raw of document.tasks) {
-    if (!raw || typeof raw !== "object" || Array.isArray(raw))
-      return insufficient("History contains an invalid run.");
-    const row = raw as Record<string, unknown>;
-    if (
-      !safeIdentifier(row.id, 200) ||
-      !safeIdentifier(row.group, 200) ||
-      !timestamp(row.startedAt) ||
-      !timestamp(row.completedAt) ||
-      Date.parse(row.completedAt) < Date.parse(row.startedAt) ||
-      !safeText(row.request, 12_000) ||
-      !safeIdentifier(row.provider, 120) ||
-      !Number.isSafeInteger(row.inputTokens) ||
-      (row.inputTokens as number) < 0 ||
-      (row.inputTokens as number) > 1e12 ||
-      !Number.isSafeInteger(row.outputTokens) ||
-      (row.outputTokens as number) < 0 ||
-      (row.outputTokens as number) > 1e12 ||
-      (row.inputTokens as number) + (row.outputTokens as number) <= 0 ||
-      !Array.isArray(row.commits) ||
-      !row.commits.length ||
-      row.commits.length > 100
-    )
-      return insufficient("History contains invalid measurements or provenance.");
-    if (ids.has(row.id)) return insufficient("History contains duplicate run IDs.");
-    ids.add(row.id);
-    const observationKey = JSON.stringify([
-      row.group,
-      row.startedAt,
-      row.completedAt,
-      row.request,
-      row.inputTokens,
-      row.outputTokens,
-    ]);
-    if (observations.has(observationKey))
-      return insufficient("History contains duplicate measurements.");
-    observations.add(observationKey);
-    const commits: HistoricalTask["commits"] = [];
-    const seenCommits = new Set<string>();
-    for (const rawCommit of row.commits) {
-      if (!rawCommit || typeof rawCommit !== "object" || Array.isArray(rawCommit))
-        return insufficient("History contains invalid commit provenance.");
-      const commit = rawCommit as Record<string, unknown>;
-      if (
-        !safeIdentifier(commit.repo, 500) ||
-        typeof commit.sha !== "string" ||
-        !/^[a-f\d]{7,64}$/i.test(commit.sha) ||
-        (commit.title !== undefined && !safeIdentifier(commit.title, 500))
-      )
-        return insufficient("History contains invalid commit provenance.");
-      const key = `${commit.repo}:${commit.sha.toLowerCase()}`;
-      if (commitGroups.has(key) && commitGroups.get(key) !== row.group)
-        return insufficient("The same commit appears in independent history groups.");
-      commitGroups.set(key, row.group);
-      if (!seenCommits.has(key))
-        commits.push({
-          repo: commit.repo,
-          sha: commit.sha.toLowerCase(),
-          ...(commit.title === undefined ? {} : { title: commit.title }),
-        });
-      seenCommits.add(key);
-    }
-    tasks.push({
-      id: row.id,
-      group: row.group,
-      startedAt: new Date(row.startedAt).toISOString(),
-      completedAt: new Date(row.completedAt).toISOString(),
-      request: row.request,
-      provider: row.provider,
-      inputTokens: row.inputTokens as number,
-      outputTokens: row.outputTokens as number,
-      commits,
-    });
+    const checked = validateHistoryRow(raw, seen);
+    if ("error" in checked) return insufficient(checked.error);
+    tasks.push(checked.task);
   }
   tasks.sort((a, b) => a.startedAt.localeCompare(b.startedAt) || a.id.localeCompare(b.id));
   return { status: "ready", tasks };
@@ -386,6 +419,39 @@ function evaluateGroups(
   return metrics(cases);
 }
 
+function selectHistoryMethod(
+  groupTotal: number,
+  prefix: ReturnType<typeof grouped>,
+  baselineTuning: ReturnType<typeof evaluateGroups>,
+) {
+  let method: HistoryMethod = "global-median";
+  let tuning = baselineTuning;
+  let selectionReason = `Only ${groupTotal} independent groups; lexical selection requires ${HISTORY_POLICY.minimumSelectionGroups}. Using the empirical global median without differentiated effort claims.`;
+  if (groupTotal < HISTORY_POLICY.minimumSelectionGroups)
+    return { method, tuning, selectionReason };
+  if (baselineTuning.count < HISTORY_POLICY.minimumTuningCases)
+    return {
+      method,
+      tuning,
+      selectionReason:
+        "Too few eligible chronological tuning cases; using the empirical global median.",
+    };
+  selectionReason =
+    "Lexical candidates did not improve chronological tuning error; using the empirical global median.";
+  for (const candidate of ["lexical-k3", "lexical-k5"] as const) {
+    const result = evaluateGroups([], prefix, candidate, true);
+    if (
+      result.count === baselineTuning.count &&
+      result.multiplicativeError! < tuning.multiplicativeError! - 1e-10
+    ) {
+      method = candidate;
+      tuning = result;
+      selectionReason = `${candidate} had the lowest expanding-window tuning multiplicative error. Choice frozen before the newest 20% of groups were tested.`;
+    }
+  }
+  return { method, tuning, selectionReason };
+}
+
 /** Pure statistical fit: all data stays in memory; SQLite only supplies its standard lexical ranking. */
 export function trainHistory(
   tasks: readonly HistoricalTask[],
@@ -407,29 +473,11 @@ export function trainHistory(
   const prefix = groups.slice(0, cut);
   const holdout = groups.slice(cut);
   const baselineTuning = evaluateGroups([], prefix, "global-median", true);
-  let method: HistoryMethod = "global-median";
-  let tuning = baselineTuning;
-  let selectionReason = `Only ${groups.length} independent groups; lexical selection requires ${HISTORY_POLICY.minimumSelectionGroups}. Using the empirical global median without differentiated effort claims.`;
-  if (
-    groups.length >= HISTORY_POLICY.minimumSelectionGroups &&
-    baselineTuning.count >= HISTORY_POLICY.minimumTuningCases
-  ) {
-    selectionReason =
-      "Lexical candidates did not improve chronological tuning error; using the empirical global median.";
-    for (const candidate of ["lexical-k3", "lexical-k5"] as const) {
-      const result = evaluateGroups([], prefix, candidate, true);
-      if (
-        result.count === baselineTuning.count &&
-        result.multiplicativeError! < tuning.multiplicativeError! - 1e-10
-      ) {
-        method = candidate;
-        tuning = result;
-        selectionReason = `${candidate} had the lowest expanding-window tuning multiplicative error. Choice frozen before the newest 20% of groups were tested.`;
-      }
-    }
-  } else if (groups.length >= HISTORY_POLICY.minimumSelectionGroups)
-    selectionReason =
-      "Too few eligible chronological tuning cases; using the empirical global median.";
+  const { method, tuning, selectionReason } = selectHistoryMethod(
+    groups.length,
+    prefix,
+    baselineTuning,
+  );
   // The holdout never selects the method. Its training pool is frozen to the older prefix.
   const validation: HistoryValidation = {
     selectionReason,
