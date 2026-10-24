@@ -166,225 +166,535 @@ function friendlyError(msg: string): string {
   return clip(m ? m[1] : msg, 500);
 }
 
-// Pure translator: pi session event -> canonical (Claude-shaped) events. Exported so it can be tested without a model.
-export function piTranslator(
-  emit: (ev: any) => void,
-  onCommands?: (list: Command[]) => void,
-  contextWindow?: () => number | undefined,
-) {
-  let started = 0;
-  let cost = 0;
-  let usageModels: any[] = [];
-  let failure: string | undefined;
-  const settle = (aborted = false) => {
-    if (failure) emit({ type: "console_error", text: failure });
-    emit({
-      type: "result",
-      subtype: aborted ? "error_during_execution" : failure ? "error" : "success",
-      is_error: !!failure,
-      duration_ms: started ? Date.now() - started : 0,
-      ...(cost > 0 ? { total_cost_usd: cost } : {}),
-      usageModels,
-    });
-    started = 0;
-    cost = 0;
-    usageModels = [];
-    failure = undefined;
-  };
-  const subagents = new Map<string, string>(); // toolCallId -> description, while a subagent tool call runs
-  const blocks = (m: any) =>
-    (m.content ?? [])
-      .map((b: any) => {
-        if (b.type === "text") return { type: "text", text: b.text };
-        if (b.type === "thinking") return { type: "thinking", thinking: b.thinking ?? "" };
-        if (b.type === "toolCall")
-          return { type: "tool_use", id: b.id, ...normTool(b.name, b.arguments) };
-        return undefined;
-      })
-      .filter(Boolean);
-  const toolResult = (id: string, content: any, isError: boolean) => ({
+type PiTranslatorState = {
+  emit: (event: any) => void;
+  onCommands?: (list: Command[]) => void;
+  contextWindow?: () => number | undefined;
+  started: number;
+  cost: number;
+  usageModels: any[];
+  failure: string | undefined;
+  subagents: Map<string, string>; // toolCallId -> description, while a subagent tool call runs
+};
+
+function piSettle(state: PiTranslatorState, aborted = false) {
+  if (state.failure) state.emit({ type: "console_error", text: state.failure });
+  state.emit({
+    type: "result",
+    subtype: aborted ? "error_during_execution" : state.failure ? "error" : "success",
+    is_error: !!state.failure,
+    duration_ms: state.started ? Date.now() - state.started : 0,
+    ...(state.cost > 0 ? { total_cost_usd: state.cost } : {}),
+    usageModels: state.usageModels,
+  });
+  state.started = 0;
+  state.cost = 0;
+  state.usageModels = [];
+  state.failure = undefined;
+}
+
+function piContentBlocks(message: any) {
+  return (message.content ?? [])
+    .map((block: any) => {
+      if (block.type === "text") return { type: "text", text: block.text };
+      if (block.type === "thinking") return { type: "thinking", thinking: block.thinking ?? "" };
+      if (block.type === "toolCall")
+        return { type: "tool_use", id: block.id, ...normTool(block.name, block.arguments) };
+      return undefined;
+    })
+    .filter(Boolean);
+}
+
+function piToolResult(toolId: string, content: any, isError: boolean) {
+  return {
     type: "user",
     message: {
       role: "user",
       content: [
-        { type: "tool_result", tool_use_id: id, content: clip(textOf(content)), is_error: isError },
+        {
+          type: "tool_result",
+          tool_use_id: toolId,
+          content: clip(textOf(content)),
+          is_error: isError,
+        },
       ],
     },
-  });
-  // The subagent extension forwards each child pi event in the tool update's details; show it tagged with the parent call.
-  const child = (parent: string, c: any) => {
-    if (c?.type === "message_end" && c.message?.role === "assistant") {
-      const m = c.message;
-      const u = m.usage;
-      if (u) {
-        cost += Number(u.cost?.total) || 0;
-        usageModels.push({
-          model: m.model || "unknown",
-          role: "subagent",
-          fresh: u.input,
-          cacheWrite: u.cacheWrite,
-          cacheRead: u.cacheRead,
-          output: u.output,
-          reasoning: u.reasoning,
-          cost: u.cost?.total,
-        });
-      }
-      const content = blocks(m);
-      if (content.length)
-        emit({
-          type: "assistant",
-          parent_tool_use_id: parent,
-          message: { role: "assistant", content },
-        });
-    } else if (c?.type === "tool_execution_end")
-      emit({
-        ...toolResult(c.toolCallId, c.result?.content, !!c.isError),
-        parent_tool_use_id: parent,
-      });
   };
-  return (r: any) => {
-    switch (r?.type) {
-      case "agent_start":
-        started ||= Date.now();
-        break;
-      case "message_start":
-        if (r.message?.role === "assistant")
-          emit({ type: "stream_event", event: { type: "message_start" } });
-        break;
-      case "message_update": {
-        const e = r.assistantMessageEvent;
-        if (e?.type === "text_delta")
-          emit({
-            type: "stream_event",
-            event: { type: "content_block_delta", delta: { type: "text_delta", text: e.delta } },
-          });
-        else if (e?.type === "thinking_delta")
-          emit({
-            type: "stream_event",
-            event: {
-              type: "content_block_delta",
-              delta: { type: "thinking_delta", thinking: e.delta },
-            },
-          });
-        break;
-      }
-      case "message_end": {
-        const m = r.message;
-        if (m?.role !== "assistant") break;
-        cost += Number(m.usage?.cost?.total) || 0;
-        const u = m.usage;
-        if (u)
-          usageModels.push({
-            model: m.model || "unknown",
-            role: "agent",
-            fresh: u.input,
-            cacheWrite: u.cacheWrite,
-            cacheRead: u.cacheRead,
-            output: u.output,
-            reasoning: u.reasoning,
-            cost: u.cost?.total,
-          });
-        const used =
-          Number(u?.totalTokens) ||
-          (Number(u?.input) || 0) +
-            (Number(u?.cacheRead) || 0) +
-            (Number(u?.cacheWrite) || 0) +
-            (Number(u?.output) || 0);
-        if (used > 0)
-          emit({
-            type: "context_usage",
-            used,
-            ...(contextWindow?.() ? { max: contextWindow() } : {}),
-          });
-        // a provider error that pi retried successfully must not fail the whole turn: only the last reply counts
-        if (m.stopReason === "error" && m.errorMessage) failure = friendlyError(m.errorMessage);
-        else if (m.stopReason !== "aborted") failure = undefined;
-        const content = blocks(m);
-        if (content.length)
-          emit({
-            type: "assistant",
-            message: { role: "assistant", content, model: m.model, usage: m.usage },
-          });
-        break;
-      }
-      case "tool_execution_start":
-        if (r.toolName === "subagent") {
-          const description = normTool("subagent", r.args).input.description;
-          subagents.set(r.toolCallId, description);
-          emit({
-            type: "system",
-            subtype: "task_started",
-            task_id: r.toolCallId,
-            tool_use_id: r.toolCallId,
-            task_type: "local_agent",
-            description,
-          });
+}
+
+function piRecordUsage(state: PiTranslatorState, message: any, role: string) {
+  const usage = message.usage;
+  if (!usage) return;
+  state.cost += Number(usage.cost?.total) || 0;
+  state.usageModels.push({
+    model: message.model || "unknown",
+    role,
+    fresh: usage.input,
+    cacheWrite: usage.cacheWrite,
+    cacheRead: usage.cacheRead,
+    output: usage.output,
+    reasoning: usage.reasoning,
+    cost: usage.cost?.total,
+  });
+}
+
+// The subagent extension forwards each child pi event in the tool update's details; show it tagged with the parent call.
+function piChildEvent(state: PiTranslatorState, parent: string, child: any) {
+  if (child?.type === "message_end" && child.message?.role === "assistant") {
+    piRecordUsage(state, child.message, "subagent");
+    const content = piContentBlocks(child.message);
+    if (content.length)
+      state.emit({
+        type: "assistant",
+        parent_tool_use_id: parent,
+        message: { role: "assistant", content },
+      });
+  } else if (child?.type === "tool_execution_end")
+    state.emit({
+      ...piToolResult(child.toolCallId, child.result?.content, !!child.isError),
+      parent_tool_use_id: parent,
+    });
+}
+
+function piUsedTokens(usage: any): number {
+  return (
+    Number(usage?.totalTokens) ||
+    (Number(usage?.input) || 0) +
+      (Number(usage?.cacheRead) || 0) +
+      (Number(usage?.cacheWrite) || 0) +
+      (Number(usage?.output) || 0)
+  );
+}
+
+function piAgentStart(state: PiTranslatorState) {
+  state.started ||= Date.now();
+}
+
+function piMessageStart(state: PiTranslatorState, rec: any) {
+  if (rec.message?.role === "assistant")
+    state.emit({ type: "stream_event", event: { type: "message_start" } });
+}
+
+function piMessageUpdate(state: PiTranslatorState, rec: any) {
+  const delta = rec.assistantMessageEvent;
+  if (delta?.type === "text_delta")
+    state.emit({
+      type: "stream_event",
+      event: { type: "content_block_delta", delta: { type: "text_delta", text: delta.delta } },
+    });
+  else if (delta?.type === "thinking_delta")
+    state.emit({
+      type: "stream_event",
+      event: {
+        type: "content_block_delta",
+        delta: { type: "thinking_delta", thinking: delta.delta },
+      },
+    });
+}
+
+function piMessageEnd(state: PiTranslatorState, rec: any) {
+  const message = rec.message;
+  if (message?.role !== "assistant") return;
+  piRecordUsage(state, message, "agent");
+  const used = piUsedTokens(message.usage);
+  if (used > 0)
+    state.emit({
+      type: "context_usage",
+      used,
+      ...(state.contextWindow?.() ? { max: state.contextWindow() } : {}),
+    });
+  // a provider error that pi retried successfully must not fail the whole turn: only the last reply counts
+  if (message.stopReason === "error" && message.errorMessage)
+    state.failure = friendlyError(message.errorMessage);
+  else if (message.stopReason !== "aborted") state.failure = undefined;
+  const content = piContentBlocks(message);
+  if (content.length)
+    state.emit({
+      type: "assistant",
+      message: { role: "assistant", content, model: message.model, usage: message.usage },
+    });
+}
+
+function piToolStart(state: PiTranslatorState, rec: any) {
+  if (rec.toolName !== "subagent") return;
+  const description = normTool("subagent", rec.args).input.description;
+  state.subagents.set(rec.toolCallId, description);
+  state.emit({
+    type: "system",
+    subtype: "task_started",
+    task_id: rec.toolCallId,
+    tool_use_id: rec.toolCallId,
+    task_type: "local_agent",
+    description,
+  });
+}
+
+function piToolUpdate(state: PiTranslatorState, rec: any) {
+  if (state.subagents.has(rec.toolCallId))
+    piChildEvent(state, rec.toolCallId, rec.partialResult?.details?.event);
+}
+
+function piToolEnd(state: PiTranslatorState, rec: any) {
+  if (state.subagents.has(rec.toolCallId)) {
+    const summary = clip(textOf(rec.result?.content), 300);
+    state.emit({
+      type: "system",
+      subtype: "task_notification",
+      task_id: rec.toolCallId,
+      tool_use_id: rec.toolCallId,
+      status: rec.isError ? "failed" : "completed",
+      summary: summary || state.subagents.get(rec.toolCallId),
+    });
+    state.subagents.delete(rec.toolCallId);
+  }
+  state.emit(piToolResult(rec.toolCallId, rec.result?.content, !!rec.isError));
+}
+
+// turn timing only: status + error class, never the message
+function piRetryStart(state: PiTranslatorState, rec: any) {
+  state.emit(
+    retryEvent({
+      attempt: rec.attempt,
+      message: String(rec.errorMessage ?? ""),
+      delay: rec.delayMs,
+    }),
+  );
+}
+
+function piRetryEnd(state: PiTranslatorState, rec: any) {
+  if (rec.success === false)
+    state.failure = friendlyError(String(rec.finalError ?? "request failed"));
+}
+
+function piSettled(state: PiTranslatorState, rec: any) {
+  piSettle(state, !!rec.aborted);
+}
+
+function piCompactResponse(state: PiTranslatorState, rec: any) {
+  if (rec.success) {
+    state.emit({ type: "system", subtype: "compact_boundary" });
+    if (Number.isFinite(rec.data?.estimatedTokensAfter))
+      state.emit({
+        type: "context_usage",
+        used: rec.data.estimatedTokensAfter,
+        ...(state.contextWindow?.() ? { max: state.contextWindow() } : {}),
+      });
+  } else state.emit({ type: "console_error", text: String(rec.error || "Pi compaction failed.") });
+  state.emit({
+    type: "result",
+    subtype: rec.success ? "success" : "error",
+    is_error: !rec.success,
+  });
+}
+
+function piCommandList(rec: any): Command[] {
+  return (rec.data?.commands ?? [])
+    .filter((entry: any) => typeof entry?.name === "string")
+    .map((entry: any) => ({
+      name: entry.name,
+      description: String(entry.description ?? "").slice(0, 200),
+    }))
+    .sort((left: Command, right: Command) => left.name.localeCompare(right.name));
+}
+
+function piResponse(state: PiTranslatorState, rec: any) {
+  if (rec.command === "compact") {
+    piCompactResponse(state, rec);
+    return;
+  }
+  if (rec.command === "get_commands" && rec.success) {
+    state.onCommands?.(piCommandList(rec));
+  } else if (rec.command === "prompt" && rec.success === false) {
+    state.failure = friendlyError(String(rec.error ?? "prompt rejected"));
+    piSettle(state);
+  }
+}
+
+const PI_HANDLERS: Record<string, (state: PiTranslatorState, rec: any) => void> = Object.assign(
+  Object.create(null),
+  {
+    agent_start: piAgentStart,
+    message_start: piMessageStart,
+    message_update: piMessageUpdate,
+    message_end: piMessageEnd,
+    tool_execution_start: piToolStart,
+    tool_execution_update: piToolUpdate,
+    tool_execution_end: piToolEnd,
+    auto_retry_start: piRetryStart,
+    auto_retry_end: piRetryEnd,
+    agent_settled: piSettled,
+    response: piResponse,
+  },
+);
+
+// Pure translator: pi session event -> canonical (Claude-shaped) events. Exported so it can be tested without a model.
+export function piTranslator(
+  emit: (event: any) => void,
+  onCommands?: (list: Command[]) => void,
+  contextWindow?: () => number | undefined,
+) {
+  const state: PiTranslatorState = {
+    emit,
+    onCommands,
+    contextWindow,
+    started: 0,
+    cost: 0,
+    usageModels: [],
+    failure: undefined,
+    subagents: new Map<string, string>(),
+  };
+  return (rec: any) => {
+    PI_HANDLERS[rec?.type]?.(state, rec);
+  };
+}
+
+type PiRun = {
+  spec: ThreadSpec;
+  ctx: AgentCtx;
+  args: string[];
+  proc: Proc | undefined;
+  dead: boolean;
+  queued: string[]; // writes made before pi is spawned wait here
+  counter: number;
+  translate: (rec: any) => void;
+  questions: ReturnType<typeof piQuestions>;
+  // A 429 that outlives pi's own 3 retries: wait out the shared cooldown, re-send the prompt once per user turn.
+  // Only when the failed reply made no tool call, so no side effect can run twice.
+  last: { text: string; images: Attachment[] } | undefined;
+  retried: boolean;
+  hadTools: boolean;
+  resending: AbortController | undefined;
+};
+
+function piArgs(spec: ThreadSpec, dir: string, routed: boolean): string[] {
+  const args = [
+    "--mode",
+    "rpc",
+    "--model",
+    routed ? CODING_ROUTE : spec.model,
+    "--session-dir",
+    dir,
+    "--extension",
+    QUESTIONS_EXTENSION,
+    "--extension",
+    TOOLS_EXTENSION,
+    "--extension",
+    SUBAGENT_EXTENSION,
+  ];
+  if (routed) args.push("--extension", CODING_ROUTE_EXTENSION);
+  if (fs.readdirSync(dir).length) args.push("--continue");
+  if (spec.mode === "plan") args.push("--tools", READ_ONLY_TOOLS);
+  return args;
+}
+
+function piWrite(run: PiRun, line: string) {
+  return run.proc ? run.proc.write(line) : void run.queued.push(line);
+}
+
+function piPromptBody(text: string, images: Attachment[]) {
+  return {
+    message: text.trim() ? text : IMAGE_ONLY_PROMPT,
+    ...(images.length
+      ? {
+          images: images.map((image) => ({
+            type: "image",
+            data: fs.readFileSync(image.path).toString("base64"),
+            mimeType: image.media_type,
+          })),
         }
-        break;
-      case "tool_execution_update":
-        if (subagents.has(r.toolCallId)) child(r.toolCallId, r.partialResult?.details?.event);
-        break;
-      case "tool_execution_end":
-        if (subagents.has(r.toolCallId)) {
-          const summary = clip(textOf(r.result?.content), 300);
-          emit({
-            type: "system",
-            subtype: "task_notification",
-            task_id: r.toolCallId,
-            tool_use_id: r.toolCallId,
-            status: r.isError ? "failed" : "completed",
-            summary: summary || subagents.get(r.toolCallId),
-          });
-          subagents.delete(r.toolCallId);
-        }
-        emit(toolResult(r.toolCallId, r.result?.content, !!r.isError));
-        break;
-      case "auto_retry_start": // turn timing only: status + error class, never the message
-        emit(
-          retryEvent({
-            attempt: r.attempt,
-            message: String(r.errorMessage ?? ""),
-            delay: r.delayMs,
+      : {}),
+  };
+}
+
+function piRatePool(model: string): "nvidia" | "openrouter" | "other" {
+  if (model.startsWith("nvidia/")) return "nvidia";
+  if (model.startsWith("openrouter/")) return "openrouter";
+  return "other";
+}
+
+function piRateLimitGaveUp(run: PiRun, rec: any): boolean {
+  return (
+    rec.type === "auto_retry_end" &&
+    rec.success === false &&
+    !run.retried &&
+    !run.hadTools &&
+    /\b429\b/.test(String(rec.finalError ?? ""))
+  );
+}
+
+function piResend(run: PiRun, rec: any, again: { text: string; images: Attachment[] }) {
+  run.retried = true;
+  run.resending = new AbortController();
+  const { signal } = run.resending;
+  run.ctx.event(retryEvent({ attempt: 4, status: 429, message: String(rec.finalError), delay: 0 }));
+  acquireModelRequest({
+    signal,
+    provider: piRatePool(run.spec.model),
+    priority: run.spec.issueRun ? "automation" : "interactive",
+  }).then(
+    () => {
+      if (!signal.aborted)
+        piWrite(
+          run,
+          JSON.stringify({
+            id: `p${++run.counter}`,
+            type: "prompt",
+            ...piPromptBody(again.text, again.images),
           }),
         );
-        break;
-      case "auto_retry_end":
-        if (r.success === false) failure = friendlyError(String(r.finalError ?? "request failed"));
-        break;
-      case "agent_settled":
-        settle(!!r.aborted);
-        break;
-      case "response":
-        if (r.command === "compact") {
-          if (r.success) {
-            emit({ type: "system", subtype: "compact_boundary" });
-            if (Number.isFinite(r.data?.estimatedTokensAfter))
-              emit({
-                type: "context_usage",
-                used: r.data.estimatedTokensAfter,
-                ...(contextWindow?.() ? { max: contextWindow() } : {}),
-              });
-          } else emit({ type: "console_error", text: String(r.error || "Pi compaction failed.") });
-          emit({ type: "result", subtype: r.success ? "success" : "error", is_error: !r.success });
-          break;
-        }
-        if (r.command === "get_commands" && r.success) {
-          onCommands?.(
-            (r.data?.commands ?? [])
-              .filter((c: any) => typeof c?.name === "string")
-              .map((c: any) => ({
-                name: c.name,
-                description: String(c.description ?? "").slice(0, 200),
-              }))
-              .sort((a: Command, b: Command) => a.name.localeCompare(b.name)),
-          );
-        } else if (r.command === "prompt" && r.success === false) {
-          failure = friendlyError(String(r.error ?? "prompt rejected"));
-          settle();
-        }
-        break;
-    }
+    },
+    () => {},
+  );
+}
+
+function piHandleLine(run: PiRun, line: string) {
+  const rec = parseJson(line);
+  if (!rec || run.questions.handle(rec)) return;
+  if (rec.type === "message_end" && rec.message?.role === "assistant")
+    run.hadTools ||= (rec.message.content ?? []).some((block: any) => block?.type === "toolCall");
+  if (run.last && piRateLimitGaveUp(run, rec)) {
+    piResend(run, rec, run.last);
+    return; // swallow the failure and the settle that follows it; the re-send continues the same turn
+  }
+  if (rec.type === "agent_settled" && run.resending) {
+    const aborted = run.resending.signal.aborted;
+    run.resending = undefined;
+    if (!aborted && !rec.aborted) return;
+    run.translate({ ...rec, aborted: true });
+    return;
+  }
+  run.translate(rec);
+}
+
+function piLaunch(run: PiRun, brain: string | undefined) {
+  if (run.dead) return;
+  const { spec, ctx } = run;
+  if (brain) run.args.push("--append-system-prompt", brain); // style preamble + shared memory index
+  const launch = sandboxLaunch(
+    spec,
+    "pi",
+    run.args,
+    piRateEnv(
+      {
+        ...childEnv(),
+        AGENT_CONSOLE_THREAD: spec.id,
+        AGENT_CONSOLE_PI_MODE: spec.mode,
+        AGENT_CONSOLE_PI_INSTRUCTIONS: brain,
+      },
+      spec.issueRun ? "automation" : "interactive",
+    ),
+  );
+  const proc = spawnLines(
+    "pi",
+    launch.command,
+    launch.args,
+    { cwd: spec.cwd, env: launch.env },
+    {
+      ...ctx,
+      exited(info) {
+        run.questions.cancelAll();
+        ctx.exited(info);
+      },
+    },
+    (line) => piHandleLine(run, line),
+  );
+  run.proc = proc;
+  for (const line of run.queued.splice(0)) proc.write(line);
+}
+
+function piBootFailed(run: PiRun, error: any) {
+  run.dead = true;
+  run.ctx.event({ type: "console_error", text: String(error?.message || error) });
+  run.ctx.exited({
+    code: 78,
+    signal: null,
+    stderr: String(error?.message || error),
+    aborted: false,
+  });
+}
+
+function piStop(run: PiRun, how: "abort" | "kill") {
+  run.resending?.abort();
+  run.questions.cancelAll();
+  if (run.proc) return run.proc[how]();
+  if (run.dead) return;
+  run.dead = true;
+  run.ctx.exited({
+    code: null,
+    signal: how === "abort" ? "SIGINT" : "SIGTERM",
+    stderr: "",
+    aborted: true,
+  });
+}
+
+function piAgent(run: PiRun): Agent {
+  const send = (kind: string, text: string, images: Attachment[]) =>
+    piWrite(
+      run,
+      JSON.stringify({ id: `p${++run.counter}`, type: kind, ...piPromptBody(text, images) }),
+    );
+  return {
+    get alive() {
+      return !run.dead && (!run.proc || run.proc.alive());
+    },
+    compact: (instructions = "") =>
+      piWrite(
+        run,
+        JSON.stringify({
+          id: `compact${++run.counter}`,
+          type: "compact",
+          ...(instructions ? { customInstructions: instructions } : {}),
+        }),
+      ),
+    send: (text, images = []) => {
+      run.last = { text, images };
+      run.retried = false;
+      run.hadTools = false;
+      run.resending = undefined;
+      send("prompt", text, images);
+    },
+    // Pi's `steer` is delivered after the current assistant turn finishes its tool calls, before the next model call
+    steer: (text, images = []) => send("steer", text, images),
+    answer: (questionId, reply) => run.questions.answer(questionId, reply),
+    abort: () => piStop(run, "abort"),
+    kill: () => piStop(run, "kill"),
   };
+}
+
+function piStart(spec: ThreadSpec, ctx: AgentCtx): Agent {
+  const dir = path.join(SESSIONS, spec.id);
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  // Only unattended NVIDIA coding runs use the host router. Manual model
+  // choices and explicit OpenRouter selections retain their exact provider.
+  const routed =
+    !!spec.issueRun && DIRECT_CODING_MODELS.some((modelId) => spec.model === `nvidia/${modelId}`);
+  const run: PiRun = {
+    spec,
+    ctx,
+    args: piArgs(spec, dir, routed),
+    proc: undefined,
+    dead: false,
+    queued: [],
+    counter: 0,
+    translate: piTranslator(
+      (event) => ctx.event(event),
+      (list) => ctx.commands(list),
+      () => contexts.get(spec.model),
+    ),
+    questions: piQuestions((msg) => piWrite(run, JSON.stringify(msg)), ctx.event),
+    last: undefined,
+    retried: false,
+    hadTools: false,
+    resending: undefined,
+  };
+  // The instructions (brain index) resolve asynchronously; writes made before pi is spawned wait in `queued`.
+  void harnessInstructions()
+    .then((brain) => piLaunch(run, brain))
+    .catch((error) => piBootFailed(run, error));
+  if (spec.effort && spec.effort !== "default")
+    piWrite(run, JSON.stringify({ id: "effort", type: "set_thinking_level", level: spec.effort }));
+  piWrite(run, JSON.stringify({ id: "cmds", type: "get_commands" }));
+  return piAgent(run);
 }
 
 export const pi: Provider = {
@@ -419,194 +729,5 @@ export const pi: Provider = {
     if (!cached.length) return { ok: false, hint: "Pi lists no models for these credentials." };
     return { ok: true };
   },
-  start(t: ThreadSpec, ctx: AgentCtx): Agent {
-    const dir = path.join(SESSIONS, t.id);
-    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-    // Only unattended NVIDIA coding runs use the host router. Manual model
-    // choices and explicit OpenRouter selections retain their exact provider.
-    const routed = !!t.issueRun && DIRECT_CODING_MODELS.some((id) => t.model === `nvidia/${id}`);
-    const args = [
-      "--mode",
-      "rpc",
-      "--model",
-      routed ? CODING_ROUTE : t.model,
-      "--session-dir",
-      dir,
-      "--extension",
-      QUESTIONS_EXTENSION,
-      "--extension",
-      TOOLS_EXTENSION,
-      "--extension",
-      SUBAGENT_EXTENSION,
-    ];
-    if (routed) args.push("--extension", CODING_ROUTE_EXTENSION);
-    if (fs.readdirSync(dir).length) args.push("--continue");
-    if (t.mode === "plan") args.push("--tools", READ_ONLY_TOOLS);
-    const translate = piTranslator(
-      (ev) => ctx.event(ev),
-      (list) => ctx.commands(list),
-      () => contexts.get(t.model),
-    );
-    // The instructions (brain index) resolve asynchronously; writes made before pi is spawned wait in `queued`.
-    let p: Proc | undefined,
-      dead = false;
-    const queued: string[] = [];
-    const write = (line: string) => (p ? p.write(line) : void queued.push(line));
-    // A 429 that outlives pi's own 3 retries: wait out the shared cooldown, re-send the prompt once per user turn.
-    // Only when the failed reply made no tool call, so no side effect can run twice.
-    let last: { text: string; images: Attachment[] } | undefined,
-      retried = false,
-      hadTools = false,
-      resending: AbortController | undefined;
-    const questions = piQuestions((msg) => write(JSON.stringify(msg)), ctx.event);
-    void harnessInstructions()
-      .then((brain) => {
-        if (dead) return;
-        if (brain) args.push("--append-system-prompt", brain); // style preamble + shared memory index
-        const launch = sandboxLaunch(
-          t,
-          "pi",
-          args,
-          piRateEnv(
-            {
-              ...childEnv(),
-              AGENT_CONSOLE_THREAD: t.id,
-              AGENT_CONSOLE_PI_MODE: t.mode,
-              AGENT_CONSOLE_PI_INSTRUCTIONS: brain,
-            },
-            t.issueRun ? "automation" : "interactive",
-          ),
-        );
-        p = spawnLines(
-          "pi",
-          launch.command,
-          launch.args,
-          { cwd: t.cwd, env: launch.env },
-          {
-            ...ctx,
-            exited(info) {
-              questions.cancelAll();
-              ctx.exited(info);
-            },
-          },
-          (line) => {
-            const r = parseJson(line);
-            if (!r || questions.handle(r)) return;
-            if (r.type === "message_end" && r.message?.role === "assistant")
-              hadTools ||= (r.message.content ?? []).some((b: any) => b?.type === "toolCall");
-            if (
-              r.type === "auto_retry_end" &&
-              r.success === false &&
-              !retried &&
-              !hadTools &&
-              last &&
-              /\b429\b/.test(String(r.finalError ?? ""))
-            ) {
-              retried = true;
-              resending = new AbortController();
-              const { signal } = resending,
-                again = last;
-              ctx.event(
-                retryEvent({ attempt: 4, status: 429, message: String(r.finalError), delay: 0 }),
-              );
-              acquireModelRequest({
-                signal,
-                provider: t.model.startsWith("nvidia/")
-                  ? "nvidia"
-                  : t.model.startsWith("openrouter/")
-                    ? "openrouter"
-                    : "other",
-                priority: t.issueRun ? "automation" : "interactive",
-              }).then(
-                () => {
-                  if (!signal.aborted)
-                    write(
-                      JSON.stringify({
-                        id: `p${++n}`,
-                        type: "prompt",
-                        ...body(again.text, again.images),
-                      }),
-                    );
-                },
-                () => {},
-              );
-              return; // swallow the failure and the settle that follows it; the re-send continues the same turn
-            }
-            if (r.type === "agent_settled" && resending) {
-              const aborted = resending.signal.aborted;
-              resending = undefined;
-              if (!aborted && !r.aborted) return;
-              return translate({ ...r, aborted: true });
-            }
-            translate(r);
-          },
-        );
-        for (const line of queued.splice(0)) p.write(line);
-      })
-      .catch((error) => {
-        dead = true;
-        ctx.event({ type: "console_error", text: String(error?.message || error) });
-        ctx.exited({
-          code: 78,
-          signal: null,
-          stderr: String(error?.message || error),
-          aborted: false,
-        });
-      });
-    const stop = (how: "abort" | "kill") => {
-      resending?.abort();
-      questions.cancelAll();
-      if (p) return p[how]();
-      if (dead) return;
-      dead = true;
-      ctx.exited({
-        code: null,
-        signal: how === "abort" ? "SIGINT" : "SIGTERM",
-        stderr: "",
-        aborted: true,
-      });
-    };
-    if (t.effort && t.effort !== "default")
-      write(JSON.stringify({ id: "effort", type: "set_thinking_level", level: t.effort }));
-    write(JSON.stringify({ id: "cmds", type: "get_commands" }));
-    let n = 0;
-    const body = (text: string, images: Attachment[]) => ({
-      message: text.trim() ? text : IMAGE_ONLY_PROMPT,
-      ...(images.length
-        ? {
-            images: images.map((i) => ({
-              type: "image",
-              data: fs.readFileSync(i.path).toString("base64"),
-              mimeType: i.media_type,
-            })),
-          }
-        : {}),
-    });
-    return {
-      get alive() {
-        return !dead && (!p || p.alive());
-      },
-      compact: (instructions = "") =>
-        write(
-          JSON.stringify({
-            id: `compact${++n}`,
-            type: "compact",
-            ...(instructions ? { customInstructions: instructions } : {}),
-          }),
-        ),
-      send: (text, images = []) => {
-        last = { text, images };
-        retried = false;
-        hadTools = false;
-        resending = undefined;
-        write(JSON.stringify({ id: `p${++n}`, type: "prompt", ...body(text, images) }));
-      },
-      // Pi's `steer` is delivered after the current assistant turn finishes its tool calls, before the next model call
-      steer: (text, images = []) =>
-        write(JSON.stringify({ id: `p${++n}`, type: "steer", ...body(text, images) })),
-      answer: (id, reply) => questions.answer(id, reply),
-      abort: () => stop("abort"),
-      kill: () => stop("kill"),
-    };
-  },
+  start: piStart,
 };

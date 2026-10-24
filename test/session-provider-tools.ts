@@ -56,6 +56,7 @@ try {
       "mcp__agent_console__session_search",
       "mcp__agent_console__session_read",
       "mcp__agent_console__pi_research",
+      "mcp__agent_console__cli_search",
     ];
     for (const name of [
       ...allowed,
@@ -124,7 +125,7 @@ try {
   const list = await request("tools/list");
   assert.deepEqual(
     list.result.tools.map((t: any) => t.name),
-    ["session_search", "session_read", "pi_research"],
+    ["session_search", "cli_search", "session_read", "pi_research"],
   );
   assert(list.result.tools.every((t: any) => t.annotations.readOnlyHint));
   const search = await request("tools/call", {
