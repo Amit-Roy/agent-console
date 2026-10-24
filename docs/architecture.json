@@ -1,6 +1,6 @@
 {
  "title": "Effort model weekly retrain",
- "subtitle": "Triage worker refit, champion/challenger gate, install",
+ "subtitle": "Weekly refit, gate, install; agent CLI for status, bench and external data",
  "items": [
   {
    "group": "Triage worker",
@@ -75,6 +75,39 @@
      "color": "cyan"
     }
    ]
+  },
+  {
+   "group": "Agent CLI",
+   "sub": "bin/effort-model",
+   "border": "dashed",
+   "color": "purple",
+   "icon": "terminal",
+   "items": [
+    {
+     "id": "cli",
+     "label": "effort-model",
+     "tech": "scripts/effort-model.ts",
+     "desc": "status, bench, data fetch",
+     "icon": "terminal",
+     "color": "purple"
+    },
+    {
+     "id": "bench",
+     "label": "Bench",
+     "tech": "triage-effort-bench.py",
+     "desc": "4 candidates; summary.json",
+     "icon": "chart-column",
+     "color": "teal"
+    },
+    {
+     "id": "hf",
+     "label": "SALT-NLP/SWE-chat",
+     "tech": "odc-by parquet",
+     "desc": "Train-only rows, cached per revision",
+     "icon": "database",
+     "color": "orange"
+    }
+   ]
   }
  ],
  "edges": [
@@ -107,6 +140,21 @@
    "from": "champ",
    "to": "gh",
    "label": "Reprice"
+  },
+  {
+   "from": "cli",
+   "to": "champ",
+   "label": "status reads"
+  },
+  {
+   "from": "cli",
+   "to": "bench",
+   "label": "bench"
+  },
+  {
+   "from": "hf",
+   "to": "bench",
+   "label": "data fetch"
   }
  ]
 }
