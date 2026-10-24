@@ -1,163 +1,77 @@
 {
- "title": "Shares and prompt tools",
- "subtitle": "Untrusted shares reach the agent via sandboxed subagents; drafts can be improved and quoted",
+ "title": "Effort model weekly retrain",
+ "subtitle": "Triage worker refit, champion/challenger gate, install",
  "items": [
   {
-   "group": "Phone PWA",
-   "border": "solid",
-   "color": "slate",
-   "icon": "smartphone",
-   "items": [
-    {
-     "id": "pwa",
-     "label": "PWA share target",
-     "tech": "POST /api/share",
-     "icon": "share-2",
-     "color": "indigo"
-    },
-    {
-     "id": "composer",
-     "label": "Composer",
-     "tech": "public/app.js",
-     "desc": "Draft, attachments, Improve dialog",
-     "icon": "pen-line",
-     "color": "indigo"
-    }
-   ]
-  },
-  {
-   "group": "Agent Console server",
-   "sub": "server/",
+   "group": "Triage worker",
+   "sub": "scripts/github-triage.ts",
    "border": "dashed",
    "color": "blue",
    "icon": "server",
    "items": [
     {
-     "id": "run",
-     "label": "downloadShare",
-     "tech": "share/run.ts",
-     "desc": "Routes Instagram links to the queue",
-     "icon": "route",
+     "id": "sched",
+     "label": "Weekly calibrate",
+     "tech": "github-triage.ts",
+     "desc": "7-day interval, 6 h crash retry",
+     "icon": "calendar-clock",
      "color": "blue"
     },
     {
-     "id": "ig",
-     "label": "Instagram provider",
-     "tech": "share/instagram.ts",
-     "desc": "Queue, dedupe, retries, caption, cookie fallback",
-     "icon": "camera",
-     "color": "pink"
-    },
-    {
-     "id": "prompt",
-     "label": "Share prompt + uploads",
-     "tech": "share/prompt.ts, uploads.ts",
-     "desc": "Social media flagged untrusted, sent as paths",
-     "icon": "file-lock",
+     "id": "fit",
+     "label": "Quantile fitter",
+     "tech": "triage-effort-fit.py",
+     "desc": "Depth 2, leaf 80; OOF conformal offsets per quantile; paired bootstrap",
+     "icon": "trees",
      "color": "teal"
     },
     {
-     "id": "improve",
-     "label": "Prompt improve API",
-     "tech": "prompt-improve.ts",
-     "desc": "Haiku rewrite, placeholders, quotes",
-     "icon": "wand-sparkles",
-     "color": "purple"
-    }
-   ]
-  },
-  {
-   "group": "Agents",
-   "sub": "Claude thread",
-   "border": "dashed",
-   "color": "indigo",
-   "icon": "bot",
-   "items": [
-    {
-     "id": "main",
-     "label": "Main agent",
-     "tech": "Claude thread",
-     "desc": "Never opens shared assets",
-     "icon": "bot",
-     "color": "orange"
-    },
-    {
-     "id": "analyzer",
-     "label": "share-analyzer",
-     "tech": "Sonnet, Read only",
-     "desc": "Reads listed paths, reports",
-     "icon": "scan-search",
-     "color": "cyan"
-    },
-    {
-     "id": "classifier",
-     "label": "share-safety-classifier",
-     "tech": "Sonnet, no tools",
-     "desc": "SAFE or UNSAFE from trace",
+     "id": "gate",
+     "label": "Promotion gate",
+     "tech": "triage-promotion.ts",
+     "desc": "Reject if paired lower90 > 0 or ratio > 1.10; coverage bounds",
      "icon": "shield-check",
-     "color": "teal"
+     "color": "orange"
     }
    ]
   },
   {
-   "group": "Downloaders and models",
+   "group": "Local state",
+   "sub": "~/.config/agent-console",
    "border": "solid",
    "color": "slate",
-   "icon": "boxes",
+   "icon": "hard-drive",
    "items": [
     {
-     "id": "ytdlp",
-     "label": "yt-dlp runner",
-     "tech": "share/ytdlp.ts",
-     "desc": "Anonymous; image posts skip retries",
-     "icon": "film",
-     "color": "orange"
+     "id": "champ",
+     "label": "Live model",
+     "tech": "triage-effort-model.json",
+     "desc": "Champion; scored on held-out rows",
+     "icon": "file-check",
+     "color": "indigo"
     },
     {
-     "id": "gdl",
-     "label": "gallery-dl runner",
-     "tech": "share/gallerydl.ts",
-     "desc": "Cookie file, image slides",
-     "icon": "images",
-     "color": "purple"
-    },
-    {
-     "id": "haiku",
-     "label": "Haiku",
-     "tech": "claude --print",
-     "desc": "No tools, 45 s timeout",
-     "icon": "sparkles",
-     "color": "orange"
-    },
-    {
-     "id": "effort",
-     "label": "Effort model",
-     "tech": "quantile tree",
-     "desc": "Text-only quote, mtime cache",
-     "icon": "gauge",
-     "color": "blue"
-    },
-    {
-     "id": "trace",
-     "label": "share-trace CLI",
-     "tech": "subagent JSONL",
-     "desc": "Tool calls + report only",
-     "icon": "file-search",
+     "id": "chal",
+     "label": "Challenger",
+     "tech": "*.challenger.json",
+     "desc": "Kept when rejected",
+     "icon": "file-x",
      "color": "slate"
     }
    ]
   },
   {
-   "group": "Instagram",
+   "group": "GitHub",
    "border": "solid",
    "color": "slate",
    "icon": "globe",
    "items": [
     {
-     "id": "insta",
-     "label": "instagram.com",
-     "tech": "Web + API",
-     "icon": "cloud",
+     "id": "gh",
+     "label": "Issue quotes",
+     "tech": "triage comment",
+     "desc": "Repriced after promote",
+     "icon": "message-square",
      "color": "cyan"
     }
    ]
@@ -165,74 +79,34 @@
  ],
  "edges": [
   {
-   "from": "pwa",
-   "to": "run",
-   "label": "Shared link"
+   "from": "sched",
+   "to": "fit",
+   "label": "Sessions + features"
   },
   {
-   "from": "run",
-   "to": "ig",
-   "label": "Queue job"
+   "from": "champ",
+   "to": "fit",
+   "label": "--champion"
   },
   {
-   "from": "ig",
-   "to": "ytdlp",
-   "label": "First attempt"
+   "from": "fit",
+   "to": "gate",
+   "label": "Artifact + validation"
   },
   {
-   "from": "ytdlp",
-   "to": "insta",
-   "label": "Anonymous"
+   "from": "gate",
+   "to": "champ",
+   "label": "Promote"
   },
   {
-   "from": "ig",
-   "to": "gdl",
-   "label": "Empty or missing"
+   "from": "gate",
+   "to": "chal",
+   "label": "Reject"
   },
   {
-   "from": "gdl",
-   "to": "insta",
-   "label": "With cookies"
-  },
-  {
-   "from": "run",
-   "to": "prompt",
-   "label": "Draft + flags"
-  },
-  {
-   "from": "prompt",
-   "to": "main",
-   "label": "Paths, no vision"
-  },
-  {
-   "from": "main",
-   "to": "analyzer",
-   "label": "Exact paths"
-  },
-  {
-   "from": "main",
-   "to": "trace",
-   "label": "agentId"
-  },
-  {
-   "from": "trace",
-   "to": "classifier",
-   "label": "Calls + report"
-  },
-  {
-   "from": "composer",
-   "to": "improve",
-   "label": "Improve, Check"
-  },
-  {
-   "from": "improve",
-   "to": "haiku",
-   "label": "Rewrite"
-  },
-  {
-   "from": "improve",
-   "to": "effort",
-   "label": "Quote old/new"
+   "from": "champ",
+   "to": "gh",
+   "label": "Reprice"
   }
  ]
 }

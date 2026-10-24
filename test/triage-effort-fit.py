@@ -6,6 +6,8 @@ import importlib.util
 import json
 import math
 import os
+import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -761,6 +763,82 @@ class EffortFitTests(unittest.TestCase):
         limited, _ = self.champion_result(fixture, capped)
         clipped = limited["validation"]["quantileModel"]["champion"]["quantiles"]["p50"]
         self.assertLess(clipped["coverage"], 1.0)
+
+    def test_offsets_come_from_training_oof_only(self):
+        fixture, first = self.quantile_fixture()
+        offsets = first["quantileModel"]["offsets"]
+        self.assertEqual(first["validation"]["quantileModel"]["offsetSource"], "oof-cqr")
+        heldout_ids = set(first["validation"]["sampleIds"])
+        self.assertTrue(heldout_ids)
+        changed = copy.deepcopy(fixture)
+        for sample in changed["samples"]:
+            if sample["sampleId"] in heldout_ids:
+                sample["outcomes"]["inputTokens"] *= 40
+                sample["outcomes"]["outputTokens"] *= 40
+        with mock.patch.object(fit, "TREE_PARAMS", {**fit.TREE_PARAMS, "max_iter": 12}):
+            artifact, _ = fit.build_artifact(changed)
+        self.assertEqual(artifact["quantileModel"]["offsets"], offsets)
+        self.assertEqual(
+            artifact["validation"]["quantileModel"]["oofCoverage"],
+            first["validation"]["quantileModel"]["oofCoverage"],
+        )
+        self.assertNotEqual(
+            artifact["validation"]["quantileModel"]["quantiles"],
+            first["validation"]["quantileModel"]["quantiles"],
+        )
+
+    def test_offsets_move_oof_coverage_toward_nominal(self):
+        fixture, _ = self.quantile_fixture()
+        samples, _ = fit.validate_dataset(fixture)
+        train, _, _ = fit.frozen_split(samples)
+        params = {**fit.TREE_PARAMS, "max_iter": 25, "min_samples_leaf": 3, "learning_rate": 0.3}
+        with mock.patch.object(fit, "TREE_PARAMS", params):
+            offsets, coverage = fit.conformal_offsets(train, None)
+        self.assertEqual(list(coverage), list(fit.QUANTILE_LEVELS))
+        moved = 0
+        for name, entry in coverage.items():
+            self.assertEqual(entry["offset"], offsets[name])
+            self.assertLessEqual(abs(offsets[name]), fit.OFFSET_LIMIT)
+            before = abs(entry["before"] - entry["nominal"])
+            after = abs(entry["after"] - entry["nominal"])
+            self.assertLessEqual(after, before + 1e-12, name)
+            moved += after < before
+        self.assertGreater(moved, 0)
+
+    def test_offsets_are_clamped(self):
+        fixture, _ = self.quantile_fixture()
+        samples, _ = fit.validate_dataset(fixture)
+        train, _, _ = fit.frozen_split(samples)
+        with mock.patch.object(fit, "OFFSET_LIMIT", 0.0):
+            offsets, coverage = fit.conformal_offsets(train, None)
+        self.assertEqual(set(offsets.values()), {0.0})
+        self.assertTrue(any(entry["clamped"] for entry in coverage.values()))
+
+    @unittest.skipUnless(shutil.which("node"), "node is required for runtime parity")
+    def test_runtime_walker_agrees_with_python_when_offsets_are_nonzero(self):
+        fixture, artifact = self.quantile_fixture()
+        model = artifact["quantileModel"]
+        self.assertTrue(any(abs(value) > 1e-6 for value in model["offsets"].values()))
+        model["ceiling"] = 5000.0
+        rows = [{"text": text_features(index)} for index in range(4)]
+        runtime = Path(SPEC.origin).resolve().parents[1] / "server/providers/triage-quantile.ts"
+        script = (
+            f"import {{ predictQuantileLogs }} from {json.dumps(str(runtime))};"
+            "const input = JSON.parse(await new Response(process.stdin).text());"
+            "console.log(JSON.stringify(input.rows.map((row) => predictQuantileLogs(input.model, row))));"
+        )
+        done = subprocess.run(
+            ["node", "--input-type=module", "-e", script],
+            input=json.dumps({"model": model, "rows": [row["text"] for row in rows]}),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        walked = json.loads(done.stdout)
+        expected = fit.np.minimum(fit.quantile_cap(model["ceiling"]), fit.head_logs(model, rows))
+        for node_row, python_row in zip(walked, expected, strict=True):
+            for name, value in zip(fit.QUANTILE_LEVELS, python_row, strict=True):
+                self.assertAlmostEqual(node_row[name], value, delta=1e-9)
 
     def test_tree_params_are_the_stable_shallow_set(self):
         expected = {
