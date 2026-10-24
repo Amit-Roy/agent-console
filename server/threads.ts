@@ -39,8 +39,11 @@ import {
   type Command,
   clip,
   DEFAULT_PROVIDER,
+  type ExitInfo,
   type Mode,
   PROVIDERS,
+  type Provider,
+  type ThreadSpec,
 } from "./providers/index.ts";
 import {
   createLabeler,
@@ -308,6 +311,156 @@ interface Live {
   exitReason?: string;
   model?: string; // resolved model id the process announced
   wakes?: string[]; // subagent results waiting for the agent to be free (harnesses that do not wake themselves)
+}
+
+// One event on its way through onEvent: steps may replace the event, and a failed result leaves its error for the issue-run hook
+interface EventFlow {
+  event: any;
+  compacting: boolean; // the thread was compacting when the event arrived
+  issueError?: string;
+}
+
+// The text of an error value: a string, or an object's string `message`
+function errorMessage(error: unknown): string | undefined {
+  if (typeof error === "string") return error;
+  return error &&
+    typeof error === "object" &&
+    "message" in error &&
+    typeof error.message === "string"
+    ? error.message
+    : undefined;
+}
+
+// What an issue run reports for a failed turn: the result's errors and the turn's console failure, redacted and capped
+function resultError(event: any, failure: string | undefined): string | undefined {
+  const errors = [
+    errorMessage(event.error),
+    ...(Array.isArray(event.errors) ? event.errors.slice(0, 20).map(errorMessage) : []),
+    failure,
+  ].filter((error): error is string => typeof error === "string" && !!error.trim());
+  return errors.length ? redact([...new Set(errors)].join("\n")).slice(0, 1000) : undefined;
+}
+
+// The command text the labeler reads for a tool call
+function toolSketch(block: any): string {
+  if (block.name === "Bash") return String(block.input.command ?? "");
+  if (block.name === "Read") return readSketch(block.input);
+  if (block.name === "Edit") return editSketch(block.input);
+  return mcpSketch(block.name, block.input);
+}
+
+function prepareIssueRun(thread: Thread, prov: Provider) {
+  assertAutomationSandbox(thread);
+  // A model removed from the approved list (retired upstream) is re-selected, not kept: the run continues on a working model.
+  if (thread.provider === "pi")
+    thread.model = selectAutomationPiModel(
+      prov.models(),
+      isAutomationPiModel(thread.model) ? thread.model : undefined,
+    );
+}
+
+// Claude and Codex go through Headroom unless the environment already points them at another endpoint
+function headroomProxyUrl(provider: string) {
+  const proxy = headroom.url();
+  const inherited = (
+    provider === "claude" ? process.env.ANTHROPIC_BASE_URL : process.env.OPENAI_BASE_URL
+  )?.replace(/\/+$/, "");
+  const managed = provider === "claude" ? headroom.state().url : `${headroom.state().url}/v1`;
+  return ["claude", "codex"].includes(provider) && (!inherited || inherited === managed)
+    ? proxy
+    : undefined;
+}
+
+function startSpec(thread: Thread): ThreadSpec {
+  return {
+    id: thread.id,
+    cwd: thread.cwd,
+    mode: thread.mode,
+    model: thread.model,
+    effort: thread.effort,
+    advisor: thread.advisor,
+    claudeAccount: thread.claudeAccount,
+    sessionId: thread.sessionId,
+    forkFrom: thread.sessionId ? undefined : thread.forkFrom,
+    issueRun: thread.issueRun,
+  };
+}
+
+type ForkPick = { model?: string; effort?: string; mode?: string; claudeAccount?: string };
+
+// The other agent a fork switches to, checked ready; undefined when the fork stays on the source's agent
+function forkTarget(src: Thread, provider?: string): Provider | undefined {
+  if (!provider || provider === src.provider) return undefined;
+  const target = PROVIDERS.get(provider);
+  if (!target) throw new Error("Unknown provider.");
+  const status = target.status();
+  if (!status.ok) throw new Error(`${target.label} is not ready. ${status.hint ?? ""}`.trim());
+  if (!target.defaultModel()) throw new Error(`${target.label} has no models available.`);
+  return target;
+}
+
+function forkAccount(src: Thread, target: Provider | undefined) {
+  if (!target && src.provider === "claude")
+    return { claudeAccount: normalizeClaudeAccount(src.claudeAccount) };
+  return target?.id === "claude" ? { claudeAccount: "sunny" as const } : {};
+}
+
+// The fork before the caller's picks: another agent starts on its defaults, the same agent keeps the source's settings
+function forkedThread(src: Thread, target: Provider | undefined, recent: boolean): Thread {
+  const now = Date.now();
+  return {
+    id: crypto.randomUUID(),
+    provider: target?.id ?? src.provider,
+    title: `${src.title.replace(/\s*\(fork\)$/, "").slice(0, 70)} (fork)`,
+    cwd: src.cwd,
+    mode: target ? (target.modes.includes(src.mode) ? src.mode : target.defaultMode) : src.mode,
+    model: target ? target.defaultModel() : src.model,
+    effort: target ? "default" : src.effort,
+    advisor: target ? undefined : src.advisor,
+    ...forkAccount(src, target),
+    context: target || recent ? undefined : src.context,
+    status: "idle",
+    cost: 0,
+    createdAt: now,
+    updatedAt: now,
+    readAt: now,
+  };
+}
+
+// Copy the history and uploads so the fork reads whole. True when there was history to copy.
+function copyForkFiles(src: Thread, child: Thread): boolean {
+  const logFile = (threadId: string) => path.join(LOG_DIR, `${threadId}.jsonl`);
+  const hasHistory = fs.existsSync(logFile(src.id));
+  if (hasHistory) fs.copyFileSync(logFile(src.id), logFile(child.id));
+  if (fs.existsSync(threadDir(src.id)))
+    fs.cpSync(threadDir(src.id), threadDir(child.id), { recursive: true });
+  return hasHistory;
+}
+
+// How the fork carries the conversation on: a native Claude fork, a copied Pi session, or the history replayed as text
+function carryForkSession(
+  src: Thread,
+  child: Thread,
+  how: { recent: boolean; replayAll: boolean; hasHistory: boolean },
+) {
+  if (how.recent) {
+    if (how.hasHistory) {
+      child.replay = true;
+      child.replayLimit = 6000;
+    }
+    return;
+  }
+  if (!how.replayAll && src.provider === "claude") {
+    if (src.sessionId) child.forkFrom = src.sessionId;
+    return;
+  }
+  if (!how.replayAll && src.provider === "pi") {
+    const dir = path.join(DATA_DIR, "pi-sessions", src.id);
+    if (fs.existsSync(dir))
+      fs.cpSync(dir, path.join(DATA_DIR, "pi-sessions", child.id), { recursive: true });
+    return;
+  }
+  if (how.hasHistory) child.replay = true;
 }
 
 export class Threads {
@@ -804,80 +957,35 @@ export class Threads {
   // With `provider` set to another agent the fork switches harness: its native session cannot carry over, so it always replays text.
   // The same holds for another Claude account, whose profile cannot read this account's sessions. `pick` sets the fork's model,
   // effort, permission mode and Claude account; anything left out keeps the source's choice.
-  fork(
-    id: string,
-    provider?: string,
-    recent = false,
-    pick: { model?: string; effort?: string; mode?: string; claudeAccount?: string } = {},
-  ): Thread {
-    const src = this.threads.get(id);
+  fork(sourceId: string, provider?: string, recent = false, pick: ForkPick = {}): Thread {
+    const src = this.threads.get(sourceId);
     if (!src) throw new Error("Unknown thread");
-    const target = provider && provider !== src.provider ? PROVIDERS.get(provider) : undefined;
-    if (provider && provider !== src.provider && !target) throw new Error("Unknown provider.");
-    if (target) {
-      const st = target.status();
-      if (!st.ok) throw new Error(`${target.label} is not ready. ${st.hint ?? ""}`.trim());
-      if (!target.defaultModel()) throw new Error(`${target.label} has no models available.`);
-    }
+    const target = forkTarget(src, provider);
     if (src.status === "running")
       throw new Error("Wait for the current turn to finish before forking.");
-    const now = Date.now();
-    const t: Thread = {
-      id: crypto.randomUUID(),
-      provider: target?.id ?? src.provider,
-      title: `${src.title.replace(/\s*\(fork\)$/, "").slice(0, 70)} (fork)`,
-      cwd: src.cwd,
-      mode: target ? (target.modes.includes(src.mode) ? src.mode : target.defaultMode) : src.mode,
-      model: target ? target.defaultModel() : src.model,
-      effort: target ? "default" : src.effort,
-      advisor: target ? undefined : src.advisor,
-      ...(!target && src.provider === "claude"
-        ? { claudeAccount: normalizeClaudeAccount(src.claudeAccount) }
-        : target?.id === "claude"
-          ? { claudeAccount: "sunny" as const }
-          : {}),
-      context: target || recent ? undefined : src.context,
-      status: "idle",
-      cost: 0,
-      createdAt: now,
-      updatedAt: now,
-      readAt: now,
-    };
-    const prov = target ?? PROVIDERS.get(src.provider);
-    if (pick.model && prov?.models().includes(pick.model)) t.model = pick.model;
-    if (pick.effort || t.model !== src.model)
-      t.effort = this.validEffort(prov, t.model, pick.effort ?? t.effort);
-    if (pick.mode && prov?.modes.includes(pick.mode as Mode)) t.mode = pick.mode as Mode;
-    if (t.provider === "claude" && pick.claudeAccount !== undefined)
-      t.claudeAccount = requireClaudeAccount(pick.claudeAccount);
+    const child = forkedThread(src, target, recent);
+    this.applyForkPick(child, src, target ?? PROVIDERS.get(src.provider), pick);
     const otherAccount =
       !target &&
       src.provider === "claude" &&
-      t.claudeAccount !== normalizeClaudeAccount(src.claudeAccount);
-    if (otherAccount) t.context = undefined;
-    const log = (x: string) => path.join(LOG_DIR, `${x}.jsonl`);
-    const hasHistory = fs.existsSync(log(src.id));
-    if (hasHistory) fs.copyFileSync(log(src.id), log(t.id));
-    if (fs.existsSync(threadDir(src.id)))
-      fs.cpSync(threadDir(src.id), threadDir(t.id), { recursive: true });
-    if (recent) {
-      if (hasHistory) {
-        t.replay = true;
-        t.replayLimit = 6000;
-      }
-    } else if (target || otherAccount) {
-      if (hasHistory) t.replay = true;
-    } else if (src.provider === "claude") {
-      if (src.sessionId) t.forkFrom = src.sessionId;
-    } else if (src.provider === "pi") {
-      const dir = path.join(DATA_DIR, "pi-sessions", src.id);
-      if (fs.existsSync(dir))
-        fs.cpSync(dir, path.join(DATA_DIR, "pi-sessions", t.id), { recursive: true });
-    } else if (hasHistory) t.replay = true;
-    this.threads.set(t.id, t);
+      child.claudeAccount !== normalizeClaudeAccount(src.claudeAccount);
+    if (otherAccount) child.context = undefined;
+    const hasHistory = copyForkFiles(src, child);
+    carryForkSession(src, child, { recent, replayAll: !!target || otherAccount, hasHistory });
+    this.threads.set(child.id, child);
     this.persist();
-    this.emit({ t: "thread", thread: t });
-    return t;
+    this.emit({ t: "thread", thread: child });
+    return child;
+  }
+
+  // The fork's own choices of model, effort, permission mode and Claude account, where the agent offers them
+  private applyForkPick(child: Thread, src: Thread, prov: Provider | undefined, pick: ForkPick) {
+    if (pick.model && prov?.models().includes(pick.model)) child.model = pick.model;
+    if (pick.effort || child.model !== src.model)
+      child.effort = this.validEffort(prov, child.model, pick.effort ?? child.effort);
+    if (pick.mode && prov?.modes.includes(pick.mode as Mode)) child.mode = pick.mode as Mode;
+    if (child.provider === "claude" && pick.claudeAccount !== undefined)
+      child.claudeAccount = requireClaudeAccount(pick.claudeAccount);
   }
 
   remove(id: string) {
@@ -1003,27 +1111,11 @@ export class Threads {
     }
   }
 
-  private start(t: Thread, warm = false): Live {
-    const prov = PROVIDERS.get(t.provider);
-    if (!prov) throw new Error(`Unknown provider "${t.provider}".`);
-    if (t.issueRun) {
-      assertAutomationSandbox(t);
-      // A model removed from the approved list (retired upstream) is re-selected, not kept: the run continues on a working model.
-      if (t.provider === "pi")
-        t.model = selectAutomationPiModel(
-          prov.models(),
-          isAutomationPiModel(t.model) ? t.model : undefined,
-        );
-    }
-    const proxy = headroom.url();
-    const inherited = (
-      t.provider === "claude" ? process.env.ANTHROPIC_BASE_URL : process.env.OPENAI_BASE_URL
-    )?.replace(/\/+$/, "");
-    const managed = t.provider === "claude" ? headroom.state().url : `${headroom.state().url}/v1`;
-    const proxyUrl =
-      ["claude", "codex"].includes(t.provider) && (!inherited || inherited === managed)
-        ? proxy
-        : undefined;
+  private start(thread: Thread, warm = false): Live {
+    const prov = PROVIDERS.get(thread.provider);
+    if (!prov) throw new Error(`Unknown provider "${thread.provider}".`);
+    if (thread.issueRun) prepareIssueRun(thread, prov);
+    const proxyUrl = headroomProxyUrl(thread.provider);
     const live: Live = {
       agent: undefined as unknown as Agent,
       aborted: false,
@@ -1032,102 +1124,108 @@ export class Threads {
       held: [],
       proxyUrl,
     };
-    const ready = () => {
-      if (live.readyAt != null) return;
-      live.readyAt = Date.now();
-      timed(() =>
-        timing?.recordProcess({
-          thread: t.id,
-          provider: t.provider,
-          kind: "ready",
-          ms: live.readyAt! - live.spawnAt!,
-        }),
-      );
-    };
-    timed(() => timing?.recordProcess({ thread: t.id, provider: t.provider, kind: "spawn" }));
-    const ctx: AgentCtx = {
-      event: (ev) => {
-        if (ev?.type === "rate_limit_event" && t.provider === "claude") {
-          ev = { ...ev, observedAt: Date.now(), usageProvider: claudeUsageKey(t.claudeAccount) };
-        }
-        if (fromProcess(ev)) ready();
-        live.heardAt = Date.now();
-        if (live.aborted) return;
-        if (live.interrupting) {
-          if (ev.type === "result") {
-            clearTimeout(live.interrupting);
-            live.interrupting = undefined;
-          }
-          return;
-        }
-        if (live.held) {
-          if (live.held.length < 500) live.held.push(ev);
-        } else if (this.live.get(t.id) === live) this.onEvent(t, ev);
-      },
-      commands: (list) => {
-        ready();
-        this.setCommands(t.provider, list);
-      },
-      exited: (info) => {
-        timed(() =>
-          timing?.recordProcess({
-            thread: t.id,
-            provider: t.provider,
-            kind: "exit",
-            ms: Date.now() - live.spawnAt!,
-            code: info.code,
-            signal: info.signal,
-            reason: live.exitReason ?? (info.aborted || live.aborted ? "stop" : "crash"),
-          }),
-        );
-        const current = this.live.get(t.id) === live;
-        if (current) this.live.delete(t.id);
-        if (live.rewarm) {
-          live.rewarm = false;
-          setImmediate(() => this.warm(t.id));
-        } // the old process no longer holds the session
-        if (current && t.background) {
-          delete t.background;
-          this.emit({ t: "thread", thread: t });
-        }
-        if (!current || t.status !== "running") return; // a replaced or aborted agent's exit says nothing about the new turn
-        const notifyFailure =
-          !t.operation && !info.aborted && !live.aborted && this.notificationTurns.delete(t.id);
-        this.notificationTurns.delete(t.id);
-        this.cancelQuestions(t.id);
-        t.status = "idle";
-        delete t.operation;
-        if (!info.aborted && !live.aborted) {
-          this.publish(t.id, {
-            type: "console_error",
-            text: `${prov.label} exited (${info.signal ?? info.code}). ${info.stderr.trim().slice(-500)}`,
-          });
-        }
-        if (notifyFailure) this.notify(t, "failed");
-        this.endTiming(t, { subtype: "exited", is_error: true });
-        this.touch(t);
-        if (parseCommand(this.queues.get(t.id)?.[0]?.text || "")?.name === "compact")
-          this.drain(t.id);
-      },
-    };
-    live.agent = prov.start(
-      {
-        id: t.id,
-        cwd: t.cwd,
-        mode: t.mode,
-        model: t.model,
-        effort: t.effort,
-        advisor: t.advisor,
-        claudeAccount: t.claudeAccount,
-        sessionId: t.sessionId,
-        forkFrom: t.sessionId ? undefined : t.forkFrom,
-        issueRun: t.issueRun,
-      },
-      ctx,
+    timed(() =>
+      timing?.recordProcess({ thread: thread.id, provider: thread.provider, kind: "spawn" }),
     );
-    this.live.set(t.id, live);
-    if (!warm) this.release(t, live);
+    const ctx: AgentCtx = {
+      event: (event) => this.agentEvent(thread, live, event),
+      commands: (list) => {
+        this.markReady(thread, live);
+        this.setCommands(thread.provider, list);
+      },
+      exited: (info) => this.agentExited(thread, live, prov, info),
+    };
+    live.agent = prov.start(startSpec(thread), ctx);
+    this.live.set(thread.id, live);
+    if (!warm) this.release(thread, live);
     return live;
+  }
+
+  // The first output from the process: record how long it took to start
+  private markReady(thread: Thread, live: Live) {
+    if (live.readyAt != null) return;
+    live.readyAt = Date.now();
+    timed(() =>
+      timing?.recordProcess({
+        thread: thread.id,
+        provider: thread.provider,
+        kind: "ready",
+        ms: live.readyAt! - live.spawnAt!,
+      }),
+    );
+  }
+
+  // Every event from the agent process: held while it starts or stays warm, swallowed after an abort or until an interrupt's result
+  private agentEvent(thread: Thread, live: Live, event: any) {
+    if (event?.type === "rate_limit_event" && thread.provider === "claude") {
+      event = {
+        ...event,
+        observedAt: Date.now(),
+        usageProvider: claudeUsageKey(thread.claudeAccount),
+      };
+    }
+    if (fromProcess(event)) this.markReady(thread, live);
+    live.heardAt = Date.now();
+    if (live.aborted) return;
+    if (live.interrupting) {
+      if (event.type === "result") {
+        clearTimeout(live.interrupting);
+        live.interrupting = undefined;
+      }
+      return;
+    }
+    if (live.held) {
+      if (live.held.length < 500) live.held.push(event);
+    } else if (this.live.get(thread.id) === live) this.onEvent(thread, event);
+  }
+
+  private recordExit(thread: Thread, live: Live, info: ExitInfo) {
+    timed(() =>
+      timing?.recordProcess({
+        thread: thread.id,
+        provider: thread.provider,
+        kind: "exit",
+        ms: Date.now() - live.spawnAt!,
+        code: info.code,
+        signal: info.signal,
+        reason: live.exitReason ?? (info.aborted || live.aborted ? "stop" : "crash"),
+      }),
+    );
+  }
+
+  private agentExited(thread: Thread, live: Live, prov: Provider, info: ExitInfo) {
+    this.recordExit(thread, live, info);
+    const current = this.live.get(thread.id) === live;
+    if (current) this.live.delete(thread.id);
+    if (live.rewarm) {
+      live.rewarm = false;
+      setImmediate(() => this.warm(thread.id));
+    } // the old process no longer holds the session
+    if (current && thread.background) {
+      delete thread.background;
+      this.emit({ t: "thread", thread });
+    }
+    if (!current || thread.status !== "running") return; // a replaced or aborted agent's exit says nothing about the new turn
+    const notifyFailure =
+      !thread.operation &&
+      !info.aborted &&
+      !live.aborted &&
+      this.notificationTurns.delete(thread.id);
+    this.notificationTurns.delete(thread.id);
+    this.cancelQuestions(thread.id);
+    thread.status = "idle";
+    delete thread.operation;
+    if (!info.aborted && !live.aborted) {
+      this.publish(thread.id, {
+        type: "console_error",
+        text: `${prov.label} exited (${info.signal ?? info.code}). ${info.stderr.trim().slice(-500)}`,
+      });
+    }
+    if (notifyFailure) this.notify(thread, "failed");
+    this.endTiming(thread, { subtype: "exited", is_error: true });
+    this.touch(thread);
+    if (parseCommand(this.queues.get(thread.id)?.[0]?.text || "")?.name === "compact")
+      this.drain(thread.id);
   }
 
   private release(t: Thread, live: Live) {
@@ -1164,308 +1262,392 @@ export class Threads {
   }
 
   // Canonical events from any harness. We only interpret the two that change thread state.
-  private onEvent(t: Thread, ev: any) {
-    const compacting = t.operation === "compact";
-    let issueError: string | undefined;
-    if (
-      ev.type === "system" &&
-      ev.subtype === "background_tasks_changed" &&
-      Array.isArray(ev.tasks)
-    ) {
-      const n = ev.tasks.length;
-      if ((t.background ?? 0) !== n) {
-        if (n) t.background = n;
-        else delete t.background;
-        this.emit({ t: "thread", thread: t });
-        if (!n) this.refreshIdleCompaction(t);
-      }
+  // The steps run in a fixed order (usage before result accounting, idle hooks last); a step returning true ends the event there.
+  private onEvent(thread: Thread, event: any) {
+    const flow: EventFlow = { event, compacting: thread.operation === "compact" };
+    if (this.noteBackgroundTasks(thread, event)) return;
+    this.noteConsoleError(thread, event);
+    if (event.type === "subagent_wake") return this.wake(thread, String(event.text || ""));
+    this.noteSelfStartedTurn(thread, event, flow.compacting);
+    if (NOISE.has(kindOf(event))) return;
+    this.noteResolvedModel(thread, event);
+    if (this.noteQuestion(thread, flow) || this.noteProviderUsage(thread, flow.event)) return;
+    this.noteRateLimit(thread, flow);
+    if (this.noteRunSettings(thread, flow.event) || this.noteContextUsage(thread, flow.event))
       return;
-    }
-    if (ev.type === "console_error" && typeof ev.text === "string") {
-      const turn = this.turns.get(t.id);
-      if (turn) {
-        turn.failure = ev.text;
-        turn.failureCode = typeof ev.code === "string" ? ev.code : undefined;
-      }
-    }
-    if (ev.type === "subagent_wake") return this.wake(t, String(ev.text || ""));
-    // Claude starts a turn by itself when a background subagent finishes after the turn ended: show it as running
+    this.noteSession(thread, flow.event);
+    this.noteCompactBoundary(thread, flow.event);
+    this.noteTurnContent(thread, flow.event);
+    if (flow.event.type === "result" && this.noteResult(thread, flow)) return;
+    this.publish(thread.id, flow.event, flow.event.type !== "stream_event");
+    this.afterIdleResult(thread, flow);
+    this.noteAssistant(thread, flow.event);
+  }
+
+  // Claude's background task count shows on the thread; an empty list lets idle compaction plan again. Never logged.
+  private noteBackgroundTasks(thread: Thread, event: any): boolean {
     if (
-      ev.type === "system" &&
-      ev.subtype === "init" &&
-      t.status === "idle" &&
-      t.provider === "claude" &&
-      !compacting
-    ) {
-      t.status = "running";
-      this.turns.set(t.id, { start: Date.now(), tools: {} });
-      this.touch(t);
+      event.type !== "system" ||
+      event.subtype !== "background_tasks_changed" ||
+      !Array.isArray(event.tasks)
+    )
+      return false;
+    const count = event.tasks.length;
+    if ((thread.background ?? 0) !== count) {
+      if (count) thread.background = count;
+      else delete thread.background;
+      this.emit({ t: "thread", thread });
+      if (!count) this.refreshIdleCompaction(thread);
     }
-    if (NOISE.has(kindOf(ev))) return;
-    const clock = this.turns.get(t.id)?.clock;
+    return true;
+  }
+
+  // The newest console error is the turn's failure: Codex and Pi report a failed turn there, not on the result
+  private noteConsoleError(thread: Thread, event: any) {
+    if (event.type !== "console_error" || typeof event.text !== "string") return;
+    const turn = this.turns.get(thread.id);
+    if (!turn) return;
+    turn.failure = event.text;
+    turn.failureCode = typeof event.code === "string" ? event.code : undefined;
+  }
+
+  // Claude starts a turn by itself when a background subagent finishes after the turn ended: show it as running
+  private noteSelfStartedTurn(thread: Thread, event: any, compacting: boolean) {
+    if (event.type !== "system" || event.subtype !== "init") return;
+    if (thread.status !== "idle" || thread.provider !== "claude" || compacting) return;
+    thread.status = "running";
+    this.turns.set(thread.id, { start: Date.now(), tools: {} });
+    this.touch(thread);
+  }
+
+  // The turn clock times the event and learns the model the process resolved; Codex names it in its init event
+  private noteResolvedModel(thread: Thread, event: any) {
+    const clock = this.turns.get(thread.id)?.clock;
     if (clock)
       timed(() => {
-        clock.event(ev);
-        const live = this.live.get(t.id);
+        clock.event(event);
+        const live = this.live.get(thread.id);
         if (live && clock.resolvedModel) live.model = clock.resolvedModel;
       });
     if (
-      t.provider === "codex" &&
-      ev.type === "system" &&
-      ev.subtype === "init" &&
-      typeof ev.model === "string"
+      thread.provider === "codex" &&
+      event.type === "system" &&
+      event.subtype === "init" &&
+      typeof event.model === "string"
     ) {
-      t.resolvedModel = ev.model;
+      thread.resolvedModel = event.model;
     }
-    if (ev.type === "question") {
+  }
+
+  // A question becomes pending (the stored copy replaces the event) and an answer clears it. True: invalid or unknown, so dropped.
+  private noteQuestion(thread: Thread, flow: EventFlow): boolean {
+    if (flow.event.type === "question") {
       try {
-        ev = this.questions.add(t.id, ev);
+        flow.event = this.questions.add(thread.id, flow.event);
       } catch {
-        this.publish(t.id, {
+        this.publish(thread.id, {
           type: "console_error",
           text: "The agent sent an invalid question request.",
         });
-        return;
+        return true;
       }
-      this.updateWaiting(t.id);
-      if (!compacting && this.notificationTurns.has(t.id)) this.notify(t, "needs_input");
+      this.updateWaiting(thread.id);
+      if (!flow.compacting && this.notificationTurns.has(thread.id))
+        this.notify(thread, "needs_input");
     }
-    if (ev.type === "question_answer") {
-      if (!this.questions.remove(t.id, ev.id)) return;
-      this.updateWaiting(t.id);
+    if (flow.event.type === "question_answer") {
+      if (!this.questions.remove(thread.id, flow.event.id)) return true;
+      this.updateWaiting(thread.id);
     }
-    if (ev.type === "provider_usage") {
-      const windows = codexWindows(ev.rateLimits);
-      if (windows.length) {
-        const merged = new Map((usage.get(t.provider)?.windows || []).map((w) => [w.label, w]));
-        for (const w of windows) merged.set(w.label, w); // app-server quota notifications can be sparse
-        usage.record(t.provider, { windows: [...merged.values()] });
-      }
+    return false;
+  }
+
+  // Codex quota windows. Not part of the conversation.
+  private noteProviderUsage(thread: Thread, event: any): boolean {
+    if (event.type !== "provider_usage") return false;
+    const windows = codexWindows(event.rateLimits);
+    if (windows.length) {
+      const merged = new Map(
+        (usage.get(thread.provider)?.windows || []).map((window) => [window.label, window]),
+      );
+      for (const window of windows) merged.set(window.label, window); // app-server quota notifications can be sparse
+      usage.record(thread.provider, { windows: [...merged.values()] });
+    }
+    return true;
+  }
+
+  // Claude quota windows, stamped with the account they belong to and when they were seen
+  private noteRateLimit(thread: Thread, flow: EventFlow) {
+    if (flow.event.type !== "rate_limit_event") return;
+    const windows = claudeWindows(flow.event);
+    if (!windows.length) return;
+    const provider =
+      thread.provider === "claude" ? claudeUsageKey(thread.claudeAccount) : thread.provider;
+    if (!provider.startsWith("claude")) {
+      usage.record(provider, { windows });
       return;
     }
-    if (ev.type === "rate_limit_event") {
-      const windows = claudeWindows(ev);
-      if (windows.length) {
-        const provider = t.provider === "claude" ? claudeUsageKey(t.claudeAccount) : t.provider;
-        if (provider.startsWith("claude")) {
-          const observedAt =
-            ev.usageProvider === provider && Number.isFinite(ev.observedAt)
-              ? ev.observedAt
-              : Date.now();
-          ev = { ...ev, observedAt, usageProvider: provider };
-          usage.record(provider, { windows }, ev.observedAt, {
-            observedAt: ev.observedAt,
-            usageProvider: provider,
-            ...(typeof ev.session_id === "string" && typeof ev.uuid === "string"
-              ? { sourceSessionId: ev.session_id, sourceEventUuid: ev.uuid }
-              : {}),
-          });
-        } else usage.record(provider, { windows });
-      }
+    const source = flow.event;
+    const observedAt =
+      source.usageProvider === provider && Number.isFinite(source.observedAt)
+        ? source.observedAt
+        : Date.now();
+    const event = { ...source, observedAt, usageProvider: provider };
+    flow.event = event;
+    usage.record(provider, { windows }, event.observedAt, {
+      observedAt: event.observedAt,
+      usageProvider: provider,
+      ...(typeof event.session_id === "string" && typeof event.uuid === "string"
+        ? { sourceSessionId: event.session_id, sourceEventUuid: event.uuid }
+        : {}),
+    });
+  }
+
+  // Run settings start the record of the last run; token usage adds to it and is the turn's usage. Neither is logged.
+  private noteRunSettings(thread: Thread, event: any): boolean {
+    if (event.type === "token_usage") {
+      const turn = this.turns.get(thread.id);
+      if (turn) turn.usage = event;
     }
-    if (ev.type === "token_usage") {
-      const turn = this.turns.get(t.id);
-      if (turn) turn.usage = ev;
-    }
-    if (ev.type === "run_settings" || ev.type === "token_usage") {
-      t.lastRun = {
-        ...(ev.type === "run_settings" ? {} : t.lastRun),
-        ...Object.fromEntries(Object.entries(ev).filter(([k]) => k !== "type")),
-      };
-      this.touch(t);
-      return;
-    }
-    if (ev.type === "context_usage") {
-      // not part of the conversation: remember it on the thread so the context meter survives reloads
-      t.context = {
-        used: ev.reset ? undefined : (ev.used ?? t.context?.used),
-        max: ev.max ?? t.context?.max,
-        ...(ev.source ? { source: ev.source } : {}),
-      };
-      this.emit({ t: "thread", thread: t });
-      return;
-    }
+    if (event.type !== "run_settings" && event.type !== "token_usage") return false;
+    thread.lastRun = {
+      ...(event.type === "run_settings" ? {} : thread.lastRun),
+      ...Object.fromEntries(Object.entries(event).filter(([key]) => key !== "type")),
+    };
+    this.touch(thread);
+    return true;
+  }
+
+  private noteContextUsage(thread: Thread, event: any): boolean {
+    if (event.type !== "context_usage") return false;
+    // not part of the conversation: remember it on the thread so the context meter survives reloads
+    thread.context = {
+      used: event.reset ? undefined : (event.used ?? thread.context?.used),
+      max: event.max ?? thread.context?.max,
+      ...(event.source ? { source: event.source } : {}),
+    };
+    this.emit({ t: "thread", thread });
+    return true;
+  }
+
+  private noteSession(thread: Thread, event: any) {
     if (
-      ev.type === "system" &&
-      ev.subtype === "init" &&
-      ev.session_id &&
-      t.sessionId !== ev.session_id
+      event.type !== "system" ||
+      event.subtype !== "init" ||
+      !event.session_id ||
+      thread.sessionId === event.session_id
+    )
+      return;
+    if (thread.forkFrom) this.accounting.seedFork(event.session_id, thread.forkFrom);
+    thread.sessionId = event.session_id;
+    delete thread.forkFrom; // the fork now has its own session
+    this.persist();
+  }
+
+  private noteCompactBoundary(thread: Thread, event: any) {
+    if (event.type !== "system" || event.subtype !== "compact_boundary") return;
+    const live = this.live.get(thread.id);
+    if (live) live.compactConfirmed = true;
+    thread.lastCompactedAt = Date.now();
+    thread.idleCompactionConsumedAt = thread.lastUserActivityAt;
+    thread.context = { max: thread.context?.max, source: thread.context?.source };
+    this.emit({ t: "thread", thread });
+  }
+
+  // Tool counts and what the turn ends on, for the usage dashboard and auto-continue
+  private noteTurnContent(thread: Thread, event: any) {
+    const turn = this.turns.get(thread.id);
+    if (event.type === "assistant" && turn) {
+      for (const block of event.message?.content ?? [])
+        if (block?.type === "tool_use") turn.tools[block.name] = (turn.tools[block.name] ?? 0) + 1;
+      this.trackBlocks(turn, event.message?.content ?? []);
+    }
+    if (event.type === "user") this.trackResults(turn, event.message?.content);
+  }
+
+  // The turn ended. True while Claude's empty /compact acknowledgement waits for the real result (nothing is logged yet).
+  private noteResult(thread: Thread, flow: EventFlow): boolean {
+    const questionOpen = this.questions.list(thread.id).length > 0; // cancelled just below; the turn still ended on it
+    this.cancelQuestions(thread.id);
+    if (this.awaitCompaction(thread, flow.event)) return true;
+    const failedTurn = this.turns.get(thread.id);
+    const failure = failedTurn?.failure;
+    const endedText = failedTurn?.lastText;
+    const unfinished = questionOpen || !!failedTurn?.bgTools?.size;
+    if (flow.event.is_error) flow.issueError = resultError(flow.event, failure);
+    this.finishTurn(thread, flow.event);
+    this.noteUsageStop(thread, flow.event, failure, failedTurn?.failureCode);
+    this.noteQuotaPause(thread, flow.event, failure);
+    if (!flow.compacting) {
+      thread.replyAt = Date.now();
+      thread.lastProviderActivityAt = Math.max(Date.now(), thread.lastUserActivityAt ?? 0);
+      if (flow.event.is_error) thread.idleCompactionConsumedAt = thread.lastUserActivityAt;
+    }
+    if (thread.operation === "compact") this.finishCompaction(thread, flow);
+    thread.lastRun = { ...thread.lastRun, duration_ms: flow.event.duration_ms };
+    // a message that arrived just as the turn ended starts the next one straight away: Claude says so in queued_turn_count
+    thread.status = Number(flow.event.queued_turn_count) > 0 ? "running" : "idle";
+    this.notifyTurnEnd(thread, flow);
+    this.touch(thread);
+    this.recycleRouting(thread.id);
+    brainCommit(); // agents may have written wiki pages this turn; keep the shared brain's git history current
+    this.continueAfterResult(thread, flow.event, endedText, unfinished);
+    return false;
+  }
+
+  // Claude answers /compact with an empty result straight away, then compacts and sends compact_boundary and the real result
+  private awaitCompaction(thread: Thread, event: any): boolean {
+    const live = this.live.get(thread.id);
+    if (
+      thread.operation === "compact" &&
+      thread.provider === "claude" &&
+      live &&
+      !live.compactConfirmed &&
+      !live.compactWait &&
+      !event.is_error &&
+      !event.num_turns
     ) {
-      if (t.forkFrom) this.accounting.seedFork(ev.session_id, t.forkFrom);
-      t.sessionId = ev.session_id;
-      delete t.forkFrom; // the fork now has its own session
-      this.persist();
-    }
-    if (ev.type === "system" && ev.subtype === "compact_boundary") {
-      const live = this.live.get(t.id);
-      if (live) live.compactConfirmed = true;
-      t.lastCompactedAt = Date.now();
-      t.idleCompactionConsumedAt = t.lastUserActivityAt;
-      t.context = { max: t.context?.max, source: t.context?.source };
-      this.emit({ t: "thread", thread: t });
-    }
-    if (ev.type === "assistant") {
-      const turn = this.turns.get(t.id);
-      if (turn)
-        for (const b of ev.message?.content ?? [])
-          if (b?.type === "tool_use") turn.tools[b.name] = (turn.tools[b.name] ?? 0) + 1;
-      if (turn) this.trackBlocks(turn, ev.message?.content ?? []);
-    }
-    if (ev.type === "user") this.trackResults(this.turns.get(t.id), ev.message?.content);
-    if (ev.type === "result") {
-      const questionOpen = this.questions.list(t.id).length > 0; // cancelled just below; the turn still ended on it
-      this.cancelQuestions(t.id);
-      const live = this.live.get(t.id);
-      // Claude answers /compact with an empty result straight away, then compacts and sends compact_boundary and the real result
-      if (
-        t.operation === "compact" &&
-        t.provider === "claude" &&
-        live &&
-        !live.compactConfirmed &&
-        !live.compactWait &&
-        !ev.is_error &&
-        !ev.num_turns
-      ) {
-        live.compactWait = setTimeout(() => {
-          live.compactWait = undefined;
-          if (t.operation === "compact" && !live.compactConfirmed)
-            this.onEvent(t, { ...ev, is_error: true, subtype: "error" });
-        }, 10 * 60_000);
-        return;
-      }
-      if (live?.compactWait) {
-        clearTimeout(live.compactWait);
+      live.compactWait = setTimeout(() => {
         live.compactWait = undefined;
-      }
-      const failedTurn = this.turns.get(t.id);
-      const failure = failedTurn?.failure;
-      const endedText = failedTurn?.lastText;
-      const unfinished = questionOpen || !!failedTurn?.bgTools?.size;
-      if (ev.is_error) {
-        const message = (error: unknown): string | undefined =>
-          typeof error === "string"
-            ? error
-            : error &&
-                typeof error === "object" &&
-                "message" in error &&
-                typeof error.message === "string"
-              ? error.message
-              : undefined;
-        const errors = [
-          message(ev.error),
-          ...(Array.isArray(ev.errors) ? ev.errors.slice(0, 20).map(message) : []),
-          failure,
-        ].filter((error): error is string => typeof error === "string" && !!error.trim());
-        if (errors.length) issueError = redact([...new Set(errors)].join("\n")).slice(0, 1000);
-      }
-      this.finishTurn(t, ev);
-      const stop = ev.is_error
-        ? detectUsageStop(t.provider, ev, failure, failedTurn?.failureCode)
-        : undefined;
-      if (stop) {
-        const stopKey = t.provider === "claude" ? claudeUsageKey(t.claudeAccount) : t.provider;
-        t.usageStop = {
-          provider: t.provider,
-          at: Date.now(),
-          text: stop.text,
-          resetsAt: stop.resetsAt ?? this.windowReset(stopKey),
-        };
-        if (t.usageStop.resetsAt === undefined) delete t.usageStop.resetsAt;
-      }
-      // Mark thread as quota-paused if turn ended due to rate limit and quota is exhausted
-      if (ev.is_error && !t.archived && !t.quotaPaused) {
-        const errMsg = [ev.error?.message ?? ev.error, ev.result, failure]
-          .filter((x) => typeof x === "string")
-          .join("\n");
-        if (QUOTA_ERROR.test(errMsg)) {
-          const providerKey =
-            t.provider === "claude" ? claudeUsageKey(t.claudeAccount) : t.provider;
-          if (usage.exhausted(providerKey)) {
-            const u = usage.get(providerKey);
-            const window = u?.windows.find(
-              (w) => w.used >= w.limit && w.resetsAt && w.resetsAt > Date.now(),
-            );
-            if (window) {
-              t.quotaPaused = {
-                provider: providerKey,
-                windowLabel: window.label,
-                resetsAt: window.resetsAt,
-              };
-              this.touch(t);
-            }
-          }
-        }
-      }
-      if (!compacting) {
-        t.replyAt = Date.now();
-        t.lastProviderActivityAt = Math.max(Date.now(), t.lastUserActivityAt ?? 0);
-        if (ev.is_error) t.idleCompactionConsumedAt = t.lastUserActivityAt;
-      }
-      if (t.operation === "compact") {
-        if (!ev.is_error && !this.live.get(t.id)?.compactConfirmed) {
-          ev = { ...ev, is_error: true, subtype: "error" };
-          this.publish(t.id, {
-            type: "console_error",
-            text: "The agent did not confirm compaction. Context has not been marked as compacted.",
-          });
-        }
-        this.publish(t.id, {
-          type: "command_status",
-          command: "compact",
-          status: ev.is_error ? "failed" : "completed",
-          text: ev.is_error
-            ? "Context compaction failed."
-            : "Context compacted. The conversation transcript is kept.",
-        });
-        delete t.operation;
-      }
-      t.lastRun = { ...t.lastRun, duration_ms: ev.duration_ms };
-      // a message that arrived just as the turn ended starts the next one straight away: Claude says so in queued_turn_count
-      t.status = Number(ev.queued_turn_count) > 0 ? "running" : "idle";
-      if (!compacting && this.notificationTurns.has(t.id) && (ev.is_error || t.status === "idle")) {
-        const queued = !!this.queues.get(t.id)?.length;
-        this.notificationTurns.delete(t.id);
-        if (ev.is_error) this.notify(t, "failed");
-        else if (!queued && !this.questions.list(t.id).length) this.notify(t, "finished");
-      }
-      this.touch(t);
-      this.recycleRouting(t.id);
-      brainCommit(); // agents may have written wiki pages this turn; keep the shared brain's git history current
-      if (
-        t.status === "idle" &&
-        (!ev.is_error || parseCommand(this.queues.get(t.id)?.[0]?.text || "")?.name === "compact")
-      )
-        this.drain(t.id);
-      if (t.status === "idle" && !ev.is_error) this.wake(t);
-      if (t.status === "idle") this.autoContinue(t, ev, endedText, unfinished);
+        if (thread.operation === "compact" && !live.compactConfirmed)
+          this.onEvent(thread, { ...event, is_error: true, subtype: "error" });
+      }, 10 * 60_000);
+      return true;
     }
-    this.publish(t.id, ev, ev.type !== "stream_event");
-    if (ev.type === "result" && t.schedule && t.status === "idle")
+    if (live?.compactWait) {
+      clearTimeout(live.compactWait);
+      live.compactWait = undefined;
+    }
+    return false;
+  }
+
+  private noteUsageStop(
+    thread: Thread,
+    event: any,
+    failure: string | undefined,
+    failureCode: string | undefined,
+  ) {
+    const stop = event.is_error
+      ? detectUsageStop(thread.provider, event, failure, failureCode)
+      : undefined;
+    if (!stop) return;
+    const stopKey =
+      thread.provider === "claude" ? claudeUsageKey(thread.claudeAccount) : thread.provider;
+    thread.usageStop = {
+      provider: thread.provider,
+      at: Date.now(),
+      text: stop.text,
+      resetsAt: stop.resetsAt ?? this.windowReset(stopKey),
+    };
+    if (thread.usageStop.resetsAt === undefined) delete thread.usageStop.resetsAt;
+  }
+
+  // Mark thread as quota-paused if turn ended due to rate limit and quota is exhausted
+  private noteQuotaPause(thread: Thread, event: any, failure: string | undefined) {
+    if (!event.is_error || thread.archived || thread.quotaPaused) return;
+    const errMsg = [event.error?.message ?? event.error, event.result, failure]
+      .filter((part) => typeof part === "string")
+      .join("\n");
+    if (!QUOTA_ERROR.test(errMsg)) return;
+    const providerKey =
+      thread.provider === "claude" ? claudeUsageKey(thread.claudeAccount) : thread.provider;
+    if (!usage.exhausted(providerKey)) return;
+    const window = usage
+      .get(providerKey)
+      ?.windows.find(
+        (candidate) =>
+          candidate.used >= candidate.limit &&
+          candidate.resetsAt &&
+          candidate.resetsAt > Date.now(),
+      );
+    if (!window) return;
+    thread.quotaPaused = {
+      provider: providerKey,
+      windowLabel: window.label,
+      resetsAt: window.resetsAt,
+    };
+    this.touch(thread);
+  }
+
+  // A /compact turn reports how it went; without compact_boundary it counts as failed
+  private finishCompaction(thread: Thread, flow: EventFlow) {
+    if (!flow.event.is_error && !this.live.get(thread.id)?.compactConfirmed) {
+      flow.event = { ...flow.event, is_error: true, subtype: "error" };
+      this.publish(thread.id, {
+        type: "console_error",
+        text: "The agent did not confirm compaction. Context has not been marked as compacted.",
+      });
+    }
+    this.publish(thread.id, {
+      type: "command_status",
+      command: "compact",
+      status: flow.event.is_error ? "failed" : "completed",
+      text: flow.event.is_error
+        ? "Context compaction failed."
+        : "Context compacted. The conversation transcript is kept.",
+    });
+    delete thread.operation;
+  }
+
+  private notifyTurnEnd(thread: Thread, flow: EventFlow) {
+    if (flow.compacting || !this.notificationTurns.has(thread.id)) return;
+    if (!flow.event.is_error && thread.status !== "idle") return;
+    const queued = !!this.queues.get(thread.id)?.length;
+    this.notificationTurns.delete(thread.id);
+    if (flow.event.is_error) this.notify(thread, "failed");
+    else if (!queued && !this.questions.list(thread.id).length) this.notify(thread, "finished");
+  }
+
+  // An idle thread moves on: queued messages, waiting subagent results, then auto-continue. Each step may start a turn.
+  private continueAfterResult(
+    thread: Thread,
+    event: any,
+    endedText: string | undefined,
+    unfinished: boolean,
+  ) {
+    if (
+      thread.status === "idle" &&
+      (!event.is_error ||
+        parseCommand(this.queues.get(thread.id)?.[0]?.text || "")?.name === "compact")
+    )
+      this.drain(thread.id);
+    if (thread.status === "idle" && !event.is_error) this.wake(thread);
+    if (thread.status === "idle") this.autoContinue(thread, event, endedText, unfinished);
+  }
+
+  // Schedule, turn-done and issue-run hooks see an idle thread's finished turn last; a hook failure never breaks the turn
+  private afterIdleResult(thread: Thread, flow: EventFlow) {
+    const event = flow.event;
+    if (event.type !== "result") return;
+    if (thread.schedule && thread.status === "idle")
       try {
-        this.onTurnEnd?.(t, ev);
+        this.onTurnEnd?.(thread, event);
       } catch {}
-    if (ev.type === "result" && t.status === "idle")
+    if (thread.status === "idle")
       try {
-        this.onTurnDone?.(t, ev);
+        this.onTurnDone?.(thread, event);
       } catch {}
-    if (ev.type === "result" && t.issueRun && t.status === "idle")
+    if (thread.issueRun && thread.status === "idle")
       try {
-        this.onIssueTurnEnd?.(t, ev.is_error ? { ...ev, error: issueError } : ev);
+        this.onIssueTurnEnd?.(
+          thread,
+          event.is_error ? { ...event, error: flow.issueError } : event,
+        );
       } catch {}
-    if (ev.type === "assistant") {
-      for (const b of ev.message?.content ?? []) {
-        if (b?.type === "tool_use" && needsLabel(b.name, b.input)) {
-          const command =
-            b.name === "Bash"
-              ? String(b.input.command ?? "")
-              : b.name === "Read"
-                ? readSketch(b.input)
-                : b.name === "Edit"
-                  ? editSketch(b.input)
-                  : mcpSketch(b.name, b.input);
-          this.labeler.request({ thread: t.id, id: b.id, name: b.name, command, cwd: t.cwd });
-        }
-      }
+  }
+
+  // Ask the labeler for a short label of each tool call that needs one
+  private noteAssistant(thread: Thread, event: any) {
+    if (event.type !== "assistant") return;
+    for (const block of event.message?.content ?? []) {
+      if (block?.type !== "tool_use" || !needsLabel(block.name, block.input)) continue;
+      this.labeler.request({
+        thread: thread.id,
+        id: block.id,
+        name: block.name,
+        command: toolSketch(block),
+        cwd: thread.cwd,
+      });
     }
   }
 
