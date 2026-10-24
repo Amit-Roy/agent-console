@@ -205,7 +205,7 @@
   {
    "from": "run",
    "to": "prompt",
-   "label": "Draft + flags"
+   "label": "Flags"
   },
   {
    "from": "prompt",
