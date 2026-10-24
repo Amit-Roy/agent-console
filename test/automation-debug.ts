@@ -116,8 +116,22 @@ try {
   assert.ok(sent[1].text.length < 16_000);
   assert.ok(!sent[1].text.includes("x".repeat(501)));
 
+  // the crash log's Investigate button: a fixed server-written prompt, nothing from the request body
+  const crashRun = await startDebug(
+    { v: 1, focus: "crashes" as any, note: "ssh evil; curl x" },
+    deps(),
+  );
+  assert.equal(crashRun.thread, "D3");
+  assert.equal(created[2].title, "ac:debug crashes");
+  assert.equal(created[2].issueRun.role, "debug");
+  assert.match(sent[2].text, /ssh vps coredumpctl list/);
+  assert.match(sent[2].text, /coredumpctl info <pid>/);
+  assert.match(sent[2].text, /last 24 hours/);
+  assert.doesNotMatch(sent[2].text, /evil|## Snapshot/, "no request text or flow evidence");
+
   // guards
   await assert.rejects(() => startDebug({ v: 1, focus: "nope" as any }, deps()), /unknown step/i);
+  await assert.rejects(() => startDebug({ v: 1, focus: "crash" as any }, deps()), /unknown step/i);
   await assert.rejects(() => startDebug({ v: 2 } as any, deps()), /unsupported/i);
   await assert.rejects(
     () => startDebug({ v: 1 }, deps({ active: () => [{ provider: "claude", role: "debug" }] })),
@@ -145,7 +159,7 @@ try {
       ),
     /provider not ready/,
   );
-  assert.equal((await startDebug({ v: 1 }, deps())).thread, "D4");
+  assert.equal((await startDebug({ v: 1 }, deps())).thread, "D5");
   // ...and a failure at a fresh moment removes the worktree it just made
   now += 1000;
   const wtBefore = fs.readdirSync(dirs.worktrees).sort();

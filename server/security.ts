@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type express from "express";
 import { createSecAutomations, type SecAutomations, statusKeyFile } from "./sec-automations.ts";
+import { createSecCrashes, type SecCrashes } from "./sec-crashes.ts";
 import { createToolWatch, RemoteError, type ToolWatch } from "./tool-watch.ts";
 
 // Security scans run on the VPS host (clamav, falco, trivy, nmap). This workspace only reads their
@@ -92,6 +93,7 @@ export function mountSecurity(
     fetchStatus: () => remote("status", statusKeyFile()),
     bridge: () => tools.bridgeView(),
   }),
+  crashes: SecCrashes = createSecCrashes({ fetch: () => remote("crashes", statusKeyFile()) }),
 ) {
   const guard =
     (fn: (req: express.Request) => Promise<any>): express.RequestHandler =>
@@ -175,6 +177,15 @@ export function mountSecurity(
   app.get(
     "/api/security/automations",
     guard(() => automations.view()),
+  );
+  // Process crashes of the last 24 h, re-validated and redacted again here. Cached 10 s, one shared request.
+  app.get(
+    "/api/security/crashes",
+    guard(() =>
+      crashes.view().catch((e: Error) => {
+        throw new SshError(e.message); // the parser's messages are fixed or sanitised, so they are safe to show
+      }),
+    ),
   );
   // Tool-watch: fixed tool versions and unsanctioned changes from the VPS. Untrusted advisory text never leaves the server.
   app.get(

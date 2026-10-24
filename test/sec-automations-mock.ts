@@ -51,6 +51,15 @@ export function status(over: Record<string, Record<string, unknown>> = {}) {
       next: NOW + 2 * MIN,
     }),
     unit({
+      id: "crashes",
+      name: "Process crashes (24 h)",
+      schedule: "Continuous",
+      periodSec: 300,
+      continuous: true,
+      lastRun: NOW - MIN,
+      next: null,
+    }),
+    unit({
       id: "osv",
       name: "OSV malware check",
       schedule: "Daily 22:30 UTC",
@@ -121,3 +130,33 @@ export const BRIDGE = {
   failed: 0,
 };
 export { D };
+
+// What `crashes` says: one entry with a secret the second redaction pass must hide, one without a stack trace.
+export const CRASHES = {
+  generatedAt: NOW,
+  total: 2,
+  crashes: [
+    {
+      at: NOW - 40 * MIN,
+      pid: 4242,
+      uid: 1000,
+      signal: "SIGSEGV",
+      exe: "/usr/bin/node",
+      comm: "node",
+      scope: "workspace 0123456789ab",
+      cmdline: "node server.js --api-token=hunter2secret --port 8080",
+      frames: ["#0 0x00007f in uv__io_poll ()", "#1 0x00007f in uv_run ()"],
+    },
+    {
+      at: NOW - 3 * H,
+      pid: 977,
+      uid: 0,
+      signal: "SIGABRT",
+      exe: "/usr/sbin/falco",
+      comm: "falco",
+      scope: "falco.service",
+      cmdline: "/usr/sbin/falco -o ghp_abcdefghijklmnop1234",
+      frames: [],
+    },
+  ],
+};

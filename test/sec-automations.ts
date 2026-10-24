@@ -48,6 +48,7 @@ function make(answers: (() => unknown)[], bridge = BRIDGE) {
       "tool-watch",
       "tool-patch",
       "falco-alert",
+      "crashes",
       "osv",
       "opencve-sync",
       "opencve-digest",
@@ -62,7 +63,10 @@ function make(answers: (() => unknown)[], bridge = BRIDGE) {
   );
   assert.equal(v.rows[0]!.runnable, "quick-scan");
   assert.equal(v.rows[1]!.runnable, "tool-watch");
-  assert.equal(v.rows[5]!.link, "https://vps.example.ts.net:8443");
+  assert.equal(
+    v.rows.find((r) => r.id === "opencve-sync")!.link,
+    "https://vps.example.ts.net:8443",
+  );
 }
 
 // amber: more than 1.5 periods since the last run
@@ -263,7 +267,7 @@ esac
     const j: any = await r.json();
     assert.equal(r.status, 200);
     assert.equal(r.headers.get("cache-control"), "no-store");
-    assert.equal(j.rows.length, 10);
+    assert.equal(j.rows.length, 11);
     assert.ok(j.rows.some((x: any) => x.id === "secscan"));
     const calls = () => fs.readFileSync(log, "utf8").trim().split("\n");
     assert.match(calls()[0]!, /no-such-status-key/);
