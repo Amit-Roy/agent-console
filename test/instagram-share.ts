@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { type ChildProcess, spawn } from "node:child_process";
+import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -52,6 +52,10 @@ for (const flag of ["--ignore-config", "--no-cookies", "--no-progress", "--write
 assert.ok(!args.includes("--no-playlist"), "carousels need the playlist");
 assert.equal(args[args.indexOf("--max-filesize") + 1], "100M");
 assert.equal(args[args.indexOf("--playlist-end") + 1], "10");
+assert.deepEqual(buildArgs("https://x/", "/tmp/out", [1, 8]).slice(3, 5), [
+  "--playlist-items",
+  "1,8",
+]);
 assert.equal(args[args.indexOf("-o") + 1], "/tmp/out/%(playlist_index|1)s.%(ext)s");
 assert.equal(classifyError("ERROR: login required", 1), BLOCKED_MESSAGE);
 assert.equal(classifyError("HTTP Error 429: rate-limit reached", 1), BLOCKED_MESSAGE);
@@ -66,8 +70,10 @@ fs.writeFileSync(
   fake,
   `#!/bin/sh
 out=""
+only=""
 while [ $# -gt 0 ]; do
   if [ "$1" = "-o" ]; then out="$2"; fi
+  if [ "$1" = "--playlist-items" ]; then only="$2"; fi
   shift
 done
 dir=$(dirname "$out")
@@ -77,6 +83,20 @@ case "$(cat "$(dirname "$0")/mode" 2>/dev/null)" in
   carousel)
     for i in 1 2 3; do printf "fakeslide$i" > "$dir/$i.mp4"; printf '{"description":"hello caption","uploader":"someone","secret":"RAWINFO"}' > "$dir/$i.info.json"; done
     printf 'fakeimage' > "$dir/4.jpg"
+    exit 0 ;;
+  flaky|gap)
+    mode=$(cat "$(dirname "$0")/mode")
+    for i in 1 2 3; do
+      if [ -n "$only" ]; then case ",$only," in *",$i,"*) ;; *) continue ;; esac; fi
+      if [ "$i" = 2 ]; then
+        if [ "$mode" = gap ]; then rc=1; continue; fi
+        if [ ! -f "$(dirname "$0")/seen" ]; then touch "$(dirname "$0")/seen"; rc=1; continue; fi
+      fi
+      printf "fakeslide$i" > "$dir/$i.mp4"
+      printf '{"description":"hello caption","playlist_count":3}' > "$dir/$i.info.json"
+    done
+    echo "ERROR: unable to download video data" >&2
+    [ "\${rc:-0}" = 1 ] && exit 1
     exit 0 ;;
 esac
 printf 'fakevideo' > "$dir/1.mp4"
@@ -121,6 +141,65 @@ assert.equal(slideCaption.match(/caption:/g)?.length, 1, "caption once");
 assert.match(slideCaption, /items: 4/);
 assert.ok(!slideCaption.includes("RAWINFO"));
 slides.cleanup();
+
+// a failed item is retried once and the post comes out whole
+setMode("flaky");
+const retried = await downloadInstagram(link("FLAKY11111"));
+assert.deepEqual(
+  retried.items.map((item) => item.name),
+  ["slide-1.mp4", "slide-2.mp4", "slide-3.mp4"],
+);
+assert.ok(!fs.readFileSync(retried.captionPath, "utf8").includes("missing:"));
+retried.cleanup();
+
+// an item that never arrives is recorded, with the way to fetch it
+setMode("gap");
+const gapped = await downloadInstagram(link("GAPPY11111"));
+assert.deepEqual(
+  gapped.items.map((item) => item.name),
+  ["slide-1.mp4", "slide-3.mp4"],
+);
+const gapCaption = fs.readFileSync(gapped.captionPath, "utf8");
+assert.match(gapCaption, /downloaded: 2 of 3/);
+assert.match(gapCaption, /^missing: 2$/m);
+assert.match(
+  gapCaption,
+  /instagram-fetch https:\/\/www\.instagram\.com\/reel\/GAPPY11111\/ --items 2/,
+);
+gapped.cleanup();
+
+// CLI: whole post, selected items, failure exit
+const cliEnv = { ...process.env, AGENT_CONSOLE_YTDLP: fake };
+const cliBin = path.join(process.cwd(), "bin", "instagram-fetch");
+const cli = (...cliArgs: string[]) => spawnSync(cliBin, cliArgs, { env: cliEnv, encoding: "utf8" });
+setMode("carousel");
+const cliOut = path.join(root, "cli-out");
+const cliRun = cli("https://www.instagram.com/p/CLIPOST1234/?igsh=x", "--out", cliOut);
+assert.equal(cliRun.status, 0, cliRun.stderr);
+const cliLines = cliRun.stdout.trim().split("\n");
+assert.equal(cliLines.length, 5, "4 slides + caption");
+assert.ok(cliLines[0].startsWith(`${cliOut}/slide-1.mp4 `), cliLines[0]);
+assert.ok(cliLines.at(-1)!.startsWith(`${cliOut}/instagram.txt `));
+assert.deepEqual(fs.readdirSync(cliOut).sort(), [
+  "instagram.txt",
+  "slide-1.mp4",
+  "slide-2.mp4",
+  "slide-3.mp4",
+  "slide-4.jpg",
+]);
+const cliPartial = cli(
+  "https://www.instagram.com/p/CLIPOST1234/",
+  "--out",
+  path.join(root, "cli-two"),
+  "--items",
+  "1,3",
+);
+assert.equal(cliPartial.status, 0, cliPartial.stderr);
+setMode("blocked");
+const cliBlocked = cli("https://www.instagram.com/p/CLIPOST1234/", "--out", path.join(root, "x"));
+assert.equal(cliBlocked.status, 1);
+assert.match(cliBlocked.stderr, /blocked anonymous download/);
+assert.equal(cli("https://evil.com/p/CLIPOST1234/").status, 1);
 
 setMode("blocked");
 await assert.rejects(downloadInstagram(link("BBBBB22222")), { message: BLOCKED_MESSAGE });
@@ -231,6 +310,7 @@ try {
     "slide-4.jpg",
   ]);
   assert.match(multiBody.prompt, /post \(4 slides\)/);
+  assert.match(multiBody.prompt, /instagram-fetch/);
   setMode("ok");
   for (const thread of ["nope", "00000000-0000-4000-8000-000000000000", 7]) {
     const unknown = await post(base, { url: "https://www.instagram.com/reel/HHHHH88888/", thread });

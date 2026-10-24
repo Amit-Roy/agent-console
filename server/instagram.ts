@@ -1,7 +1,6 @@
 import { execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { DATA_DIR } from "./auth.ts";
 
 // Share-to-console for Instagram reels: validate the shared link, download it anonymously with yt-dlp (no shell, no cookies),
 // and hand back the video plus a small caption file. Caption text is untrusted data.
@@ -54,13 +53,14 @@ export function extractInstagramUrl(text: unknown, url: unknown): InstagramLink 
   return null;
 }
 
-export function buildArgs(url: string, outDir: string): string[] {
+export function buildArgs(url: string, outDir: string, items?: number[]): string[] {
   return [
     "--ignore-config",
     "--no-cookies",
     "--no-progress",
-    "--playlist-end",
-    String(MAX_ITEMS),
+    ...(items?.length
+      ? ["--playlist-items", items.join(",")]
+      : ["--playlist-end", String(MAX_ITEMS)]),
     "--max-filesize",
     "100M",
     "-f",
@@ -115,15 +115,21 @@ function runYtDlp(args: string[], signal?: AbortSignal): Promise<void> {
   });
 }
 
-function captionText(info: any, url: string, itemCount: number): string {
+export const FETCH_HINT = "If slides are missing, run `instagram-fetch <url>`.";
+
+function captionText(info: any, link: InstagramLink, got: number, missing: number[]): string {
   const lines = [
     `caption: ${String(info?.description ?? info?.title ?? "").slice(0, 4000)}`,
     `uploader: ${String(info?.uploader ?? info?.channel ?? "")}`,
     `upload_date: ${String(info?.upload_date ?? "")}`,
     `duration: ${String(info?.duration ?? "")}`,
-    `items: ${itemCount}`,
-    `url: ${url}`,
+    `items: ${got}`,
+    `url: ${link.url}`,
   ];
+  if (missing.length) {
+    lines.push(`downloaded: ${got} of ${got + missing.length}`, `missing: ${missing.join(",")}`);
+    lines.push(`fetch the rest: instagram-fetch ${link.url} --items ${missing.join(",")}`);
+  } else lines.push(FETCH_HINT.replace("<url>", link.url));
   return lines.join("\n") + "\n";
 }
 
@@ -156,41 +162,142 @@ export function downloadInstagram(
   return job;
 }
 
+interface Found {
+  index: number;
+  name: string;
+  ext: string;
+}
+
+function scanStage(stage: string): Found[] {
+  const found: Found[] = [];
+  for (const name of fs.readdirSync(stage)) {
+    const match = MEDIA_RE.exec(name);
+    if (match) found.push({ index: Number(match[1]), name, ext: match[2].toLowerCase() });
+  }
+  return found.sort((left, right) => left.index - right.index);
+}
+
+/** Item count yt-dlp reported for the post (carousel size), from the info files it wrote; 0 when unknown. */
+function expectedCount(stage: string): number {
+  let count = 0;
+  for (const name of fs.readdirSync(stage)) {
+    if (!name.endsWith(".info.json")) continue;
+    try {
+      const info = JSON.parse(fs.readFileSync(path.join(stage, name), "utf8"));
+      count = Math.max(count, Number(info.playlist_count) || 0, Number(info.n_entries) || 0);
+    } catch {}
+  }
+  return Math.min(count, MAX_ITEMS);
+}
+
+export interface FetchedPost {
+  items: DownloadedItem[];
+  captionPath: string;
+  missing: number[];
+}
+
+/** Runs yt-dlp once; a failure is remembered (not thrown) because yt-dlp exits nonzero on a partial result. */
+async function runAttempt(
+  link: InstagramLink,
+  stage: string,
+  opts: { signal?: AbortSignal },
+  items: number[] | undefined,
+  errors: unknown[],
+): Promise<void> {
+  try {
+    await runYtDlp(buildArgs(link.url, stage, items), opts.signal);
+  } catch (error) {
+    if (opts.signal?.aborted) throw error;
+    errors.push(error);
+  }
+}
+
+function missingItems(stage: string, wantedItems?: number[]): number[] {
+  const have = new Set(scanStage(stage).map((entry) => entry.index));
+  const size = expectedCount(stage) || Math.max(1, ...have);
+  const wanted = wantedItems ?? Array.from({ length: size }, (_, offset) => offset + 1);
+  return wanted.filter((index) => !have.has(index));
+}
+
+function checkTotalSize(stage: string, found: Found[]): void {
+  const total = found.reduce(
+    (sum, entry) => sum + fs.statSync(path.join(stage, entry.name)).size,
+    0,
+  );
+  if (total > MAX_TOTAL_BYTES) throw new ShareError("That post is too large (over 100 MB).");
+}
+
+function nameItems(stage: string, found: Found[]): DownloadedItem[] {
+  const multi = found.length > 1 || expectedCount(stage) > 1 || found[0].index > 1;
+  return found.map((entry) => {
+    const isVideo = /^(mp4|webm|mkv|mov|m4v)$/.test(entry.ext);
+    const outExt = isVideo ? "mp4" : entry.ext === "jpeg" ? "jpg" : entry.ext;
+    const base = multi ? `slide-${entry.index}` : isVideo ? "video" : "image";
+    return { path: path.join(stage, entry.name), name: `${base}.${outExt}` };
+  });
+}
+
+function readInfo(stage: string): any {
+  const infoName = fs.existsSync(path.join(stage, "1.info.json"))
+    ? "1.info.json"
+    : fs.readdirSync(stage).find((name) => name.endsWith(".info.json"));
+  try {
+    if (infoName) return JSON.parse(fs.readFileSync(path.join(stage, infoName), "utf8"));
+  } catch {}
+  return {};
+}
+
+/** Downloads, then retries once when nothing arrived (unless Instagram said no) and once more for the missing items. */
+async function downloadItems(
+  link: InstagramLink,
+  stage: string,
+  opts: { signal?: AbortSignal; items?: number[] },
+): Promise<{ missing: number[]; firstError: unknown }> {
+  const errors: unknown[] = [];
+  await runAttempt(link, stage, opts, opts.items, errors);
+  const first = errors[0];
+  const blocked = first instanceof ShareError && first.message === BLOCKED_MESSAGE;
+  // nothing at all: one more try, except when Instagram said no (retrying only adds rate-limit pressure)
+  if (!scanStage(stage).length && !blocked) await runAttempt(link, stage, opts, opts.items, errors);
+  if (!scanStage(stage).length) return { missing: [], firstError: first };
+  let missing = missingItems(stage, opts.items);
+  if (missing.length) {
+    await runAttempt(link, stage, opts, missing, errors);
+    missing = missingItems(stage, opts.items);
+  }
+  return { missing, firstError: first };
+}
+
+/**
+ * Downloads a post into `stage` (yt-dlp keeps going past a failed item, so a nonzero exit with files on disk is a partial result),
+ * retries the missing items once, and writes instagram.txt. Throws only when nothing at all was fetched.
+ */
+export async function fetchPost(
+  link: InstagramLink,
+  stage: string,
+  opts: { signal?: AbortSignal; items?: number[] } = {},
+): Promise<FetchedPost> {
+  const { missing, firstError } = await downloadItems(link, stage, opts);
+  const found = scanStage(stage).filter((entry) => !opts.items || opts.items.includes(entry.index));
+  if (!found.length)
+    throw firstError instanceof Error ? firstError : new ShareError("Instagram download failed.");
+  checkTotalSize(stage, found);
+  const items = nameItems(stage, found);
+  const captionPath = path.join(stage, "instagram.txt");
+  fs.writeFileSync(captionPath, captionText(readInfo(stage), link, items.length, missing), {
+    mode: 0o600,
+  });
+  return { items, captionPath, missing };
+}
+
 async function downloadNow(link: InstagramLink, signal?: AbortSignal): Promise<Downloaded> {
+  const { DATA_DIR } = await import("./auth.ts");
   const root = path.join(DATA_DIR, "tmp");
   fs.mkdirSync(root, { recursive: true, mode: 0o700 });
   const stage = fs.mkdtempSync(path.join(root, "instagram-"));
   const cleanup = () => fs.rmSync(stage, { recursive: true, force: true });
   try {
-    await runYtDlp(buildArgs(link.url, stage), signal);
-    const found = fs
-      .readdirSync(stage)
-      .map((name) => ({ name, match: MEDIA_RE.exec(name) }))
-      .filter((entry) => entry.match)
-      .sort((left, right) => Number(left.match![1]) - Number(right.match![1]))
-      .slice(0, MAX_ITEMS);
-    if (!found.length) throw new ShareError("Instagram download failed.");
-    const total = found.reduce(
-      (sum, entry) => sum + fs.statSync(path.join(stage, entry.name)).size,
-      0,
-    );
-    if (total > MAX_TOTAL_BYTES) throw new ShareError("That post is too large (over 100 MB).");
-    const items = found.map((entry, index) => {
-      const ext = entry.match![2].toLowerCase();
-      const isVideo = /^(mp4|webm|mkv|mov|m4v)$/.test(ext);
-      const outExt = isVideo ? "mp4" : ext === "jpeg" ? "jpg" : ext;
-      const base = found.length > 1 ? `slide-${index + 1}` : isVideo ? "video" : "image";
-      return { path: path.join(stage, entry.name), name: `${base}.${outExt}` };
-    });
-    let info: any = {};
-    const infoName = fs.existsSync(path.join(stage, "1.info.json"))
-      ? "1.info.json"
-      : fs.readdirSync(stage).find((name) => name.endsWith(".info.json"));
-    try {
-      if (infoName) info = JSON.parse(fs.readFileSync(path.join(stage, infoName), "utf8"));
-    } catch {}
-    const captionPath = path.join(stage, "instagram.txt");
-    fs.writeFileSync(captionPath, captionText(info, link.url, items.length), { mode: 0o600 });
+    const { items, captionPath } = await fetchPost(link, stage, { signal });
     return { items, captionPath, cleanup };
   } catch (error) {
     cleanup();
