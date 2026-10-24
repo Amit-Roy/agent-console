@@ -39,14 +39,18 @@ for (let turn = 0; turn < 60; turn++) {
     type: "assistant",
     message: {
       role: "assistant",
-      content: [{ type: "tool_use", id: `tool-${turn}`, name: "Bash", input: { command: `echo ${turn}` } }],
+      content: [
+        { type: "tool_use", id: `tool-${turn}`, name: "Bash", input: { command: `echo ${turn}` } },
+      ],
     },
   });
   events.push({
     type: "user",
     message: {
       role: "user",
-      content: [{ type: "tool_result", tool_use_id: `tool-${turn}`, content: `out ${turn}\n`.repeat(20) }],
+      content: [
+        { type: "tool_result", tool_use_id: `tool-${turn}`, content: `out ${turn}\n`.repeat(20) },
+      ],
     },
   });
   events.push({
@@ -110,7 +114,9 @@ try {
   await page.routeWebSocket(/\/ws$/, (socket) => {
     const upstream = socket.connectToServer();
     socket.onMessage((message) => upstream.send(message));
-    release = () => parked?.splice(0).forEach((held) => socket.send(held));
+    release = () => {
+      for (const held of parked?.splice(0) ?? []) socket.send(held);
+    };
     upstream.onMessage((message) => {
       if (parked && /"t":"history"/.test(String(message).slice(0, 20))) {
         parked.push(String(message));
