@@ -4,9 +4,11 @@ import path from "node:path";
 
 // bin/share-trace <agentId>
 // Prints a share-analyzer subagent's tool calls and final report as JSON for the safety classifier.
-// Tool results are never included: they hold the untrusted asset contents.
+// Tool results are never included: they hold the untrusted asset contents. Only a coarse
+// `blocked` kind is derived from an error result's text; no result text is ever emitted.
 const USAGE = "usage: share-trace <agentId>";
 const MAX_INPUT_BYTES = 2048;
+const MAX_BASH_INPUT_BYTES = 8192;
 const MAX_REPORT_BYTES = 20480;
 const AGENT_TYPE = "share-analyzer";
 
@@ -49,7 +51,37 @@ function truncate(text: string, limit: number): string {
   return `${bytes.subarray(0, limit).toString("utf8")}…[truncated ${bytes.length - limit} bytes]`;
 }
 
-type Call = { name: string; input: string; isError: boolean };
+type Blocked = "network" | "fs" | "denied" | "timeout" | null;
+// Checked in order; first match wins.
+const BLOCKED_PATTERNS: [Exclude<Blocked, null>, RegExp][] = [
+  ["denied", /share jail unavailable|hook|has been denied|permission to use|blocked|not allowed/i],
+  ["timeout", /timed out|timeout/i],
+  [
+    "network",
+    /network is unreachable|could not resolve|name or service not known|temporary failure in name resolution|connection refused|no route to host|failed to connect/i,
+  ],
+  ["fs", /no such file|permission denied|read-only file system|not a directory|cannot access/i],
+];
+
+/** Flattens tool_result content to text for classification only; the text is never stored. */
+function resultText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content.map((part) => (typeof part?.text === "string" ? part.text : "")).join("\n");
+}
+
+function classifyBlocked(content: unknown): Blocked {
+  const text = resultText(content);
+  return BLOCKED_PATTERNS.find(([, pattern]) => pattern.test(text))?.[0] ?? null;
+}
+
+type Call = {
+  name: string;
+  input: string;
+  truncated: boolean;
+  isError: boolean;
+  blocked: Blocked;
+};
 type Trace = { calls: Map<string, Call>; report: string };
 
 function parseRecord(line: string): any {
@@ -60,25 +92,30 @@ function parseRecord(line: string): any {
   }
 }
 
+function newCall(block: any): Call {
+  const name = String(block.name);
+  const full = JSON.stringify(block.input ?? {});
+  const limit = name === "Bash" ? MAX_BASH_INPUT_BYTES : MAX_INPUT_BYTES;
+  const input = truncate(full, limit);
+  return { name, input, truncated: input !== full, isError: false, blocked: null };
+}
+
 function applyAssistant(trace: Trace, content: any[]) {
   const texts: string[] = [];
   for (const block of content) {
-    if (block?.type === "tool_use")
-      trace.calls.set(block.id, {
-        name: String(block.name),
-        input: truncate(JSON.stringify(block.input ?? {}), MAX_INPUT_BYTES),
-        isError: false,
-      });
+    if (block?.type === "tool_use") trace.calls.set(block.id, newCall(block));
     else if (block?.type === "text" && typeof block.text === "string") texts.push(block.text);
   }
   if (texts.length) trace.report = texts.join("\n");
 }
 
-/** Only the error flag of a tool_result is kept; its content is never read. */
+/** Keeps the error flag and a coarse blocked kind (errors only); result text is never kept. */
 function applyUser(trace: Trace, content: any[]) {
   for (const block of content) {
     const call = block?.type === "tool_result" ? trace.calls.get(block.tool_use_id) : undefined;
-    if (call && block.is_error === true) call.isError = true;
+    if (!call || block.is_error !== true) continue;
+    call.isError = true;
+    call.blocked = classifyBlocked(block.content);
   }
 }
 

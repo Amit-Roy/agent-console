@@ -84,8 +84,8 @@
     {
      "id": "analyzer",
      "label": "share-analyzer",
-     "tech": "Sonnet, Read only",
-     "desc": "Reads listed paths, reports",
+     "tech": "Sonnet, Read + Bash",
+     "desc": "Commands run in the jail",
      "icon": "scan-search",
      "color": "cyan"
     },
@@ -93,9 +93,17 @@
      "id": "classifier",
      "label": "share-safety-classifier",
      "tech": "Sonnet, no tools",
-     "desc": "SAFE or UNSAFE from trace",
+     "desc": "Judges commands tried, SAFE or UNSAFE",
      "icon": "shield-check",
      "color": "teal"
+    },
+    {
+     "id": "jail",
+     "label": "share-jail",
+     "tech": "bwrap via PreToolUse hook",
+     "desc": "No network, no home, assets read-only",
+     "icon": "lock",
+     "color": "slate"
     }
    ]
   },
@@ -141,7 +149,7 @@
      "id": "trace",
      "label": "share-trace CLI",
      "tech": "subagent JSONL",
-     "desc": "Tool calls + report only",
+     "desc": "Calls, blocked kind, report",
      "icon": "file-search",
      "color": "slate"
     }
@@ -233,6 +241,11 @@
    "from": "improve",
    "to": "effort",
    "label": "Quote old/new"
+  },
+  {
+   "from": "analyzer",
+   "to": "jail",
+   "label": "Bash, wrapped"
   }
  ]
 }
