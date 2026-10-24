@@ -11,8 +11,17 @@ fs.mkdirSync(dataDir, { recursive: true });
 fs.mkdirSync(binDir, { recursive: true });
 process.env.AGENT_CONSOLE_DATA = dataDir;
 
-const { extractInstagramUrl, buildArgs, classifyError, downloadInstagram, BLOCKED_MESSAGE } =
-  await import("../server/instagram.ts");
+const {
+  extractInstagramUrl,
+  buildArgs,
+  classifyError,
+  downloadInstagram,
+  galleryArgs,
+  BLOCKED_MESSAGE,
+  IMAGE_POST_MESSAGE,
+  COOKIES_EXPIRED_MESSAGE,
+} = await import("../server/instagram.ts");
+const { instagramProvider } = await import("../server/share/instagram.ts");
 
 // ---- extraction table
 const table: [string, string, string | null][] = [
@@ -60,6 +69,7 @@ assert.equal(args[args.indexOf("-o") + 1], "/tmp/out/%(playlist_index|1)s.%(ext)
 assert.equal(classifyError("ERROR: login required", 1), BLOCKED_MESSAGE);
 assert.equal(classifyError("HTTP Error 429: rate-limit reached", 1), BLOCKED_MESSAGE);
 assert.equal(classifyError("Video is not available", 1), BLOCKED_MESSAGE);
+assert.equal(classifyError("ERROR: [Instagram] X: No video formats found!", 1), IMAGE_POST_MESSAGE);
 assert.match(classifyError("", "ETIMEDOUT"), /timed out/);
 assert.match(classifyError("File is larger than max-filesize", 1), /too large/);
 assert.match(classifyError("ERROR: Unsupported URL", 1), /valid Instagram link/);
@@ -69,6 +79,7 @@ const fake = path.join(binDir, "yt-dlp");
 fs.writeFileSync(
   fake,
   `#!/bin/sh
+echo "$*" >> "$(dirname "$0")/ycalls"
 out=""
 only=""
 while [ $# -gt 0 ]; do
@@ -80,6 +91,11 @@ dir=$(dirname "$out")
 case "$(cat "$(dirname "$0")/mode" 2>/dev/null)" in
   blocked) echo "ERROR: [Instagram] login required" >&2; exit 1 ;;
   timeout) echo "ERROR: Read timed out" >&2; exit 1 ;;
+  images) echo "ERROR: [Instagram] X: No video formats found!" >&2; exit 1 ;;
+  mixed)
+    printf "fakeslide1" > "$dir/1.mp4"; printf '{"description":"hello caption","playlist_count":3}' > "$dir/1.info.json"
+    echo "ERROR: [Instagram] X: No video formats found!" >&2
+    exit 1 ;;
   carousel)
     for i in 1 2 3; do printf "fakeslide$i" > "$dir/$i.mp4"; printf '{"description":"hello caption","uploader":"someone","secret":"RAWINFO"}' > "$dir/$i.info.json"; done
     printf 'fakeimage' > "$dir/4.jpg"
@@ -198,7 +214,7 @@ assert.equal(cliPartial.status, 0, cliPartial.stderr);
 setMode("blocked");
 const cliBlocked = cli("https://www.instagram.com/p/CLIPOST1234/", "--out", path.join(root, "x"));
 assert.equal(cliBlocked.status, 1);
-assert.match(cliBlocked.stderr, /blocked anonymous download/);
+assert.match(cliBlocked.stderr, /Instagram blocked the download/);
 const wrapper = spawnSync(
   path.join(process.cwd(), "bin", "instagram-fetch"),
   ["https://evil.com/p/CLIPOST1234/"],
@@ -260,6 +276,139 @@ await assert.rejects(downloadInstagram(link("BBBBB22222")), { message: BLOCKED_M
 setMode("timeout");
 await assert.rejects(downloadInstagram(link("CCCCC33333")), /timed out/);
 assert.deepEqual(stageLeftovers(), [], "staging removed on failure");
+
+// ---- gallery-dl cookie fallback for image-only posts
+const galleryFake = path.join(binDir, "gallery-dl");
+fs.writeFileSync(
+  galleryFake,
+  `#!/bin/sh
+echo "$*" >> "$(dirname "$0")/gcalls"
+dir=""
+fmt=""
+range=""
+cookies=""
+while [ $# -gt 0 ]; do
+  case "$1" in -D) dir="$2" ;; -f) fmt="$2" ;; --range) range="$2" ;; -C) cookies="$2" ;; esac
+  shift
+done
+[ -f "$cookies" ] || exit 2
+case "$(cat "$(dirname "$0")/gmode" 2>/dev/null)" in
+  login) echo "[instagram][error] HTTP redirect to login page (sessionid=SECRETSESSION)" >&2; exit 1 ;;
+esac
+case "$range" in *-*) list="1 2 3" ;; *) list=$(echo "$range" | tr , ' ') ;; esac
+for i in $list; do
+  name=$(echo "$fmt" | sed "s/{num}/$i/; s/{extension}/jpg/")
+  printf "gslide$i" > "$dir/$name"
+  printf '{"description":"g cap","username":"u","count":3,"post_date":"2026-01-02 03:04:05"}' > "$dir/$name.json"
+done
+`,
+  { mode: 0o755 },
+);
+process.env.AGENT_CONSOLE_GALLERYDL = galleryFake;
+const cookieFile = path.join(dataDir, "instagram-cookies.txt");
+const callFile = (name: string) => path.join(binDir, name);
+const calls = (name: string) =>
+  fs.existsSync(callFile(name))
+    ? fs.readFileSync(callFile(name), "utf8").trim().split("\n").filter(Boolean)
+    : [];
+const resetCalls = () => {
+  for (const name of ["ycalls", "gcalls"]) fs.rmSync(callFile(name), { force: true });
+};
+const fetchProvider = (code: string) => {
+  const stageDir = fs.mkdtempSync(path.join(root, "stage-"));
+  return { stageDir, run: () => instagramProvider.fetch(link(code), stageDir, {}) };
+};
+const logged: string[] = [];
+const realError = console.error;
+console.error = (...parts: unknown[]) => {
+  logged.push(parts.join(" "));
+};
+const galleryUrl = "https://www.instagram.com/p/GALLERY1111/";
+const galleryOut = galleryArgs(galleryUrl, "/tmp/stage", "/tmp/cookies.txt", []);
+assert.deepEqual(galleryOut.slice(0, 12), [
+  "--config-ignore",
+  "-q",
+  "--no-part",
+  "--no-mtime",
+  "--http-timeout",
+  "30",
+  "--filesize-max",
+  "100M",
+  "--write-metadata",
+  "-C",
+  "/tmp/cookies.txt",
+  "-D",
+]);
+assert.equal(galleryOut[galleryOut.indexOf("-D") + 1], "/tmp/stage");
+assert.equal(galleryOut[galleryOut.indexOf("-f") + 1], "{num}.{extension}");
+assert.equal(galleryOut[galleryOut.indexOf("--range") + 1], "1-10");
+assert.equal(
+  galleryArgs(galleryUrl, "/tmp/stage", "/tmp/cookies.txt", [2, 3])[
+    galleryOut.indexOf("--range") + 1
+  ],
+  "2,3",
+);
+assert.deepEqual(galleryOut.slice(-2), ["--", galleryUrl]);
+
+fs.writeFileSync(
+  cookieFile,
+  "# Netscape HTTP Cookie File\n.instagram.com\tTRUE\t/\tTRUE\t0\tsessionid\tSECRETSESSION\n",
+);
+setMode("images");
+resetCalls();
+const imageRun = fetchProvider("IMAGE111111");
+const imageResult = await imageRun.run();
+assert.equal(imageResult.kind, "images");
+assert.deepEqual(
+  imageResult.items.map((item) => item.name),
+  ["slide-1.jpg", "slide-2.jpg", "slide-3.jpg"],
+);
+assert.deepEqual(imageResult.missing, []);
+const imageCaption = fs.readFileSync(imageResult.notePath, "utf8");
+assert.match(imageCaption, /g cap/);
+assert.match(imageCaption, /uploader: u$/m);
+assert.match(imageCaption, /upload_date: 20260102/);
+assert.deepEqual(
+  fs.readdirSync(imageRun.stageDir).filter((name) => name.endsWith(".jpg.json")),
+  [],
+  "raw gallery-dl metadata removed",
+);
+assert.equal(calls("ycalls").length, 1, "image-only post is not retried with yt-dlp");
+assert.equal(calls("gcalls").length, 1);
+
+fs.rmSync(cookieFile);
+resetCalls();
+await assert.rejects(fetchProvider("IMAGE222222").run(), { message: IMAGE_POST_MESSAGE });
+assert.equal(calls("gcalls").length, 0, "no cookie file, no gallery-dl");
+
+fs.writeFileSync(
+  cookieFile,
+  "# Netscape HTTP Cookie File\n.instagram.com\tTRUE\t/\tTRUE\t0\tsessionid\tSECRETSESSION\n",
+);
+fs.writeFileSync(callFile("gmode"), "login");
+await assert.rejects(fetchProvider("IMAGE333333").run(), { message: COOKIES_EXPIRED_MESSAGE });
+fs.writeFileSync(callFile("gmode"), "ok");
+
+setMode("mixed");
+resetCalls();
+const mixedResult = await fetchProvider("MIXED111111").run();
+assert.equal(mixedResult.items.length, 3);
+assert.deepEqual(mixedResult.missing, []);
+assert.equal(calls("ycalls").length, 1, "image-only items are not retried with yt-dlp");
+assert.match(calls("gcalls")[0], /--range 2,3 /);
+
+setMode("ok");
+resetCalls();
+await fetchProvider("REEL1111111").run();
+assert.equal(calls("gcalls").length, 0, "normal reel never reaches gallery-dl");
+
+console.error = realError;
+assert.ok(
+  logged.some((line) => line.includes("gallery-dl failed")),
+  "failure is logged",
+);
+assert.ok(!logged.join("\n").includes("SECRETSESSION"), "cookie values never reach the console");
+fs.rmSync(cookieFile);
 
 // ---- scratch server integration
 const { makeToken } = await import("../server/auth.ts");

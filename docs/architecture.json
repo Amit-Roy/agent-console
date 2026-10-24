@@ -1,0 +1,109 @@
+{
+ "title": "Instagram share download",
+ "subtitle": "Shared post to staged slides and caption",
+ "items": [
+  {
+   "group": "Phone",
+   "border": "solid",
+   "color": "slate",
+   "icon": "smartphone",
+   "items": [
+    {
+     "id": "pwa",
+     "label": "PWA share target",
+     "tech": "POST /api/share",
+     "icon": "share-2",
+     "color": "indigo"
+    }
+   ]
+  },
+  {
+   "group": "Agent Console server",
+   "sub": "server/share",
+   "border": "dashed",
+   "color": "blue",
+   "icon": "server",
+   "items": [
+    {
+     "id": "run",
+     "label": "downloadShare",
+     "tech": "share/run.ts",
+     "desc": "Routes Instagram links to the queue",
+     "icon": "route",
+     "color": "blue"
+    },
+    {
+     "id": "ig",
+     "label": "Instagram provider",
+     "tech": "share/instagram.ts",
+     "desc": "Queue, dedupe, retries, caption, cookie fallback",
+     "icon": "camera",
+     "color": "pink"
+    },
+    {
+     "id": "ytdlp",
+     "label": "yt-dlp runner",
+     "tech": "share/ytdlp.ts",
+     "desc": "Anonymous; image posts skip retries",
+     "icon": "film",
+     "color": "orange"
+    },
+    {
+     "id": "gdl",
+     "label": "gallery-dl runner",
+     "tech": "share/gallerydl.ts",
+     "desc": "Cookie file, image slides",
+     "icon": "images",
+     "color": "purple"
+    }
+   ]
+  },
+  {
+   "group": "Instagram",
+   "border": "solid",
+   "color": "slate",
+   "icon": "globe",
+   "items": [
+    {
+     "id": "insta",
+     "label": "instagram.com",
+     "tech": "Web + API",
+     "icon": "cloud",
+     "color": "cyan"
+    }
+   ]
+  }
+ ],
+ "edges": [
+  {
+   "from": "pwa",
+   "to": "run",
+   "label": "Shared link"
+  },
+  {
+   "from": "run",
+   "to": "ig",
+   "label": "Queue job"
+  },
+  {
+   "from": "ig",
+   "to": "ytdlp",
+   "label": "First attempt"
+  },
+  {
+   "from": "ytdlp",
+   "to": "insta",
+   "label": "Anonymous"
+  },
+  {
+   "from": "ig",
+   "to": "gdl",
+   "label": "Empty or missing"
+  },
+  {
+   "from": "gdl",
+   "to": "insta",
+   "label": "With cookies"
+  }
+ ]
+}
