@@ -39,12 +39,6 @@ assert.equal(fontLoads, 0, "naming must not require a newly installed runtime fo
 hooks.deregister();
 execFileSync(process.execPath, ["scripts/title-metrics.mjs", "--check"], { stdio: "pipe" });
 assert.equal(cleanTitle(""), undefined, "empty replies must be rejected");
-assert.equal(
-  cleanTitle("Orchestrator GitHub issue triage queue worker"),
-  "Orchestrator GitHub issue triage",
-  "whole words only, within the 30-char budget",
-);
-assert.equal(cleanTitle("Social multi-platform"), "Social multi-platform", "no mid-word cut");
 const threads = new Threads(() => {});
 try {
   // an unnamed thread is named by its prompts

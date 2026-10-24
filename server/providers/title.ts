@@ -1,12 +1,12 @@
 import { completeLabel } from "./small-model.ts";
 import metrics from "./title-metrics.json" with { type: "json" };
 
-// Chat titles are natural phrases; auto-mode issue titles use fitTitle. A new thread is titled after its folder. After each prompt with substance, Nemotron (via NVIDIA, a free model; never Haiku or
+// A new thread is titled after its folder. After each prompt with substance, Nemotron (via NVIDIA, a free model; never Haiku or
 // Luna) names it after what is being discussed: all user messages, text only, oldest first within a character budget.
 // One small call: no tools, no MCP, no hooks.
 
 export const MAX_INPUT = 100_000; // chars of user text per call; the oldest messages fall off first
-const MAX_WORDS = 5; // chat titles: natural words, shown in full by the thread menu
+const MAX_WORDS = 5;
 const MAX_CHARS = 30;
 export const MAX_TITLE = 20; // auto-mode issue titles (fitTitle, window-dispatch): Topic:123 desc, narrow row
 const MAX_TITLE_WIDTH = 174; // px: 180px running desktop row, with 6px reserve; Android has 220px
@@ -64,7 +64,7 @@ export function titleInput(messages: unknown[], budget = MAX_INPUT): string[] {
   return kept.reverse();
 }
 
-/** Model output -> a tidy thread title, or undefined when it does not look like one. Whole words only, never cut mid-word. */
+/** Model output -> a tidy thread title, or undefined when it does not look like one. */
 export function cleanTitle(raw: unknown): string | undefined {
   let t =
     String(raw ?? "")

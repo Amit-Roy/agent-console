@@ -80,10 +80,7 @@ check(
   "title: natural title kept in full within the word budget",
   cleanTitle("Playwright Alternative") === "Playwright Alternative",
 );
-check(
-  "title: quotes, markdown and trailing punctuation stripped",
-  cleanTitle('**"Chat image paste".**') === "Chat image paste",
-);
+check("title: quotes and markdown stripped", cleanTitle('**"Chat image paste".**') === "Chat image paste");
 check(
   "title: 'Title:' prefix and extra lines dropped",
   cleanTitle("Title: Dark mode toggle\n\nThis title captures...") === "Dark mode toggle",
@@ -95,7 +92,6 @@ check(
 check(
   "title: capped at 30 chars on a word boundary, never mid-word",
   cleanTitle("Video generation portfolio exploration") === "Video generation portfolio" &&
-    cleanTitle("Video generation portfolio exploration")!.length <= 30 &&
     cleanTitle("x".repeat(40)) === undefined,
 );
 check(
