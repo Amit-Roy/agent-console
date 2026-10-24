@@ -133,70 +133,85 @@ export function wireCopy(btn, getText, label = "Copy") {
 const esc = (s) =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
-/** A local file reference, never an HTTP URL, app route, or executable scheme. Paths stay relative until the server resolves them. */
-export function parseFileRef(value) {
-  if (typeof value !== "string" || !value || /[\u0000-\u001f\u007f]/.test(value)) return null;
-  let ref = value.trim();
-  if (!ref || ref.startsWith("#") || ref.startsWith("//")) return null;
-  let line = null,
-    endLine = null,
-    column = null;
+function stripLineHash(ref) {
   const hash = ref.indexOf("#");
-  if (hash !== -1) {
-    const range = /^#L(\d+)(?:-L?(\d+))?$/i.exec(ref.slice(hash));
-    if (range) {
-      line = Number(range[1]);
-      endLine = Number(range[2] || range[1]);
-    }
-    ref = ref.slice(0, hash);
-  }
-  if (/^file:/i.test(ref)) {
-    try {
-      const url = new URL(ref);
-      if (url.protocol !== "file:" || (url.hostname && url.hostname !== "localhost") || url.search)
-        return null;
-      ref = url.pathname;
-    } catch {
-      return null;
-    }
-  }
+  if (hash === -1) return { ref, line: null, endLine: null };
+  const range = /^#L(\d+)(?:-L?(\d+))?$/i.exec(ref.slice(hash));
+  return {
+    ref: ref.slice(0, hash),
+    line: range ? Number(range[1]) : null,
+    endLine: range ? Number(range[2] || range[1]) : null,
+  };
+}
+function fileUrlPath(ref) {
   try {
-    ref = decodeURIComponent(ref);
+    const url = new URL(ref);
+    if (url.protocol !== "file:" || (url.hostname && url.hostname !== "localhost") || url.search)
+      return null;
+    return url.pathname;
   } catch {
     return null;
   }
-  const position = /:(\d+)(?::(\d+))?$/.exec(ref);
-  if (position) {
-    if (line == null) {
-      line = Number(position[1]);
-      endLine = line;
-      column = position[2] ? Number(position[2]) : null;
-    }
-    ref = ref.slice(0, position.index);
+}
+function decodeRef(ref) {
+  try {
+    return decodeURIComponent(ref);
+  } catch {
+    return null;
   }
-  if (
+}
+function stripPosition(ref, where) {
+  const position = /:(\d+)(?::(\d+))?$/.exec(ref);
+  if (!position) return ref;
+  if (where.line == null) {
+    where.line = Number(position[1]);
+    where.endLine = where.line;
+    where.column = position[2] ? Number(position[2]) : null;
+  }
+  return ref.slice(0, position.index);
+}
+function hasForbiddenRefShape(ref) {
+  return (
     !ref ||
     /[\u0000-\u001f\u007f\\?]/.test(ref) ||
     /^[a-z][\w+.-]*:/i.test(ref) ||
     ref.startsWith("//")
-  )
-    return null;
-  if (
+  );
+}
+function isReservedRoute(ref) {
+  return (
     /^\/(?:api|uploads|export|vendor|fonts)(?:\/|$)/.test(ref) ||
     /^\/(?:dashboard|login|restart|manifest\.webmanifest|sw\.js|icon\.svg)\/?$/.test(ref)
-  )
-    return null;
-  // Bare names with no extension are ambiguous; common repository documents remain useful file links.
-  if (
+  );
+}
+// Bare names with no extension are ambiguous; common repository documents remain useful file links.
+function isAmbiguousBareName(ref) {
+  return (
     !ref.includes("/") &&
     !/\.[\w-]+$/.test(ref) &&
     !/^(?:README|LICENSE|LICENCE|COPYING|NOTICE|Dockerfile|Makefile|AGENTS|CLAUDE)$/i.test(ref)
-  )
-    return null;
-  for (const n of [line, endLine, column])
-    if (n != null && (!Number.isSafeInteger(n) || n < 1)) return null;
-  if (endLine != null && endLine < line) return null;
-  return { path: ref, line, endLine, column };
+  );
+}
+function hasValidLocation(where) {
+  for (const position of [where.line, where.endLine, where.column])
+    if (position != null && (!Number.isSafeInteger(position) || position < 1)) return false;
+  return !(where.endLine != null && where.endLine < where.line);
+}
+/** A local file reference, never an HTTP URL, app route, or executable scheme. Paths stay relative until the server resolves them. */
+export function parseFileRef(value) {
+  if (typeof value !== "string" || !value || /[\u0000-\u001f\u007f]/.test(value)) return null;
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.startsWith("#") || trimmed.startsWith("//")) return null;
+  const hashed = stripLineHash(trimmed);
+  const where = { line: hashed.line, endLine: hashed.endLine, column: null };
+  let ref = hashed.ref;
+  if (/^file:/i.test(ref)) ref = fileUrlPath(ref);
+  if (ref !== null) ref = decodeRef(ref);
+  if (ref === null) return null;
+  ref = stripPosition(ref, where);
+  if (hasForbiddenRefShape(ref) || isReservedRoute(ref) || isAmbiguousBareName(ref)) return null;
+  if (!hasValidLocation(where)) return null;
+  return { path: ref, line: where.line, endLine: where.endLine, column: where.column };
 }
 const cache = new Map();
 /** Highlighted HTML for `text` (escaped plain text when the language is unknown). Cached: streaming re-renders the same blocks. */
@@ -470,53 +485,66 @@ function axis(v) {
   if (v.type === "linear" || v.type === "logarithmic" || v.type === "category") out.type = v.type;
   return out;
 }
-/** Strict JSON -> a small, validated config (never the raw object), or null while the JSON is incomplete or invalid. */
-function normaliseChart(src) {
-  let j;
+function parseChartJson(src) {
   try {
-    j = JSON.parse(src);
+    return JSON.parse(src);
   } catch {
     return null;
   }
-  if (!j || typeof j !== "object" || Array.isArray(j) || !CHART_TYPES.has(j.type)) return null;
-  const rawSets = j.data?.datasets;
-  if (!Array.isArray(rawSets) || !rawSets.length || rawSets.length > MAX.datasets) return null;
-  const labels = Array.isArray(j.data.labels)
-    ? j.data.labels.slice(0, MAX.labels).map((l) => str(l, 60))
-    : [];
+}
+const paintColors = (value) =>
+  Array.isArray(value) ? value.slice(0, MAX.labels).map(color) : color(value);
+function normaliseDataset(raw, type) {
+  if (!raw || typeof raw !== "object" || !Array.isArray(raw.data) || raw.data.length > MAX.points)
+    return null;
+  const data = [];
+  for (const value of raw.data) {
+    const pointValue = point(value, type);
+    if (pointValue === undefined) return null;
+    data.push(pointValue);
+  }
+  const fillColors = paintColors(raw.backgroundColor),
+    edgeColors = paintColors(raw.borderColor);
+  return {
+    label: str(raw.label, 80),
+    data,
+    bg: fillColors && [].concat(fillColors).every(Boolean) ? fillColors : null,
+    border: edgeColors && [].concat(edgeColors).every(Boolean) ? edgeColors : null,
+    fill: raw.fill === true,
+    tension: Math.min(Math.max(num(raw.tension) ?? 0.25, 0), 1),
+    stack: str(raw.stack, 40) || undefined,
+  };
+}
+function normaliseDatasets(rawSets, type) {
   let total = 0;
   const datasets = [];
-  for (const d of rawSets) {
-    if (!d || typeof d !== "object" || !Array.isArray(d.data) || d.data.length > MAX.points)
-      return null;
-    const data = [];
-    for (const v of d.data) {
-      const p = point(v, j.type);
-      if (p === undefined) return null;
-      data.push(p);
-    }
-    total += data.length;
-    const paint = (c) => (Array.isArray(c) ? c.slice(0, MAX.labels).map(color) : color(c));
-    const bg = paint(d.backgroundColor),
-      border = paint(d.borderColor);
-    datasets.push({
-      label: str(d.label, 80),
-      data,
-      bg: bg && [].concat(bg).every(Boolean) ? bg : null,
-      border: border && [].concat(border).every(Boolean) ? border : null,
-      fill: d.fill === true,
-      tension: Math.min(Math.max(num(d.tension) ?? 0.25, 0), 1),
-      stack: str(d.stack, 40) || undefined,
-    });
+  for (const raw of rawSets) {
+    const dataset = normaliseDataset(raw, type);
+    if (!dataset) return null;
+    total += dataset.data.length;
+    datasets.push(dataset);
   }
-  if (total > MAX.total || !total) return null;
-  const opts = j.options && typeof j.options === "object" ? j.options : {};
+  return total > MAX.total || !total ? null : datasets;
+}
+/** Strict JSON -> a small, validated config (never the raw object), or null while the JSON is incomplete or invalid. */
+function normaliseChart(src) {
+  const json = parseChartJson(src);
+  if (!json || typeof json !== "object" || Array.isArray(json) || !CHART_TYPES.has(json.type))
+    return null;
+  const rawSets = json.data?.datasets;
+  if (!Array.isArray(rawSets) || !rawSets.length || rawSets.length > MAX.datasets) return null;
+  const labels = Array.isArray(json.data.labels)
+    ? json.data.labels.slice(0, MAX.labels).map((label) => str(label, 60))
+    : [];
+  const datasets = normaliseDatasets(rawSets, json.type);
+  if (!datasets) return null;
+  const opts = json.options && typeof json.options === "object" ? json.options : {};
   const plugins = opts.plugins && typeof opts.plugins === "object" ? opts.plugins : {};
   return {
-    type: j.type,
+    type: json.type,
     labels,
     datasets,
-    title: str(j.title ?? plugins.title?.text, 120),
+    title: str(json.title ?? plugins.title?.text, 120),
     legend: plugins.legend?.display !== false,
     horizontal: opts.indexAxis === "y",
     x: axis(opts.scales?.x),
@@ -612,40 +640,46 @@ function chartOptions(cfg) {
     }),
   };
 }
+function datasetBackground(cfg, series, base, fills) {
+  if (series.bg) return series.bg;
+  if (fills) return fills;
+  if (cfg.type === "line" || cfg.type === "radar") return alpha(base, 0.18);
+  return cfg.type === "scatter" || cfg.type === "bubble" ? alpha(base, 0.7) : base;
+}
+function datasetBorderWidth(cfg, radial, line) {
+  if (radial) return 2;
+  return line || cfg.type === "scatter" ? 2 : 0;
+}
+function chartDataset(cfg, series, index, palette, surface) {
+  const base = palette[index % palette.length];
+  const radial = RADIAL.has(cfg.type);
+  const cycle = cfg.labels.length ? cfg.labels : series.data;
+  const fills = radial ? cycle.map((_label, slot) => palette[slot % palette.length]) : null;
+  const line = cfg.type === "line" || cfg.type === "radar";
+  return {
+    label: series.label || `Series ${index + 1}`,
+    data: series.data,
+    stack: series.stack,
+    tension: series.tension,
+    fill: series.fill || cfg.type === "radar",
+    backgroundColor: datasetBackground(cfg, series, base, fills),
+    borderColor: series.border || (radial ? surface : base),
+    borderWidth: datasetBorderWidth(cfg, radial, line),
+    ...(cfg.type === "bar" && { borderRadius: 4, maxBarThickness: 48 }),
+    ...(line && { pointRadius: series.data.length > 40 ? 0 : 3, pointHoverRadius: 5 }),
+  };
+}
 function chartData(cfg) {
   const palette = Array.from(
     { length: 6 },
-    (_, i) => cssVar(`--viz-${i + 1}`) || cssVar("--accent"),
+    (_, slot) => cssVar(`--viz-${slot + 1}`) || cssVar("--accent"),
   );
   const surface = cssVar("--s1");
   return {
     labels: cfg.labels,
-    datasets: cfg.datasets.map((d, i) => {
-      const c = palette[i % palette.length];
-      const radial = RADIAL.has(cfg.type);
-      const cycle = cfg.labels.length ? cfg.labels : d.data;
-      const fills = radial ? cycle.map((_, k) => palette[k % palette.length]) : null;
-      const line = cfg.type === "line" || cfg.type === "radar";
-      return {
-        label: d.label || `Series ${i + 1}`,
-        data: d.data,
-        stack: d.stack,
-        tension: d.tension,
-        fill: d.fill || cfg.type === "radar",
-        backgroundColor:
-          d.bg ||
-          fills ||
-          (line
-            ? alpha(c, 0.18)
-            : cfg.type === "scatter" || cfg.type === "bubble"
-              ? alpha(c, 0.7)
-              : c),
-        borderColor: d.border || (radial ? surface : c),
-        borderWidth: radial ? 2 : line || cfg.type === "scatter" ? 2 : 0,
-        ...(cfg.type === "bar" && { borderRadius: 4, maxBarThickness: 48 }),
-        ...(line && { pointRadius: d.data.length > 40 ? 0 : 3, pointHoverRadius: 5 }),
-      };
-    }),
+    datasets: cfg.datasets.map((series, index) =>
+      chartDataset(cfg, series, index, palette, surface),
+    ),
   };
 }
 /** Fallback / accessible data table: rows = labels (or points), columns = datasets. */
@@ -859,44 +893,49 @@ function linkify(root) {
 }
 
 // -- placeholders -> nodes --
-function mountMedia(root, mounts) {
-  for (const node of root.querySelectorAll("img, video")) {
-    const alt = node.getAttribute("alt") || "",
-      title = node.getAttribute("title") || "";
-    const raw = node.dataset.localPath,
-      ref = raw ? parseFileRef(raw) : null,
-      src = node.getAttribute("src");
-    const isVideo = node.tagName === "VIDEO";
-    if (!ref && !(src && HTTP_URL.test(src))) {
-      if (isVideo && !src) node.remove();
-      else if (isVideo) {
-        node.controls = true;
-        node.setAttribute("playsinline", "");
-        node.setAttribute("preload", "metadata");
-        node.classList.add("md-video");
-      }
-      continue; // data:/blob: images and same-origin URLs are left as sanitised
-    }
-    if (isVideo && node.closest(".md-media")) continue;
-    const spec = { alt, title, src: ref ? null : src, local: ref && { ...ref, raw } };
-    const key = `${isVideo ? "video" : "img"}:${ref ? `${threadOf()}:${ref.path}` : src}`;
-    node.replaceWith(keep(key, () => (isVideo ? buildVideo(spec) : buildImage(spec))));
-  }
-  for (const holder of root.querySelectorAll(".chart[data-chart]")) {
-    const key = holder.dataset.chart;
-    if (!chartConfigs.get(key)) {
-      holder.remove();
-      continue;
-    }
-    const fig = keep(`chart:${key}`, () => {
-      const f = chartFigure(key);
-      mounts.push(f);
-      return f;
-    });
-    holder.replaceWith(fig);
+function plainMediaFallback(node, isVideo, src) {
+  if (isVideo && !src) node.remove();
+  else if (isVideo) {
+    node.controls = true;
+    node.setAttribute("playsinline", "");
+    node.setAttribute("preload", "metadata");
+    node.classList.add("md-video");
   }
 }
-
+function mountMediaNode(node) {
+  const alt = node.getAttribute("alt") || "",
+    title = node.getAttribute("title") || "";
+  const raw = node.dataset.localPath,
+    ref = raw ? parseFileRef(raw) : null,
+    src = node.getAttribute("src");
+  const isVideo = node.tagName === "VIDEO";
+  if (!ref && !(src && HTTP_URL.test(src))) {
+    plainMediaFallback(node, isVideo, src);
+    return; // data:/blob: images and same-origin URLs are left as sanitised
+  }
+  if (isVideo && node.closest(".md-media")) return;
+  const spec = { alt, title, src: ref ? null : src, local: ref && { ...ref, raw } };
+  const key = `${isVideo ? "video" : "img"}:${ref ? `${threadOf()}:${ref.path}` : src}`;
+  node.replaceWith(keep(key, () => (isVideo ? buildVideo(spec) : buildImage(spec))));
+}
+function mountChartHolder(holder, mounts) {
+  const key = holder.dataset.chart;
+  if (!chartConfigs.get(key)) {
+    holder.remove();
+    return;
+  }
+  const figure = keep(`chart:${key}`, () => {
+    const built = chartFigure(key);
+    mounts.push(built);
+    return built;
+  });
+  holder.replaceWith(figure);
+}
+function mountMedia(root, mounts) {
+  for (const node of root.querySelectorAll("img, video")) mountMediaNode(node);
+  for (const holder of root.querySelectorAll(".chart[data-chart]"))
+    mountChartHolder(holder, mounts);
+}
 /** Post-sanitise structure: code headers, scrollable tables, media, linked paths. Operates on already-sanitised DOM (or a fragment of it). */
 export function enhance(root, mounts = []) {
   for (const pre of root.querySelectorAll("pre")) if (!pre.closest(".code")) codeBlock(pre);

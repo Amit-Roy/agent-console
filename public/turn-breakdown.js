@@ -144,51 +144,63 @@ function picker(turns, index) {
   return wrap;
 }
 
-function totals(t) {
+function outcomeLabel(outcome) {
+  if (outcome === "aborted") return "Stopped";
+  return outcome === "exited" ? "Process exited" : "Ended with error";
+}
+
+function buildTotalsHead(turn) {
   const head = el("div", "tt-head");
-  head.append(el("span", "tt-big", fmtDur(t.total_ms)), el("span", "tt-cap", "whole turn"));
-  if (t.outcome && t.outcome !== "ok")
-    head.append(
-      el(
-        "span",
-        "tt-tag cold",
-        t.outcome === "aborted"
-          ? "Stopped"
-          : t.outcome === "exited"
-            ? "Process exited"
-            : "Ended with error",
-      ),
-    );
-  const retries = (t.retries || 0) + (t.rate_limits || 0);
-  const line = [
-    `First token ${t.first_ms == null ? "none" : fmtDur(t.first_ms)}`,
-    plural(t.steps || 0, "model step"),
-    plural(t.tools?.length ?? 0, "tool call"),
+  head.append(el("span", "tt-big", fmtDur(turn.total_ms)), el("span", "tt-cap", "whole turn"));
+  if (turn.outcome && turn.outcome !== "ok")
+    head.append(el("span", "tt-tag cold", outcomeLabel(turn.outcome)));
+  return head;
+}
+
+function totalsLine(turn) {
+  const retries = (turn.retries || 0) + (turn.rate_limits || 0);
+  return [
+    `First token ${turn.first_ms == null ? "none" : fmtDur(turn.first_ms)}`,
+    plural(turn.steps || 0, "model step"),
+    plural(turn.tools?.length ?? 0, "tool call"),
     ...(retries ? [plural(retries, "retry", "retries")] : []),
   ].join(" · ");
-  const other = (t.startup_ms || 0) + (t.wait_ms || 0);
-  const parts = [
-    ["model", "Model", t.model_ms || 0],
-    ["tools", "Tools", t.tool_ms || 0],
-    ["other", "Other", other],
-  ];
-  const sum = parts.reduce((n, p) => n + p[2], 0);
+}
+
+function buildTotalsLegend(parts) {
+  const sum = parts.reduce((total, part) => total + part[2], 0);
   const legend = el("ul", "tt-legend");
   for (const [key, name, ms] of parts) {
-    const li = el("li");
-    li.append(
+    const item = el("li");
+    item.append(
       el("i", `sw ${key}`),
       el("span", "", name),
       el("b", "", fmtDur(ms)),
       el("span", "pct", sum ? `${Math.round((ms / sum) * 100)}%` : ""),
     );
-    legend.append(li);
+    legend.append(item);
   }
-  const notes = [
-    t.queue_ms ? `Queued ${fmtDur(t.queue_ms)} before sending (not in the total)` : "",
-    t.startup_ms ? `Startup ${fmtDur(t.startup_ms)}` : "",
-    t.wait_ms ? `Waiting for you ${fmtDur(t.wait_ms)}` : "",
+  return legend;
+}
+
+function totalsNotes(turn) {
+  return [
+    turn.queue_ms ? `Queued ${fmtDur(turn.queue_ms)} before sending (not in the total)` : "",
+    turn.startup_ms ? `Startup ${fmtDur(turn.startup_ms)}` : "",
+    turn.wait_ms ? `Waiting for you ${fmtDur(turn.wait_ms)}` : "",
   ].filter(Boolean);
+}
+
+function totals(turn) {
+  const head = buildTotalsHead(turn);
+  const line = totalsLine(turn);
+  const other = (turn.startup_ms || 0) + (turn.wait_ms || 0);
+  const legend = buildTotalsLegend([
+    ["model", "Model", turn.model_ms || 0],
+    ["tools", "Tools", turn.tool_ms || 0],
+    ["other", "Other", other],
+  ]);
+  const notes = totalsNotes(turn);
   return [
     head,
     el("p", "note", line),
@@ -226,15 +238,7 @@ const rowLabel = (r) =>
             ? "Queued"
             : "Startup";
 
-function waterfall(t, seg, more) {
-  const all = rows(seg);
-  // Bar length encodes duration on a square-root scale against the turn's longest row, so a 1.6 s Read stays visible next to
-  // a 5 min Bash. When it happened is text: the start offset column.
-  const longest = Math.max(1, ...all.map((r) => r.end - r.a));
-  const len = (ms) => Math.sqrt(Math.max(0, ms) / longest) * 100;
-  const shown = state.showAllRows ? all : all.slice(0, ROWS);
-  const list = el("ol", "tb-fall");
-  list.setAttribute("aria-label", "Timeline, in order");
+function buildAxisRow() {
   const axis = el("li", "tb-axis");
   axis.setAttribute("aria-hidden", "true");
   axis.append(
@@ -243,32 +247,81 @@ function waterfall(t, seg, more) {
     el("span", "tb-track"),
     el("span", "tb-ms", "Duration"),
   );
-  list.append(axis);
-  for (const r of shown) {
-    const li = el("li", `tb-row ${r.k}${r.errors ? " err" : ""}`);
-    const lab = el("span", "tb-lab");
-    lab.append(el("span", "tb-name", rowLabel(r)));
-    if (r.errors) lab.append(el("span", "tb-fail", r.count > 1 ? `${r.errors} failed` : "failed"));
-    const track = el("span", "tb-track");
-    track.setAttribute("aria-hidden", "true");
-    const wall = r.end - r.a;
-    const bar = el("i", "tb-bar");
-    bar.style.width = `${len(wall)}%`;
-    if (r.k === "model" && r.f != null && r.d > 0) {
-      const f = el("i", "tb-ttft");
-      f.style.width = `${Math.min(100, (r.f / r.d) * 100)}%`;
-      bar.append(f);
-    }
-    track.append(bar);
-    li.append(
-      lab,
-      el("span", "tb-at", fmtAt(r.a, t.total_ms)),
-      track,
-      el("span", "tb-ms", r.k === "retry" && !wall ? "—" : fmtDur(wall)),
-    );
-    li.title = `${rowLabel(r)}: starts at ${fmtDur(r.a)}, ${fmtDur(wall)}${r.k === "model" && r.f != null ? `, first output after ${fmtDur(r.f)}` : ""}${r.count > 1 ? `, ${r.count} calls` : ""}`;
-    list.append(li);
+  return axis;
+}
+
+// Bar length encodes duration on a square-root scale against the turn's longest row, so a 1.6 s Read stays visible next to
+// a 5 min Bash. When it happened is text: the start offset column.
+function barLength(ms, longest) {
+  return Math.sqrt(Math.max(0, ms) / longest) * 100;
+}
+
+function buildBar(row, wall, longest) {
+  const barElement = el("i", "tb-bar");
+  barElement.style.width = `${barLength(wall, longest)}%`;
+  if (row.k === "model" && row.f != null && row.d > 0) {
+    const ttft = el("i", "tb-ttft");
+    ttft.style.width = `${Math.min(100, (row.f / row.d) * 100)}%`;
+    barElement.append(ttft);
   }
+  return barElement;
+}
+
+function rowTitle(row, wall) {
+  return `${rowLabel(row)}: starts at ${fmtDur(row.a)}, ${fmtDur(wall)}${row.k === "model" && row.f != null ? `, first output after ${fmtDur(row.f)}` : ""}${row.count > 1 ? `, ${row.count} calls` : ""}`;
+}
+
+function buildFallRow(turn, row, longest) {
+  const item = el("li", `tb-row ${row.k}${row.errors ? " err" : ""}`);
+  const label = el("span", "tb-lab");
+  label.append(el("span", "tb-name", rowLabel(row)));
+  if (row.errors)
+    label.append(el("span", "tb-fail", row.count > 1 ? `${row.errors} failed` : "failed"));
+  const track = el("span", "tb-track");
+  track.setAttribute("aria-hidden", "true");
+  const wall = row.end - row.a;
+  track.append(buildBar(row, wall, longest));
+  item.append(
+    label,
+    el("span", "tb-at", fmtAt(row.a, turn.total_ms)),
+    track,
+    el("span", "tb-ms", row.k === "retry" && !wall ? "—" : fmtDur(wall)),
+  );
+  item.title = rowTitle(row, wall);
+  return item;
+}
+
+function buildMoreButton(rowCount) {
+  const button = el(
+    "button",
+    "btn block tb-more",
+    state.showAllRows ? `Show first ${ROWS} rows` : `Show all ${rowCount} rows`,
+  );
+  button.type = "button";
+  button.onclick = () => {
+    state.showAllRows = !state.showAllRows;
+    render();
+    view().querySelector(".tb-more")?.focus();
+  };
+  return button;
+}
+
+function buildTailNote(more) {
+  return el(
+    "p",
+    "note tb-tail",
+    `${plural(more.n, "later segment")} not itemized: model ${fmtDur(more.model_ms)}, tools ${fmtDur(more.tool_ms)} in ${plural(more.tools, "call")}${more.errors ? ` (${more.errors} failed)` : ""}${more.other_ms ? `, other ${fmtDur(more.other_ms)}` : ""}.`,
+  );
+}
+
+function waterfall(turn, seg, more) {
+  const all = rows(seg);
+  const longest = Math.max(1, ...all.map((row) => row.end - row.a));
+  const shown = state.showAllRows ? all : all.slice(0, ROWS);
+  const list = el("ol", "tb-fall");
+  list.setAttribute("aria-label", "Timeline, in order");
+  list.append(buildAxisRow());
+  for (const row of shown) list.append(buildFallRow(turn, row, longest));
   const kids = [
     el("h4", "", "Timeline"),
     el(
@@ -278,28 +331,8 @@ function waterfall(t, seg, more) {
     ),
     list,
   ];
-  if (all.length > ROWS) {
-    const btn = el(
-      "button",
-      "btn block tb-more",
-      state.showAllRows ? `Show first ${ROWS} rows` : `Show all ${all.length} rows`,
-    );
-    btn.type = "button";
-    btn.onclick = () => {
-      state.showAllRows = !state.showAllRows;
-      render();
-      view().querySelector(".tb-more")?.focus();
-    };
-    kids.push(btn);
-  }
-  if (more)
-    kids.push(
-      el(
-        "p",
-        "note tb-tail",
-        `${plural(more.n, "later segment")} not itemized: model ${fmtDur(more.model_ms)}, tools ${fmtDur(more.tool_ms)} in ${plural(more.tools, "call")}${more.errors ? ` (${more.errors} failed)` : ""}${more.other_ms ? `, other ${fmtDur(more.other_ms)}` : ""}.`,
-      ),
-    );
+  if (all.length > ROWS) kids.push(buildMoreButton(all.length));
+  if (more) kids.push(buildTailNote(more));
   return kids;
 }
 

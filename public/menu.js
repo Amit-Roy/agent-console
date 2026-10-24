@@ -23,8 +23,370 @@ const icon = (name, cls = "") => {
 let uid = 0;
 const openMenus = new Set();
 
+function isEnabled(ctx, index) {
+  return ctx.items[index] && !ctx.items[index].disabled;
+}
+
+function currentItem(ctx) {
+  return ctx.items.find((item) => item.value === ctx.value);
+}
+
+function paintTrigger(ctx) {
+  const item = currentItem(ctx);
+  if (ctx.config.renderTrigger) return ctx.config.renderTrigger(item, ctx.trigger);
+  const span = ctx.trigger.querySelector("span") || ctx.trigger.appendChild(el("span"));
+  span.textContent = item ? item.label : "";
+}
+
+function scrollNodeIntoPopup(popup, node) {
+  if (node.offsetTop < popup.scrollTop) popup.scrollTop = node.offsetTop;
+  else if (node.offsetTop + node.offsetHeight > popup.scrollTop + popup.clientHeight)
+    popup.scrollTop = node.offsetTop + node.offsetHeight - popup.clientHeight;
+}
+
+function setActive(ctx, index, scroll = true) {
+  const popup = ctx.pop;
+  if (!popup) return;
+  ctx.active = index;
+  popup.querySelectorAll("[data-active]").forEach((node) => {
+    node.removeAttribute("data-active");
+  });
+  const node = popup.querySelector(`[id="${ctx.id}-${index}"]`);
+  if (!node) return popup.removeAttribute("aria-activedescendant");
+  node.setAttribute("data-active", "");
+  popup.setAttribute("aria-activedescendant", node.id);
+  // Scroll the list itself; scrollIntoView also moves the dialog and dismisses this menu.
+  if (scroll) scrollNodeIntoPopup(popup, node);
+}
+
+function moveActive(ctx, delta, from = ctx.active) {
+  let index = from;
+  for (let step = 0; step < ctx.items.length; step++) {
+    index += delta;
+    if (index < 0 || index >= ctx.items.length) return;
+    if (isEnabled(ctx, index)) return setActive(ctx, index);
+  }
+}
+
+function pickSide(preferred, height, above, below) {
+  if (preferred === "bottom" && height > below && above > below) return "top";
+  if (preferred === "top" && height > above && below > above) return "bottom";
+  return preferred;
+}
+
+function placeMenu(ctx) {
+  const { pop: popup, trigger, config } = ctx;
+  const rect = trigger.getBoundingClientRect();
+  const viewWidth = document.documentElement.clientWidth,
+    viewHeight = window.innerHeight,
+    gap = 6,
+    pad = 8;
+  popup.style.minWidth =
+    config.kind === "listbox" && trigger.classList.contains("field") ? `${rect.width}px` : "";
+  popup.style.maxHeight = "";
+  const height = popup.offsetHeight,
+    width = popup.offsetWidth;
+  const below = viewHeight - rect.bottom - gap - pad,
+    above = rect.top - gap - pad;
+  const side = pickSide(config.side, height, above, below);
+  const room = side === "top" ? above : below;
+  popup.style.maxHeight = `${Math.max(120, Math.min(room, 24 * 16))}px`;
+  const shownHeight = Math.min(height, room);
+  popup.style.top = `${side === "top" ? rect.top - gap - shownHeight : rect.bottom + gap}px`;
+  let left = config.align === "end" ? rect.right - width : rect.left;
+  left = Math.max(pad, Math.min(left, viewWidth - width - pad));
+  popup.style.left = `${left}px`;
+  popup.dataset.side = side;
+}
+
+function buildItemNode(ctx, item, index) {
+  const { config } = ctx;
+  const node = el("div");
+  node.id = `${ctx.id}-${index}`;
+  node.dataset.value = String(item.value);
+  node.setAttribute("role", ctx.itemRole);
+  if (config.kind === "listbox")
+    node.setAttribute(
+      "aria-selected",
+      String(item.keep ? !!item.checked : item.value === ctx.value),
+    );
+  if (item.disabled) node.setAttribute("aria-disabled", "true");
+  if (item.tone) node.dataset.tone = item.tone;
+  if (item.icon) {
+    const itemIcon = icon(item.icon, "m-ico");
+    node.append(itemIcon);
+  }
+  const text = el("span", "m-txt");
+  text.append(el("span", "m-label", item.label));
+  if (item.desc) text.append(el("span", "m-desc", item.desc));
+  node.append(
+    text,
+    icon(item.children ? "chev-right" : "check", item.children ? "m-ico" : "m-check"),
+  );
+  if (item.children) node.setAttribute("aria-haspopup", "menu");
+  return node;
+}
+
+function appendItems(ctx) {
+  let group = "";
+  ctx.items.forEach((item, index) => {
+    if (item.group && item.group !== group) {
+      group = item.group;
+      const heading = el("div", "m-group", group);
+      heading.setAttribute("aria-hidden", "true");
+      ctx.pop.append(heading);
+    }
+    const node = buildItemNode(ctx, item, index);
+    node.addEventListener(
+      "pointermove",
+      () => ctx.active !== index && isEnabled(ctx, index) && setActive(ctx, index, false),
+    );
+    node.addEventListener("click", () => isEnabled(ctx, index) && chooseItem(ctx, index));
+    ctx.pop.append(node);
+  });
+}
+
+function loadRootItems(ctx) {
+  ctx.parents = [];
+  ctx.items = ctx.config.getItems ? ctx.config.getItems() : ctx.rootItems;
+  ctx.rootItems = ctx.items;
+}
+
+function createPopup(ctx, nested) {
+  const { config, trigger } = ctx;
+  const popup = el("div", "menu");
+  ctx.pop = popup;
+  popup.id = ctx.id;
+  popup.tabIndex = -1;
+  popup.setAttribute("role", config.kind);
+  popup.setAttribute(
+    "aria-label",
+    config.label || trigger.getAttribute("aria-label") || trigger.title || "Menu",
+  );
+  const head = !nested && (typeof config.header === "function" ? config.header() : config.header); // read-only context line, e.g. a thread's full title
+  if (head) popup.append(el("div", "m-head", head));
+  return popup;
+}
+
+function startIndex(ctx, start) {
+  const { items } = ctx;
+  const selected = items.findIndex((item) => item.value === ctx.value && !item.disabled);
+  const first = items.findIndex((_item, index) => isEnabled(ctx, index));
+  const last =
+    items.length -
+    1 -
+    [...items].reverse().findIndex((_item, index) => isEnabled(ctx, items.length - 1 - index));
+  if (start === "last") return last;
+  if (start === "first") return first;
+  return selected >= 0 ? selected : first;
+}
+
+function openMenu(ctx, start = "selected", nested = false) {
+  const { trigger } = ctx;
+  if (ctx.pop || trigger.disabled) return;
+  if (!nested) loadRootItems(ctx);
+  if (!ctx.items.length) return;
+  for (const menu of openMenus) menu.close(false);
+  const popup = createPopup(ctx, nested);
+  appendItems(ctx);
+  (trigger.closest("dialog") || document.body).append(popup); // inside an open <dialog> so it sits in the top layer with it
+  trigger.setAttribute("aria-expanded", "true");
+  trigger.setAttribute("aria-controls", ctx.id);
+  placeMenu(ctx);
+  ctx.openedAt = performance.now();
+  setActive(ctx, startIndex(ctx, start));
+  popup.focus({ preventScroll: true });
+  popup.addEventListener("keydown", ctx.onKey);
+  document.addEventListener("pointerdown", ctx.onOutside, true);
+  window.addEventListener("resize", ctx.onDismiss);
+  window.addEventListener("scroll", ctx.onScroll, true);
+  openMenus.add(ctx.api);
+  if (!nested) ctx.config.onOpen();
+}
+
+function closeMenu(ctx, returnFocus = true, notify = true) {
+  const popup = ctx.pop;
+  if (!popup) return;
+  ctx.pop = null;
+  openMenus.delete(ctx.api);
+  document.removeEventListener("pointerdown", ctx.onOutside, true);
+  window.removeEventListener("resize", ctx.onDismiss);
+  window.removeEventListener("scroll", ctx.onScroll, true);
+  ctx.trigger.setAttribute("aria-expanded", "false");
+  ctx.trigger.removeAttribute("aria-controls");
+  popup.remove();
+  if (returnFocus) ctx.trigger.focus({ preventScroll: true });
+  if (notify) ctx.config.onClose();
+}
+
+function showItems(ctx, nextItems, selected) {
+  closeMenu(ctx, false, false);
+  ctx.items = nextItems;
+  ctx.typed = "";
+  openMenu(ctx, "first", true);
+  if (selected != null) setActive(ctx, selected);
+}
+
+function goBack(ctx) {
+  const parent = ctx.parents.pop();
+  if (parent) showItems(ctx, parent.items, parent.active);
+}
+
+function selectValue(ctx, item) {
+  const { config } = ctx;
+  if (item.keep) {
+    config.onSelect(item.value, item);
+    return;
+  } // an action row (e.g. "Advisor · Opus"): acts without becoming the menu's value
+  if (config.kind !== "listbox") {
+    config.onSelect(item.value, item);
+    return;
+  }
+  if (item.value === ctx.value) return;
+  if (config.onSelect(item.value, item) === false) return;
+  ctx.value = item.value;
+  paintTrigger(ctx);
+}
+
+function chooseItem(ctx, index) {
+  const item = ctx.items[index];
+  if (item.back) return goBack(ctx);
+  if (item.children) {
+    ctx.parents.push({ items: ctx.items, active: index });
+    return showItems(ctx, [{ value: "menu-back", label: "Back", back: true }, ...item.children]);
+  }
+  closeMenu(ctx, true);
+  selectValue(ctx, item);
+}
+
+function keyOpenSubmenu(ctx, event) {
+  if (ctx.items[ctx.active]?.children) {
+    event.preventDefault();
+    chooseItem(ctx, ctx.active);
+  }
+  return true;
+}
+
+function keyBack(ctx, event) {
+  if (ctx.parents.length) {
+    event.preventDefault();
+    goBack(ctx);
+  }
+  return true;
+}
+
+function keyMove(delta, fromEnd) {
+  return (ctx, event) => {
+    event.preventDefault();
+    if (fromEnd == null) moveActive(ctx, delta);
+    else moveActive(ctx, delta, fromEnd === "end" ? ctx.items.length : fromEnd);
+    return true;
+  };
+}
+
+function keyChoose(ctx, event) {
+  event.preventDefault();
+  if (ctx.typed && event.key === " ") return false; // space inside a typeahead word
+  if (isEnabled(ctx, ctx.active)) chooseItem(ctx, ctx.active);
+  return true;
+}
+
+function keyEscape(ctx, event) {
+  event.preventDefault();
+  event.stopPropagation();
+  if (ctx.parents.length) goBack(ctx);
+  else closeMenu(ctx, true);
+  return true;
+}
+
+function keyTab(ctx) {
+  closeMenu(ctx, true); // focus is back on the trigger, so Tab moves on from there
+  return true;
+}
+
+const NAVIGATION_KEYS = {
+  ArrowRight: keyOpenSubmenu,
+  ArrowLeft: keyBack,
+  ArrowDown: keyMove(1),
+  ArrowUp: keyMove(-1),
+  Home: keyMove(1, -1),
+  End: keyMove(-1, "end"),
+  Enter: keyChoose,
+  " ": keyChoose,
+  Escape: keyEscape,
+  Tab: keyTab,
+};
+
+function typeAhead(ctx, event) {
+  const now = Date.now();
+  ctx.typed =
+    now - ctx.typedAt > 700 ? event.key.toLowerCase() : ctx.typed + event.key.toLowerCase();
+  ctx.typedAt = now;
+  const order = [...ctx.items.keys()];
+  const from = ctx.typed.length === 1 ? ctx.active + 1 : ctx.active; // repeated single letter cycles
+  const rotated = order.slice(from).concat(order.slice(0, from));
+  const hit = rotated.find(
+    (index) => isEnabled(ctx, index) && ctx.items[index].label.toLowerCase().startsWith(ctx.typed),
+  );
+  if (hit != null) setActive(ctx, hit);
+  event.preventDefault();
+}
+
+function handleKey(ctx, event) {
+  if (event.altKey || event.ctrlKey || event.metaKey) return;
+  const navigate = Object.hasOwn(NAVIGATION_KEYS, event.key) && NAVIGATION_KEYS[event.key];
+  if (navigate && navigate(ctx, event)) return;
+  if ((event.key.length === 1 && /\S/.test(event.key)) || (event.key === " " && ctx.typed))
+    typeAhead(ctx, event);
+}
+
+function handleOutside(ctx, event) {
+  if (ctx.pop && !ctx.pop.contains(event.target) && !ctx.trigger.contains(event.target))
+    closeMenu(ctx, false);
+}
+
+// only scrolling that moves the trigger dismisses the menu (the chat scrolling while history loads must not)
+function handleScroll(ctx, event) {
+  // Ignore the scroll that brings the trigger into view just before a tap opens this menu.
+  if (performance.now() - ctx.openedAt < 150) return;
+  const target = event.target;
+  if (
+    ctx.pop &&
+    !ctx.pop.contains(target) &&
+    (target === document || target.contains?.(ctx.trigger))
+  )
+    closeMenu(ctx, false);
+}
+
+function createMenuApi(ctx) {
+  return {
+    open: (start, nested) => openMenu(ctx, start, nested),
+    close: (returnFocus, notify) => closeMenu(ctx, returnFocus, notify),
+    get value() {
+      return ctx.value;
+    },
+    get isOpen() {
+      return !!ctx.pop;
+    },
+    setValue(newValue) {
+      ctx.value = newValue;
+      paintTrigger(ctx);
+    },
+    setItems(nextItems, newValue = ctx.value) {
+      ctx.rootItems = ctx.items = nextItems;
+      ctx.value = newValue;
+      paintTrigger(ctx);
+    },
+    setDisabled(disabled) {
+      ctx.trigger.disabled = disabled;
+      if (disabled) closeMenu(ctx, false);
+    },
+    items: () => ctx.items,
+  };
+}
+
 export function createMenu(opts) {
-  const o = {
+  const config = {
     kind: "listbox",
     side: "bottom",
     align: "start",
@@ -35,296 +397,39 @@ export function createMenu(opts) {
     label: "",
     ...opts,
   };
-  const trigger = o.trigger;
-  const id = `menu-${++uid}`;
-  const itemRole = o.kind === "menu" ? "menuitem" : "option";
-  let items = o.items || [];
-  let value = o.value;
-  let pop = null;
-  let active = -1;
-  let typed = "";
-  let typedAt = 0;
-  let parents = [];
-  let rootItems = items;
-  let openedAt = 0;
+  const items = config.items || [];
+  const ctx = {
+    config,
+    trigger: config.trigger,
+    id: `menu-${++uid}`,
+    itemRole: config.kind === "menu" ? "menuitem" : "option",
+    items,
+    value: config.value,
+    pop: null,
+    active: -1,
+    typed: "",
+    typedAt: 0,
+    parents: [],
+    rootItems: items,
+    openedAt: 0,
+    api: null,
+  };
+  ctx.onKey = (event) => handleKey(ctx, event);
+  ctx.onOutside = (event) => handleOutside(ctx, event);
+  ctx.onDismiss = () => closeMenu(ctx, false);
+  ctx.onScroll = (event) => handleScroll(ctx, event);
 
-  trigger.setAttribute("aria-haspopup", o.kind === "menu" ? "menu" : "listbox");
+  const { trigger } = ctx;
+  trigger.setAttribute("aria-haspopup", config.kind === "menu" ? "menu" : "listbox");
   trigger.setAttribute("aria-expanded", "false");
-
-  const enabled = (i) => items[i] && !items[i].disabled;
-  const current = () => items.find((i) => i.value === value);
-
-  function paintTrigger() {
-    const it = current();
-    if (o.renderTrigger) return o.renderTrigger(it, trigger);
-    const span = trigger.querySelector("span") || trigger.appendChild(el("span"));
-    span.textContent = it ? it.label : "";
-  }
-
-  function setActive(i, scroll = true) {
-    if (!pop) return;
-    active = i;
-    pop.querySelectorAll("[data-active]").forEach((n) => {
-      n.removeAttribute("data-active");
-    });
-    const node = pop.querySelector(`[id="${id}-${i}"]`);
-    if (!node) return pop.removeAttribute("aria-activedescendant");
-    node.setAttribute("data-active", "");
-    pop.setAttribute("aria-activedescendant", node.id);
-    // Scroll the list itself; scrollIntoView also moves the dialog and dismisses this menu.
-    if (scroll) {
-      if (node.offsetTop < pop.scrollTop) pop.scrollTop = node.offsetTop;
-      else if (node.offsetTop + node.offsetHeight > pop.scrollTop + pop.clientHeight)
-        pop.scrollTop = node.offsetTop + node.offsetHeight - pop.clientHeight;
-    }
-  }
-  function move(delta, from = active) {
-    let i = from;
-    for (let n = 0; n < items.length; n++) {
-      i += delta;
-      if (i < 0 || i >= items.length) return;
-      if (enabled(i)) return setActive(i);
-    }
-  }
-
-  function place() {
-    const r = trigger.getBoundingClientRect();
-    const vw = document.documentElement.clientWidth,
-      vh = window.innerHeight,
-      gap = 6,
-      pad = 8;
-    pop.style.minWidth =
-      o.kind === "listbox" && trigger.classList.contains("field") ? `${r.width}px` : "";
-    pop.style.maxHeight = "";
-    const h = pop.offsetHeight,
-      w = pop.offsetWidth;
-    const below = vh - r.bottom - gap - pad,
-      above = r.top - gap - pad;
-    let side = o.side;
-    if (side === "bottom" && h > below && above > below) side = "top";
-    else if (side === "top" && h > above && below > above) side = "bottom";
-    const room = side === "top" ? above : below;
-    pop.style.maxHeight = `${Math.max(120, Math.min(room, 24 * 16))}px`;
-    const hh = Math.min(h, room);
-    pop.style.top = `${side === "top" ? r.top - gap - hh : r.bottom + gap}px`;
-    let left = o.align === "end" ? r.right - w : r.left;
-    left = Math.max(pad, Math.min(left, vw - w - pad));
-    pop.style.left = `${left}px`;
-    pop.dataset.side = side;
-  }
-
-  function open(start = "selected", nested = false) {
-    if (pop || trigger.disabled) return;
-    if (!nested) {
-      parents = [];
-      items = o.getItems ? o.getItems() : rootItems;
-      rootItems = items;
-    }
-    if (!items.length) return;
-    for (const m of openMenus) m.close(false);
-    pop = el("div", "menu");
-    pop.id = id;
-    pop.tabIndex = -1;
-    pop.setAttribute("role", o.kind);
-    pop.setAttribute(
-      "aria-label",
-      o.label || trigger.getAttribute("aria-label") || trigger.title || "Menu",
-    );
-    const head = !nested && (typeof o.header === "function" ? o.header() : o.header); // read-only context line, e.g. a thread's full title
-    if (head) pop.append(el("div", "m-head", head));
-    let group = "";
-    items.forEach((it, i) => {
-      if (it.group && it.group !== group) {
-        group = it.group;
-        const heading = el("div", "m-group", group);
-        heading.setAttribute("aria-hidden", "true");
-        pop.append(heading);
-      }
-      const n = el("div");
-      n.id = `${id}-${i}`;
-      n.dataset.value = String(it.value);
-      n.setAttribute("role", itemRole);
-      if (o.kind === "listbox")
-        n.setAttribute("aria-selected", String(it.keep ? !!it.checked : it.value === value));
-      if (it.disabled) n.setAttribute("aria-disabled", "true");
-      if (it.tone) n.dataset.tone = it.tone;
-      if (it.icon) {
-        const ic = icon(it.icon, "m-ico");
-        n.append(ic);
-      }
-      const txt = el("span", "m-txt");
-      txt.append(el("span", "m-label", it.label));
-      if (it.desc) txt.append(el("span", "m-desc", it.desc));
-      n.append(txt, icon(it.children ? "chev-right" : "check", it.children ? "m-ico" : "m-check"));
-      if (it.children) n.setAttribute("aria-haspopup", "menu");
-      n.addEventListener("pointermove", () => active !== i && enabled(i) && setActive(i, false));
-      n.addEventListener("click", () => enabled(i) && choose(i));
-      pop.append(n);
-    });
-    (trigger.closest("dialog") || document.body).append(pop); // inside an open <dialog> so it sits in the top layer with it
-    trigger.setAttribute("aria-expanded", "true");
-    trigger.setAttribute("aria-controls", id);
-    place();
-    openedAt = performance.now();
-    const sel = items.findIndex((it) => it.value === value && !it.disabled);
-    const first = items.findIndex((_, i) => enabled(i));
-    const last =
-      items.length - 1 - [...items].reverse().findIndex((_, i) => enabled(items.length - 1 - i));
-    setActive(start === "last" ? last : start === "first" ? first : sel >= 0 ? sel : first);
-    pop.focus({ preventScroll: true });
-    pop.addEventListener("keydown", onKey);
-    document.addEventListener("pointerdown", onOutside, true);
-    window.addEventListener("resize", onDismiss);
-    window.addEventListener("scroll", onScroll, true);
-    openMenus.add(api);
-    if (!nested) o.onOpen();
-  }
-
-  function close(returnFocus = true, notify = true) {
-    if (!pop) return;
-    const p = pop;
-    pop = null;
-    openMenus.delete(api);
-    document.removeEventListener("pointerdown", onOutside, true);
-    window.removeEventListener("resize", onDismiss);
-    window.removeEventListener("scroll", onScroll, true);
-    trigger.setAttribute("aria-expanded", "false");
-    trigger.removeAttribute("aria-controls");
-    p.remove();
-    if (returnFocus) trigger.focus({ preventScroll: true });
-    if (notify) o.onClose();
-  }
-
-  function showItems(next, selected) {
-    close(false, false);
-    items = next;
-    typed = "";
-    open("first", true);
-    if (selected != null) setActive(selected);
-  }
-
-  function back() {
-    const parent = parents.pop();
-    if (parent) showItems(parent.items, parent.active);
-  }
-
-  function choose(i) {
-    const it = items[i];
-    if (it.back) return back();
-    if (it.children) {
-      parents.push({ items, active: i });
-      return showItems([{ value: "menu-back", label: "Back", back: true }, ...it.children]);
-    }
-    close(true);
-    if (it.keep) {
-      o.onSelect(it.value, it);
-      return;
-    } // an action row (e.g. "Advisor · Opus"): acts without becoming the menu's value
-    if (o.kind === "listbox") {
-      if (it.value === value) return;
-      if (o.onSelect(it.value, it) === false) return;
-      value = it.value;
-      paintTrigger();
-    } else o.onSelect(it.value, it);
-  }
-
-  function onKey(e) {
-    if (e.altKey || e.ctrlKey || e.metaKey) return;
-    switch (e.key) {
-      case "ArrowRight":
-        if (items[active]?.children) {
-          e.preventDefault();
-          choose(active);
-        }
-        return;
-      case "ArrowLeft":
-        if (parents.length) {
-          e.preventDefault();
-          back();
-        }
-        return;
-      case "ArrowDown":
-        e.preventDefault();
-        return move(1);
-      case "ArrowUp":
-        e.preventDefault();
-        return move(-1);
-      case "Home":
-        e.preventDefault();
-        return move(1, -1);
-      case "End":
-        e.preventDefault();
-        return move(-1, items.length);
-      case "Enter":
-      case " ":
-        e.preventDefault();
-        if (typed && e.key === " ") break; // space inside a typeahead word
-        return enabled(active) && choose(active);
-      case "Escape":
-        e.preventDefault();
-        e.stopPropagation();
-        return parents.length ? back() : close(true);
-      case "Tab":
-        return close(true); // focus is back on the trigger, so Tab moves on from there
-    }
-    if ((e.key.length === 1 && /\S/.test(e.key)) || (e.key === " " && typed)) {
-      const now = Date.now();
-      typed = now - typedAt > 700 ? e.key.toLowerCase() : typed + e.key.toLowerCase();
-      typedAt = now;
-      const order = [...items.keys()];
-      const from = typed.length === 1 ? active + 1 : active; // repeated single letter cycles
-      const rot = order.slice(from).concat(order.slice(0, from));
-      const hit = rot.find((i) => enabled(i) && items[i].label.toLowerCase().startsWith(typed));
-      if (hit != null) setActive(hit);
-      e.preventDefault();
-    }
-  }
-  function onOutside(e) {
-    if (pop && !pop.contains(e.target) && !trigger.contains(e.target)) close(false);
-  }
-  function onDismiss() {
-    close(false);
-  }
-  // only scrolling that moves the trigger dismisses the menu (the chat scrolling while history loads must not)
-  function onScroll(e) {
-    // Ignore the scroll that brings the trigger into view just before a tap opens this menu.
-    if (performance.now() - openedAt < 150) return;
-    if (pop && !pop.contains(e.target) && (e.target === document || e.target.contains?.(trigger)))
-      close(false);
-  }
-
-  trigger.addEventListener("click", () => (pop ? close(true) : open()));
-  trigger.addEventListener("keydown", (e) => {
-    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-      e.preventDefault();
-      pop || open(e.key === "ArrowUp" ? "last" : "first");
+  trigger.addEventListener("click", () => (ctx.pop ? closeMenu(ctx, true) : openMenu(ctx)));
+  trigger.addEventListener("keydown", (event) => {
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      ctx.pop || openMenu(ctx, event.key === "ArrowUp" ? "last" : "first");
     }
   });
-
-  const api = {
-    open,
-    close,
-    get value() {
-      return value;
-    },
-    get isOpen() {
-      return !!pop;
-    },
-    setValue(v) {
-      value = v;
-      paintTrigger();
-    },
-    setItems(next, v = value) {
-      rootItems = items = next;
-      value = v;
-      paintTrigger();
-    },
-    setDisabled(b) {
-      trigger.disabled = b;
-      if (b) close(false);
-    },
-    items: () => items,
-  };
-  paintTrigger();
-  return api;
+  ctx.api = createMenuApi(ctx);
+  paintTrigger(ctx);
+  return ctx.api;
 }

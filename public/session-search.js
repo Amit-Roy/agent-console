@@ -47,6 +47,82 @@ async function lookupPrs(request, ref) {
     results.append(row);
   }
 }
+function groupByThread(hits) {
+  const groups = new Map();
+  for (const hit of hits) {
+    if (!groups.has(hit.thread)) groups.set(hit.thread, []);
+    groups.get(hit.thread).push(hit);
+  }
+  return groups;
+}
+
+async function loadSurroundingMessages(details, hit) {
+  if (!details.open || details.dataset.loaded) return;
+  details.dataset.loaded = "true";
+  const text = element("pre", "Loading messages…");
+  details.append(text);
+  try {
+    const response = await fetch(
+      `/api/sessions/${encodeURIComponent(hit.thread)}?start=${Math.max(1, hit.line - 2)}&limit=8`,
+      { cache: "no-store" },
+    );
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.error || "Could not load messages.");
+    text.textContent = body.events
+      .map((event) => `Line ${event.line} · ${event.role}\n${event.text}`)
+      .join("\n\n");
+  } catch (error) {
+    text.textContent = error.message;
+    delete details.dataset.loaded;
+  }
+}
+
+function buildHitBox(hit) {
+  const box = element("div", undefined, "hit");
+  box.append(
+    element("p", `${hit.role} · line ${hit.line}`, "search-meta"),
+    element("p", hit.snippet || hit.text),
+  );
+  const details = element("details");
+  details.append(element("summary", "Read surrounding messages"));
+  details.addEventListener("toggle", () => loadSurroundingMessages(details, hit));
+  box.append(details);
+  return box;
+}
+
+function buildGroupRow(hits) {
+  const first = hits[0];
+  const row = element("li");
+  row.append(
+    heading(first, "/#thread=" + encodeURIComponent(first.thread)),
+    element(
+      "p",
+      `${first.provider} · ${hits.length} matching message${hits.length === 1 ? "" : "s"}`,
+      "search-meta",
+    ),
+  );
+  for (const hit of hits) row.append(buildHitBox(hit));
+  return row;
+}
+
+async function runTextSearch(request, params) {
+  const response = await fetch("/api/sessions/search?" + params, {
+    signal: request.signal,
+    cache: "no-store",
+  });
+  if (response.status === 401) {
+    location.assign("/login");
+    return;
+  }
+  const body = await response.json();
+  if (!response.ok) throw new Error(body.error || "Search failed. Try again.");
+  if (request !== pending) return;
+  status.textContent = body.results.length
+    ? `${body.results.length} matching messages · ${body.indexedSessions} sessions searched`
+    : "No matches. Try fewer words or another provider.";
+  for (const hits of groupByThread(body.results).values()) results.append(buildGroupRow(hits));
+}
+
 async function search() {
   pending?.abort();
   const request = (pending = new AbortController());
@@ -57,73 +133,8 @@ async function search() {
   status.textContent = "Searching sessions…";
   results.setAttribute("aria-busy", "true");
   try {
-    if (PR_REF.test(query.value.trim())) {
-      await lookupPrs(request, query.value.trim());
-      return;
-    }
-    const response = await fetch("/api/sessions/search?" + params, {
-      signal: request.signal,
-      cache: "no-store",
-    });
-    if (response.status === 401) {
-      location.assign("/login");
-      return;
-    }
-    const body = await response.json();
-    if (!response.ok) throw new Error(body.error || "Search failed. Try again.");
-    if (request !== pending) return;
-    status.textContent = body.results.length
-      ? `${body.results.length} matching messages · ${body.indexedSessions} sessions searched`
-      : "No matches. Try fewer words or another provider.";
-    const groups = new Map();
-    for (const hit of body.results) {
-      if (!groups.has(hit.thread)) groups.set(hit.thread, []);
-      groups.get(hit.thread).push(hit);
-    }
-    for (const hits of groups.values()) {
-      const first = hits[0];
-      const row = element("li");
-      row.append(
-        heading(first, "/#thread=" + encodeURIComponent(first.thread)),
-        element(
-          "p",
-          `${first.provider} · ${hits.length} matching message${hits.length === 1 ? "" : "s"}`,
-          "search-meta",
-        ),
-      );
-      for (const hit of hits) {
-        const box = element("div", undefined, "hit");
-        box.append(
-          element("p", `${hit.role} · line ${hit.line}`, "search-meta"),
-          element("p", hit.snippet || hit.text),
-        );
-        const details = element("details");
-        details.append(element("summary", "Read surrounding messages"));
-        details.addEventListener("toggle", async () => {
-          if (!details.open || details.dataset.loaded) return;
-          details.dataset.loaded = "true";
-          const text = element("pre", "Loading messages…");
-          details.append(text);
-          try {
-            const response = await fetch(
-              `/api/sessions/${encodeURIComponent(hit.thread)}?start=${Math.max(1, hit.line - 2)}&limit=8`,
-              { cache: "no-store" },
-            );
-            const body = await response.json();
-            if (!response.ok) throw new Error(body.error || "Could not load messages.");
-            text.textContent = body.events
-              .map((event) => `Line ${event.line} · ${event.role}\n${event.text}`)
-              .join("\n\n");
-          } catch (error) {
-            text.textContent = error.message;
-            delete details.dataset.loaded;
-          }
-        });
-        box.append(details);
-        row.append(box);
-      }
-      results.append(row);
-    }
+    if (PR_REF.test(query.value.trim())) await lookupPrs(request, query.value.trim());
+    else await runTextSearch(request, params);
   } catch (error) {
     if (error.name !== "AbortError" && request === pending) status.textContent = error.message;
   } finally {
