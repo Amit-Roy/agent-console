@@ -1934,6 +1934,29 @@ function requestEarlier(thread) {
   state.earlierWanted = null;
   state.loadingEarlier = true;
 }
+async function waitReaderStill(token) {
+  while (readerScrolling()) await new Promise((resolve) => setTimeout(resolve, 120));
+  return token === state.renderToken;
+}
+function settleEarlierButton(btn, start, fetchMore) {
+  if (!(start > 0 && btn)) return void btn?.remove();
+  if (fetchMore) return;
+  btn.disabled = false;
+  btn.textContent = "Show earlier messages";
+}
+// Three frames of re-anchoring while content settles; false when the thread changed under it.
+async function settleEarlierAnchor(chat, { anchor, anchorTop, fromBottom }, token) {
+  chat.scrollTop = chat.scrollHeight - fromBottom;
+  if (anchor && anchorTop != null) holdHistoryAnchor(anchor, anchorTop);
+  for (let pass = 0; pass < 3; pass++) {
+    await frame();
+    if (token !== state.renderToken) return false;
+    if (readerScrolling()) break; // the finger owns the scroll position now
+    if (anchor?.isConnected && anchorTop != null)
+      chat.scrollTop += anchor.getBoundingClientRect().top - anchorTop;
+  }
+  return true;
+}
 // Older events are drawn off-screen, then slid in above what is there with the scroll position held, so the page does not jump.
 async function showEarlier(m) {
   const pageAt = state.pageAt;
@@ -1948,6 +1971,8 @@ async function showEarlier(m) {
   const ok = await renderEvents(m.events, token, false);
   if (!ok) return;
   state.into = null;
+  // The reply can land mid-drag: inserting then fights the finger, so hold the page until the reader is still (live events queue in pendingLive).
+  if (!(await waitReaderStill(token))) return;
   const btn = chat.querySelector(":scope > .earlier");
   const anchor = btn?.nextElementSibling || chat.firstElementChild;
   const anchorTop = anchor?.getBoundingClientRect().top;
@@ -1964,20 +1989,8 @@ async function showEarlier(m) {
     chat.scrollHeight - heightBefore < chat.clientHeight &&
     (state.earlierChain = (state.earlierChain || 0) + 1) < 20;
   if (!fetchMore) state.earlierChain = 0;
-  if (m.start > 0 && btn) {
-    if (!fetchMore) {
-      btn.disabled = false;
-      btn.textContent = "Show earlier messages";
-    }
-  } else btn?.remove();
-  chat.scrollTop = chat.scrollHeight - fromBottom;
-  if (anchor && anchorTop != null) holdHistoryAnchor(anchor, anchorTop);
-  for (let pass = 0; pass < 3; pass++) {
-    await frame();
-    if (token !== state.renderToken) return;
-    if (anchor?.isConnected && anchorTop != null)
-      chat.scrollTop += anchor.getBoundingClientRect().top - anchorTop;
-  }
+  settleEarlierButton(btn, m.start, fetchMore);
+  if (!(await settleEarlierAnchor(chat, { anchor, anchorTop, fromBottom }, token))) return;
   state.live = live;
   state.loadingEarlier = false;
   state.rendering = false;
@@ -2783,6 +2796,7 @@ function holdHistoryAnchor(node, top) {
   releaseHistoryAnchor();
   const chat = $("chat");
   const observer = new ResizeObserver(() => {
+    if (readerScrolling()) return releaseHistoryAnchor();
     if (!node.isConnected) return releaseHistoryAnchor();
     const delta = node.getBoundingClientRect().top - top;
     if (Math.abs(delta) > 0.5) {
