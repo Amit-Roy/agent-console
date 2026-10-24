@@ -392,6 +392,36 @@ for (const [name, viewport, scheme] of [
     `brain ${name}: legend identifies node categories and connections`,
     (await page.locator(".graph-legend li").count()) === 5,
   );
+  const phoneWidth = await page.evaluate(() => innerWidth < 600);
+  check(
+    `brain ${name}: legend starts ${phoneWidth ? "collapsed" : "open"}`,
+    (await page.locator("#legendToggle").getAttribute("aria-expanded")) === String(!phoneWidth) &&
+      (await page.locator("#legendBody").isVisible()) === !phoneWidth,
+  );
+  if (phoneWidth) {
+    await page.click("#legendToggle");
+    check(
+      `brain ${name}: legend button opens the legend`,
+      (await page.locator("#legendToggle").getAttribute("aria-expanded")) === "true" &&
+        (await page.locator("#legendBody").isVisible()),
+    );
+    await page.click("#legendToggle");
+  }
+  check(
+    `brain ${name}: graph controls float over the canvas and stay 44px`,
+    await page.evaluate(() => {
+      const wrap = document.querySelector(".graph-wrap")!.getBoundingClientRect();
+      const toolbar = document.querySelector(".graph-toolbar")!;
+      const inside = (box: DOMRect) => box.left >= wrap.left && box.right <= wrap.right;
+      return (
+        inside(toolbar.getBoundingClientRect()) &&
+        ["zoomOut", "zoomIn", "fitGraph", "linksToggle"].every((buttonId) => {
+          const box = document.getElementById(buttonId)!.getBoundingClientRect();
+          return box.width >= 44 && box.height >= 44 && inside(box);
+        })
+      );
+    }),
+  );
   const graphBefore = await page.evaluate(() => {
     const graph = (document.getElementById("cy") as any).__cy;
     return {
