@@ -1,4 +1,170 @@
 // Browser push is the single notification channel for thread outcomes and questions.
+const SILENT_KEY = "ac_notifications_silent";
+const SUBSCRIPTIONS_URL = "/api/notifications/subscriptions";
+
+function readSilent(ctx) {
+  try {
+    ctx.silent = ctx.storage?.getItem(SILENT_KEY) === "1";
+  } catch {}
+}
+
+function updateControls(ctx) {
+  ctx.toggle.disabled =
+    ctx.busy || !ctx.supported || (!ctx.subscription && ctx.Notification?.permission === "denied");
+  ctx.silentToggle.disabled = ctx.busy;
+  ctx.silentToggle.checked = ctx.silent;
+}
+
+function statusMessage(ctx) {
+  if (!ctx.supported)
+    return "Push notifications are unavailable in this browser. On iPhone or iPad, open the installed Home Screen app.";
+  if (ctx.Notification.permission === "denied")
+    return "Notifications are blocked. Allow notifications in your browser or device settings, then reopen this dialog.";
+  return ctx.subscription
+    ? "On for this device. Finished, failed, and needs input alerts include a link to the thread."
+    : "Off for this device. Enable alerts for finished, failed, and needs input. Each alert opens its thread.";
+}
+
+function render(ctx, message) {
+  updateControls(ctx);
+  ctx.toggle.textContent = ctx.subscription ? "Disable notifications" : "Enable notifications";
+  ctx.launch.setAttribute("aria-label", `Notifications: ${ctx.subscription ? "on" : "off"}`);
+  ctx.status.textContent = message || statusMessage(ctx);
+}
+
+async function request(ctx, url, options) {
+  const response = await ctx.apiFetch(url, options);
+  if (!response.ok) throw new Error(`Notification settings request failed (${response.status}).`);
+  return response;
+}
+
+function jsonBody(value) {
+  return {
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(value),
+  };
+}
+
+function subscriptionSettings(ctx, value) {
+  const { subscription } = ctx;
+  return {
+    ...(subscription.toJSON ? subscription.toJSON() : subscription),
+    silent: value,
+  };
+}
+
+async function worker(ctx) {
+  if (!ctx.registration) {
+    await ctx.navigator.serviceWorker.register("/sw.js");
+    ctx.registration = await ctx.navigator.serviceWorker.ready;
+  }
+  return ctx.registration;
+}
+
+function postSubscription(ctx, silent) {
+  return request(ctx, SUBSCRIPTIONS_URL, {
+    method: "POST",
+    ...jsonBody(subscriptionSettings(ctx, silent)),
+  });
+}
+
+async function refresh(ctx) {
+  if (ctx.busy) return;
+  readSilent(ctx);
+  if (!ctx.supported) return render(ctx);
+  ctx.busy = true;
+  render(ctx, "Checking notification settings…");
+  try {
+    ctx.subscription = await (await worker(ctx)).pushManager.getSubscription();
+    if (ctx.subscription && ctx.Notification.permission === "granted")
+      await postSubscription(ctx, ctx.silent);
+    render(ctx);
+  } catch (error) {
+    render(ctx, `${error.message} Reopen this dialog to retry.`);
+  } finally {
+    ctx.busy = false;
+    updateControls(ctx);
+  }
+}
+
+async function changeSilent(ctx) {
+  if (ctx.busy) return;
+  const nextSilent = ctx.silentToggle.checked;
+  ctx.busy = true;
+  render(ctx, "Saving notification preference…");
+  try {
+    if (ctx.subscription) await postSubscription(ctx, nextSilent);
+    ctx.storage?.setItem(SILENT_KEY, nextSilent ? "1" : "0");
+    ctx.silent = nextSilent;
+    render(ctx);
+  } catch (error) {
+    render(ctx, `${error.message} Silent notification preference was not saved. Try again.`);
+  } finally {
+    ctx.busy = false;
+    updateControls(ctx);
+  }
+}
+
+function decodePublicKey(publicKey) {
+  const padded = publicKey.replace(/-/g, "+").replace(/_/g, "/");
+  return Uint8Array.from(atob(padded + "=".repeat((4 - (padded.length % 4)) % 4)), (char) =>
+    char.charCodeAt(0),
+  );
+}
+
+async function disableSubscription(ctx) {
+  await request(ctx, SUBSCRIPTIONS_URL, {
+    method: "DELETE",
+    ...jsonBody({ endpoint: ctx.subscription.endpoint }),
+  });
+  await ctx.subscription.unsubscribe();
+  ctx.subscription = null;
+}
+
+// Resolves false when permission is refused, so the caller skips its final render.
+async function enableSubscription(ctx, permission) {
+  if ((await permission) !== "granted") {
+    render(ctx);
+    return false;
+  }
+  const config = await (await request(ctx, "/api/notifications")).json();
+  if (!config.enabled || !config.publicKey)
+    throw new Error("Push notifications are unavailable on this server.");
+  ctx.subscription = await (await worker(ctx)).pushManager.subscribe({
+    userVisibleOnly: true,
+    applicationServerKey: decodePublicKey(config.publicKey),
+  });
+  try {
+    await postSubscription(ctx, ctx.silent);
+  } catch (error) {
+    await ctx.subscription.unsubscribe().catch(() => {});
+    ctx.subscription = null;
+    throw error;
+  }
+  return true;
+}
+
+async function toggleSubscription(ctx) {
+  if (ctx.busy) return;
+  // Request permission directly from the click, before awaiting network or worker setup.
+  const permission =
+    !ctx.subscription && ctx.Notification.permission !== "granted"
+      ? ctx.Notification.requestPermission()
+      : Promise.resolve(ctx.Notification.permission);
+  ctx.busy = true;
+  render(ctx, ctx.subscription ? "Disabling notifications…" : "Enabling notifications…");
+  try {
+    if (ctx.subscription) await disableSubscription(ctx);
+    else if (!(await enableSubscription(ctx, permission))) return;
+    render(ctx);
+  } catch (error) {
+    render(ctx, `${error.message} Try again.`);
+  } finally {
+    ctx.busy = false;
+    updateControls(ctx);
+  }
+}
+
 export function setupNotifications({
   apiFetch,
   document = globalThis.document,
@@ -7,167 +173,34 @@ export function setupNotifications({
   window = globalThis.window,
   storage = globalThis.localStorage,
 }) {
-  const launch = document.getElementById("notifications");
-  const dialog = document.getElementById("notifications-dialog");
-  const toggle = document.getElementById("notifications-toggle");
-  const status = document.getElementById("notifications-status");
-  const silentToggle = document.getElementById("notifications-silent");
-  let silent = false;
-  try {
-    silent = storage?.getItem("ac_notifications_silent") === "1";
-  } catch {}
-  let subscription = null;
-  let registration;
-  let busy = false;
-  const supported =
-    window.isSecureContext &&
-    Notification &&
-    "serviceWorker" in navigator &&
-    "PushManager" in window;
-
-  function controls() {
-    toggle.disabled =
-      busy || !supported || (!subscription && Notification?.permission === "denied");
-    silentToggle.disabled = busy;
-    silentToggle.checked = silent;
-  }
-  function render(message) {
-    controls();
-    toggle.textContent = subscription ? "Disable notifications" : "Enable notifications";
-    launch.setAttribute("aria-label", `Notifications: ${subscription ? "on" : "off"}`);
-    status.textContent =
-      message ||
-      (!supported
-        ? "Push notifications are unavailable in this browser. On iPhone or iPad, open the installed Home Screen app."
-        : Notification.permission === "denied"
-          ? "Notifications are blocked. Allow notifications in your browser or device settings, then reopen this dialog."
-          : subscription
-            ? "On for this device. Finished, failed, and needs input alerts include a link to the thread."
-            : "Off for this device. Enable alerts for finished, failed, and needs input. Each alert opens its thread.");
-  }
-  async function request(url, options) {
-    const response = await apiFetch(url, options);
-    if (!response.ok) throw new Error(`Notification settings request failed (${response.status}).`);
-    return response;
-  }
-  const body = (value) => ({
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(value),
-  });
-  const subscriptionSettings = (value) => ({
-    ...(subscription.toJSON ? subscription.toJSON() : subscription),
-    silent: value,
-  });
-  async function worker() {
-    if (!registration) {
-      await navigator.serviceWorker.register("/sw.js");
-      registration = await navigator.serviceWorker.ready;
-    }
-    return registration;
-  }
-  async function refresh() {
-    if (busy) return;
-    try {
-      silent = storage?.getItem("ac_notifications_silent") === "1";
-    } catch {}
-    if (!supported) return render();
-    busy = true;
-    render("Checking notification settings…");
-    try {
-      subscription = await (await worker()).pushManager.getSubscription();
-      if (subscription && Notification.permission === "granted") {
-        await request("/api/notifications/subscriptions", {
-          method: "POST",
-          ...body(subscriptionSettings(silent)),
-        });
-      }
-      render();
-    } catch (error) {
-      render(`${error.message} Reopen this dialog to retry.`);
-    } finally {
-      busy = false;
-      controls();
-    }
-  }
-  silentToggle.onchange = async () => {
-    if (busy) return;
-    const nextSilent = silentToggle.checked;
-    busy = true;
-    render("Saving notification preference…");
-    try {
-      if (subscription) {
-        await request("/api/notifications/subscriptions", {
-          method: "POST",
-          ...body(subscriptionSettings(nextSilent)),
-        });
-      }
-      storage?.setItem("ac_notifications_silent", nextSilent ? "1" : "0");
-      silent = nextSilent;
-      render();
-    } catch (error) {
-      render(`${error.message} Silent notification preference was not saved. Try again.`);
-    } finally {
-      busy = false;
-      controls();
-    }
+  const ctx = {
+    apiFetch,
+    navigator,
+    Notification,
+    storage,
+    launch: document.getElementById("notifications"),
+    dialog: document.getElementById("notifications-dialog"),
+    toggle: document.getElementById("notifications-toggle"),
+    status: document.getElementById("notifications-status"),
+    silentToggle: document.getElementById("notifications-silent"),
+    silent: false,
+    subscription: null,
+    registration: undefined,
+    busy: false,
+    supported:
+      window.isSecureContext &&
+      Notification &&
+      "serviceWorker" in navigator &&
+      "PushManager" in window,
   };
-  launch.onclick = async () => {
-    dialog.showModal();
-    await refresh();
+  readSilent(ctx);
+  ctx.silentToggle.onchange = () => changeSilent(ctx);
+  ctx.launch.onclick = async () => {
+    ctx.dialog.showModal();
+    await refresh(ctx);
   };
-  toggle.onclick = async () => {
-    if (busy) return;
-    // Request permission directly from the click, before awaiting network or worker setup.
-    const permission =
-      !subscription && Notification.permission !== "granted"
-        ? Notification.requestPermission()
-        : Promise.resolve(Notification.permission);
-    busy = true;
-    render(subscription ? "Disabling notifications…" : "Enabling notifications…");
-    try {
-      if (subscription) {
-        await request("/api/notifications/subscriptions", {
-          method: "DELETE",
-          ...body({ endpoint: subscription.endpoint }),
-        });
-        await subscription.unsubscribe();
-        subscription = null;
-      } else {
-        if ((await permission) !== "granted") {
-          render();
-          return;
-        }
-        const config = await (await request("/api/notifications")).json();
-        if (!config.enabled || !config.publicKey)
-          throw new Error("Push notifications are unavailable on this server.");
-        const padded = config.publicKey.replace(/-/g, "+").replace(/_/g, "/");
-        const key = Uint8Array.from(atob(padded + "=".repeat((4 - (padded.length % 4)) % 4)), (c) =>
-          c.charCodeAt(0),
-        );
-        subscription = await (await worker()).pushManager.subscribe({
-          userVisibleOnly: true,
-          applicationServerKey: key,
-        });
-        try {
-          await request("/api/notifications/subscriptions", {
-            method: "POST",
-            ...body(subscriptionSettings(silent)),
-          });
-        } catch (error) {
-          await subscription.unsubscribe().catch(() => {});
-          subscription = null;
-          throw error;
-        }
-      }
-      render();
-    } catch (error) {
-      render(`${error.message} Try again.`);
-    } finally {
-      busy = false;
-      controls();
-    }
-  };
-  render();
+  ctx.toggle.onclick = () => toggleSubscription(ctx);
+  render(ctx);
   // The sidebar menu reads the launcher's label before the dialog is ever opened.
-  void refresh();
+  void refresh(ctx);
 }
