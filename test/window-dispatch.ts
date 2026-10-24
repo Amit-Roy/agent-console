@@ -292,6 +292,19 @@ assert.match(
   "trivial work never pushes to the default branch",
 );
 
+// completion contract: close on full completion, follow-up issue for the rest
+for (const [repo, effort] of [
+  ["o/agent-console", "bau"],
+  ["o/agent-console", "deep"],
+] as const) {
+  const text = issuePrompt(dec(repo, effort), "b", "main");
+  assert.match(text, /`Closes #5`/, `${effort} prompt closes the issue on completion`);
+  assert.match(text, /`Refs #5`/, `${effort} prompt keeps Refs for partial work`);
+  assert.match(text, /acceptance criterion/, `${effort} prompt lists acceptance criteria`);
+  assert.match(text, /follow-up issue/, `${effort} prompt requires follow-up issues`);
+  assert.doesNotMatch(text, /what is left/, `${effort} prompt does not invite stopping early`);
+}
+
 // startIssue: own worktree and branch, a locked-title thread inside it, one prompt
 {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "ac-issue-"));

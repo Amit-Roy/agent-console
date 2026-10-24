@@ -282,12 +282,14 @@ export function issuePrompt(d: Decision, branch: string, base: string): string {
   return [
     `Work GitHub issue ${issue.repo}#${issue.number}: ${issue.title}`,
     `Read it first: gh issue view ${issue.number} --repo ${issue.repo} --comments. The triage comment holds the book of work.`,
+    `List every acceptance criterion from the issue and the triage comment. The job is done only when each acceptance criterion is met and checked with evidence (a test, command output, a measurement, or a screenshot). Do not stop at a partial slice.`,
+    `If an acceptance criterion truly cannot be done in this run (it needs another repository, a manual human step, or a measurement only possible after deploy), open a follow-up issue for exactly that part with gh issue create --repo ${issue.repo} and link it, instead of leaving it silent.`,
     `You are in your own private Git checkout on branch ${branch} (from ${base}). Never touch the main checkout.`,
     direct
-      ? `When done and verified, commit, rebase onto origin/${base} and push to ${base}. Reference the issue (Refs #${issue.number}).`
-      : `When done and verified, push the branch and open a pull request into ${base} that references the issue. Do not merge it.${effort !== "deep" ? " A Sonnet or Sol review must approve it before merge: say so in the PR body and stop." : ""}`,
+      ? `When done and verified, commit, rebase onto origin/${base} and push to ${base}. Put \`Closes #${issue.number}\` in the commit message only when every acceptance criterion is met; otherwise put \`Refs #${issue.number}\` plus the follow-up issue links.`
+      : `When done and verified, push the branch and open a pull request into ${base} that references the issue. The PR body must contain \`Closes #${issue.number}\` only when every acceptance criterion is met; otherwise it must contain \`Refs #${issue.number}\` plus the follow-up issue links. Do not merge it.${effort !== "deep" ? " A Sonnet or Sol review must approve it before merge: say so in the PR body and stop." : ""}`,
     selfReviewBlock(skillDir(), base),
-    `Unattended run: do not ask questions. End with a short summary: what changed, how it was checked, what is left.`,
+    `Unattended run: do not ask questions. End with a short summary: what changed, how it was checked, a checklist of each acceptance criterion with its evidence, and any follow-up issue links.`,
   ].join("\n\n");
 }
 
