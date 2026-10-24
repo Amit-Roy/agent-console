@@ -42,88 +42,122 @@ export type NewEvent = {
   msg?: string;
   data?: Record<string, unknown>;
 };
-export function createEventLog(opts: { file: string; now?: () => number; maxBytes?: number }) {
-  const now = opts.now ?? Date.now,
-    maxBytes = opts.maxBytes ?? 5 * 1024 * 1024;
-  let events: AutomationEvent[] = [];
-  let size = 0;
-  for (const f of [opts.file + ".1", opts.file]) {
+type EventLogState = {
+  file: string;
+  now: () => number;
+  maxBytes: number;
+  events: AutomationEvent[];
+  size: number;
+  seq: number;
+};
+
+function loadEvents(state: EventLogState) {
+  for (const file of [state.file + ".1", state.file]) {
     try {
-      for (const line of fs.readFileSync(f, "utf8").split("\n")) {
+      for (const line of fs.readFileSync(file, "utf8").split("\n")) {
         try {
-          if (line) events.push(JSON.parse(line));
+          if (line) state.events.push(JSON.parse(line));
         } catch {}
       }
-      if (f === opts.file) size = fs.statSync(f).size;
+      if (file === state.file) state.size = fs.statSync(file).size;
     } catch {}
   }
-  events = events.slice(-KEEP);
-  let seq = events.at(-1)?.seq ?? 0;
+  state.events = state.events.slice(-KEEP);
+  state.seq = state.events.at(-1)?.seq ?? 0;
+}
 
-  function record(e: NewEvent): AutomationEvent {
-    if (!STEP_IDS.includes(e.step)) throw new Error(`Unknown step "${e.step}"`);
-    const ev: AutomationEvent = {
-      seq: ++seq,
-      ts: now(),
-      step: e.step,
-      kind: e.kind,
-      ...(e.run ? { run: e.run } : {}),
-      ...(e.ref ? { ref: redact(e.ref).slice(0, 200) } : {}),
-      ...(e.msg ? { msg: redact(e.msg).slice(0, 300) } : {}),
-      ...(e.data ? { data: clean(e.data) as Record<string, unknown> } : {}),
-    };
-    const line = JSON.stringify(ev) + "\n";
-    try {
-      if (size + line.length > maxBytes) {
-        fs.renameSync(opts.file, opts.file + ".1");
-        size = 0;
-      }
-      fs.appendFileSync(opts.file, line, { mode: 0o600 });
-      size += line.length;
-    } catch {
-      /* a full disk must not stop the automation it describes */
+function persistLine(state: EventLogState, line: string) {
+  try {
+    if (state.size + line.length > state.maxBytes) {
+      fs.renameSync(state.file, state.file + ".1");
+      state.size = 0;
     }
-    events.push(ev);
-    if (events.length > KEEP * 2) events = events.slice(-KEEP);
-    return ev;
+    fs.appendFileSync(state.file, line, { mode: 0o600 });
+    state.size += line.length;
+  } catch {
+    /* a full disk must not stop the automation it describes */
   }
+}
 
-  /** Newest first. `before` is the `next` of the previous page. */
-  function read(q: { step?: StepId; limit?: number; before?: number }): {
-    events: AutomationEvent[];
-    next?: number;
-  } {
-    const limit = Math.min(500, Math.max(1, Math.floor(q.limit ?? 100)));
-    const out: AutomationEvent[] = [];
-    for (let i = events.length - 1; i >= 0 && out.length < limit; i--) {
-      const e = events[i];
-      if ((q.before != null && e.seq >= q.before) || (q.step && e.step !== q.step)) continue;
-      out.push(e);
-    }
-    const more =
-      out.length === limit &&
-      events.some((e) => e.seq < out[out.length - 1].seq && (!q.step || e.step === q.step));
-    return { events: out, ...(more ? { next: out[out.length - 1].seq } : {}) };
-  }
+function recordEvent(state: EventLogState, input: NewEvent): AutomationEvent {
+  if (!STEP_IDS.includes(input.step)) throw new Error(`Unknown step "${input.step}"`);
+  const event: AutomationEvent = {
+    seq: ++state.seq,
+    ts: state.now(),
+    step: input.step,
+    kind: input.kind,
+    ...(input.run ? { run: input.run } : {}),
+    ...(input.ref ? { ref: redact(input.ref).slice(0, 200) } : {}),
+    ...(input.msg ? { msg: redact(input.msg).slice(0, 300) } : {}),
+    ...(input.data ? { data: clean(input.data) as Record<string, unknown> } : {}),
+  };
+  persistLine(state, JSON.stringify(event) + "\n");
+  state.events.push(event);
+  if (state.events.length > KEEP * 2) state.events = state.events.slice(-KEEP);
+  return event;
+}
 
-  /** Runs that started and never ended. A run older than STALE_RUN_MS is abandoned rather than active. */
-  function openRuns(): { run: string; step: StepId; ts: number }[] {
-    const open = new Map<string, AutomationEvent>();
-    for (const e of events) {
-      if (!e.run) continue;
-      if (e.kind === "start") open.set(e.run, e);
-      else if (e.kind === "ok" || e.kind === "fail" || e.kind === "abandoned") open.delete(e.run);
-    }
-    return [...open.values()].map((e) => ({ run: e.run!, step: e.step, ts: e.ts }));
+/** Newest first. `before` is the `next` of the previous page. */
+function readEvents(
+  state: EventLogState,
+  query: { step?: StepId; limit?: number; before?: number },
+): {
+  events: AutomationEvent[];
+  next?: number;
+} {
+  const limit = Math.min(500, Math.max(1, Math.floor(query.limit ?? 100)));
+  const out: AutomationEvent[] = [];
+  for (let index = state.events.length - 1; index >= 0 && out.length < limit; index--) {
+    const event = state.events[index];
+    if (
+      (query.before != null && event.seq >= query.before) ||
+      (query.step && event.step !== query.step)
+    )
+      continue;
+    out.push(event);
   }
+  const more =
+    out.length === limit &&
+    state.events.some(
+      (event) => event.seq < out[out.length - 1].seq && (!query.step || event.step === query.step),
+    );
+  return { events: out, ...(more ? { next: out[out.length - 1].seq } : {}) };
+}
+
+/** Runs that started and never ended. A run older than STALE_RUN_MS is abandoned rather than active. */
+function openRunsOf(state: EventLogState): { run: string; step: StepId; ts: number }[] {
+  const open = new Map<string, AutomationEvent>();
+  for (const event of state.events) {
+    if (!event.run) continue;
+    if (event.kind === "start") open.set(event.run, event);
+    else if (event.kind === "ok" || event.kind === "fail" || event.kind === "abandoned")
+      open.delete(event.run);
+  }
+  return [...open.values()].map((event) => ({ run: event.run!, step: event.step, ts: event.ts }));
+}
+
+export function createEventLog(opts: { file: string; now?: () => number; maxBytes?: number }) {
+  const state: EventLogState = {
+    file: opts.file,
+    now: opts.now ?? Date.now,
+    maxBytes: opts.maxBytes ?? 5 * 1024 * 1024,
+    events: [],
+    size: 0,
+    seq: 0,
+  };
+  loadEvents(state);
+  const record = (input: NewEvent) => recordEvent(state, input);
+  const read = (query: { step?: StepId; limit?: number; before?: number }) =>
+    readEvents(state, query);
+  const openRuns = () => openRunsOf(state);
 
   /** At start-up nothing from a previous process is still running: close every open run as abandoned. */
   function recoverOpenRuns(): string[] {
-    return openRuns().map((r) => {
-      record({ step: r.step, kind: "abandoned", run: r.run, msg: "server restarted" });
-      return r.run;
+    return openRuns().map((open) => {
+      record({ step: open.step, kind: "abandoned", run: open.run, msg: "server restarted" });
+      return open.run;
     });
   }
-  return { record, read, openRuns, recoverOpenRuns, all: () => events };
+  return { record, read, openRuns, recoverOpenRuns, all: () => state.events };
 }
 export type EventLog = ReturnType<typeof createEventLog>;
