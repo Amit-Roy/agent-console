@@ -134,5 +134,5 @@ try {
   await browser?.close();
   server.kill();
   stub.close();
-  fs.rmSync(data, { recursive: true, force: true });
+  fs.rmSync(data, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 }

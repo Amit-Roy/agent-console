@@ -3,6 +3,7 @@
 //   fonts:       Inter Variable + JetBrains Mono Variable + Newsreader Variable (SIL OFL 1.1), latin + latin-ext subsets only
 //   highlight.js: core + 13 common languages as ES modules (BSD-3-Clause)
 //   chart.js:    minified UMD build, lazy-loaded by render.js only when a ```chart block appears (MIT)
+//   cytoscape:   minified ES module, lazy-loaded by brain.js only when the Brain graph view opens (MIT)
 import fs from "node:fs";
 import path from "node:path";
 
@@ -69,4 +70,6 @@ for (const l of [
 copy(nm("highlight.js/LICENSE"), out("vendor/hljs/LICENSE.txt"));
 copy(nm("chart.js/dist/chart.umd.min.js"), out("vendor/chart.umd.min.js"));
 copy(nm("chart.js/LICENSE.md"), out("vendor/chart.LICENSE.txt"));
-console.log("vendored fonts + highlight.js + chart.js into public/");
+copy(nm("cytoscape/dist/cytoscape.esm.min.mjs"), out("vendor/cytoscape.esm.min.mjs"));
+copy(nm("cytoscape/LICENSE"), out("vendor/cytoscape.LICENSE.txt"));
+console.log("vendored fonts + highlight.js + chart.js + cytoscape into public/");
