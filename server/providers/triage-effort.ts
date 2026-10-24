@@ -179,6 +179,12 @@ function boundedMetadata(value: unknown, depth = 0): boolean {
   );
 }
 
+/** Tree quotes are only as validated as the boosted heads themselves, never the ridge fit. */
+function treeValidationStatus(validation: EffortModel["validation"]): "experimental" | "validated" {
+  const heads = validation.quantileModel;
+  return record(heads) && heads.status === "validated" ? "validated" : "experimental";
+}
+
 /** Reject the whole artifact: partial loading could silently change its learned equation. */
 export function validateEffortModel(value: unknown): LoadedEffortModel {
   const invalid = () => unavailable("The effort model is malformed or unsupported.");
@@ -595,7 +601,11 @@ export function quoteEffort(
           : "bau";
   return {
     status: "ready",
-    confidence: incomplete ? "experimental" : model.validation.status,
+    confidence: incomplete
+      ? "experimental"
+      : tree
+        ? treeValidationStatus(model.validation)
+        : model.validation.status,
     scope,
     tokenYieldBasis,
     workloadMetric,

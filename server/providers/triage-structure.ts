@@ -194,9 +194,13 @@ export function quoteStructure(
   const flags = extraction?.flags ?? requestStructure(text);
   const inferredFromRepo = extraction?.inferredFromRepo ?? false;
   const missing = FLAGS.filter(({ flag }) => !flags[flag]);
-  const driver = price.contributions
-    .filter((item) => item.logWork > 0)
-    .sort((a, b) => b.logWork - a.logWork)[0];
+  // Ridge contributions do not explain tree prices, so tree quotes name no driver.
+  const driver =
+    price.method === "boosted-trees-quantile-v1"
+      ? undefined
+      : price.contributions
+          .filter((item) => item.logWork > 0)
+          .sort((a, b) => b.logWork - a.logWork)[0];
   const costDriver = driver ? (DRIVER_LABELS[driver.feature] ?? null) : null;
   if (!price.total)
     return { flags, budget: null, counterfactual: null, costDriver, inferredFromRepo };
