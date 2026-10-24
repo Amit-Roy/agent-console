@@ -123,7 +123,7 @@ try {
   assert.deepEqual([...placed].sort(), [...ids].sort(), "every step is drawn");
   assert.deepEqual(
     FLOW.pipelines.map((p) => p.id),
-    ["pr", "windows", "monitor", "dream", "cve", "runtime", "scans", "deadman"],
+    ["pr", "windows", "monitor", "dream", "effort", "cve", "runtime", "scans", "deadman"],
   );
   const dream = FLOW.pipelines.find((p) => p.id === "dream")!;
   assert.equal(dream.group, "workflow");
