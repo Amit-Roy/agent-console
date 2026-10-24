@@ -294,10 +294,10 @@ export const FLOW: { nodes: FlowNode[]; edges: FlowEdge[]; pipelines: Pipeline[]
   pipelines: [
     {
       id: "pr",
-      label: "PR workflow",
+      label: "Window dispatch",
       group: "workflow",
       icon: "pr",
-      hint: "From a new issue to a merged pull request",
+      hint: "Dispatches issues through a quota window to a merged pull request",
       phases: [
         { label: "Issue to labels", steps: ["triage"] },
         {

@@ -322,10 +322,17 @@ try {
       .locator("[data-wf]")
       .evaluateAll((ns) => ns.map((n) => (n as HTMLElement).dataset.wf));
     ok(
-      "the left panel lists every workflow and the extra console view",
+      "the left panel lists every workflow",
       JSON.stringify(navIds) ===
-        JSON.stringify(["pr", "windows", "monitor", "cve", "runtime", "scans", "deadman", "other"]),
+        JSON.stringify(["pr", "windows", "monitor", "cve", "runtime", "scans", "deadman"]),
       JSON.stringify(navIds),
+    );
+    const pageText = await page.locator("body").innerText();
+    ok(
+      "scheduled prompts and the detached console view are gone",
+      !pageText.includes("Morning AI news digest") &&
+        !pageText.includes("Potential money making") &&
+        !pageText.includes("Other triggers"),
     );
     ok(
       "one workflow is open at a time",
@@ -347,9 +354,8 @@ try {
       ok(
         "phone workflow menu uses the console popover",
         (await page.locator('.menu[role="listbox"]').isVisible()) &&
-          (await page.locator(".menu [role=option]").count()) === 8 &&
-          (await page.locator(".menu .m-group").allInnerTexts()).join("|") ===
-            "Workflows|Security|Console",
+          (await page.locator(".menu [role=option]").count()) === 7 &&
+          (await page.locator(".menu .m-group").allInnerTexts()).join("|") === "Workflows|Security",
       );
       await page.keyboard.press("Escape");
     }
@@ -358,16 +364,16 @@ try {
         await page.click("#wf-select");
         await page.click(`.menu [data-value="${id}"]`);
       } else await page.click(`[data-wf="${id}"]`);
-      if (id !== "other") await page.waitForSelector(`[data-pipeline="${id}"] [data-step]`);
+      await page.waitForSelector(`[data-pipeline="${id}"] [data-step]`);
       ok(
         `${id}: only this workflow is drawn`,
         (await page.getAttribute(`[data-wf="${id}"]`, "aria-current")) === "page" &&
           (!usingPicker || (await page.getAttribute("#wf-select", "data-value")) === id) &&
-          (id === "other" || (await page.locator("[data-pipeline]").count()) === 1),
+          (await page.locator("[data-pipeline]").count()) === 1,
       );
     };
     ok(
-      "PR workflow: issue to labels, labels to PR, premium review and merge",
+      "Window dispatch: issue to labels, labels to PR, premium review and merge",
       JSON.stringify(await inPipe("pr")) ===
         JSON.stringify([
           "triage",
@@ -385,7 +391,7 @@ try {
       JSON.stringify(await inPipe("pr")),
     );
     ok(
-      "PR workflow phases are labelled",
+      "Window dispatch phases are labelled",
       (await page.locator('[data-pipeline="pr"] .phase h3').allInnerTexts())
         .map((t) => t.toLowerCase())
         .join("|") === "1. issue to labels|2. labels to pull request|3. premium review and merge",
@@ -443,11 +449,24 @@ try {
       ),
     );
     await openWf("windows");
+    const windowsText = await page.locator("#am").innerText();
+    ok("the window opener lists its own trigger", windowsText.includes("Window opener tick"));
     ok(
-      "the window opener lists its own trigger",
-      (await page.locator("#am").innerText()).includes("Window opener tick"),
+      "the window opener owns its opener settings",
+      windowsText.includes("Opener hours") &&
+        windowsText.includes("Opener providers") &&
+        !windowsText.includes("Issues per window"),
     );
     await openWf("pr");
+    const dispatchText = await page.locator("#am").innerText();
+    ok(
+      "window dispatch owns dispatcher settings and runs",
+      dispatchText.includes("Window dispatch") &&
+        dispatchText.includes("Issues per window") &&
+        dispatchText.includes("Repositories") &&
+        dispatchText.includes("Runs") &&
+        !dispatchText.includes("Opener hours"),
+    );
     const state = (s: string) => page.getAttribute(`[data-step="${s}"]`, "data-state");
     ok("worker is the active step", (await state("worker")) === "active");
     ok("review is active too", (await state("review")) === "active");
@@ -484,13 +503,6 @@ try {
     );
     await page.locator("#failures").scrollIntoViewIfNeeded();
     await page.screenshot({ path: `${OUT}/resolved-failures-${name}.png` });
-    await openWf("other");
-    await page.waitForSelector("#triggers");
-    ok(
-      "other triggers list what belongs to no workflow",
-      (await page.locator("#triggers").innerText()).includes("Debug button") &&
-        !(await page.locator("#triggers").innerText()).includes("GitHub webhook"),
-    );
     await openWf("pr");
     await page.waitForSelector("#hooks");
     ok(
@@ -621,5 +633,5 @@ try {
   fs.rmSync(data, { recursive: true, force: true });
 }
 console.log(
-  "PASS automation UI: Auto lane with grouped archived history and live archival, workflow panels (PR workflow phases, window opener) with active/failed steps, review/redo loop, step drawer logs, triggers, failures, hooks, live refresh, phone layout",
+  "PASS automation UI: Auto lane with grouped archived history and live archival, workflow panels (window dispatch phases, window opener) with active/failed steps, review/redo loop, step drawer logs, per-workflow settings and runs, failures, hooks, live refresh, phone layout",
 );
