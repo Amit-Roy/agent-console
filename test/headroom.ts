@@ -1,12 +1,17 @@
 // Offline startup regression: delay proxy health and verify no session can inherit the initial unhealthy state.
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import http from "node:http";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { diagnostic, ResourceGuard } from "../server/headroom-diagnostics.ts";
 
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "ac-headroom-"));
+const inheritedHeadroomCommand = process.env.AGENT_CONSOLE_HEADROOM_COMMAND;
+const inheritedHeadroomKompress = process.env.AGENT_CONSOLE_HEADROOM_KOMPRESS;
+delete process.env.AGENT_CONSOLE_HEADROOM_COMMAND;
+delete process.env.AGENT_CONSOLE_HEADROOM_KOMPRESS;
 const socket = net.createServer();
 await new Promise<void>((resolve) => socket.listen(0, "127.0.0.1", resolve));
 const port = (socket.address() as net.AddressInfo).port;
@@ -88,7 +93,14 @@ try {
     assert.equal(refreshed.reachable, false);
     assert.equal(refreshed.running, false, "Explicit repair invalidates unavailable proxy routing");
     assert.equal(headroom.url(), undefined);
-    globalThis.fetch = nativeFetch;
+    globalThis.fetch = ((input: RequestInfo | URL) =>
+      new Promise<Response>((resolve, reject) => {
+        const request = http.get(String(input), (response) => {
+          response.resume();
+          resolve(new Response(null, { status: response.statusCode ?? 500 }));
+        });
+        request.once("error", reject);
+      })) as typeof fetch;
     assert.equal((await headroom.probe(true)).reachable, true);
     assert.equal(
       headroom.url(),
@@ -180,4 +192,8 @@ try {
 } finally {
   await headroom.stop();
   fs.rmSync(scratch, { recursive: true, force: true });
+  if (inheritedHeadroomCommand === undefined) delete process.env.AGENT_CONSOLE_HEADROOM_COMMAND;
+  else process.env.AGENT_CONSOLE_HEADROOM_COMMAND = inheritedHeadroomCommand;
+  if (inheritedHeadroomKompress === undefined) delete process.env.AGENT_CONSOLE_HEADROOM_KOMPRESS;
+  else process.env.AGENT_CONSOLE_HEADROOM_KOMPRESS = inheritedHeadroomKompress;
 }
