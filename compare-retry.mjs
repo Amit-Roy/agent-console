@@ -31,4 +31,6 @@ const observed = {
   infrastructure: await scenario("429 rate limit exceeded"),
   exhausted: await scenario("TypeError: totals is undefined", 2),
 };
-console.log(JSON.stringify({ source, command: process.argv.join(" "), samplesPerScenario: 1, observed }, null, 2));
+if (process.argv.includes("--compact")) {
+  for (const [scenario, result] of Object.entries(observed)) console.log(`${scenario}: ${JSON.stringify(result)}`);
+} else console.log(JSON.stringify({ source, command: process.argv.join(" "), samplesPerScenario: 1, observed }, null, 2));
