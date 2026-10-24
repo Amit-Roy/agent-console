@@ -52,6 +52,7 @@ import { BenchmarkError, benchmarkUsage, createBenchmarks } from "./benchmarks.t
 import { createBootTiming } from "./boot-timing.ts";
 import { BrainGraph, BrainGraphError } from "./brain-graph.ts";
 import { cancelClaudeLogin, finishClaudeLogin, startClaudeLogin } from "./claude-login.ts";
+import { CliSearch } from "./cli-search.ts";
 import { contextAllocation } from "./context-allocation.ts";
 import { createDoctor } from "./doctor.ts";
 import { threadToMarkdown } from "./export.ts";
@@ -75,7 +76,6 @@ import { providerInfo, refreshPiModels } from "./providers/index.ts";
 import { effortModelPath } from "./providers/triage-effort.ts";
 import { describe, Schedules } from "./schedules.ts";
 import { mountSecurity } from "./security.ts";
-import { CliSearch } from "./cli-search.ts";
 import { SessionSearch } from "./session-search.ts";
 import { isSandboxedShareProvider, sharePrompt, shareTitle } from "./share/prompt.ts";
 import { resolveShare } from "./share/registry.ts";
