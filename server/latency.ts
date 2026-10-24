@@ -27,6 +27,56 @@ const duration = (n: unknown) =>
 const size = (n: unknown, max: number) =>
   typeof n === "number" && Number.isInteger(n) && n >= 0 && n <= max;
 
+function validLatencyShape(sample: any) {
+  if (!size(sample.width, 16384) || !sample.width || !size(sample.height, 16384) || !sample.height)
+    return false;
+  if (STAGES.some((stage) => sample[stage] != null && !duration(sample[stage]))) return false;
+  if (sample.events != null && !size(sample.events, 100_000)) return false;
+  return !["bytes", "wire_bytes"].some(
+    (field) => sample[field] != null && !size(sample[field], 64 * 1024 * 1024),
+  );
+}
+
+function latencyRow(
+  sample: any,
+  thread: (id: string) => { provider: string } | undefined,
+  now: number,
+): any[] | undefined {
+  if (
+    !sample ||
+    !KINDS.has(sample.kind) ||
+    typeof sample.thread !== "string" ||
+    !duration(sample.total_ms)
+  )
+    return undefined;
+  const owner =
+    sample.thread === "viewer:repos" && sample.kind.startsWith("viewer_")
+      ? { provider: "workspace" }
+      : thread(sample.thread);
+  if (!owner || !validLatencyShape(sample)) return undefined;
+  return [
+    now,
+    sample.thread,
+    owner.provider,
+    sample.kind,
+    sample.total_ms,
+    sample.server_ms ?? null,
+    sample.render_ms ?? null,
+    sample.wait_ms ?? null,
+    sample.events ?? null,
+    sample.bytes ?? null,
+    sample.wire_bytes ?? null,
+    sample.prepare_ms ?? null,
+    sample.roundtrip_ms ?? null,
+    sample.decode_ms ?? null,
+    sample.module_ms ?? null,
+    sample.width,
+    sample.height,
+    sample.touch === true ? 1 : 0,
+    sample.hidden === true ? 1 : 0,
+  ];
+}
+
 export const RETENTION_DAYS = 7;
 const DAY_MS = 86_400_000;
 
@@ -63,41 +113,9 @@ export class LatencyStore {
   ) {
     if (!Array.isArray(samples) || samples.length > 20) return 0;
     const rows: any[][] = [];
-    for (const s of samples) {
-      if (!s || !KINDS.has(s.kind) || typeof s.thread !== "string" || !duration(s.total_ms))
-        continue;
-      const t =
-        s.thread === "viewer:repos" && s.kind.startsWith("viewer_")
-          ? { provider: "workspace" }
-          : thread(s.thread);
-      if (!t || !size(s.width, 16384) || !s.width || !size(s.height, 16384) || !s.height) continue;
-      if (STAGES.some((k) => s[k] != null && !duration(s[k]))) continue;
-      if (
-        (s.events != null && !size(s.events, 100_000)) ||
-        ["bytes", "wire_bytes"].some((k) => s[k] != null && !size(s[k], 64 * 1024 * 1024))
-      )
-        continue;
-      rows.push([
-        now,
-        s.thread,
-        t.provider,
-        s.kind,
-        s.total_ms,
-        s.server_ms ?? null,
-        s.render_ms ?? null,
-        s.wait_ms ?? null,
-        s.events ?? null,
-        s.bytes ?? null,
-        s.wire_bytes ?? null,
-        s.prepare_ms ?? null,
-        s.roundtrip_ms ?? null,
-        s.decode_ms ?? null,
-        s.module_ms ?? null,
-        s.width,
-        s.height,
-        s.touch === true ? 1 : 0,
-        s.hidden === true ? 1 : 0,
-      ]);
+    for (const sample of samples) {
+      const row = latencyRow(sample, thread, now);
+      if (row) rows.push(row);
     }
     if (!rows.length) return 0;
     const insert = this.db.prepare(
