@@ -107,8 +107,10 @@ try {
     await page.goto(`${base}/automation#cve`);
     await page.waitForSelector("#sec-rows .sec-row");
     const openWf = async (id: string) => {
-      if (name.startsWith("phone")) await page.selectOption("#wf-select", id);
-      else await page.click(`[data-wf="${id}"]`);
+      if (name.startsWith("phone")) {
+        await page.click("#wf-select");
+        await page.click(`.menu [data-value="${id}"]`);
+      } else await page.click(`[data-wf="${id}"]`);
     };
     const rows = page.locator("#sec-rows .sec-row");
     check(`${name}: CVE workflow lists its real units`, (await rows.count()) === 6);

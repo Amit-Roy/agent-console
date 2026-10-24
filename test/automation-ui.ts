@@ -342,14 +342,27 @@ try {
         : (await page.locator("#wf-nav").isVisible()) &&
             !(await page.locator("#wf-select").isVisible()),
     );
+    if (usingPicker) {
+      await page.click("#wf-select");
+      ok(
+        "phone workflow menu uses the console popover",
+        (await page.locator('.menu[role="listbox"]').isVisible()) &&
+          (await page.locator(".menu [role=option]").count()) === 8 &&
+          (await page.locator(".menu .m-group").allInnerTexts()).join("|") ===
+            "Workflows|Security|Console",
+      );
+      await page.keyboard.press("Escape");
+    }
     const openWf = async (id: string) => {
-      if (usingPicker) await page.selectOption("#wf-select", id);
-      else await page.click(`[data-wf="${id}"]`);
+      if (usingPicker) {
+        await page.click("#wf-select");
+        await page.click(`.menu [data-value="${id}"]`);
+      } else await page.click(`[data-wf="${id}"]`);
       if (id !== "other") await page.waitForSelector(`[data-pipeline="${id}"] [data-step]`);
       ok(
         `${id}: only this workflow is drawn`,
         (await page.getAttribute(`[data-wf="${id}"]`, "aria-current")) === "page" &&
-          (!usingPicker || (await page.inputValue("#wf-select")) === id) &&
+          (!usingPicker || (await page.getAttribute("#wf-select", "data-value")) === id) &&
           (id === "other" || (await page.locator("[data-pipeline]").count()) === 1),
       );
     };

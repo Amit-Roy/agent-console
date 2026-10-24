@@ -1,8 +1,24 @@
-// Accessible popover menu button, replacing native <select> (listbox, value picker) and serving as an actions menu (menu).
-//   const m = createMenu({ trigger, items:[{value,label,desc?,icon?,tone?,disabled?,keep?,checked?,children?}], value, onSelect, onOpen?, onClose?, kind:"listbox"|"menu", side:"top"|"bottom", align:"start"|"end" })
+// Accessible popover menu button for value pickers (listbox) and actions (menu).
+//   const m = createMenu({ trigger, items:[{value,label,desc?,group?,icon?,tone?,disabled?,keep?,checked?,children?}], value, onSelect, onOpen?, onClose?, kind:"listbox"|"menu", side:"top"|"bottom", align:"start"|"end" })
 // Keyboard: trigger opens with Enter / Space / ArrowDown / ArrowUp. In the popover: ArrowUp/Down, Home/End, typeahead, Enter/Space select,
 // Right opens a submenu; Left, Back, or Esc returns to its parent. Esc at the root returns focus to the trigger; Tab closes. Click or tap outside closes. Items are >=44px on coarse pointers (see .menu in style.css).
-import { el, icon } from "/render.js";
+// Local DOM helpers keep this module independent of render.js and its markdown/highlight vendors.
+const SVG = "http://www.w3.org/2000/svg";
+const el = (tag, cls, text) => {
+  const node = document.createElement(tag);
+  if (cls) node.className = cls;
+  if (text != null) node.textContent = text;
+  return node;
+};
+const icon = (name, cls = "") => {
+  const svg = document.createElementNS(SVG, "svg");
+  svg.setAttribute("class", cls ? `ico ${cls}` : "ico");
+  svg.setAttribute("aria-hidden", "true");
+  const use = document.createElementNS(SVG, "use");
+  use.setAttribute("href", `#i-${name}`);
+  svg.append(use);
+  return svg;
+};
 
 let uid = 0;
 const openMenus = new Set();
@@ -30,6 +46,7 @@ export function createMenu(opts) {
   let typedAt = 0;
   let parents = [];
   let rootItems = items;
+  let openedAt = 0;
 
   trigger.setAttribute("aria-haspopup", o.kind === "menu" ? "menu" : "listbox");
   trigger.setAttribute("aria-expanded", "false");
@@ -50,7 +67,7 @@ export function createMenu(opts) {
     pop.querySelectorAll("[data-active]").forEach((n) => {
       n.removeAttribute("data-active");
     });
-    const node = pop.children[i + (pop.firstChild?.classList.contains("m-head") ? 1 : 0)];
+    const node = pop.querySelector(`[id="${id}-${i}"]`);
     if (!node) return pop.removeAttribute("aria-activedescendant");
     node.setAttribute("data-active", "");
     pop.setAttribute("aria-activedescendant", node.id);
@@ -115,9 +132,17 @@ export function createMenu(opts) {
     );
     const head = !nested && (typeof o.header === "function" ? o.header() : o.header); // read-only context line, e.g. a thread's full title
     if (head) pop.append(el("div", "m-head", head));
+    let group = "";
     items.forEach((it, i) => {
+      if (it.group && it.group !== group) {
+        group = it.group;
+        const heading = el("div", "m-group", group);
+        heading.setAttribute("aria-hidden", "true");
+        pop.append(heading);
+      }
       const n = el("div");
       n.id = `${id}-${i}`;
+      n.dataset.value = String(it.value);
       n.setAttribute("role", itemRole);
       if (o.kind === "listbox")
         n.setAttribute("aria-selected", String(it.keep ? !!it.checked : it.value === value));
@@ -140,6 +165,7 @@ export function createMenu(opts) {
     trigger.setAttribute("aria-expanded", "true");
     trigger.setAttribute("aria-controls", id);
     place();
+    openedAt = performance.now();
     const sel = items.findIndex((it) => it.value === value && !it.disabled);
     const first = items.findIndex((_, i) => enabled(i));
     const last =
@@ -261,6 +287,8 @@ export function createMenu(opts) {
   }
   // only scrolling that moves the trigger dismisses the menu (the chat scrolling while history loads must not)
   function onScroll(e) {
+    // Ignore the scroll that brings the trigger into view just before a tap opens this menu.
+    if (performance.now() - openedAt < 150) return;
     if (pop && !pop.contains(e.target) && (e.target === document || e.target.contains?.(trigger)))
       close(false);
   }
