@@ -81,7 +81,8 @@ function checkItems(items, where, ids, errors) {
     errors.push(`${where}: items must be a non-empty list`);
     return;
   }
-  for (const [index, item] of items.entries()) checkItem(item, `${where} item ${index + 1}`, ids, errors);
+  for (const [index, item] of items.entries())
+    checkItem(item, `${where} item ${index + 1}`, ids, errors);
 }
 
 function checkItem(item, where, ids, errors) {
@@ -278,7 +279,13 @@ function buildHeading(spec) {
   const heading = document.createElement("h1");
   heading.textContent = spec.title;
   const parts = [heading];
-  if (spec.subtitle) parts.push(Object.assign(document.createElement("p"), { className: "subtitle", textContent: spec.subtitle }));
+  if (spec.subtitle)
+    parts.push(
+      Object.assign(document.createElement("p"), {
+        className: "subtitle",
+        textContent: spec.subtitle,
+      }),
+    );
   if (spec.note) parts.push(span("note", spec.note));
   return parts;
 }
@@ -338,7 +345,8 @@ function settle(requestId, outcome) {
 function dropWorker(reason) {
   routeWorker?.terminate();
   routeWorker = null;
-  for (const requestId of [...pending.keys()]) settle(requestId, (entry) => entry.reject(new Error(reason)));
+  for (const requestId of [...pending.keys()])
+    settle(requestId, (entry) => entry.reject(new Error(reason)));
 }
 
 function getWorker() {
@@ -382,7 +390,10 @@ function hashText(text) {
 }
 
 function routeKey(layout, edges, size) {
-  const round = (box) => [box.id, box.l, box.t, box.r, box.b].map((value) => (typeof value === "number" ? Math.round(value) : value));
+  const round = (box) =>
+    [box.id, box.l, box.t, box.r, box.b].map((value) =>
+      typeof value === "number" ? Math.round(value) : value,
+    );
   const rects = [...layout.boxes.values()].map(round);
   const headers = layout.headers.map((box) => [box.l, box.t, box.r, box.b].map(Math.round));
   return hashText(JSON.stringify([edges, rects, headers, size]));
@@ -427,7 +438,11 @@ function measureCanvas(canvas) {
   const boxes = new Map();
   for (const element of canvas.querySelectorAll("[data-id]")) {
     const group = element.classList.contains("group");
-    boxes.set(element.dataset.id, { id: element.dataset.id, group, ...relativeRect(element, origin) });
+    boxes.set(element.dataset.id, {
+      id: element.dataset.id,
+      group,
+      ...relativeRect(element, origin),
+    });
   }
   const headers = [];
   for (const header of canvas.querySelectorAll(".group > header")) {
@@ -506,7 +521,10 @@ function edgeChip(edge) {
 
 const CHIP_PAD = 3;
 const overlaps = (first, second) =>
-  first.l < second.r + CHIP_PAD && first.r > second.l - CHIP_PAD && first.t < second.b + CHIP_PAD && first.b > second.t - CHIP_PAD;
+  first.l < second.r + CHIP_PAD &&
+  first.r > second.l - CHIP_PAD &&
+  first.t < second.b + CHIP_PAD &&
+  first.b > second.t - CHIP_PAD;
 
 function longestSegment(points) {
   let best = [points[0], points[1]];
@@ -522,7 +540,10 @@ function longestSegment(points) {
 // Chip centres to try: the path midpoint, then ±25% and ±50% from the centre of the longest segment.
 function chipSpots(points, midpoint) {
   const [start, end] = longestSegment(points);
-  const along = (share) => [start[0] + (end[0] - start[0]) * share, start[1] + (end[1] - start[1]) * share];
+  const along = (share) => [
+    start[0] + (end[0] - start[0]) * share,
+    start[1] + (end[1] - start[1]) * share,
+  ];
   return [midpoint, along(0.75), along(0.25), along(1), along(0)];
 }
 
@@ -530,8 +551,15 @@ function chipSpots(points, midpoint) {
 function placeChip(chip, spots, obstacles) {
   const halfWidth = chip.offsetWidth / 2;
   const halfHeight = chip.offsetHeight / 2;
-  const boxAt = ([left, top]) => ({ l: left - halfWidth, r: left + halfWidth, t: top - halfHeight, b: top + halfHeight });
-  const spot = spots.find((candidate) => !obstacles.some((other) => overlaps(boxAt(candidate), other))) || spots[0];
+  const boxAt = ([left, top]) => ({
+    l: left - halfWidth,
+    r: left + halfWidth,
+    t: top - halfHeight,
+    b: top + halfHeight,
+  });
+  const spot =
+    spots.find((candidate) => !obstacles.some((other) => overlaps(boxAt(candidate), other))) ||
+    spots[0];
   chip.style.left = `${spot[0]}px`;
   chip.style.top = `${spot[1]}px`;
   obstacles.push(boxAt(spot));
@@ -539,7 +567,8 @@ function placeChip(chip, spots, obstacles) {
 
 let overlayCount = 0;
 function drawOverlay(canvas, edges, { routes, labels }, layout) {
-  for (const old of canvas.querySelectorAll(":scope > svg.wires, :scope > .edge-label")) old.remove();
+  for (const old of canvas.querySelectorAll(":scope > svg.wires, :scope > .edge-label"))
+    old.remove();
   const prefix = `arch-arrow-${++overlayCount}`;
   const svg = svgElement("svg", { class: "wires", "aria-hidden": "true" });
   svg.append(arrowMarkers(prefix));
@@ -548,7 +577,8 @@ function drawOverlay(canvas, edges, { routes, labels }, layout) {
     if (points.length < 2) continue;
     const edge = edges[index];
     svg.append(wirePath(edge, points, prefix));
-    if (edge.label || edge.step) chips.push({ chip: edgeChip(edge), spots: chipSpots(points, labels[index]) });
+    if (edge.label || edge.step)
+      chips.push({ chip: edgeChip(edge), spots: chipSpots(points, labels[index]) });
   }
   canvas.append(svg, ...chips.map((item) => item.chip));
   const obstacles = [...layout.boxes.values()].filter((box) => !box.group);
@@ -558,7 +588,9 @@ function drawOverlay(canvas, edges, { routes, labels }, layout) {
 // ---------- routing lifecycle ----------
 const canvasSize = (canvas) => `${canvas.offsetWidth}x${canvas.offsetHeight}`;
 const laidOut = (canvas) =>
-  canvas.isConnected && typeof canvas.getBoundingClientRect === "function" && canvas.offsetWidth > 0;
+  canvas.isConnected &&
+  typeof canvas.getBoundingClientRect === "function" &&
+  canvas.offsetWidth > 0;
 
 async function routeNow(container) {
   const canvas = container.__archCanvas;

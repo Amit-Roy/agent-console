@@ -57,7 +57,8 @@ const NORMAL = { t: [0, -1, 1], b: [0, 1, 2], l: [-1, 0, 4], r: [1, 0, 8] };
 const STUB = 20;
 
 function sidePoint(box, side, offset) {
-  if (side === "l" || side === "r") return [side === "l" ? box.l : box.r, box.t + offset * (box.b - box.t)];
+  if (side === "l" || side === "r")
+    return [side === "l" ? box.l : box.r, box.t + offset * (box.b - box.t)];
   return [box.l + offset * (box.r - box.l), side === "t" ? box.t : box.b];
 }
 
@@ -104,13 +105,17 @@ function connEnd(ctx, box, side, offset) {
   if (!shape) {
     const [pointX, pointY] = sidePoint(box, side, offset);
     const [normalX, normalY] = NORMAL[side];
-    return ctx.track(new Avoid.ConnEnd(ctx.point(pointX + normalX * STUB, pointY + normalY * STUB)));
+    return ctx.track(
+      new Avoid.ConnEnd(ctx.point(pointX + normalX * STUB, pointY + normalY * STUB)),
+    );
   }
   const key = `${box.id}:${side}:${offset.toFixed(4)}`;
   if (!ctx.pins.has(key)) {
     const pin = ctx.nextPin++;
     const [pinX, pinY] = pinPosition(side, offset);
-    new Avoid.ShapeConnectionPin(shape, pin, pinX, pinY, true, 0, NORMAL[side][2]).setExclusive(false);
+    new Avoid.ShapeConnectionPin(shape, pin, pinX, pinY, true, 0, NORMAL[side][2]).setExclusive(
+      false,
+    );
     ctx.pins.set(key, pin);
   }
   return ctx.track(new Avoid.ConnEnd(shape, ctx.pins.get(key)));
@@ -180,7 +185,9 @@ function routeEdges(Avoid, layout, edges) {
 
 // Point halfway along the polyline.
 function midpoint(points) {
-  const lengths = points.slice(1).map((point, index) => Math.hypot(point[0] - points[index][0], point[1] - points[index][1]));
+  const lengths = points
+    .slice(1)
+    .map((point, index) => Math.hypot(point[0] - points[index][0], point[1] - points[index][1]));
   let remaining = lengths.reduce((sum, length) => sum + length, 0) / 2;
   for (const [index, length] of lengths.entries()) {
     if (remaining <= length && length > 0) {

@@ -20,7 +20,10 @@ assert.match(validateArch(dangling).join("\n"), /to must reference a node or gro
 
 const badValues = {
   title: "t",
-  items: [{ id: "a", label: "A", color: "red", status: "weird" }, { id: "a", label: "B" }],
+  items: [
+    { id: "a", label: "A", color: "red", status: "weird" },
+    { id: "a", label: "B" },
+  ],
 };
 const badText = validateArch(badValues).join("\n");
 assert.match(badText, /color must be one of/);
@@ -29,7 +32,9 @@ assert.match(badText, /duplicate id a/);
 assert.deepEqual(validateArch(null), ["spec must be a JSON object"]);
 
 // DOM build in linkedom: every node gets data-id, edges are kept for the router.
-const { document, window } = parseHTML("<!doctype html><html><head></head><body><div id=c></div></body></html>");
+const { document, window } = parseHTML(
+  "<!doctype html><html><head></head><body><div id=c></div></body></html>",
+);
 Object.assign(globalThis, { document, window });
 setArchIcons({ bot: '<circle cx="12" cy="12" r="3"/>' });
 const box = document.getElementById("c");
