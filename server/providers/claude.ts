@@ -88,6 +88,8 @@ const AUTO_ALLOWED_TOOLS = [
   "mcp__agent_console__session_read",
   "mcp__agent_console__pi_research",
   "mcp__agent_console__cli_search",
+  "mcp__agent_console__thread_list",
+  "mcp__agent_console__thread_send",
 ];
 
 function respondControl(ctx: ControlContext, requestId: string, response: object) {
@@ -135,7 +137,7 @@ function handleControlRequest(ctx: ControlContext, event: any) {
     });
     return;
   }
-  // Session history tools are read-only and authenticated by the Console bridge.
+  // Console tools are authenticated by the bridge; thread sends also require a live root tool call.
   // Allow only these exact names in Plan/acceptEdits; all other permission prompts retain their policy.
   const redactionAction = req.input?.action ?? "scan";
   const redactionAllowed =
