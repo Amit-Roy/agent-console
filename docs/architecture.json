@@ -1,110 +1,123 @@
 {
- "title": "Session-search deletes",
- "subtitle": "Deleting FTS rows without scanning the index",
- "items": [
-  {
-   "group": "Session logs",
-   "border": "solid",
-   "icon": "folder",
-   "items": [
+  "title": "Transcript read path",
+  "subtitle": "Turn end, retitle and export read logs without blocking the event loop",
+  "items": [
     {
-     "id": "logs",
-     "label": "Session logs",
-     "tech": "JSONL per thread",
-     "desc": "Appended by providers",
-     "icon": "file-text"
-    }
-   ]
-  },
-  {
-   "group": "Node server",
-   "sub": "background pass every 60 s",
-   "border": "dashed",
-   "icon": "server",
-   "items": [
-    {
-     "id": "pass",
-     "label": "Index pass",
-     "tech": "server/session-search.ts",
-     "desc": "Deletes FTS rows by rowid via deleteFts",
-     "icon": "refresh-cw"
-    }
-   ]
-  },
-  {
-   "group": "session-search.sqlite",
-   "sub": "432 MB",
-   "border": "solid",
-   "icon": "database",
-   "items": [
-    {
-     "id": "fts",
-     "label": "session_fts",
-     "tech": "FTS5, UNINDEXED thread/line",
-     "desc": "Full-text index of session text",
-     "icon": "search"
+      "group": "Storage",
+      "sub": "thread data dir",
+      "border": "solid",
+      "icon": "database",
+      "items": [
+        {
+          "id": "logs",
+          "label": "Thread JSONL logs",
+          "tech": "up to 57 MB",
+          "desc": "Append-only transcripts",
+          "icon": "file-json"
+        }
+      ]
     },
     {
-     "id": "events",
-     "label": "events",
-     "tech": "SQLite table",
-     "desc": "Event rows by thread and line",
-     "icon": "table"
+      "group": "Readers",
+      "sub": "server/threads.ts",
+      "border": "solid",
+      "icon": "server",
+      "items": [
+        {
+          "id": "history",
+          "label": "threads.history",
+          "tech": "server/threads.ts",
+          "desc": "Sync full read and parse of the transcript",
+          "icon": "history"
+        },
+        {
+          "id": "historyTail",
+          "label": "threads.historyTail",
+          "tech": "256 KB async chunks, backwards",
+          "desc": "Reads only the log tail",
+          "icon": "file-clock"
+        },
+        {
+          "id": "historyAsync",
+          "label": "readLines / historyAsync",
+          "tech": "async line stream",
+          "desc": "Streams the log without blocking",
+          "icon": "workflow"
+        }
+      ]
     },
     {
-     "id": "map",
-     "label": "fts_map",
-     "tech": "WITHOUT ROWID, user_version 3",
-     "desc": "thread, line to FTS rowid; backfilled by mapBatch",
-     "icon": "key-round"
+      "group": "Consumers",
+      "sub": "server/schedules.ts and routes",
+      "border": "solid",
+      "icon": "workflow",
+      "items": [
+        {
+          "id": "turnEnded",
+          "label": "schedules.turnEnded",
+          "tech": "historyTail, ending set",
+          "desc": "Run stays running until read; re-entry blocked",
+          "icon": "timer"
+        },
+        {
+          "id": "userTexts",
+          "label": "Retitle userTexts",
+          "tech": "readLines",
+          "desc": "Async stream, no full parse",
+          "icon": "type"
+        },
+        {
+          "id": "export",
+          "label": "GET /export/:thread",
+          "tech": "historyAsync",
+          "desc": "Async stream, output unchanged",
+          "icon": "download"
+        },
+        {
+          "id": "compose",
+          "label": "composePrompt",
+          "tech": "threads.history (sync)",
+          "desc": "Still reads synchronously",
+          "icon": "message-square-text"
+        }
+      ]
     }
-   ]
-  },
-  {
-   "group": "Search API",
-   "border": "solid",
-   "icon": "search-code",
-   "items": [
+  ],
+  "edges": [
     {
-     "id": "api",
-     "label": "Search API",
-     "tech": "session_search",
-     "desc": "Queries index and events",
-     "icon": "search-code"
+      "from": "logs",
+      "to": "history",
+      "label": "full read"
+    },
+    {
+      "from": "logs",
+      "to": "historyTail",
+      "label": "tail chunks"
+    },
+    {
+      "from": "logs",
+      "to": "historyAsync",
+      "label": "line stream"
+    },
+    {
+      "from": "historyTail",
+      "to": "turnEnded",
+      "label": "last events"
+    },
+    {
+      "from": "historyAsync",
+      "to": "userTexts",
+      "label": "user lines"
+    },
+    {
+      "from": "historyAsync",
+      "to": "export",
+      "label": "all lines"
+    },
+    {
+      "from": "history",
+      "to": "compose",
+      "label": "sync read"
     }
-   ]
-  }
- ],
- "edges": [
-  {
-   "from": "logs",
-   "to": "pass",
-   "label": "new lines"
-  },
-  {
-   "from": "pass",
-   "to": "fts",
-   "label": "insert and delete"
-  },
-  {
-   "from": "pass",
-   "to": "events",
-   "label": "upsert and delete"
-  },
-  {
-   "from": "pass",
-   "to": "map",
-   "label": "rowid lookup"
-  },
-  {
-   "from": "fts",
-   "to": "api",
-   "label": "MATCH queries"
-  },
-  {
-   "from": "events",
-   "to": "api",
-   "label": "read context"
-  }
- ]
+  ]
 }
