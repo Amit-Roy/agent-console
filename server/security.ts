@@ -85,6 +85,55 @@ export function resetSecurityCache() {
   latestPending = null;
 }
 
+function failureStatus(error: unknown): number {
+  if (error instanceof SshError || error instanceof RemoteError) return 502;
+  return error instanceof NotFound ? 404 : 500;
+}
+
+function failureMessage(error: unknown): string {
+  if (error instanceof SshError || error instanceof RemoteError) return error.message;
+  return error instanceof NotFound ? "No such scan." : "Security scan data is unavailable.";
+}
+
+function guardRoute(handler: (req: express.Request) => Promise<any>): express.RequestHandler {
+  return async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    try {
+      res.json(await handler(req));
+    } catch (error: any) {
+      res.status(failureStatus(error)).json({ error: failureMessage(error) });
+    }
+  };
+}
+
+const scanHandler: express.RequestHandler = async (req, res, next) => {
+  if (!ID.test(req.params.id)) return void res.status(400).json({ error: "Invalid scan id." });
+  return guardRoute(async () => {
+    const result = await remote(`get ${req.params.id}`);
+    if (!result || !result.id) throw new NotFound("not found");
+    return result;
+  })(req, res, next);
+};
+
+const scanLogHandler: express.RequestHandler = async (req, res, next) => {
+  const after = req.query.after === undefined ? "0" : String(req.query.after);
+  if (!SCAN_ID.test(req.params.id) || !/^[0-9]{1,9}$/.test(after))
+    return void res.status(400).json({ error: "Invalid scan id or position." });
+  return guardRoute(async () => {
+    const result = await remote(`log ${req.params.id} ${Number(after)}`);
+    if (!result || result.error || !Array.isArray(result.lines)) throw new NotFound("not found");
+    return result;
+  })(req, res, next);
+};
+
+const scanModeHandler: express.RequestHandler = (req, res, next) => {
+  const mode = req.query.mode === undefined ? "full" : req.query.mode;
+  if (typeof mode !== "string" || !MODES.has(mode))
+    return void res.status(400).json({ error: "Invalid scan mode." });
+  res.locals.mode = mode;
+  next();
+};
+
 export function mountSecurity(
   app: express.Express,
   sameOrigin: express.RequestHandler,
@@ -95,34 +144,9 @@ export function mountSecurity(
   }),
   crashes: SecCrashes = createSecCrashes({ fetch: () => remote("crashes", statusKeyFile()) }),
 ) {
-  const guard =
-    (fn: (req: express.Request) => Promise<any>): express.RequestHandler =>
-    async (req, res) => {
-      res.set("Cache-Control", "no-store");
-      try {
-        res.json(await fn(req));
-      } catch (e: any) {
-        res
-          .status(
-            e instanceof SshError || e instanceof RemoteError
-              ? 502
-              : e instanceof NotFound
-                ? 404
-                : 500,
-          )
-          .json({
-            error:
-              e instanceof SshError || e instanceof RemoteError
-                ? e.message
-                : e instanceof NotFound
-                  ? "No such scan."
-                  : "Security scan data is unavailable.",
-          });
-      }
-    };
   app.get(
     "/api/security/latest",
-    guard(async () => {
+    guardRoute(async () => {
       const result = await latest();
       return {
         result: result && result.id ? result : null,
@@ -132,41 +156,19 @@ export function mountSecurity(
   );
   app.get(
     "/api/security/history",
-    guard(async () => ({ scans: await remote("history") })),
+    guardRoute(async () => ({ scans: await remote("history") })),
   );
   app.get(
     "/api/security/status",
-    guard(() => remote("status")),
+    guardRoute(() => remote("status")),
   );
-  app.get("/api/security/scans/:id", async (req, res, next) => {
-    if (!ID.test(req.params.id)) return void res.status(400).json({ error: "Invalid scan id." });
-    return guard(async () => {
-      const result = await remote(`get ${req.params.id}`);
-      if (!result || !result.id) throw new NotFound("not found");
-      return result;
-    })(req, res, next);
-  });
-  app.get("/api/security/scans/:id/log", async (req, res, next) => {
-    const after = req.query.after === undefined ? "0" : String(req.query.after);
-    if (!SCAN_ID.test(req.params.id) || !/^[0-9]{1,9}$/.test(after))
-      return void res.status(400).json({ error: "Invalid scan id or position." });
-    return guard(async () => {
-      const result = await remote(`log ${req.params.id} ${Number(after)}`);
-      if (!result || result.error || !Array.isArray(result.lines)) throw new NotFound("not found");
-      return result;
-    })(req, res, next);
-  });
+  app.get("/api/security/scans/:id", scanHandler);
+  app.get("/api/security/scans/:id/log", scanLogHandler);
   app.post(
     "/api/security/run",
     sameOrigin,
-    (req, res, next) => {
-      const mode = req.query.mode === undefined ? "full" : req.query.mode;
-      if (typeof mode !== "string" || !MODES.has(mode))
-        return void res.status(400).json({ error: "Invalid scan mode." });
-      res.locals.mode = mode;
-      next();
-    },
-    guard(async (req) => {
+    scanModeHandler,
+    guardRoute(async (req) => {
       const out = await remote(`run ${req.res?.locals.mode}`);
       resetSecurityCache();
       automations.invalidate();
@@ -176,12 +178,12 @@ export function mountSecurity(
   // Every security automation (VPS timers, OpenCVE, the patch bridge) with schedule, last and next run, colour. Cached 60 s.
   app.get(
     "/api/security/automations",
-    guard(() => automations.view()),
+    guardRoute(() => automations.view()),
   );
   // Process crashes of the last 24 h, re-validated and redacted again here. Cached 10 s, one shared request.
   app.get(
     "/api/security/crashes",
-    guard(() =>
+    guardRoute(() =>
       crashes.view().catch((e: Error) => {
         throw new SshError(e.message); // the parser's messages are fixed or sanitised, so they are safe to show
       }),
@@ -190,12 +192,12 @@ export function mountSecurity(
   // Tool-watch: fixed tool versions and unsanctioned changes from the VPS. Untrusted advisory text never leaves the server.
   app.get(
     "/api/security/tools",
-    guard(() => tools.publicView()),
+    guardRoute(() => tools.publicView()),
   );
   app.post(
     "/api/security/tools/run",
     sameOrigin,
-    guard(async () => {
+    guardRoute(async () => {
       const out = await tools.run();
       void tools.tick().catch(() => {});
       automations.invalidate();
