@@ -76,6 +76,7 @@ import { type IssueRun, ROUTES } from "./window-dispatch.ts";
 export type { Command, Mode };
 
 export interface Thread {
+  workState?: { version: 1; foreground: string[]; background: string[]; backgroundCount: number };
   id: string;
   provider: string;
   title: string;
@@ -524,6 +525,9 @@ const QUOTA_ERROR =
   /\b429\b|rate.?limit|too many requests|usage.?limit|quota|hit your (?:\w+ )?limit|limit reached|reached (?:your|the) (?:\w+[- ])?limit/i;
 
 interface Live {
+  foreground?: Set<string>;
+  backgroundTools?: Set<string>;
+  taskTools?: Map<string, string>;
   agent: Agent;
   aborted: boolean;
   proxyUrl?: string;
@@ -540,6 +544,14 @@ interface Live {
   exitReason?: string;
   model?: string; // resolved model id the process announced
   wakes?: string[]; // subagent results waiting for the agent to be free (harnesses that do not wake themselves)
+}
+
+interface WorkUpdate {
+  thread: Thread;
+  event: any;
+  foreground: Set<string>;
+  background: Set<string>;
+  tasks: Map<string, string>;
 }
 
 // One event on its way through onEvent: steps may replace the event, and a failed result leaves its error for the issue-run hook
@@ -748,7 +760,10 @@ export class Threads {
   private loadThreads() {
     try {
       for (const saved of JSON.parse(fs.readFileSync(THREADS_FILE, "utf8")) as Thread[])
-        if (reviveThread(saved)) this.threads.set(saved.id, saved);
+        if (reviveThread(saved)) {
+          saved.workState = { version: 1, foreground: [], background: [], backgroundCount: 0 };
+          this.threads.set(saved.id, saved);
+        }
     } catch {}
   }
 
@@ -971,9 +986,17 @@ export class Threads {
     if (pending.length) this.updateWaiting(id);
   }
   private persist() {
-    fs.writeFileSync(THREADS_FILE, JSON.stringify([...this.threads.values()], null, 1), {
-      mode: 0o600,
-    });
+    fs.writeFileSync(
+      THREADS_FILE,
+      JSON.stringify(
+        [...this.threads.values()].map(({ workState: _workState, ...thread }) => thread),
+        null,
+        1,
+      ),
+      {
+        mode: 0o600,
+      },
+    );
   }
   private touch(t: Thread) {
     t.updatedAt = Date.now();
@@ -1287,6 +1310,7 @@ export class Threads {
       start,
       events: items.map((item) => item.e),
       questions: this.questions.list(threadId),
+      workState: this.workState(threadId),
       ...(delta ? { delta: true } : {}),
       server_ms: Math.round((performance.now() - at) * 10) / 10,
     };
@@ -1413,6 +1437,7 @@ export class Threads {
     if (current) {
       this.threadToolAuth.clear(thread.id);
       this.live.delete(thread.id);
+      this.emitWorkState(thread);
     }
     if (live.rewarm) {
       live.rewarm = false;
@@ -1484,6 +1509,7 @@ export class Threads {
     this.threadToolAuth.observe(thread.id, event);
     if (event.type === "result" && !event.parent_tool_use_id) this.threadToolAuth.clear(thread.id);
     const flow: EventFlow = { event, compacting: thread.operation === "compact" };
+    this.noteWorkState(thread, event);
     if (this.noteBackgroundTasks(thread, event)) return;
     this.noteConsoleError(thread, event);
     if (event.type === "subagent_wake") return this.wake(thread, String(event.text || ""));
@@ -1503,6 +1529,112 @@ export class Threads {
     this.noteAssistant(thread, flow.event);
   }
 
+  private workState(id: string) {
+    const live = this.live.get(id);
+    return {
+      version: 1 as const,
+      foreground: [...(live?.foreground ?? [])],
+      background: [...(live?.backgroundTools ?? [])],
+      backgroundCount: live
+        ? Math.max(this.threads.get(id)?.background ?? 0, live.backgroundTools?.size ?? 0)
+        : 0,
+    };
+  }
+
+  private emitWorkState(thread: Thread) {
+    thread.workState = this.workState(thread.id);
+    this.emit({ t: "thread", thread });
+  }
+
+  private noteWorkState(thread: Thread, event: any) {
+    if (event.parent_tool_use_id) return;
+    const live = this.live.get(thread.id);
+    if (!live) return;
+    const work = {
+      thread,
+      event,
+      foreground: (live.foreground ??= new Set<string>()),
+      background: (live.backgroundTools ??= new Set<string>()),
+      tasks: (live.taskTools ??= new Map<string, string>()),
+    };
+    let changed = false;
+    switch (event.type) {
+      case "assistant":
+        changed = this.trackWorkCalls(work);
+        break;
+      case "user":
+        changed = this.trackWorkResults(work);
+        break;
+      case "system":
+        changed = this.trackSystemWork(work);
+        break;
+    }
+    if (changed) this.emitWorkState(thread);
+  }
+
+  private trackSystemWork(work: WorkUpdate) {
+    switch (work.event.subtype) {
+      case "task_started":
+        return this.startTaskWork(work);
+      case "task_notification":
+        return this.finishTaskWork(work);
+      case "background_tasks_changed":
+        if (Array.isArray(work.event.tasks)) this.replaceBackgroundWork(work);
+        return false;
+      default:
+        return false;
+    }
+  }
+
+  private trackWorkCalls({ event, foreground }: WorkUpdate) {
+    let changed = false;
+    for (const block of event.message?.content ?? []) {
+      if (block.type !== "tool_use" || typeof block.id !== "string") continue;
+      foreground.add(block.id);
+      changed = true;
+    }
+    return changed;
+  }
+
+  private trackWorkResults({ event, foreground, background, tasks }: WorkUpdate) {
+    let changed = false;
+    for (const block of event.message?.content ?? []) {
+      if (block.type !== "tool_result") continue;
+      changed = foreground.delete(block.tool_use_id) || changed;
+      if (background.has(block.tool_use_id)) continue;
+      for (const [task, tool] of tasks) if (tool === block.tool_use_id) tasks.delete(task);
+    }
+    return changed;
+  }
+
+  private startTaskWork({ event, foreground, background, tasks }: WorkUpdate) {
+    if (typeof event.tool_use_id !== "string") return false;
+    if (typeof event.task_id === "string") tasks.set(event.task_id, event.tool_use_id);
+    if (!event.is_backgrounded) return false;
+    foreground.delete(event.tool_use_id);
+    background.add(event.tool_use_id);
+    return true;
+  }
+
+  private finishTaskWork({ thread, event, background, tasks }: WorkUpdate) {
+    const id = event.tool_use_id ?? tasks.get(event.task_id);
+    tasks.delete(event.task_id);
+    if (id) for (const [task, tool] of tasks) if (tool === id) tasks.delete(task);
+    if (!id || !background.delete(id)) return false;
+    thread.background = Math.max(0, (thread.background ?? 0) - 1);
+    return true;
+  }
+
+  private replaceBackgroundWork({ event, foreground, background, tasks }: WorkUpdate) {
+    background.clear();
+    for (const task of event.tasks) {
+      const id = task.tool_use_id ?? tasks.get(task.task_id);
+      if (typeof id === "string") background.add(id);
+    }
+    for (const [task, tool] of tasks)
+      if (!foreground.has(tool) && !background.has(tool)) tasks.delete(task);
+  }
+
   // Claude's background task count shows on the thread; an empty list lets idle compaction plan again. Never logged.
   private noteBackgroundTasks(thread: Thread, event: any): boolean {
     if (
@@ -1518,6 +1650,7 @@ export class Threads {
       this.emit({ t: "thread", thread });
       if (!count) this.refreshIdleCompaction(thread);
     }
+    this.emitWorkState(thread);
     return true;
   }
 
@@ -1689,6 +1822,12 @@ export class Threads {
     const questionOpen = this.questions.list(thread.id).length > 0; // cancelled just below; the turn still ended on it
     this.cancelQuestions(thread.id);
     if (this.awaitCompaction(thread, flow.event)) return true;
+    const live = this.live.get(thread.id);
+    live?.foreground?.clear();
+    if (live?.taskTools)
+      for (const [task, tool] of live.taskTools)
+        if (!live.backgroundTools?.has(tool)) live.taskTools.delete(task);
+    this.emitWorkState(thread);
     const failedTurn = this.turns.get(thread.id);
     const failure = failedTurn?.failure;
     const unfinished = questionOpen || !!failedTurn?.bgTools?.size;
@@ -2579,6 +2718,9 @@ export class Threads {
     this.continueArmed.delete(id);
     const t = this.threads.get(id);
     const live = this.live.get(id);
+    live?.foreground?.clear();
+    live?.backgroundTools?.clear();
+    live?.taskTools?.clear();
     if (!t) return;
     this.cancelQuestions(id, true);
     t.idleCompactionConsumedAt = t.lastUserActivityAt;
@@ -2588,6 +2730,7 @@ export class Threads {
     if (this.queues.delete(id)) this.emitQueue(id); // Stop means stop: nothing queued behind it runs
     if (!live) {
       delete t.background;
+      this.emitWorkState(t);
       this.touch(t);
       return;
     }
@@ -2610,6 +2753,7 @@ export class Threads {
     t.status = "idle";
     delete t.operation;
     delete t.background;
+    this.emitWorkState(t);
     this.publish(id, { type: "aborted", ts: Date.now() });
     this.touch(t);
   }
@@ -2629,6 +2773,7 @@ export class Threads {
       live.agent.kill();
     }
     const t = this.threads.get(id);
+    if (t) this.emitWorkState(t);
     if (t?.background) {
       delete t.background;
       this.emit({ t: "thread", thread: t });

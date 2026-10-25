@@ -7,6 +7,7 @@ import path from "node:path";
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "ac-codex-forward-"));
 const previous = { ...process.env };
 Object.assign(process.env, {
+  AGENT_CONSOLE_DATA: scratch,
   PATH: `${scratch}${path.delimiter}${previous.PATH}`,
   CODEX_HOME: path.join(scratch, "home"),
   AGENT_CONSOLE_ENV_FILES: path.join(scratch, "absent-env"),
@@ -62,6 +63,14 @@ try {
   while (!collected.some((e) => e.type === "result") && Date.now() < deadline)
     await new Promise((r) => setTimeout(r, 25));
   const child = collected.filter((e) => e.parent_tool_use_id === "spawn");
+  const activeTasks = collected.find(
+    (e) => e.subtype === "background_tasks_changed" && e.tasks.length > 0,
+  );
+  assert.equal(
+    activeTasks?.tasks[0].tool_use_id,
+    "spawn",
+    "live task snapshots identify the spawning tool call",
+  );
   const blocks = child.flatMap((e) => e.message?.content ?? []);
   assert.ok(
     child.every((e) => e.type === "assistant" || e.type === "user"),

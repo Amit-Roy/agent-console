@@ -511,6 +511,7 @@ function onThreadMessage(message) {
   state.threads.set(message.thread.id, message.thread);
   renderThreads();
   if (message.thread.id === state.current) {
+    if (message.thread.workState && !state.rendering) reconcileCards();
     renderHead();
     markRead(message.thread.id);
   } else renderUsage();
@@ -1898,6 +1899,7 @@ function appendReadyHint() {
 async function showHistory(m) {
   clearTimeout(state.loadTimer);
   state.loading = null;
+  if (m.workState && cur()) cur().workState = m.workState;
   const token = ++state.renderToken;
   state.historyAt = performance.now();
   const refreshing = state.revalidating;
@@ -1933,10 +1935,12 @@ async function showHistory(m) {
   $("chat").setAttribute("aria-busy", "false");
   state.lastScrollTop = $("chat").scrollTop;
   drainPendingLive();
+  reconcileCards();
   historyDone(m, refreshing, cachedMetrics);
 }
 // A refresh that asked for only what was logged after the cached view: append it in place instead of redrawing the conversation.
 function showDelta(m) {
+  if (m.workState && cur()) cur().workState = m.workState;
   clearTimeout(state.loadTimer);
   state.loading = null;
   const cachedMetrics = window.agentConsoleMetrics;
@@ -1954,6 +1958,7 @@ function showDelta(m) {
   if (cur()?.operation !== "compact") settleCompact("interrupted");
   earlierIdle();
   state.lastScrollTop = chat.scrollTop;
+  reconcileCards();
   historyDone(m, true, cachedMetrics);
 }
 function historyDone(m, refreshing, cachedMetrics) {
@@ -2102,6 +2107,7 @@ async function showEarlier(m) {
   chat.setAttribute("aria-busy", "false");
   state.lastScrollTop = chat.scrollTop;
   for (const e of state.pendingLive.splice(0)) onEvent(e, true);
+  reconcileCards();
   latency.record({
     kind: "page",
     thread: m.thread,
@@ -2777,7 +2783,7 @@ function renderCtx() {
 function updateWorking() {
   $("state").classList.toggle("waiting", !!(questions.count(state.current) || cur()?.waiting));
   const n = Math.max(
-    cur()?.background || 0,
+    cur()?.workState?.backgroundCount ?? cur()?.background ?? 0,
     [...state.cards.values()].filter(
       (c) =>
         c.classList.contains("agent") &&
@@ -3003,6 +3009,33 @@ function settleCompact(outcome = "stopped") {
   }
   state.compact = null;
 }
+
+// Runtime tool IDs survive transcript compaction. Historical task chips alone do
+// not prove that a process is still alive.
+function backgroundWorkActive({ id, chip, thread }) {
+  const work = thread?.workState;
+  if (!work) return chip && (thread?.background || 0) > 0;
+  return work.background.includes(id);
+}
+
+function reconcileCards({ foregroundEnded = false } = {}) {
+  const thread = cur();
+  const work = thread?.workState;
+  for (const [id, card] of state.cards) {
+    const chip = card.querySelector(".task-chip.running");
+    const background = backgroundWorkActive({ id, chip, thread });
+    if (chip && !background) finishChip(card, chip, { status: "stopped" });
+    if (!card.classList.contains("pending") || background) continue;
+    const foreground =
+      !foregroundEnded && (work ? work.foreground.includes(id) : thread?.status === "running");
+    if (foreground) continue;
+    card.classList.remove("pending");
+    card.classList.add("done");
+    card.querySelector(".st")?.replaceChildren(icon("alert"), el("span", "sr-only", "interrupted"));
+  }
+  updateWorking();
+}
+
 function addNote(text, cls = "note") {
   if (cls === "errtxt") return push(errBlock(text));
   push(el("div", `msg ${cls}`, text));
@@ -3407,7 +3440,26 @@ function startBackgroundChip(card, existing, e) {
     finishChip(card, chip, done);
   }
 }
-function taskEvent(e) {
+function updateTaskWork(e) {
+  const work = cur()?.workState;
+  if (work) {
+    if (
+      e.subtype === "task_started" &&
+      e.is_backgrounded &&
+      !work.background.includes(e.tool_use_id)
+    ) {
+      work.background.push(e.tool_use_id);
+      work.backgroundCount = Math.max(work.backgroundCount, work.background.length);
+    } else if (e.subtype === "task_notification") {
+      if (work.background.includes(e.tool_use_id)) {
+        work.background = work.background.filter((id) => id !== e.tool_use_id);
+        work.backgroundCount = Math.max(work.background.length, work.backgroundCount - 1);
+      }
+    }
+  }
+}
+function taskEvent(e, ctx) {
+  if (ctx.live) updateTaskWork(e);
   const card = state.cards.get(e.tool_use_id);
   if (!card) {
     // history is paged newest-first: the notification can arrive before the older page that holds its card and task_started
@@ -3588,10 +3640,14 @@ function onToolCardToggle(card) {
 
 function onAssistantToolUse(block, event, ctx) {
   const { live } = ctx;
+  const work = cur()?.workState;
+  if (live && work && !work.foreground.includes(block.id)) work.foreground.push(block.id);
   dropLive("text");
   dropLive("thinking");
   if (isAgent(block.name)) {
     const agentEl = agentCard(block);
+    if (live) agentEl.startedAt = performance.now();
+    else if (typeof event.ts === "number") agentEl.startedTs = event.ts;
     state.cards.set(block.id, agentEl);
     push(agentEl, live);
     updateWorking();
@@ -3648,9 +3704,11 @@ function settleToolResult(card, part, event) {
   }
 }
 
-function onUserEvent(event) {
+function onUserEvent(event, ctx) {
   for (const part of event.message?.content ?? []) {
     if (part.type !== "tool_result") continue;
+    const work = cur()?.workState;
+    if (ctx.live && work) work.foreground = work.foreground.filter((id) => id !== part.tool_use_id);
     const card = state.cards.get(part.tool_use_id);
     if (!card) continue;
     settleToolResult(card, part, event);
@@ -3679,6 +3737,8 @@ function onResult(event, ctx) {
   dropLive("text");
   dropLive("thinking");
   state.live = null;
+  if (ctx.live && cur()?.workState) cur().workState.foreground = [];
+  reconcileCards({ foregroundEnded: ctx.live });
   const bits = resultStats(event);
   const last = (state.into || $("chat")).lastElementChild;
   const row = last?.matches(".msg.asst") ? last.querySelector(".actions") : null;
@@ -3698,8 +3758,8 @@ function onResult(event, ctx) {
     );
 }
 
-function onSystemEvent(event) {
-  if (event.subtype?.startsWith("task_")) taskEvent(event);
+function onSystemEvent(event, ctx) {
+  if (event.subtype?.startsWith("task_")) taskEvent(event, ctx);
 }
 
 function onToolUpdate(event) {
@@ -3736,6 +3796,8 @@ function onToolLabel(event) {
 function onAborted(_evt, ctx) {
   state.live = null;
   settleCompact("stopped");
+  if (ctx.live && cur()?.workState) cur().workState.foreground = [];
+  reconcileCards({ foregroundEnded: ctx.live });
   push(el("div", "msg note", "Stopped."), ctx.live);
 }
 
