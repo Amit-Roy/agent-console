@@ -82,7 +82,7 @@ import { isSandboxedShareProvider, sharePrompt, shareTitle } from "./share/promp
 import { resolveShare } from "./share/registry.ts";
 import { downloadShare } from "./share/run.ts";
 import { ShareError } from "./share/types.ts";
-import { Threads, turnTiming } from "./threads.ts";
+import { safeId, Threads, turnTiming } from "./threads.ts";
 import { createTelemetryService } from "./token-telemetry.ts";
 import { startToolPriority } from "./tool-priority.ts";
 import { createToolWatch } from "./tool-watch.ts";
@@ -1526,8 +1526,8 @@ wss.on("connection", (ws) => {
     let m: any;
     try {
       m = JSON.parse(String(raw));
-      if (m?.thread != null && !isId(m.thread)) throw new Error("Invalid thread id.");
-      if (m?.t === "read" && m.id != null && !isId(m.id)) throw new Error("Invalid thread id.");
+      if (m?.thread != null && !safeId(m.thread)) throw new Error("Invalid thread id.");
+      if (m?.t === "read" && m.id != null && !safeId(m.id)) throw new Error("Invalid thread id.");
       switch (m.t) {
         case "ping":
           return reply({ t: "pong" });

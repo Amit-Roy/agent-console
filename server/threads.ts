@@ -141,7 +141,7 @@ fs.mkdirSync(LOG_DIR, { recursive: true, mode: 0o700 });
 
 // Thread ids reach file paths, so only plain names pass: no dots or slashes that could leave the data folder.
 const SAFE_ID = /^[A-Za-z0-9_-]{1,64}$/;
-const safeId = (threadId: unknown): threadId is string =>
+export const safeId = (threadId: unknown): threadId is string =>
   typeof threadId === "string" && SAFE_ID.test(threadId);
 
 // The only way to build a transcript path.
