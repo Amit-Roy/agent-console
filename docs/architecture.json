@@ -10,14 +10,6 @@
       "icon": "server",
       "items": [
         {
-          "id": "sessions",
-          "label": "Session builder",
-          "tech": "triage-session-build.ts",
-          "desc": "Keeps console-linked or interactive sessions; drops probes, scratch cwd, window openers",
-          "icon": "filter",
-          "color": "teal"
-        },
-        {
           "id": "sched",
           "label": "Weekly calibrate",
           "tech": "github-triage.ts",
@@ -40,6 +32,14 @@
           "desc": "Pinball: paired lower90 > 0 or ratio > 1.10. Coverage vs champion within 2 SE; hard bounds",
           "icon": "shield-check",
           "color": "orange"
+        },
+        {
+          "id": "sessions",
+          "label": "Session builder",
+          "tech": "triage-session-build.ts",
+          "desc": "Keeps console-linked or interactive sessions; drops probes, scratch cwd, window openers",
+          "icon": "filter",
+          "color": "teal"
         }
       ]
     },
@@ -179,12 +179,12 @@
   "edges": [
     {
       "from": "sched",
-      "to": "sessions",
-      "label": "Build"
+      "to": "fit",
+      "label": "Sessions + features"
     },
     {
       "from": "sessions",
-      "to": "fit",
+      "to": "sched",
       "label": "Real rows"
     },
     {
