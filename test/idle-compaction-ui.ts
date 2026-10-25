@@ -130,7 +130,10 @@ try {
       colorScheme: "dark",
     });
     await context.addCookies([{ name: "ac_session", value: makeToken(), url: base }]);
-    await context.addInitScript((threadId) => localStorage.setItem("ac_thread", threadId), `known-cache-${width}`);
+    await context.addInitScript(
+      (threadId) => localStorage.setItem("ac_thread", threadId),
+      `known-cache-${width}`,
+    );
     const page = await context.newPage();
     const errors: string[] = [];
     page.on("pageerror", (error) => errors.push(String(error)));
