@@ -15,7 +15,7 @@
           "tech": "triage-session-build.ts",
           "desc": "Keeps console-linked or interactive sessions; drops probes, scratch cwd, window openers",
           "icon": "filter",
-          "color": "green"
+          "color": "teal"
         },
         {
           "id": "sched",
