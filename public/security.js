@@ -369,18 +369,21 @@ function buildFalcoGroup(group, index) {
     el("span", `chip ${group.prio === "Warning" ? "high" : "critical"}`, group.prio),
     el("span", "chip", `${group.items.length}×`),
   );
-  btn.append(name, chips, el("span", "hchev", open ? "−" : "+"));
+  const chevron = el("span", "hchev", open ? "−" : "+");
+  const body = el("div", "tbody");
+  body.id = panelId;
+  body.hidden = !open;
+  if (open) body.append(buildFalcoAlertList(group));
+  btn.append(name, chips, chevron);
   btn.addEventListener("click", () => {
-    state.open.has(key) ? state.open.delete(key) : state.open.add(key);
-    renderFalco();
+    const expanded = !state.open.has(key);
+    expanded ? state.open.add(key) : state.open.delete(key);
+    btn.setAttribute("aria-expanded", String(expanded));
+    chevron.textContent = expanded ? "−" : "+";
+    if (expanded && !body.firstChild) body.append(buildFalcoAlertList(group));
+    body.hidden = !expanded;
   });
-  item.append(btn);
-  if (open) {
-    const body = el("div", "tbody");
-    body.id = panelId;
-    body.append(buildFalcoAlertList(group));
-    item.append(body);
-  }
+  item.append(btn, body);
   return item;
 }
 function renderFalco() {
