@@ -103,6 +103,7 @@ import {
   SAFE_NAME,
   saveUpload,
   sniffImageFile,
+  threadDir,
   UPLOAD_DIR,
 } from "./uploads.ts";
 import {
@@ -931,7 +932,7 @@ async function handleShare(req: express.Request, res: express.Response, only?: s
     // the client fills the composer with the prompt and these uploads; nothing is sent until the user taps Send
     res.json({
       thread: saved.thread,
-      prompt: sharePrompt(link, result, saved.threadProvider),
+      prompt: sharePrompt(link, result, saved.threadProvider, threadDir(saved.thread)),
       attachments: saved.files.map(({ id: uploadId, name, kind, media_type, size }) => ({
         id: uploadId,
         name,
