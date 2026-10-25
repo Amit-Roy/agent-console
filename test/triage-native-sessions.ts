@@ -224,12 +224,6 @@ try {
     buildNativeSessions({ piDir, maxFileBytes: 1, detectRunningProcesses: false }).tasks.length,
     0,
   );
-  console.log(
-    "Native session parsing passed: ownership, dedupe, child rollup, cache accounting, inactive failures, missing telemetry, and bounded reads.",
-  );
-} finally {
-  fs.rmSync(temporary, { recursive: true, force: true });
-}
   const originDir = path.join(temporary, "origin");
   const originRows = (sessionId: string, entrypoint: string, cwd: string) => [
     { type: "attachment", sessionId, entrypoint, cwd },
@@ -259,3 +253,9 @@ try {
     scratch: false,
     real: true,
   });
+  console.log(
+    "Native session parsing passed: ownership, dedupe, child rollup, cache accounting, inactive failures, missing telemetry, and bounded reads.",
+  );
+} finally {
+  fs.rmSync(temporary, { recursive: true, force: true });
+}
