@@ -5,6 +5,7 @@ import { WebSocket } from "ws";
 import { makeToken } from "../server/auth.ts";
 
 const BASE = process.env.BASE || "http://127.0.0.1:7070";
+const PROXY_SECRET = process.env.PROXY_SECRET; // raw secret whose sha256 is AGENT_CONSOLE_PROXY_SECRET_SHA256 on the server
 const cookie = `ac_session=${makeToken()}`;
 let failed = 0;
 const check = (name: string, ok: boolean, extra = "") => {
@@ -18,7 +19,12 @@ const withHost = (host: string) =>
   new Promise<number>((res, rej) => {
     const u = new URL(BASE + "/vendor/marked.js");
     const r = request(
-      { host: u.hostname, port: u.port, path: u.pathname, headers: { host } },
+      {
+        host: u.hostname,
+        port: u.port,
+        path: u.pathname,
+        headers: PROXY_SECRET ? { host, "x-agent-console-proxy": PROXY_SECRET } : { host },
+      },
       (x) => {
         x.resume();
         res(x.statusCode ?? 0);

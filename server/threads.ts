@@ -139,6 +139,17 @@ const QUESTIONS_FILE = path.join(DATA_DIR, "questions.json");
 const LOG_DIR = path.join(DATA_DIR, "logs");
 fs.mkdirSync(LOG_DIR, { recursive: true, mode: 0o700 });
 
+// Thread ids reach file paths, so only plain names pass: no dots or slashes that could leave the data folder.
+const SAFE_ID = /^[A-Za-z0-9_-]{1,64}$/;
+export const safeId = (threadId: unknown): threadId is string =>
+  typeof threadId === "string" && SAFE_ID.test(threadId);
+
+// The only way to build a transcript path.
+function logFile(threadId: string): string {
+  if (!safeId(threadId)) throw new Error("Invalid thread id.");
+  return path.join(LOG_DIR, `${threadId}.jsonl`);
+}
+
 // An idle agent keeps its process (warm next turn: ~0.3 s to start instead of ~20 s) for up to IDLE_KILL_MS. Idle processes are
 // capped at IDLE_MAX, oldest killed first, and all but the newest two go early when available memory drops under IDLE_MEM_FLOOR.
 const IDLE_KILL_MS = Number(process.env.AGENT_CONSOLE_IDLE_MS ?? 30 * 60 * 1000);
@@ -255,7 +266,7 @@ function parseWindowsLine(buf: Buffer, from: number, hit: number, provider: stri
 // Boot: record the newest Claude rate-limit event from this thread's log.
 function recordClaudeUsage(thread: Thread) {
   const key = claudeUsageKey(thread.claudeAccount);
-  const last = lastClaudeWindows(path.join(LOG_DIR, `${thread.id}.jsonl`), key);
+  const last = lastClaudeWindows(logFile(thread.id), key);
   if (!last || !Number.isFinite(last.observedAt) || last.usageProvider !== key) return;
   usage.record(last.usageProvider, { windows: claudeWindows(last) }, last.observedAt, {
     observedAt: last.observedAt,
@@ -641,7 +652,6 @@ function forkedThread(src: Thread, target: Provider | undefined, recent: boolean
 
 // Copy the history and uploads so the fork reads whole. True when there was history to copy.
 function copyForkFiles(src: Thread, child: Thread): boolean {
-  const logFile = (threadId: string) => path.join(LOG_DIR, `${threadId}.jsonl`);
   const hasHistory = fs.existsSync(logFile(src.id));
   if (hasHistory) fs.copyFileSync(logFile(src.id), logFile(child.id));
   if (fs.existsSync(threadDir(src.id)))
@@ -1167,6 +1177,7 @@ export class Threads {
   }
 
   remove(id: string) {
+    if (!safeId(id) || !this.threads.has(id)) return;
     this.cancelQuestions(id, true);
     this.kill(id, "remove");
     this.queues.delete(id);
@@ -1175,7 +1186,7 @@ export class Threads {
     this.threads.delete(id);
     this.titling.delete(id);
     this.persist();
-    fs.rmSync(path.join(LOG_DIR, `${id}.jsonl`), { force: true });
+    fs.rmSync(logFile(id), { force: true });
     fs.rmSync(path.join(DATA_DIR, "pi-sessions", id), { recursive: true, force: true });
     fs.rmSync(path.join(DATA_DIR, "auto-runtime", id), { recursive: true, force: true });
     removeUploads(id);
@@ -1190,7 +1201,7 @@ export class Threads {
   history(id: string): unknown[] {
     try {
       return fs
-        .readFileSync(path.join(LOG_DIR, `${id}.jsonl`), "utf8")
+        .readFileSync(logFile(id), "utf8")
         .split("\n")
         .filter(Boolean)
         .map((l) => JSON.parse(l))
@@ -1208,7 +1219,7 @@ export class Threads {
     const limit = small ? Math.ceil(PAGE * 0.6) : PAGE,
       maxBytes = small ? PAGE_BYTES / 2 : PAGE_BYTES;
     const at = performance.now();
-    const file = path.join(LOG_DIR, `${threadId}.jsonl`);
+    const file = logFile(threadId);
     const delta =
       since != null && before == null ? this.historyIndex.after(file, since, PAGE) : null;
     const page = delta || this.historyIndex.read(file, before, limit);
@@ -1239,7 +1250,7 @@ export class Threads {
   }
 
   private log(id: string, ev: unknown) {
-    fs.appendFileSync(path.join(LOG_DIR, `${id}.jsonl`), JSON.stringify(ev) + "\n", {
+    fs.appendFileSync(logFile(id), JSON.stringify(ev) + "\n", {
       mode: 0o600,
     });
   }
@@ -1252,7 +1263,7 @@ export class Threads {
       t: "event",
       thread: id,
       event: ev,
-      seq: this.historyIndex.count(path.join(LOG_DIR, `${id}.jsonl`)),
+      seq: this.historyIndex.count(logFile(id)),
     });
   }
 
@@ -1988,10 +1999,7 @@ export class Threads {
       return this.whileRunning(t, `/compact${instructions ? " " + instructions : ""}`, {
         mode: "queue",
       });
-    if (
-      !fs.existsSync(path.join(LOG_DIR, `${id}.jsonl`)) ||
-      (t.provider === "codex" && !t.sessionId)
-    )
+    if (!fs.existsSync(logFile(id)) || (t.provider === "codex" && !t.sessionId))
       throw new Error("Send a message before compacting this thread.");
     t.idleCompactionConsumedAt = t.lastUserActivityAt;
     this.idleCompactionTimers.cancel(id);
@@ -2409,7 +2417,7 @@ export class Threads {
   private userTexts(id: string): string[] {
     try {
       return fs
-        .readFileSync(path.join(LOG_DIR, `${id}.jsonl`), "utf8")
+        .readFileSync(logFile(id), "utf8")
         .split("\n")
         .filter((l) => l.includes('"user_input"'))
         .flatMap((l) => {
