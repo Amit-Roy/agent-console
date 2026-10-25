@@ -12,8 +12,20 @@ const sentinel = path.join(root, "shared-skill");
 const coding = "nvidia/nvidia/nemotron-3-ultra-550b-a55b";
 const retired = "nvidia/nvidia/nemotron-3-super-120b-a12b"; // NVIDIA 404s it; no longer approved
 const vision = "nvidia/meta/llama-3.2-11b-vision-instruct";
+const home = path.join(root, "home");
+const forbidden = {
+  secret: path.join(data, "secret"),
+  ssh: path.join(home, ".ssh", "id"),
+  coder: path.join(home, ".config", "coderv2", "session"),
+  other: path.join(data, "pi-sessions", "other-thread", "log"),
+};
 fs.mkdirSync(cwd);
 fs.mkdirSync(bin);
+for (const file of Object.values(forbidden)) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, "fake-secret");
+}
+fs.writeFileSync(path.join(cwd, "readable.txt"), "clone");
 fs.writeFileSync(sentinel, "original");
 execFileSync("git", ["init", "-q", cwd], { stdio: "ignore" });
 fs.writeFileSync(path.join(cwd, ".git", "agent-console-auto"), "private-checkout-v1\n");
@@ -32,7 +44,14 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
   let denied = false, error;
   try { fs.writeFileSync(${JSON.stringify(sentinel)}, 'overwritten'); }
   catch (e) { denied = e.code === 'EACCES' || e.code === 'EPERM'; error = e.code; }
-  const outcome = {denied,error,tmp:process.env.TMPDIR};
+  const reads = {};
+  for (const [name, file] of Object.entries(${JSON.stringify(forbidden)})) {
+    try { fs.readFileSync(file); reads[name] = 'readable'; } catch (e) { reads[name] = e.code; }
+    try { fs.readdirSync(path.dirname(file)); reads[name + 'Dir'] = 'readable'; } catch (e) { reads[name + 'Dir'] = e.code; }
+  }
+  try { fs.readFileSync(path.join(process.cwd(), 'readable.txt')); reads.clone = 'readable'; } catch (e) { reads.clone = e.code; }
+  try { fs.readdirSync(process.env.TMPDIR); reads.run = 'readable'; } catch (e) { reads.run = e.code; }
+  const outcome = {denied,error,tmp:process.env.TMPDIR,reads};
   fs.writeFileSync(path.join(process.cwd(), process.env.AGENT_CONSOLE_THREAD + '.json'), JSON.stringify(outcome));
   emit({type:'agent_start'});
   emit({type:'message_end',message:{role:'assistant',model:'fixture',content:[{type:'text',text:JSON.stringify(outcome)}],stopReason:'stop'}});
@@ -42,6 +61,12 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
   { mode: 0o700 },
 );
 
+process.env.HOME = home;
+// The fake home hides the real toolchain, so grant the interpreter that runs the fake worker.
+process.env.AGENT_CONSOLE_AUTO_READ = [
+  path.dirname(path.dirname(fs.realpathSync(process.execPath))),
+  bin,
+].join(path.delimiter);
 process.env.AGENT_CONSOLE_DATA = data;
 process.env.AGENT_CONSOLE_ENV_FILES = path.join(root, "no-env-file");
 process.env.AGENT_CONSOLE_BRAIN = path.join(root, "no-brain");
@@ -119,6 +144,15 @@ try {
     "Threads must pass issueRun into the real Pi launcher so the kernel denies shared writes",
   );
   assert.equal(fs.readFileSync(sentinel, "utf8"), "original");
+  for (const name of Object.keys(forbidden)) {
+    assert.ok(["EACCES", "EPERM"].includes(outcome.reads[name]), `${name} file must be denied`);
+    assert.ok(
+      ["EACCES", "EPERM"].includes(outcome.reads[`${name}Dir`]),
+      `${name} dir must be denied`,
+    );
+  }
+  assert.equal(outcome.reads.clone, "readable");
+  assert.equal(outcome.reads.run, "readable");
   assert.equal(outcome.tmp, path.join(data, "auto-runtime", auto.id, "tmp"));
   assert.equal(
     threads.history(auto.id).some((event: any) => event.type === "result" && !event.is_error),
