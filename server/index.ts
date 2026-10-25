@@ -611,8 +611,9 @@ app.post("/api/agent-tools/:name", express.json({ limit: "1mb" }), async (req, r
   try {
     if (gate.error) throw new Error(gate.error);
     const input = req.body ?? {};
-    const result =
-      req.params.name === "session_redact"
+    const result = ["thread_list", "thread_send"].includes(req.params.name)
+      ? await threads.threadTool(req.params.name, thread, input)
+      : req.params.name === "session_redact"
         ? transcriptRedaction.tool(input, thread ? threads.get(thread) : undefined)
         : req.params.name === "cli_search"
           ? cliSearch.search(input)

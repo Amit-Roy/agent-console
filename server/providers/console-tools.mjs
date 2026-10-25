@@ -23,6 +23,28 @@ const id = { id: { type: "string", description: "Task id or exact title, from sc
 
 export const TOOLS = [
   {
+    name: "thread_list",
+    label: "List threads",
+    description:
+      "List active Agent Console threads with ids, titles, providers, and statuses. Use thread_send to contact another thread.",
+    parameters: { type: "object", additionalProperties: false, properties: {} },
+  },
+  {
+    name: "thread_send",
+    label: "Message another thread",
+    description:
+      "Send a message to another Agent Console thread. Only the top-level agent can send; subagents cannot. Idle recipients start a turn; busy recipients receive steering or queue delivery. Returned delivery is started, steered, steering (pending), or queued.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      required: ["thread", "message"],
+      properties: {
+        thread: { type: "string", description: "Target thread id from thread_list." },
+        message: { type: "string", minLength: 1, maxLength: 20000 },
+      },
+    },
+  },
+  {
     name: "session_redact",
     label: "Clean session credentials",
     description:
