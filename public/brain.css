@@ -2,6 +2,46 @@
 body.brain {
   --wiki: var(--viz-1);
   --ops: var(--viz-3);
+  --tag: var(--viz-2);
+  --graph-bg: var(--s1);
+  --graph-text: var(--t1);
+  --graph-edge: var(--t3);
+  --graph-edge-opacity: 0.4;
+  --graph-glow: 0;
+  --graph-panel: var(--s1);
+  --graph-panel-edge: var(--edge-strong);
+  --graph-panel-glow: var(--shadow-card);
+}
+/* Dark mode uses a neon graph palette: glowing symbols on a near-black canvas. */
+@media (prefers-color-scheme: dark) {
+  body.brain {
+    --wiki: #9d7bff;
+    --ops: #ff3df2;
+    --tag: #00e5ff;
+    --graph-bg: #05060b;
+    --graph-text: #e6f6ff;
+    --graph-edge: #00e5ff;
+    --graph-edge-opacity: 0.18;
+    --graph-glow: 7;
+    --graph-panel: rgb(10 12 22 / 0.88);
+    --graph-panel-edge: rgb(0 229 255 / 0.25);
+    --graph-panel-glow: 0 0 0 1px rgb(0 229 255 / 0.25), 0 8px 32px rgb(0 0 0 / 0.6);
+  }
+  .legend-node {
+    box-shadow: 0 0 8px currentColor;
+  }
+  .legend-node.wiki {
+    color: var(--wiki);
+  }
+  .legend-node.ops {
+    color: var(--ops);
+  }
+  .legend-node.tag-node {
+    color: var(--tag);
+  }
+  body.brain .legend-toggle {
+    color: var(--tag);
+  }
 }
 .brain .range button {
   min-height: 44px;
@@ -140,7 +180,7 @@ body.brain {
   position: relative;
   height: max(22rem, calc(100dvh - 16rem));
   margin-inline: calc(-1 * max(var(--sp-4), env(safe-area-inset-left)));
-  background: var(--s1);
+  background: var(--graph-bg);
   overflow: hidden;
 }
 #cy {
@@ -241,10 +281,10 @@ body.brain {
   position: absolute;
   inset: auto auto var(--sp-3) var(--sp-3);
   max-width: calc(100% - 2 * var(--sp-3));
-  background: var(--s1);
-  border: 1px solid var(--edge-strong);
+  background: var(--graph-panel);
+  border: 1px solid var(--graph-panel-edge);
   border-radius: 12px;
-  box-shadow: var(--shadow-card);
+  box-shadow: var(--graph-panel-glow);
   color: var(--t2);
 }
 .legend-toggle {
@@ -326,7 +366,7 @@ body.brain {
   clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
 }
 .legend-node.tag-node {
-  background: var(--viz-2);
+  background: var(--tag);
   border-radius: 4px;
 }
 .legend-line {
@@ -343,10 +383,10 @@ body.brain {
   max-width: calc(100% - 2 * var(--sp-3));
   padding: var(--sp-1);
   gap: var(--sp-1);
-  background: var(--s1);
-  border: 1px solid var(--edge-strong);
+  background: var(--graph-panel);
+  border: 1px solid var(--graph-panel-edge);
   border-radius: var(--r-full);
-  box-shadow: var(--shadow-card);
+  box-shadow: var(--graph-panel-glow);
 }
 .graph-toolbar .btn {
   min-width: 44px;
