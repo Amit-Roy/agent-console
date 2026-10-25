@@ -18,7 +18,7 @@ supervised() { [ -f "$RUN/supervisor" ] && tr '\0' ' ' <"/proc/$(cat "$RUN/super
 case "${1:-status}" in
   start) if [ "$RUN" = "$HOME/.cache/agent-console" ] && [ "${AGENT_CONSOLE_MOCK:-0}" != "1" ]; then
            # its own Node boot takes seconds even when it is already up; the server only polls its database, so never wait for it
-           ( "$DIR/bin/github-triage" start || echo "[$(date -Is)] GitHub triage could not start; see its private log." ) </dev/null >>"$RUN/log" 2>&1 &
+           ( "$DIR/bin/github-triage" start || echo "[$(date +%Y-%m-%dT%H:%M:%S.%3N%:z)] GitHub triage could not start; see its private log." ) </dev/null >>"$RUN/log" 2>&1 &
          fi
          running && { echo "already running"; exit 0; }
          supervised && { echo "already running (supervisor $(cat "$RUN/supervisor") is restarting the server; see $RUN/log)"; exit 0; }
@@ -39,15 +39,15 @@ case "${1:-status}" in
            entry=server/index.ts bundle=.bundle/server/index.ts.mjs
            if [ "$delay" -le 1 ] && [ -f "$DIR/scripts/bundle-server.mjs" ]; then
              if [ ! -f "$DIR/$bundle" ] || [ -n "$(cd "$DIR" && find server scripts/bundle-server.mjs package-lock.json -newer "$bundle" -print -quit)" ]; then
-               (cd "$DIR" && node scripts/bundle-server.mjs) >>"$RUN/log" 2>&1 || echo "[$(date -Is)] supervisor $$: bundle failed; running sources" >>"$RUN/log"
+               (cd "$DIR" && node scripts/bundle-server.mjs) >>"$RUN/log" 2>&1 || echo "[$(date +%Y-%m-%dT%H:%M:%S.%3N%:z)] supervisor $$: bundle failed; running sources" >>"$RUN/log"
              fi
              [ -f "$DIR/$bundle" ] && [ -z "$(cd "$DIR" && find server scripts/bundle-server.mjs package-lock.json -newer "$bundle" -print -quit)" ] && entry=$bundle
            fi
            # the compile cache keeps Node from re-stripping TypeScript and recompiling every module on each boot
-           echo "[$(date -Is)] supervisor $$: starting server ($entry)" >>"$RUN/log"; began=$(date +%s)
+           echo "[$(date +%Y-%m-%dT%H:%M:%S.%3N%:z)] supervisor $$: starting server ($entry)" >>"$RUN/log"; began=$(date +%s)
            (cd "$DIR" && PORT=$PORT AGENT_CONSOLE_PID_FILE="$RUN/pid" NODE_COMPILE_CACHE="$RUN/compile-cache" exec node "$entry" 8>&-) >>"$RUN/log" 2>&1; code=$?
            [ $(($(date +%s) - began)) -ge 60 ] && delay=1 # back off only while it keeps crashing on boot
-           echo "[$(date -Is)] supervisor $$: server exited with code $code; restarting in ${delay}s" >>"$RUN/log"
+           echo "[$(date +%Y-%m-%dT%H:%M:%S.%3N%:z)] supervisor $$: server exited with code $code; restarting in ${delay}s" >>"$RUN/log"
            sleep "$delay"; delay=$((delay < 30 ? delay * 2 : 30))
          done ;;
   stop)  supervised && kill "$(cat "$RUN/supervisor")"; rm -f "$RUN/supervisor"
