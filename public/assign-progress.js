@@ -35,114 +35,146 @@ function node() {
   return n;
 }
 
+function planSteps(ctx, steps) {
+  ctx.list.replaceChildren(
+    ...steps.map(({ id, label }, index) => {
+      const stepItem = el("li", "ap-step");
+      stepItem.dataset.state = "pending";
+      const row = el("button", "ap-row");
+      row.type = "button";
+      row.setAttribute("aria-expanded", "false");
+      row.setAttribute("aria-controls", `ap-log-${id}`);
+      const time = el("span", "ap-time");
+      row.append(node(), el("span", "ap-label", label), time);
+      const log = el("pre", "ap-log");
+      log.id = `ap-log-${id}`;
+      log.hidden = true;
+      row.onclick = () => {
+        log.hidden = !log.hidden;
+        row.setAttribute("aria-expanded", String(!log.hidden));
+      };
+      stepItem.append(row, log);
+      ctx.rows.set(id, { li: stepItem, row, time, log, start: 0, i: index });
+      return stepItem;
+    }),
+  );
+}
+
+function showLiveTime(ctx) {
+  if (ctx.active) ctx.active.time.textContent = seconds(performance.now() - ctx.active.clientStart);
+}
+
+function finishStep(ctx, stepRow, state, at) {
+  stepRow.li.dataset.state = state;
+  stepRow.time.textContent = seconds(Math.max(0, at - stepRow.start));
+  if (ctx.active === stepRow) ctx.active = null;
+}
+
+function startStep(ctx, stepRow, message) {
+  Object.assign(stepRow, { start: message.at, clientStart: performance.now() });
+  stepRow.li.dataset.state = "active";
+  ctx.active = stepRow;
+  showLiveTime(ctx);
+  // The newest step stays in view on short phone screens.
+  stepRow.li.scrollIntoView({ block: "nearest", behavior: "smooth" });
+}
+
+function failStep(ctx, stepRow, message) {
+  finishStep(ctx, stepRow, "failed", message.at);
+  stepRow.log.append(`${message.error}\n`);
+  stepRow.log.hidden = false;
+  stepRow.row.setAttribute("aria-expanded", "true");
+}
+
+function appendStepLog(stepRow, message) {
+  stepRow.log.append(`${message.text}\n`);
+  if (!stepRow.log.hidden) stepRow.log.scrollTop = stepRow.log.scrollHeight;
+}
+
+function handleRowMessage(ctx, message, stepRow) {
+  if (message.t === "step") startStep(ctx, stepRow, message);
+  else if (message.t === "log") appendStepLog(stepRow, message);
+  else if (message.t === "ok") finishStep(ctx, stepRow, "done", message.at);
+  else if (message.t === "fail") failStep(ctx, stepRow, message);
+}
+
+function handleMessage(ctx, message) {
+  const stepRow = ctx.rows.get(message.id);
+  if (message.t === "plan") planSteps(ctx, message.steps);
+  else if (message.t === "done") ctx.thread = message.thread;
+  else if (message.t === "error")
+    throw new Error(message.error || "Could not start a premium session.");
+  else if (stepRow) handleRowMessage(ctx, message, stepRow);
+}
+
+async function readAssignmentStream(ctx, response) {
+  const reader = response.body.getReader(),
+    decoder = new TextDecoder();
+  let buf = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    buf += decoder.decode(value, { stream: !done });
+    const lines = buf.split("\n");
+    buf = lines.pop();
+    for (const line of lines) if (line.trim()) handleMessage(ctx, JSON.parse(line));
+    if (done) break;
+  }
+  if (buf.trim()) handleMessage(ctx, JSON.parse(buf));
+}
+
+function showStreamFailure(ctx, failure) {
+  ctx.failed = true;
+  if (ctx.active)
+    finishStep(
+      ctx,
+      ctx.active,
+      "failed",
+      ctx.active.start + performance.now() - ctx.active.clientStart,
+    );
+  $("ap-title").textContent = "Assignment stopped";
+  ctx.error.textContent = failure.message;
+  ctx.error.hidden = false;
+  ctx.open.textContent = "Back to settings";
+  ctx.open.disabled = false;
+}
+
 /** Reads one assignment stream into the progress dialog. Resolves with the thread id; rejects with the server's error. */
 export async function showAssignmentProgress(response, { title, onBack, onOpen }) {
-  const dlg = $("ap"),
-    list = $("ap-steps"),
-    open = $("ap-open"),
-    error = $("ap-error");
-  const rows = new Map();
-  let active = null,
-    tick = 0,
-    thread = null,
-    failed = false;
+  const ctx = {
+    dlg: $("ap"),
+    list: $("ap-steps"),
+    open: $("ap-open"),
+    error: $("ap-error"),
+    rows: new Map(),
+    active: null,
+    thread: null,
+    failed: false,
+  };
   $("ap-title").textContent = "Assigning to premium";
   $("ap-sub").textContent = title;
-  error.hidden = true;
-  list.replaceChildren();
-  open.textContent = "See thread";
-  open.disabled = true;
-  open.onclick = () => {
-    dlg.close();
-    if (failed) onBack();
-    else if (thread) onOpen(thread);
+  ctx.error.hidden = true;
+  ctx.list.replaceChildren();
+  ctx.open.textContent = "See thread";
+  ctx.open.disabled = true;
+  ctx.open.onclick = () => {
+    ctx.dlg.close();
+    if (ctx.failed) onBack();
+    else if (ctx.thread) onOpen(ctx.thread);
   };
-  $("ap-close").onclick = () => dlg.close();
-  if (!dlg.open) dlg.showModal();
+  $("ap-close").onclick = () => ctx.dlg.close();
+  if (!ctx.dlg.open) ctx.dlg.showModal();
 
-  const plan = (steps) => {
-    list.replaceChildren(
-      ...steps.map(({ id, label }, i) => {
-        const li = el("li", "ap-step");
-        li.dataset.state = "pending";
-        const row = el("button", "ap-row");
-        row.type = "button";
-        row.setAttribute("aria-expanded", "false");
-        row.setAttribute("aria-controls", `ap-log-${id}`);
-        const time = el("span", "ap-time");
-        row.append(node(), el("span", "ap-label", label), time);
-        const log = el("pre", "ap-log");
-        log.id = `ap-log-${id}`;
-        log.hidden = true;
-        row.onclick = () => {
-          log.hidden = !log.hidden;
-          row.setAttribute("aria-expanded", String(!log.hidden));
-        };
-        li.append(row, log);
-        rows.set(id, { li, row, time, log, start: 0, i });
-        return li;
-      }),
-    );
-  };
-  const live = () => {
-    if (active) active.time.textContent = seconds(performance.now() - active.clientStart);
-  };
-  const finish = (r, state, at) => {
-    r.li.dataset.state = state;
-    r.time.textContent = seconds(Math.max(0, at - r.start));
-    if (active === r) active = null;
-  };
-  const handle = (m) => {
-    const r = rows.get(m.id);
-    if (m.t === "plan") plan(m.steps);
-    else if (m.t === "step" && r) {
-      Object.assign(r, { start: m.at, clientStart: performance.now() });
-      r.li.dataset.state = "active";
-      active = r;
-      live();
-      // The newest step stays in view on short phone screens.
-      r.li.scrollIntoView({ block: "nearest", behavior: "smooth" });
-    } else if (m.t === "log" && r) {
-      r.log.append(`${m.text}\n`);
-      if (!r.log.hidden) r.log.scrollTop = r.log.scrollHeight;
-    } else if (m.t === "ok" && r) finish(r, "done", m.at);
-    else if (m.t === "fail" && r) {
-      finish(r, "failed", m.at);
-      r.log.append(`${m.error}\n`);
-      r.log.hidden = false;
-      r.row.setAttribute("aria-expanded", "true");
-    } else if (m.t === "done") thread = m.thread;
-    else if (m.t === "error") throw new Error(m.error || "Could not start a premium session.");
-  };
-
-  tick = setInterval(live, 100);
+  const tick = setInterval(() => showLiveTime(ctx), 100);
   try {
-    const reader = response.body.getReader(),
-      decoder = new TextDecoder();
-    let buf = "";
-    for (;;) {
-      const { value, done } = await reader.read();
-      buf += decoder.decode(value, { stream: !done });
-      const lines = buf.split("\n");
-      buf = lines.pop();
-      for (const line of lines) if (line.trim()) handle(JSON.parse(line));
-      if (done) break;
-    }
-    if (buf.trim()) handle(JSON.parse(buf));
-    if (!thread) throw new Error("The connection closed before the session started.");
+    await readAssignmentStream(ctx, response);
+    if (!ctx.thread) throw new Error("The connection closed before the session started.");
     $("ap-title").textContent = "Premium session started";
-    open.disabled = false;
-    if (dlg.open) open.focus();
-    return thread;
-  } catch (e) {
-    failed = true;
-    if (active) finish(active, "failed", active.start + performance.now() - active.clientStart);
-    $("ap-title").textContent = "Assignment stopped";
-    error.textContent = e.message;
-    error.hidden = false;
-    open.textContent = "Back to settings";
-    open.disabled = false;
-    throw e;
+    ctx.open.disabled = false;
+    if (ctx.dlg.open) ctx.open.focus();
+    return ctx.thread;
+  } catch (failure) {
+    showStreamFailure(ctx, failure);
+    throw failure;
   } finally {
     clearInterval(tick);
   }
