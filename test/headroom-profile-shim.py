@@ -47,34 +47,47 @@ class Sink(BaseHTTPRequestHandler):
 
 
 def run_child(env_extra, port):
-    env = {k: v for k, v in os.environ.items() if not k.startswith(("AGENT_CONSOLE_HEADROOM", "OTEL_"))}
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith(("AGENT_CONSOLE_HEADROOM", "OTEL_"))
+    }
     env.update(
         PYTHONPATH=str(SHIM_DIR),
         OTEL_METRIC_EXPORT_INTERVAL="500",
         OTEL_EXPORTER_OTLP_METRICS_ENDPOINT=f"http://127.0.0.1:{port}/v1/metrics",
     )
     env.update(env_extra)
-    return subprocess.run([sys.executable, "-c", CHILD], env=env, capture_output=True, text=True, timeout=60)
+    return subprocess.run(
+        [sys.executable, "-c", CHILD], env=env, capture_output=True, text=True, timeout=60
+    )
 
 
 def decode_points(body):
-    from opentelemetry.proto.collector.metrics.v1.metrics_service_pb2 import ExportMetricsServiceRequest
+    from opentelemetry.proto.collector.metrics.v1.metrics_service_pb2 import (
+        ExportMetricsServiceRequest,
+    )
 
     request = ExportMetricsServiceRequest()
     request.ParseFromString(body)
     names, attrs = set(), set()
-    for rm in request.resource_metrics:
-        attrs.update(("resource:" + a.key) for a in rm.resource.attributes)
-        for sm in rm.scope_metrics:
-            for metric in sm.metrics:
+    for resource_metrics in request.resource_metrics:
+        attrs.update("resource:" + attr.key for attr in resource_metrics.resource.attributes)
+        for scope_metrics in resource_metrics.scope_metrics:
+            for metric in scope_metrics.metrics:
                 names.add(metric.name)
-                kind = metric.WhichOneof("data")
-                for point in getattr(metric, kind).data_points:
-                    attrs.update(a.key for a in point.attributes)
-                    for a in point.attributes:
-                        if a.key == "code.location":
-                            attrs.add("loc=" + a.value.string_value)
+                attrs.update(metric_attrs(metric))
     return names, attrs
+
+
+def metric_attrs(metric):
+    found = set()
+    for point in getattr(metric, metric.WhichOneof("data")).data_points:
+        for attr in point.attributes:
+            found.add(attr.key)
+            if attr.key == "code.location":
+                found.add("loc=" + attr.value.string_value)
+    return found
 
 
 class ShimTest(unittest.TestCase):
@@ -89,7 +102,10 @@ class ShimTest(unittest.TestCase):
         self.server.server_close()
 
     def test_exports_allowlisted_metrics(self):
-        result = run_child({"AGENT_CONSOLE_HEADROOM_PROFILE": "1", "AGENT_CONSOLE_HEADROOM_TRACEMALLOC": "1"}, self.port)
+        result = run_child(
+            {"AGENT_CONSOLE_HEADROOM_PROFILE": "1", "AGENT_CONSOLE_HEADROOM_TRACEMALLOC": "1"},
+            self.port,
+        )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(Sink.bodies, result.stderr)
         names, attrs = decode_points(Sink.bodies[-1])

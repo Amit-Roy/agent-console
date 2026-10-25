@@ -24,8 +24,16 @@ def _mallinfo_reader(field):
         _fields_ = [
             (name, ctypes.c_size_t)
             for name in (
-                "arena", "ordblks", "smblks", "hblks", "hblkhd",
-                "usmblks", "fsmblks", "uordblks", "fordblks", "keepcost",
+                "arena",
+                "ordblks",
+                "smblks",
+                "hblks",
+                "hblkhd",
+                "usmblks",
+                "fsmblks",
+                "uordblks",
+                "fordblks",
+                "keepcost",
             )
         ]
 
@@ -41,7 +49,7 @@ def _relative_location(filename, lineno, roots):
     path = filename
     for root in roots:
         if root and filename.startswith(root):
-            path = filename[len(root):].lstrip("/")
+            path = filename[len(root) :].lstrip("/")
             break
     path = path.replace("\\", "/")
     text = f"{path}:{lineno}"
@@ -87,8 +95,9 @@ def _build_resource(resource_cls):
 
 
 def _register_gauges(meter, tracemalloc):
-    from opentelemetry.metrics import Observation
     import sysconfig
+
+    from opentelemetry.metrics import Observation
 
     for name, field in (
         ("headroom.malloc.arena_bytes", "arena"),
@@ -111,8 +120,12 @@ def _register_gauges(meter, tracemalloc):
 
         return callback
 
-    meter.create_observable_gauge("headroom.tracemalloc.traced_bytes", callbacks=[traced(0)], unit="By")
-    meter.create_observable_gauge("headroom.tracemalloc.peak_bytes", callbacks=[traced(1)], unit="By")
+    meter.create_observable_gauge(
+        "headroom.tracemalloc.traced_bytes", callbacks=[traced(0)], unit="By"
+    )
+    meter.create_observable_gauge(
+        "headroom.tracemalloc.peak_bytes", callbacks=[traced(1)], unit="By"
+    )
 
     roots = sorted({sysconfig.get_path("purelib"), sysconfig.get_path("stdlib")}, key=len)
     cache = _SiteCache(tracemalloc, [r + "/" for r in reversed(roots) if r])
@@ -143,7 +156,11 @@ def _setup():
         tracemalloc.start(1)
     endpoint = os.environ.get("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT")
     interval = int(os.environ.get("OTEL_METRIC_EXPORT_INTERVAL", "30000"))
-    exporter = OTLPMetricExporter(endpoint=endpoint, timeout=5) if endpoint else OTLPMetricExporter(timeout=5)
+    exporter = (
+        OTLPMetricExporter(endpoint=endpoint, timeout=5)
+        if endpoint
+        else OTLPMetricExporter(timeout=5)
+    )
     reader = PeriodicExportingMetricReader(exporter, export_interval_millis=interval)
     provider = MeterProvider(resource=_build_resource(Resource), metric_readers=[reader])
     SystemMetricsInstrumentor(config=dict(RUNTIME_CONFIG)).instrument(meter_provider=provider)
