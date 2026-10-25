@@ -99,7 +99,10 @@ const env = {
 };
 delete env.AGENT_CONSOLE_PID_FILE;
 delete env.AGENT_CONSOLE_IDLE_COMPACT_CODEX_TTL_MS;
-const server = spawn(process.execPath, ["server/index.ts"], { env, stdio: "ignore" });
+const server = spawn(process.execPath, [process.env.TEST_SERVER_ENTRY || "server/index.ts"], {
+  env,
+  stdio: "ignore",
+});
 let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
 try {
   let ready = false;
@@ -172,13 +175,13 @@ try {
   }
 
   // Exact counts and completed replay prevent empty history from passing.
+  const lifecycleContext = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  await lifecycleContext.addCookies([{ name: "ac_session", value: makeToken(), url: base }]);
+  await lifecycleContext.addInitScript(() => localStorage.setItem("ac_thread", "lifecycle"));
   for (const scenario of process.env.AC_LIFECYCLE_CASE
     ? [process.env.AC_LIFECYCLE_CASE]
     : ["idle", "done-launch", "active", "background", "delta", "earlier", "result", "aborted"]) {
-    const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
-    await context.addCookies([{ name: "ac_session", value: makeToken(), url: base }]);
-    await context.addInitScript(() => localStorage.setItem("ac_thread", "lifecycle"));
-    const page = await context.newPage();
+    const page = await lifecycleContext.newPage();
     page.setDefaultTimeout(5000);
     const errors: string[] = [];
     page.on("pageerror", (error) => errors.push(String(error)));
@@ -314,6 +317,18 @@ try {
         t: "thread",
         thread: {
           ...fixture("lifecycle", "mock"),
+          workState: { version: 1, foreground: [], background: [], backgroundCount: 1 },
+        },
+      });
+      await page.waitForFunction(
+        () =>
+          document.querySelectorAll(".task-chip.running, .msg.card.pending").length === 0 &&
+          document.querySelector("#state-t")?.textContent === "Working · 1 agent",
+      );
+      send({
+        t: "thread",
+        thread: {
+          ...fixture("lifecycle", "mock"),
           workState: { version: 1, foreground: [], background: [], backgroundCount: 0 },
         },
       });
@@ -324,9 +339,10 @@ try {
       );
     }
     assert.deepEqual(errors, []);
-    await context.close();
+    await page.close();
     console.log(`PASS tool card lifecycle ${scenario}`);
   }
+  await lifecycleContext.close();
 
   assert.equal(
     fs.existsSync(path.join(data, "turns.jsonl")) &&

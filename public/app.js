@@ -3012,14 +3012,18 @@ function settleCompact(outcome = "stopped") {
 
 // Runtime tool IDs survive transcript compaction. Historical task chips alone do
 // not prove that a process is still alive.
+function backgroundWorkActive({ id, chip, thread }) {
+  const work = thread?.workState;
+  if (!work) return chip && (thread?.background || 0) > 0;
+  return work.background.includes(id);
+}
+
 function reconcileCards({ foregroundEnded = false } = {}) {
   const thread = cur();
   const work = thread?.workState;
   for (const [id, card] of state.cards) {
     const chip = card.querySelector(".task-chip.running");
-    const background = work
-      ? work.background.includes(id) || (chip && work.backgroundCount > work.background.length)
-      : chip && (thread?.background || 0) > 0;
+    const background = backgroundWorkActive({ id, chip, thread });
     if (chip && !background) finishChip(card, chip, { status: "stopped" });
     if (!card.classList.contains("pending") || background) continue;
     const foreground =
@@ -3436,9 +3440,9 @@ function startBackgroundChip(card, existing, e) {
     finishChip(card, chip, done);
   }
 }
-function taskEvent(e, ctx) {
+function updateTaskWork(e) {
   const work = cur()?.workState;
-  if (ctx.live && work) {
+  if (work) {
     if (
       e.subtype === "task_started" &&
       e.is_backgrounded &&
@@ -3453,6 +3457,9 @@ function taskEvent(e, ctx) {
       }
     }
   }
+}
+function taskEvent(e, ctx) {
+  if (ctx.live) updateTaskWork(e);
   const card = state.cards.get(e.tool_use_id);
   if (!card) {
     // history is paged newest-first: the notification can arrive before the older page that holds its card and task_started

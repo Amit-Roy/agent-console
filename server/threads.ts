@@ -546,6 +546,14 @@ interface Live {
   wakes?: string[]; // subagent results waiting for the agent to be free (harnesses that do not wake themselves)
 }
 
+interface WorkUpdate {
+  thread: Thread;
+  event: any;
+  foreground: Set<string>;
+  background: Set<string>;
+  tasks: Map<string, string>;
+}
+
 // One event on its way through onEvent: steps may replace the event, and a failed result leaves its error for the issue-run hook
 interface EventFlow {
   event: any;
@@ -1542,55 +1550,89 @@ export class Threads {
     if (event.parent_tool_use_id) return;
     const live = this.live.get(thread.id);
     if (!live) return;
-    const foreground = (live.foreground ??= new Set());
-    const background = (live.backgroundTools ??= new Set());
-    const tasks = (live.taskTools ??= new Map());
+    const work = {
+      thread,
+      event,
+      foreground: (live.foreground ??= new Set<string>()),
+      background: (live.backgroundTools ??= new Set<string>()),
+      tasks: (live.taskTools ??= new Map<string, string>()),
+    };
     let changed = false;
-    for (const block of event.message?.content ?? []) {
-      if (event.type === "assistant" && block.type === "tool_use" && typeof block.id === "string") {
-        foreground.add(block.id);
-        changed = true;
-      } else if (event.type === "user" && block.type === "tool_result") {
-        changed = foreground.delete(block.tool_use_id) || changed;
-        if (!background.has(block.tool_use_id))
-          for (const [task, tool] of tasks) if (tool === block.tool_use_id) tasks.delete(task);
-      }
-    }
-    if (
-      event.type === "system" &&
-      event.subtype === "task_started" &&
-      typeof event.tool_use_id === "string"
-    ) {
-      if (typeof event.task_id === "string") tasks.set(event.task_id, event.tool_use_id);
-      if (event.is_backgrounded) {
-        foreground.delete(event.tool_use_id);
-        background.add(event.tool_use_id);
-        changed = true;
-      }
-    }
-    if (event.type === "system" && event.subtype === "task_notification") {
-      const id = event.tool_use_id ?? tasks.get(event.task_id);
-      tasks.delete(event.task_id);
-      if (id) for (const [task, tool] of tasks) if (tool === id) tasks.delete(task);
-      if (id && background.delete(id)) {
-        thread.background = Math.max(0, (thread.background ?? 0) - 1);
-        changed = true;
-      }
-    }
-    if (
-      event.type === "system" &&
-      event.subtype === "background_tasks_changed" &&
-      Array.isArray(event.tasks)
-    ) {
-      background.clear();
-      for (const task of event.tasks) {
-        const id = task.tool_use_id ?? tasks.get(task.task_id);
-        if (typeof id === "string") background.add(id);
-      }
-      for (const [task, tool] of tasks)
-        if (!foreground.has(tool) && !background.has(tool)) tasks.delete(task);
+    switch (event.type) {
+      case "assistant":
+        changed = this.trackWorkCalls(work);
+        break;
+      case "user":
+        changed = this.trackWorkResults(work);
+        break;
+      case "system":
+        changed = this.trackSystemWork(work);
+        break;
     }
     if (changed) this.emitWorkState(thread);
+  }
+
+  private trackSystemWork(work: WorkUpdate) {
+    switch (work.event.subtype) {
+      case "task_started":
+        return this.startTaskWork(work);
+      case "task_notification":
+        return this.finishTaskWork(work);
+      case "background_tasks_changed":
+        if (Array.isArray(work.event.tasks)) this.replaceBackgroundWork(work);
+        return false;
+      default:
+        return false;
+    }
+  }
+
+  private trackWorkCalls({ event, foreground }: WorkUpdate) {
+    let changed = false;
+    for (const block of event.message?.content ?? []) {
+      if (block.type !== "tool_use" || typeof block.id !== "string") continue;
+      foreground.add(block.id);
+      changed = true;
+    }
+    return changed;
+  }
+
+  private trackWorkResults({ event, foreground, background, tasks }: WorkUpdate) {
+    let changed = false;
+    for (const block of event.message?.content ?? []) {
+      if (block.type !== "tool_result") continue;
+      changed = foreground.delete(block.tool_use_id) || changed;
+      if (background.has(block.tool_use_id)) continue;
+      for (const [task, tool] of tasks) if (tool === block.tool_use_id) tasks.delete(task);
+    }
+    return changed;
+  }
+
+  private startTaskWork({ event, foreground, background, tasks }: WorkUpdate) {
+    if (typeof event.tool_use_id !== "string") return false;
+    if (typeof event.task_id === "string") tasks.set(event.task_id, event.tool_use_id);
+    if (!event.is_backgrounded) return false;
+    foreground.delete(event.tool_use_id);
+    background.add(event.tool_use_id);
+    return true;
+  }
+
+  private finishTaskWork({ thread, event, background, tasks }: WorkUpdate) {
+    const id = event.tool_use_id ?? tasks.get(event.task_id);
+    tasks.delete(event.task_id);
+    if (id) for (const [task, tool] of tasks) if (tool === id) tasks.delete(task);
+    if (!id || !background.delete(id)) return false;
+    thread.background = Math.max(0, (thread.background ?? 0) - 1);
+    return true;
+  }
+
+  private replaceBackgroundWork({ event, foreground, background, tasks }: WorkUpdate) {
+    background.clear();
+    for (const task of event.tasks) {
+      const id = task.tool_use_id ?? tasks.get(task.task_id);
+      if (typeof id === "string") background.add(id);
+    }
+    for (const [task, tool] of tasks)
+      if (!foreground.has(tool) && !background.has(tool)) tasks.delete(task);
   }
 
   // Claude's background task count shows on the thread; an empty list lets idle compaction plan again. Never logged.
