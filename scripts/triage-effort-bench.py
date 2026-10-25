@@ -62,7 +62,7 @@ FOREST_GRID = [
     for leaf in (5, 10, 20)
     for features in (0.5, 1.0)
 ]
-# The newest fifth of the training rows picks the forest settings; held-out rows never do.
+# The lowest-hash fifth of the training rows picks the forest settings; held-out rows never do.
 FOREST_VALID_FRACTION = 0.2
 TARGET_METRIC = "totalTokens"
 # Row origins that mark probe sessions; a row with none of these (or no marker) counts as real.
@@ -256,8 +256,8 @@ def forest_logs(forest, rows):
 
 
 def pick_forest_config(train):
-    """Grid search on training rows only: fit on the older rows, score on the newest fifth."""
-    ordered = sorted(train, key=lambda sample: sample["_start"])
+    """Grid search on training rows only: fit on the highest-hash rows, score on the lowest-hash fifth."""
+    ordered = sorted(train, key=lambda sample: fit.stable_hash(sample["sampleId"]), reverse=True)
     cut = int(len(ordered) * (1 - FOREST_VALID_FRACTION))
     older, newest = ordered[:cut], ordered[cut:]
     features, target = matrix_of(older), target_of(older)
@@ -307,7 +307,7 @@ def score(logs, held, cap):
 
 def split_ceiling(samples):
     """Frozen split plus the own-train workload ceiling (external rows never set it)."""
-    train, held, _ = fit.frozen_split(samples)
+    train, held, _ = fit.random_split(samples)
     ceiling = float(max(fit.observed_work(sample, TARGET_METRIC) for sample in train))
     return train, held, ceiling
 
@@ -355,11 +355,11 @@ def run_candidate(samples, spec):
 
 
 def cut_gap(samples, fraction, spec):
-    """Pinball change at one cut-point when the newest training rows are dropped.
+    """Pinball change at one cut-point when the lowest-hash training rows are dropped.
 
     Raw heads only: offsets cost OFFSET_FOLDS extra fits per refit, about 6x per cut-point.
     """
-    grouped = fit.groups(samples)
+    grouped = sorted(fit.groups(samples), key=fit.group_hash)
     prefix = [
         sample for group in grouped[: int(round(len(grouped) * fraction))] for sample in group
     ]
@@ -368,7 +368,9 @@ def cut_gap(samples, fraction, spec):
     except ValueError:
         return None
     cap = math.log1p(ceiling)
-    older = sorted(train, key=lambda sample: sample["_start"])[: -fit.STABILITY_DROPPED]
+    older = sorted(train, key=lambda sample: fit.stable_hash(sample["sampleId"]))[
+        fit.STABILITY_DROPPED :
+    ]
     if len(older) < 2:
         return None
     full = score(fit_predict(train, held, spec)[0], held, cap)["pinball"]

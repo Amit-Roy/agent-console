@@ -60,6 +60,7 @@ import {
 } from "./providers/pi-model.ts";
 import { suggestTitle, titleText } from "./providers/title.ts";
 import { type PendingQuestion, Questions } from "./questions.ts";
+import { ThreadToolAuth } from "./thread-tool-auth.ts";
 import { fromProcess, runFacts, TurnClock, TurnTimingStore } from "./turn-timing.ts";
 import {
   MAX_ATTACHMENTS,
@@ -206,6 +207,7 @@ interface Queued {
   revision: number;
   editing?: boolean;
   questionAnswer?: true;
+  sourceThread?: { id: string; title: string; provider: string };
   at?: number; // when it was queued: queue wait in turn timing
 }
 const attachList = (q: Queued): any[] => (Array.isArray(q.attachments) ? q.attachments : []);
@@ -331,6 +333,7 @@ type SendOptions = {
   mode?: "steer" | "queue";
   delivery?: "queued";
   questionAnswer?: true;
+  sourceThread?: { id: string; title: string; provider: string };
   queuedAt?: number;
   instructions?: string;
   scheduled?: string;
@@ -385,6 +388,7 @@ function userInputEvent(
     ...(opts.auto ? { auto: opts.auto } : {}),
     ...(opts.delivery ? { delivery: opts.delivery } : {}),
     ...(opts.questionAnswer ? { questionAnswer: true } : {}),
+    ...(opts.sourceThread ? { sourceThread: opts.sourceThread } : {}),
     ...(opts.scheduled ? { scheduled: opts.scheduled } : {}),
     ...attachmentSummary(attachments),
   };
@@ -469,12 +473,14 @@ function mergeQueued(items: Queued[]): {
   text: string;
   attachments: unknown;
   questionAnswer?: true;
+  sourceThread?: { id: string; title: string; provider: string };
 } {
   if (items.length === 1)
     return {
       text: items[0].text,
       attachments: items[0].attachments,
       ...(items[0].questionAnswer ? { questionAnswer: true } : {}),
+      ...(items[0].sourceThread ? { sourceThread: items[0].sourceThread } : {}),
     };
   let next = 0;
   const attachments: any[] = [];
@@ -610,6 +616,7 @@ function startSpec(thread: Thread): ThreadSpec {
     sessionId: thread.sessionId,
     forkFrom: thread.sessionId ? undefined : thread.forkFrom,
     issueRun: thread.issueRun,
+    schedule: thread.schedule,
   };
 }
 
@@ -691,6 +698,7 @@ function carryForkSession(
 
 export class Threads {
   private questions = new Questions();
+  private threadToolAuth = new ThreadToolAuth();
   private idleCompactionTimers = new IdleCompactionTimers();
   private closed = false;
   private historyIndex = new HistoryIndex();
@@ -1419,6 +1427,7 @@ export class Threads {
     this.recordExit(thread, live, info);
     const current = this.live.get(thread.id) === live;
     if (current) {
+      this.threadToolAuth.clear(thread.id);
       this.live.delete(thread.id);
       this.emitWorkState(thread);
     }
@@ -1489,6 +1498,8 @@ export class Threads {
   // Canonical events from any harness. We only interpret the two that change thread state.
   // The steps run in a fixed order (usage before result accounting, idle hooks last); a step returning true ends the event there.
   private onEvent(thread: Thread, event: any) {
+    this.threadToolAuth.observe(thread.id, event);
+    if (event.type === "result" && !event.parent_tool_use_id) this.threadToolAuth.clear(thread.id);
     const flow: EventFlow = { event, compacting: thread.operation === "compact" };
     this.noteWorkState(thread, event);
     if (this.noteBackgroundTasks(thread, event)) return;
@@ -2183,10 +2194,8 @@ export class Threads {
   send(threadId: string, text: string, opts: SendOptions = {}) {
     const thread = this.threads.get(threadId);
     if (!thread) throw new Error("Unknown thread");
-    if (!opts.auto && !opts.questionAnswer && this.command(thread, text, opts.attachments)) return;
-    const attachments = resolveAttachments(threadId, opts.attachments);
-    this.answerAsyncQuestions(thread, text, opts, attachments);
-    if (!opts.auto) this.noteUserActivity(thread);
+    const attachments = this.prepareSend(thread, text, opts);
+    if (!attachments) return;
     if (thread.status === "running") {
       if (opts.auto) throw new Error("A turn is already running.");
       return this.whileRunning(thread, text, opts);
@@ -2194,7 +2203,8 @@ export class Threads {
     // older queued messages are about to drain (or wait on an edit): a new one joins behind them, never jumps ahead
     if (!opts.auto && !opts.delivery && this.queues.get(threadId)?.length) {
       this.enqueue(thread, text, opts);
-      return this.drain(threadId);
+      this.drain(threadId);
+      return "queued";
     }
     const prompt = this.composePrompt(thread, text, opts, attachments);
     const live = this.beginTurn(thread, opts);
@@ -2212,7 +2222,84 @@ export class Threads {
       if (this.notificationTurns.delete(threadId)) this.notify(thread, "failed");
       throw error;
     }
-    if (!opts.auto) this.notePrompt(thread, text);
+    if (!opts.auto && !opts.sourceThread) this.notePrompt(thread, text);
+    return "started";
+  }
+
+  private prepareSend(thread: Thread, text: string, opts: SendOptions) {
+    if (
+      !opts.sourceThread &&
+      !opts.auto &&
+      !opts.questionAnswer &&
+      this.command(thread, text, opts.attachments)
+    )
+      return;
+    const attachments = resolveAttachments(thread.id, opts.attachments);
+    if (!opts.sourceThread) this.answerAsyncQuestions(thread, text, opts, attachments);
+    if (!opts.auto && !opts.sourceThread) this.noteUserActivity(thread);
+    return attachments;
+  }
+
+  authorizeThreadTool(threadId: string, name: string, input: unknown) {
+    if (!this.live.has(threadId) || this.threads.get(threadId)?.status !== "running")
+      return Promise.resolve(false);
+    return this.threadToolAuth.consume(threadId, name, input);
+  }
+
+  async threadTool(name: string, senderId: string | undefined, input: any) {
+    const sender = senderId ? this.threads.get(senderId) : undefined;
+    if (
+      !sender ||
+      sender.archived ||
+      !senderId ||
+      !this.live.has(senderId) ||
+      sender.status !== "running"
+    )
+      throw new Error("Thread tools require a live Agent Console thread.");
+    if (name === "thread_list") {
+      if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).length)
+        throw new Error("thread_list takes no arguments.");
+      return {
+        threads: [...this.threads.values()]
+          .filter((thread) => !thread.archived)
+          .map(({ id: threadId, title, provider, status }) => ({
+            id: threadId,
+            title,
+            provider,
+            status,
+          })),
+      };
+    }
+    if (name !== "thread_send") throw new Error("Unknown thread tool.");
+    if (!(await this.authorizeThreadTool(senderId, name, input)))
+      throw new Error("thread_send is available only to the top-level agent's current tool call.");
+    if (sender.archived || sender.status !== "running" || !this.live.has(senderId))
+      throw new Error("Sending thread is no longer running.");
+    return this.sendThreadMessage(sender, input);
+  }
+
+  private sendThreadMessage(sender: Thread, input: any) {
+    if (
+      !input ||
+      typeof input !== "object" ||
+      Array.isArray(input) ||
+      Object.keys(input).some((key) => !["thread", "message"].includes(key)) ||
+      typeof input.thread !== "string" ||
+      typeof input.message !== "string" ||
+      !input.message.trim() ||
+      input.message.length > 20_000
+    )
+      throw new Error(
+        "Use thread_send with a thread id and a nonempty message of at most 20000 characters.",
+      );
+    const target = this.threads.get(input.thread);
+    if (!target || target.archived)
+      throw new Error("Target thread is missing or archived. Call thread_list.");
+    if (target.id === sender.id) throw new Error("Cannot send a message to the same thread.");
+    const sourceThread = { id: sender.id, title: sender.title, provider: sender.provider };
+    const text = `[Message from thread ${sender.id} (${sender.provider}): ${sender.title}]\n${input.message}`;
+    const delivery = this.send(target.id, text, { sourceThread });
+    return { thread: target.id, delivery };
   }
 
   // A plain chat reply answers the thread's pending background questions.
@@ -2307,15 +2394,12 @@ export class Threads {
     if (!t.titleLocked) void this.retitle(t, clean);
   }
 
-  private whileRunning(
-    thread: Thread,
-    text: string,
-    opts: { attachments?: unknown; mode?: "steer" | "queue"; questionAnswer?: true },
-  ) {
+  private whileRunning(thread: Thread, text: string, opts: SendOptions) {
     const attachments = resolveAttachments(thread.id, opts.attachments); // reject bad ids now, not when the queue drains
     const agent = this.live.get(thread.id)?.agent;
     // A normal chat reply also releases a waiting tool; otherwise steering can sit behind that tool forever.
     if (
+      !opts.sourceThread &&
       opts.mode !== "queue" &&
       !attachments.length &&
       text.trim() &&
@@ -2323,10 +2407,10 @@ export class Threads {
     )
       return;
     if (thread.operation !== "compact" && opts.mode !== "queue" && agent?.steer) {
-      this.steerAgent(thread, text, opts, attachments, agent);
-      return;
+      return this.steerAgent(thread, text, opts, attachments, agent);
     }
     this.enqueue(thread, text, opts);
+    return "queued";
   }
 
   // True when a waiting tool consumed the reply.
@@ -2343,7 +2427,7 @@ export class Threads {
   private steerAgent(
     thread: Thread,
     text: string,
-    opts: { attachments?: unknown; mode?: "steer" | "queue"; questionAnswer?: true },
+    opts: SendOptions,
     attachments: ReturnType<typeof resolveAttachments>,
     agent: Agent,
   ) {
@@ -2358,33 +2442,31 @@ export class Threads {
         if (!this.threads.has(thread.id) || this.live.get(thread.id)?.agent !== agent) return;
         this.steerRejected(thread, text, opts, error);
       });
+    return "steering";
   }
 
   private steerAccepted(
     thread: Thread,
     text: string,
-    opts: { questionAnswer?: true },
+    opts: SendOptions,
     attachments: ReturnType<typeof resolveAttachments>,
   ) {
-    this.continueArmed.add(thread.id);
+    if (!opts.sourceThread) this.continueArmed.add(thread.id);
     this.notificationTurns.add(thread.id);
-    this.notePrompt(thread, text);
+    if (!opts.sourceThread) this.notePrompt(thread, text);
     this.publish(thread.id, {
       type: "user_input",
       text,
       ts: Date.now(),
       delivery: "steer",
       ...(opts.questionAnswer ? { questionAnswer: true } : {}),
+      ...(opts.sourceThread ? { sourceThread: opts.sourceThread } : {}),
       ...attachmentSummary(attachments),
     });
+    return "steered";
   }
 
-  private steerRejected(
-    thread: Thread,
-    text: string,
-    opts: { attachments?: unknown; mode?: "steer" | "queue"; questionAnswer?: true },
-    error: Error,
-  ) {
+  private steerRejected(thread: Thread, text: string, opts: SendOptions, error: Error) {
     this.publish(thread.id, {
       type: "console_error",
       text: `Steering was not accepted: ${error.message}. Sending as the next message.`,
@@ -2399,19 +2481,20 @@ export class Threads {
     }
   }
 
-  private enqueue(t: Thread, text: string, opts: { attachments?: unknown; questionAnswer?: true }) {
-    const q = this.queues.get(t.id) ?? [];
-    if (q.length >= MAX_QUEUE) throw new Error("Too many queued messages.");
-    q.push({
+  private enqueue(thread: Thread, text: string, opts: SendOptions) {
+    const queue = this.queues.get(thread.id) ?? [];
+    if (queue.length >= MAX_QUEUE) throw new Error("Too many queued messages.");
+    queue.push({
       id: crypto.randomUUID(),
       text,
       attachments: opts.attachments,
       revision: 0,
       at: Date.now(),
       ...(opts.questionAnswer ? { questionAnswer: true } : {}),
+      ...(opts.sourceThread ? { sourceThread: opts.sourceThread } : {}),
     });
-    this.queues.set(t.id, q);
-    this.emitQueue(t.id);
+    this.queues.set(thread.id, queue);
+    this.emitQueue(thread.id);
   }
 
   private emitQueue(id: string) {
@@ -2488,6 +2571,7 @@ export class Threads {
       attachments: item.attachments,
       mode: "steer",
       ...(item.questionAnswer ? { questionAnswer: true } : {}),
+      ...(item.sourceThread ? { sourceThread: item.sourceThread } : {}),
     });
   }
   unqueue(id: string, qid: string) {
@@ -2510,17 +2594,18 @@ export class Threads {
       if (!t || t.status !== "idle" || !q?.length || q[0].editing) return;
       let n = 1;
       let files = attachList(q[0]).length;
-      if (!parseCommand(q[0].text)) {
+      if (!q[0].sourceThread && !parseCommand(q[0].text)) {
         while (
           n < q.length &&
           !q[n].editing &&
+          !q[n].sourceThread &&
           !parseCommand(q[n].text) &&
           files + attachList(q[n]).length <= MAX_ATTACHMENTS
         )
           files += attachList(q[n++]).length;
       }
       const items = q.splice(0, n);
-      const { text, attachments, questionAnswer } = mergeQueued(items);
+      const { text, attachments, questionAnswer, sourceThread } = mergeQueued(items);
       const queuedAt = Math.min(...items.map((x) => x.at ?? Infinity));
       this.emitQueue(id);
       try {
@@ -2528,6 +2613,7 @@ export class Threads {
           attachments,
           delivery: "queued",
           ...(questionAnswer ? { questionAnswer: true } : {}),
+          ...(sourceThread ? { sourceThread } : {}),
           ...(Number.isFinite(queuedAt) ? { queuedAt } : {}),
         });
       } catch (e: any) {
@@ -2557,7 +2643,11 @@ export class Threads {
         .flatMap((l) => {
           try {
             const e = JSON.parse(l);
-            return e.type === "user_input" && !e.auto && !e.command && typeof e.text === "string"
+            return e.type === "user_input" &&
+              !e.auto &&
+              !e.sourceThread &&
+              !e.command &&
+              typeof e.text === "string"
               ? [e.text]
               : [];
           } catch {
@@ -2581,6 +2671,7 @@ export class Threads {
   }
 
   abort(id: string) {
+    this.threadToolAuth.clear(id);
     this.notificationTurns.delete(id);
     this.continueArmed.delete(id);
     const t = this.threads.get(id);
@@ -2626,6 +2717,7 @@ export class Threads {
   }
 
   private kill(id: string, reason = "kill", rewarm = false) {
+    this.threadToolAuth.clear(id);
     this.notificationTurns.delete(id);
     this.continueArmed.delete(id);
     this.cancelQuestions(id);

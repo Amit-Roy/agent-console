@@ -17,7 +17,11 @@ export const SESSION_INSTRUCTIONS = [
 ].join("\n");
 
 const exposed = (name) =>
-  name.startsWith("session_") || name === "pi_research" || name === "cli_search";
+  name.startsWith("session_") ||
+  name === "thread_list" ||
+  name === "thread_send" ||
+  name === "pi_research" ||
+  name === "cli_search";
 
 export function consoleMcpServer() {
   if (!process.env.AGENT_CONSOLE_TOOL_URL || !process.env.AGENT_CONSOLE_TOOL_TOKEN)
@@ -60,7 +64,7 @@ export async function handleMcp(request) {
           description: t.description,
           inputSchema: t.parameters,
           annotations: {
-            readOnlyHint: t.name !== "session_redact",
+            readOnlyHint: !["session_redact", "thread_send"].includes(t.name),
             destructiveHint: t.name === "session_redact",
           },
         })),

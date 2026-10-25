@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { DATA_DIR } from "../auth.ts";
 import { launch as sandboxLaunch } from "../automation/sandbox.ts";
 import { retryEvent } from "../turn-timing.ts";
-import { harnessInstructions } from "./brain.ts";
+import { harnessInstructions, personaFor, personaInstructions } from "./brain.ts";
 import { childEnv } from "./env.ts";
 import { acquireModelRequest } from "./model-rate-client.ts";
 import { CODING_ROUTE, DIRECT_CODING_MODELS } from "./pi-coding-route.mjs";
@@ -566,10 +566,15 @@ function piHandleLine(run: PiRun, line: string) {
   run.translate(rec);
 }
 
+/** Main-thread system prompt: the role persona first. Children get only `brain` through the forwarded env, never the persona. */
+export const piMainPrompt = (spec: ThreadSpec, brain: string | undefined) =>
+  [personaInstructions(personaFor(spec)), brain].filter(Boolean).join("\n\n");
+
 function piLaunch(run: PiRun, brain: string | undefined) {
   if (run.dead) return;
   const { spec, ctx } = run;
-  if (brain) run.args.push("--append-system-prompt", brain); // style preamble + shared memory index
+  const main = piMainPrompt(spec, brain);
+  if (main) run.args.push("--append-system-prompt", main); // persona + style preamble + shared memory index
   const launch = sandboxLaunch(
     spec,
     "pi",

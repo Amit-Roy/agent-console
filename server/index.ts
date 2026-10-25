@@ -59,7 +59,8 @@ import { createDoctor } from "./doctor.ts";
 import { threadToMarkdown } from "./export.ts";
 import { fileMedia, fileTree, fileViewer } from "./files.ts";
 import { refHandler } from "./gh-refs.ts";
-import { headroom } from "./headroom.ts";
+import { headroom, metricsIngest } from "./headroom.ts";
+import { HeadroomProfileStore } from "./headroom-profile.ts";
 import { hostKill, hostMetrics, hostPorts, hostProcessDetail, hostProcesses } from "./host.ts";
 import { hostDu, hostDuRescan, hostHistory, latestHost, startHostSampler } from "./host-history.ts";
 import { IdeaError, Ideas } from "./ideas.ts";
@@ -95,10 +96,9 @@ import {
   writeEffortConfig,
 } from "./triage-promotion.ts";
 import {
-  adoptUpload,
+  adoptShareFiles,
   isId,
   MAX_FILE_BYTES,
-  markUntrusted,
   removeUpload,
   SAFE_NAME,
   saveUpload,
@@ -187,6 +187,13 @@ try {
 } catch {
   console.warn("Local latency storage is unavailable.");
 }
+let headroomProfile: HeadroomProfileStore | undefined;
+try {
+  headroomProfile = new HeadroomProfileStore(path.join(DATA_DIR, "latency.sqlite"));
+} catch {
+  console.warn("Headroom profile storage is unavailable.");
+}
+headroom.attachProfile(headroomProfile, PORT);
 setInterval(() => threads.sweep(), 60_000).unref();
 startToolPriority(); // tool commands below agents and this server: busy tests never delay a turn
 // Every automation stage writes here; the dashboard reads it. A previous process's unfinished runs are closed as abandoned.
@@ -611,8 +618,9 @@ app.post("/api/agent-tools/:name", express.json({ limit: "1mb" }), async (req, r
   try {
     if (gate.error) throw new Error(gate.error);
     const input = req.body ?? {};
-    const result =
-      req.params.name === "session_redact"
+    const result = ["thread_list", "thread_send"].includes(req.params.name)
+      ? await threads.threadTool(req.params.name, thread, input)
+      : req.params.name === "session_redact"
         ? transcriptRedaction.tool(input, thread ? threads.get(thread) : undefined)
         : req.params.name === "cli_search"
           ? cliSearch.search(input)
@@ -629,6 +637,12 @@ app.post("/api/agent-tools/:name", express.json({ limit: "1mb" }), async (req, r
     res.status(400).json({ error: e?.message || String(e) });
   }
 });
+
+// Headroom's own OTLP exporter reports over loopback with no session cookie; the handler rejects any non-loopback caller.
+app.post(
+  "/v1/metrics",
+  metricsIngest(() => headroomProfile),
+);
 
 // everything below requires the session cookie
 app.use((req, res, next) => {
@@ -880,20 +894,16 @@ function attachShare(
         cwd: path.join(os.homedir(), "repos"),
         title: shareTitle(link),
       });
-  const files: ReturnType<typeof adoptUpload>[] = [];
+  // the note carries the post's caption, which is as untrusted as the media
+  const sources = [...result.items, { path: result.notePath, name: shareNoteName(link.provider) }];
   try {
-    for (const item of result.items) {
-      const adopted = adoptUpload(thread.id, item.path, item.name, MAX_SHARE_BYTES);
-      if (isSandboxedShareProvider(link.provider)) markUntrusted(thread.id, adopted.id);
-      files.push(adopted);
-    }
-    const noteName = shareNoteName(link.provider);
-    files.push(adoptUpload(thread.id, result.notePath, noteName, MAX_SHARE_BYTES));
+    const untrusted = isSandboxedShareProvider(link.provider);
+    const files = adoptShareFiles(thread.id, sources, untrusted, MAX_SHARE_BYTES);
+    return { thread: thread.id, threadProvider: thread.provider, files };
   } catch (error) {
     if (!existing) threads.remove(thread.id);
     throw error;
   }
-  return { thread: thread.id, threadProvider: thread.provider, files };
 }
 async function handleShare(req: express.Request, res: express.Response, only?: string) {
   let link: ReturnType<typeof resolveShare>;
@@ -1307,6 +1317,19 @@ app.get("/api/host/processes", hostProcesses);
 app.get("/api/host/processes/:pid/detail", hostProcessDetail);
 app.get("/api/host/ports", hostPorts);
 app.get("/api/host/history", hostHistory);
+const PROFILE_RANGES: Record<string, number> = {
+  "1h": 3_600_000,
+  "6h": 21_600_000,
+  "24h": 86_400_000,
+  "7d": 604_800_000,
+};
+app.get("/api/host/headroom-profile", (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  const range = PROFILE_RANGES[String(req.query.range ?? "24h")];
+  if (!range) return void res.status(400).json({ error: "range must be 1h, 6h, 24h or 7d" });
+  if (!headroomProfile) return void res.status(503).json({ error: "Profile storage unavailable." });
+  res.json(headroomProfile.query(range));
+});
 app.get("/api/host/du", hostDu);
 app.post("/api/host/du/rescan", sameOrigin, hostDuRescan);
 app.post("/api/host/processes/:pid/kill", express.json({ limit: "1kb" }), sameOrigin, hostKill);
