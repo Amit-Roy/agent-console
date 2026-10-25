@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fit initial-request complexity to chronological observed session usage.
+"""Fit initial-request complexity to observed session usage.
 
 Requests and credentials are never copied to artifacts. The CLI does not read
 production logs; it accepts the audited, prework-feature dataset explicitly.
@@ -8,6 +8,7 @@ Legacy delivery-run datasets retain their tool-call target and token yields.
 
 import argparse
 import copy
+import hashlib
 import json
 import math
 import os
@@ -270,19 +271,40 @@ def groups(samples):
     )
 
 
-def frozen_split(samples):
+HOLDOUT_PERCENT = 10
+
+
+def stable_hash(key):
+    """Stable 32-bit bucket source for a group or sample id; never time-ordered."""
+    return int(hashlib.sha256(str(key).encode()).hexdigest()[:8], 16)
+
+
+def group_hash(group):
+    return stable_hash(group[0]["groupId"])
+
+
+def flatten(group_list):
+    return [row for group in group_list for row in group]
+
+
+def random_split(samples):
+    """Hash-randomized held-out split by thread group (sha256-10pct).
+
+    Old and new sessions are one sample: no time ordering, no purge. A group
+    stays whole on one side, and keeps its side as data grows.
+    """
     grouped = groups(samples)
     if len(grouped) < 4:
         raise ValueError("Need at least four independent completed thread groups")
-    holdout_count = max(1, math.ceil(len(grouped) * 0.2))
-    holdout = [s for group in grouped[-holdout_count:] for s in group]
-    boundary = min(s["_start"] for s in holdout)
-    older, purged = [], []
-    for group in grouped[:-holdout_count]:
-        (older if max(s["_time"] for s in group) < boundary else purged).extend(group)
-    if len(groups(older)) < 3:
-        raise ValueError("Insufficient older groups after strict temporal-overlap purge")
-    return older, holdout, purged
+    held = [group for group in grouped if group_hash(group) % 100 < HOLDOUT_PERCENT]
+    if len(held) < 3 or len(grouped) - len(held) < 3:
+        count = max(3, math.ceil(len(grouped) * HOLDOUT_PERCENT / 100))
+        held = sorted(grouped, key=lambda group: (group_hash(group), group[0]["groupId"]))[:count]
+    held_ids = {group[0]["groupId"] for group in held}
+    train = flatten(group for group in grouped if group[0]["groupId"] not in held_ids)
+    if len(groups(train)) < 3:
+        raise ValueError("Insufficient training groups after randomized split")
+    return train, flatten(held), []
 
 
 def design(samples, imputation=None, scale=None):
@@ -351,20 +373,13 @@ def predict_work(model, samples):
     return np.maximum(0, np.expm1(np.clip(matrix @ weights, -50, 30)))
 
 
-def folds(samples):
+def folds(samples, count=5):
+    """Grouped K folds by group-id hash; no time ordering."""
     ordered = groups(samples)
-    # At least two independent groups precede each validation group. Groups
-    # with overlapping completion windows are purged from that fold.
-    for index in range(2, len(ordered)):
-        validation = ordered[index]
-        boundary = min(s["_start"] for s in validation)
-        train = [
-            s
-            for group in ordered[:index]
-            if max(r["_time"] for r in group) < boundary
-            for s in group
-        ]
-        if len(groups(train)) >= 2:
+    for fold in range(count):
+        validation = flatten(group for group in ordered if group_hash(group) % count == fold)
+        train = flatten(group for group in ordered if group_hash(group) % count != fold)
+        if validation and len(groups(train)) >= 2:
             yield train, validation
 
 
@@ -725,14 +740,14 @@ def fit_calibrated_heads(train, ceiling):
 
 
 def stability_probe(train, heldout, ceiling, cap, full_pinball):
-    """Report-only: refit without the newest training rows and score the same held-out rows."""
-    older = sorted(train, key=lambda sample: sample["_start"])[:-STABILITY_DROPPED]
+    """Report-only: refit without the lowest-hash training rows and score the same held-out rows."""
+    older = sorted(train, key=lambda sample: stable_hash(sample["sampleId"]))[STABILITY_DROPPED:]
     if len(older) < 2:
         return None
     model, _, _ = fit_calibrated_heads(older, ceiling)
     pinball = mean_pinball(score_quantile_model(model, heldout, cap))
     return {
-        "droppedNewest": STABILITY_DROPPED,
+        "droppedRows": STABILITY_DROPPED,
         "meanPinball": pinball,
         "gap": abs(pinball - full_pinball),
     }
@@ -778,10 +793,10 @@ def fit_quantile_model(train, heldout, ceiling):
 
 
 def select_alpha(train, workload_metric):
-    """Pick the ridge alpha by older-group out-of-fold log MSE; ties prefer the larger alpha."""
+    """Pick the ridge alpha by grouped out-of-fold log MSE; ties prefer the larger alpha."""
     folds_list = list(folds(train))
     if not folds_list:
-        raise ValueError("No strict older-group folds available for residual calibration")
+        raise ValueError("No grouped folds available for residual calibration")
     scores, residuals_by_alpha = [], {}
     for alpha in ALPHAS:
         residuals = []
@@ -873,7 +888,7 @@ def build_artifact(dataset, champion_path=None):
     scope = dataset_scope(dataset)
     token_yield_basis = "workload" if scope == "completed-session" else "actions"
     workload_metric = "totalTokens" if scope == "completed-session" else "toolCalls"
-    train, heldout, purged = frozen_split(samples)
+    train, heldout, purged = random_split(samples)
     alpha, scores, residuals_by_alpha = select_alpha(train, workload_metric)
     model = fit_model(train, alpha, workload_metric)
     scenarios = [
@@ -954,7 +969,7 @@ def build_artifact(dataset, champion_path=None):
         "groupCount": len(groups(heldout)),
         "sampleIds": [s["sampleId"] for s in heldout],
         "purgedSampleCount": len(purged),
-        "splitPolicy": "newest 20% thread groups by earliest run start; every training group completed before earliest target start",
+        "splitPolicy": "thread groups whose sha256(groupId) bucket is below 10 of 100 are held out; no time ordering, no purge",
         "workloadMetric": workload_metric,
         "work": model_error,
         "baselineWork": baseline_error,
@@ -973,7 +988,7 @@ def build_artifact(dataset, champion_path=None):
             ),
             "Prework feature extraction uncertainty is not identified by this sample.",
             "Empirical OOF intervals are not coverage guarantees or risk-neutral prices.",
-            "Alpha selection and residual calibration share older-group folds; newest groups remain untouched.",
+            "Alpha selection and residual calibration share grouped hash folds; held-out groups remain untouched.",
             "Token yields reflect historical provider, tool, and context policy mixtures.",
         ],
         "selection": scores,
@@ -989,7 +1004,7 @@ def build_artifact(dataset, champion_path=None):
         "rejectedByReason": rejected,
         "trainingSamples": len(train),
         "heldoutSamples": len(heldout),
-        "temporalPurgedSamples": len(purged),
+        "groupedSplit": "sha256-10pct",
         "oofSamples": len(oof_ids),
         "trainingSamplesWithoutOof": len(train) - len(oof_ids),
         "acceptedZeroActionSamples": sum(s["outcomes"].get("toolCalls") == 0 for s in samples),
@@ -1042,7 +1057,7 @@ def build_artifact(dataset, champion_path=None):
         training["calibration"] = (
             "empirical-training-distribution"
             if estimator == "historical-baseline"
-            else "chronological-out-of-fold"
+            else "grouped-out-of-fold"
         )
         cohort_audit["activeScenarios"] = len(scenarios)
         cohort_audit["activeZeroUsageScenarios"] = sum(bool(s.get("zeroWork")) for s in scenarios)
