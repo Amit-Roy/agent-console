@@ -95,10 +95,9 @@ import {
   writeEffortConfig,
 } from "./triage-promotion.ts";
 import {
-  adoptUpload,
+  adoptShareFiles,
   isId,
   MAX_FILE_BYTES,
-  markUntrusted,
   removeUpload,
   SAFE_NAME,
   saveUpload,
@@ -881,20 +880,16 @@ function attachShare(
         cwd: path.join(os.homedir(), "repos"),
         title: shareTitle(link),
       });
-  const files: ReturnType<typeof adoptUpload>[] = [];
+  // the note carries the post's caption, which is as untrusted as the media
+  const sources = [...result.items, { path: result.notePath, name: shareNoteName(link.provider) }];
   try {
-    for (const item of result.items) {
-      const adopted = adoptUpload(thread.id, item.path, item.name, MAX_SHARE_BYTES);
-      if (isSandboxedShareProvider(link.provider)) markUntrusted(thread.id, adopted.id);
-      files.push(adopted);
-    }
-    const noteName = shareNoteName(link.provider);
-    files.push(adoptUpload(thread.id, result.notePath, noteName, MAX_SHARE_BYTES));
+    const untrusted = isSandboxedShareProvider(link.provider);
+    const files = adoptShareFiles(thread.id, sources, untrusted, MAX_SHARE_BYTES);
+    return { thread: thread.id, threadProvider: thread.provider, files };
   } catch (error) {
     if (!existing) threads.remove(thread.id);
     throw error;
   }
-  return { thread: thread.id, threadProvider: thread.provider, files };
 }
 async function handleShare(req: express.Request, res: express.Response, only?: string) {
   let link: ReturnType<typeof resolveShare>;
