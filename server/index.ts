@@ -512,7 +512,7 @@ app.use((_req, res, next) => {
   res.setHeader("X-Frame-Options", "DENY");
   res.setHeader(
     "Content-Security-Policy",
-    "default-src 'self'; img-src 'self' data: blob: https: http:; media-src 'self' blob: https: http:; style-src 'self' 'unsafe-inline'; connect-src 'self' wss: ws:; frame-ancestors 'none'",
+    "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; img-src 'self' data: blob: https: http:; media-src 'self' blob: https: http:; style-src 'self' 'unsafe-inline'; connect-src 'self' wss: ws:; frame-ancestors 'none'",
   );
   next();
 });
@@ -1448,6 +1448,17 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
         ? `Files must be under ${MAX_FILE_BYTES >> 20} MB.`
         : "Upload failed.",
   });
+});
+// The ```arch route worker runs libavoid's embind glue, which needs eval. Only the worker script (and the module it
+// imports) gets a CSP allowing it; Chromium applies a dedicated worker's own response CSP, the page CSP stays strict.
+const ARCH_WORKER_SCRIPTS = new Set(["/arch-route-worker.js", "/vendor/libavoid/index.js"]);
+app.use((req, res, next) => {
+  if (ARCH_WORKER_SCRIPTS.has(req.path))
+    res.setHeader(
+      "Content-Security-Policy",
+      "default-src 'none'; script-src 'self' 'unsafe-eval' 'wasm-unsafe-eval'; connect-src 'self'",
+    );
+  next();
 });
 app.use(express.static(path.join(ROOT, "public"), { index: "index.html", extensions: ["html"] }));
 

@@ -4,6 +4,8 @@
 //   highlight.js: core + 13 common languages as ES modules (BSD-3-Clause)
 //   chart.js:    minified UMD build, lazy-loaded by render.js only when a ```chart block appears (MIT)
 //   cytoscape:   minified ES module, lazy-loaded by brain.js only when the Brain graph view opens (MIT)
+//   libavoid-js: orthogonal connector router (JS + wasm), lazy-loaded by arch.js for ```arch diagrams (LGPL-2.1)
+//   lucide:      icons.json, a name -> inner SVG markup map built from lucide-static, used by arch.js (ISC)
 import fs from "node:fs";
 import path from "node:path";
 
@@ -72,4 +74,21 @@ copy(nm("chart.js/dist/chart.umd.min.js"), out("vendor/chart.umd.min.js"));
 copy(nm("chart.js/LICENSE.md"), out("vendor/chart.LICENSE.txt"));
 copy(nm("cytoscape/dist/cytoscape.esm.min.mjs"), out("vendor/cytoscape.esm.min.mjs"));
 copy(nm("cytoscape/LICENSE"), out("vendor/cytoscape.LICENSE.txt"));
-console.log("vendored fonts + highlight.js + chart.js + cytoscape into public/");
+copy(nm("libavoid-js/dist/index.js"), out("vendor/libavoid/index.js"));
+copy(nm("libavoid-js/dist/libavoid.wasm"), out("vendor/libavoid/libavoid.wasm"));
+copy(nm("libavoid-js/LICENSE"), out("vendor/libavoid/LICENSE.txt"));
+const nodes = JSON.parse(fs.readFileSync(nm("lucide-static/icon-nodes.json"), "utf8"));
+const attrText = (attrs) =>
+  Object.entries(attrs)
+    .filter(([key]) => key !== "key")
+    .map(([key, value]) => ` ${key}="${value}"`)
+    .join("");
+const icons = {};
+for (const [name, parts] of Object.entries(nodes))
+  icons[name] = parts.map(([tag, attrs]) => `<${tag}${attrText(attrs)}/>`).join("");
+fs.mkdirSync(out("vendor/lucide"), { recursive: true });
+fs.writeFileSync(out("vendor/lucide/icons.json"), JSON.stringify(icons));
+copy(nm("lucide-static/LICENSE"), out("vendor/lucide/LICENSE.txt"));
+console.log(
+  "vendored fonts + highlight.js + chart.js + cytoscape + libavoid + lucide into public/",
+);
