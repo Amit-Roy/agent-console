@@ -1472,6 +1472,25 @@ function renderThreads() {
 }
 setInterval(() => state.threads.size && renderThreads(), 30000);
 
+function securityBadText(changed, failed) {
+  if (changed) return `Security: ${changed} unsanctioned change${changed > 1 ? "s" : ""}`;
+  return `Security: ${failed} failed patch${failed > 1 ? "es" : ""}`;
+}
+function securityWarnText(open, behind) {
+  if (open) return `Security: ${open} patch PR${open > 1 ? "s" : ""} open`;
+  return `Security: ${behind} tool${behind > 1 ? "s" : ""} behind`;
+}
+function securityVerdict(counts) {
+  const { changed, failed, failing, open, behind } = counts;
+  if (changed || failed) return { tone: "bad", text: securityBadText(changed, failed) };
+  if (failing)
+    return {
+      tone: "bad",
+      text: `Security: ${failing} automation${failing > 1 ? "s" : ""} failing`,
+    };
+  if (behind) return { tone: "warn", text: securityWarnText(open, behind) };
+  return { tone: "ok", text: "Security: all clear" };
+}
 // Security shield in the sidebar: green = nothing to do, amber = a patch PR is open or a tool is behind, red = unsanctioned change, failed patch or a failing security automation.
 async function refreshSecurity() {
   const link = $("sec-status");
@@ -1489,21 +1508,7 @@ async function refreshSecurity() {
       .catch(() => null);
     const failing = auto?.summary?.bad ?? 0;
     const changed = (d.mismatches || []).length;
-    if (changed || failed) {
-      tone = "bad";
-      text = `Security: ${changed ? `${changed} unsanctioned change${changed > 1 ? "s" : ""}` : `${failed} failed patch${failed > 1 ? "es" : ""}`}`;
-    } else if (failing) {
-      tone = "bad";
-      text = `Security: ${failing} automation${failing > 1 ? "s" : ""} failing`;
-    } else if (behind.length) {
-      tone = "warn";
-      text = open
-        ? `Security: ${open} patch PR${open > 1 ? "s" : ""} open`
-        : `Security: ${behind.length} tool${behind.length > 1 ? "s" : ""} behind`;
-    } else {
-      tone = "ok";
-      text = "Security: all clear";
-    }
+    ({ tone, text } = securityVerdict({ changed, failed, failing, open, behind: behind.length }));
   } catch {}
   link.dataset.tone = tone;
   link.setAttribute("aria-label", text);
@@ -1550,6 +1555,25 @@ async function finishSendingDraft(cid, draft) {
       localStorage.removeItem(`ac_sending:${cid}`);
     } catch {}
 }
+function mergeSendingAttachment(item, list, labels, saved) {
+  const existing = list.find((entry) => entry.key === item.key);
+  if (existing) {
+    if (item.n && existing.n !== item.n) labels.set(item.n, existing.n);
+    return;
+  }
+  if (item.n && list.some((entry) => entry.n === item.n)) {
+    const next = Math.max(0, ...list.map((entry) => entry.n || 0)) + 1;
+    labels.set(item.n, next);
+    item.n = next;
+  }
+  list.push(item);
+  saved.push(attachmentStorage.save(item));
+}
+function mergeRecoveredText(text, recovered) {
+  if (recovered && text !== recovered && !text.startsWith(`${recovered}\n\n`))
+    return recovered + (text ? `\n\n${text}` : "");
+  return text;
+}
 async function recoverSendingDraft(cid, draft) {
   let text = drafts.get(draft.thread) || "";
   try {
@@ -1559,26 +1583,12 @@ async function recoverSendingDraft(cid, draft) {
   attachmentDrafts.set(draft.thread, list);
   const saved = [];
   const labels = new Map();
-  for (const p of draft.attachments) {
-    const existing = list.find((item) => item.key === p.key);
-    if (existing) {
-      if (p.n && existing.n !== p.n) labels.set(p.n, existing.n);
-      continue;
-    }
-    if (p.n && list.some((item) => item.n === p.n)) {
-      const n = Math.max(0, ...list.map((item) => item.n || 0)) + 1;
-      labels.set(p.n, n);
-      p.n = n;
-    }
-    list.push(p);
-    saved.push(attachmentStorage.save(p));
-  }
+  for (const item of draft.attachments) mergeSendingAttachment(item, list, labels, saved);
   list.sort((a, b) => (a.order || 0) - (b.order || 0));
   const recovered = draft.text.replace(/\[Image #(\d+)\]/g, (token, n) =>
     labels.has(Number(n)) ? `[Image #${labels.get(Number(n))}]` : token,
   );
-  if (recovered && text !== recovered && !text.startsWith(`${recovered}\n\n`))
-    text = recovered + (text ? `\n\n${text}` : "");
+  text = mergeRecoveredText(text, recovered);
   writeDraft(draft.thread, text);
   if (state.current === draft.thread) restoreDraft(draft.thread);
   await Promise.all(saved);
@@ -1623,10 +1633,7 @@ document.addEventListener("visibilitychange", () => {
   }
 });
 
-function openThread(id) {
-  const switching = state.current !== id;
-  if (switching) chatSearch.close(false);
-  if (switching) saveDraft();
+function recordCancelledMeasurement() {
   if (state.measurement)
     latency.record({
       kind: "cancelled",
@@ -1635,39 +1642,92 @@ function openThread(id) {
       hidden: state.measurement.hidden,
     });
   state.measurement = null;
+}
+function captureViewSnapshot() {
+  return {
+    nodes: [...$("chat").childNodes],
+    cards: state.cards,
+    doneTasks: state.doneTasks,
+    subs: state.subs,
+    subTools: state.subTools,
+    live: state.live,
+    compact: state.compact,
+    start: state.start,
+    latestStart: state.latestStart,
+    end: state.end,
+    scroll: $("chat").scrollTop,
+    anchor: viewAnchor(),
+    stats: $("diagnostics").textContent,
+  };
+}
+function resetThreadCollections() {
+  state.cards = new Map();
+  state.lastTs = null;
+  state.subs = new Map();
+  state.subTools = new Map();
+  state.doneTasks = null;
+  state.live = null;
+}
+function stashOldView(old, id) {
+  if (state.live?.raf) {
+    cancelAnimationFrame(state.live.raf);
+    state.live.raf = 0;
+  }
+  const snapshot = (!state.deferredRefresh && state.snapshot) || captureViewSnapshot();
+  snapshot.stale ||= !!state.revalidating || !!state.loadingEarlier || old.id === id;
+  views.delete(old.id);
+  views.set(old.id, snapshot);
+  if (views.size > 5) views.delete(views.keys().next().value);
+  resetThreadCollections();
+}
+function showCachedView(id, cached) {
+  if (state.features.selectiveEvents) send({ t: "subscribe", thread: id });
+  clearTimeout(state.loadTimer);
+  state.loading = null;
+  state.cards = cached.cards;
+  state.doneTasks = cached.doneTasks;
+  state.subs = cached.subs;
+  state.subTools = cached.subTools;
+  state.start = cached.start;
+  state.latestStart = cached.latestStart;
+  state.end = cached.end;
+  state.live = cached.live;
+  state.compact = cached.compact;
+  $("chat").replaceChildren(...cached.nodes);
+  questions.ensure(id);
+  earlierIdle();
+  restoreView(cached);
+  const total_ms = Math.round(performance.now() - state.openAt);
+  window.agentConsoleMetrics = { thread: id, cached: true, total_ms };
+  latency.record({ kind: "cached", thread: id, total_ms, render_ms: total_ms, wait_ms: 0 });
+  showLoad(`Opened from cache in ${fmtMs(total_ms)}`);
+  views.delete(id);
+  if (cached.stale || cur()?.status === "running") revalidateCachedView(cached);
+}
+function revalidateCachedView(cached) {
+  state.snapshot = cached;
+  state.revalidating = true;
+  state.deferredRefresh = cached.start < cached.latestStart && !state.stick;
+  const status = el(
+    "div",
+    "loading",
+    state.deferredRefresh
+      ? "Showing saved history. Return to latest to update."
+      : "Updating conversation…",
+  );
+  status.id = "conversation-updating";
+  status.setAttribute("role", "status");
+  $("chat").before(status);
+  if (!state.deferredRefresh) refreshConversation();
+}
+function openThread(id) {
+  const switching = state.current !== id;
+  if (switching) chatSearch.close(false);
+  if (switching) saveDraft();
+  recordCancelledMeasurement();
   releaseHistoryAnchor();
   const old = cur();
-  if (old && ((!state.rendering && !state.loading) || state.snapshot)) {
-    if (state.live?.raf) {
-      cancelAnimationFrame(state.live.raf);
-      state.live.raf = 0;
-    }
-    const snapshot = (!state.deferredRefresh && state.snapshot) || {
-      nodes: [...$("chat").childNodes],
-      cards: state.cards,
-      doneTasks: state.doneTasks,
-      subs: state.subs,
-      subTools: state.subTools,
-      live: state.live,
-      compact: state.compact,
-      start: state.start,
-      latestStart: state.latestStart,
-      end: state.end,
-      scroll: $("chat").scrollTop,
-      anchor: viewAnchor(),
-      stats: $("diagnostics").textContent,
-    };
-    snapshot.stale ||= !!state.revalidating || !!state.loadingEarlier || old.id === id;
-    views.delete(old.id);
-    views.set(old.id, snapshot);
-    if (views.size > 5) views.delete(views.keys().next().value);
-    state.cards = new Map();
-    state.lastTs = null;
-    state.subs = new Map();
-    state.subTools = new Map();
-    state.doneTasks = null;
-    state.live = null;
-  }
+  if (old && ((!state.rendering && !state.loading) || state.snapshot)) stashOldView(old, id);
   state.revalidating = false;
   state.loadingEarlier = false;
   state.earlierChain = 0;
@@ -1700,43 +1760,7 @@ function openThread(id) {
   warmSoon();
   const cached = views.get(id);
   if (cached) {
-    if (state.features.selectiveEvents) send({ t: "subscribe", thread: id });
-    clearTimeout(state.loadTimer);
-    state.loading = null;
-    state.cards = cached.cards;
-    state.doneTasks = cached.doneTasks;
-    state.subs = cached.subs;
-    state.subTools = cached.subTools;
-    state.start = cached.start;
-    state.latestStart = cached.latestStart;
-    state.end = cached.end;
-    state.live = cached.live;
-    state.compact = cached.compact;
-    $("chat").replaceChildren(...cached.nodes);
-    questions.ensure(id);
-    earlierIdle();
-    restoreView(cached);
-    const total_ms = Math.round(performance.now() - state.openAt);
-    window.agentConsoleMetrics = { thread: id, cached: true, total_ms };
-    latency.record({ kind: "cached", thread: id, total_ms, render_ms: total_ms, wait_ms: 0 });
-    showLoad(`Opened from cache in ${fmtMs(total_ms)}`);
-    views.delete(id);
-    if (cached.stale || cur()?.status === "running") {
-      state.snapshot = cached;
-      state.revalidating = true;
-      state.deferredRefresh = cached.start < cached.latestStart && !state.stick;
-      const status = el(
-        "div",
-        "loading",
-        state.deferredRefresh
-          ? "Showing saved history. Return to latest to update."
-          : "Updating conversation…",
-      );
-      status.id = "conversation-updating";
-      status.setAttribute("role", "status");
-      $("chat").before(status);
-      if (!state.deferredRefresh) refreshConversation();
-    }
+    showCachedView(id, cached);
     return;
   }
   showLoading(id);
@@ -1840,6 +1864,37 @@ async function renderEvents(events, token, follow) {
   }
   return token === state.renderToken;
 }
+function resetRefreshState() {
+  if (state.live?.raf) cancelAnimationFrame(state.live.raf);
+  state.live = null;
+  state.compact = null;
+  state.cards = new Map();
+  state.lastTs = null;
+  state.subs = new Map();
+  state.subTools = new Map();
+  state.doneTasks = null;
+}
+function prepareHistoryHost(refreshing) {
+  const more = state.start > 0 ? earlierButton() : null;
+  if (more && !refreshing) $("chat").append(more); // tappable while the newest page draws: requestEarlier waits, so two renders never fight over the scroll position
+  const host = document.createDocumentFragment();
+  if (refreshing && more) host.append(more);
+  return host;
+}
+function alignHistoryView(refreshing, followed, savedScroll) {
+  if (refreshing && !followed) $("chat").scrollTop = savedScroll;
+  else scrollDown(true);
+}
+function drainPendingLive() {
+  for (const pending of state.pendingLive.splice(0)) onEvent(pending, true);
+}
+function appendReadyHint() {
+  const hint = emptyState();
+  hint.querySelector("h2").textContent = "Ready";
+  hint.querySelector("p").textContent = "Send a message to start this thread.";
+  hint.querySelector("button").remove();
+  $("chat").append(hint);
+}
 async function showHistory(m) {
   clearTimeout(state.loadTimer);
   state.loading = null;
@@ -1847,43 +1902,25 @@ async function showHistory(m) {
   state.historyAt = performance.now();
   const refreshing = state.revalidating;
   const cachedMetrics = refreshing ? window.agentConsoleMetrics : null;
-  if (refreshing) {
-    if (state.live?.raf) cancelAnimationFrame(state.live.raf);
-    state.live = null;
-    state.compact = null;
-    state.cards = new Map();
-    state.lastTs = null;
-    state.subs = new Map();
-    state.subTools = new Map();
-    state.doneTasks = null;
-  } else clearChat();
+  if (refreshing) resetRefreshState();
+  else clearChat();
   state.rendering = true;
   $("chat").setAttribute("aria-busy", "true");
   state.pendingLive = refreshing ? state.waitingLive.splice(0) : [];
   state.start = m.start || 0;
   state.latestStart = state.start;
   state.end = m.end;
-  const more = state.start > 0 ? earlierButton() : null;
-  if (more && !refreshing) $("chat").append(more); // tappable while the newest page draws: requestEarlier waits, so two renders never fight over the scroll position
-  const host = document.createDocumentFragment();
-  if (refreshing && more) host.append(more);
+  const host = prepareHistoryHost(refreshing);
   state.into = host;
   if (!(await renderEvents(m.events, token, true))) return;
   state.into = null;
   const refreshScroll = $("chat").scrollTop;
   const refreshFollow = state.stick && nearBottom();
-  const alignHistory = () =>
-    refreshing && !refreshFollow ? ($("chat").scrollTop = refreshScroll) : scrollDown(true);
+  const alignHistory = () => alignHistoryView(refreshing, refreshFollow, refreshScroll);
   if (refreshing) $("chat").replaceChildren(host);
   else $("chat").append(host);
-  if (!m.events.length) {
-    const hint = emptyState();
-    hint.querySelector("h2").textContent = "Ready";
-    hint.querySelector("p").textContent = "Send a message to start this thread.";
-    hint.querySelector("button").remove();
-    $("chat").append(hint);
-  }
-  for (const e of state.pendingLive.splice(0)) onEvent(e, true);
+  if (!m.events.length) appendReadyHint();
+  drainPendingLive();
   alignHistory();
   await frame();
   if (token !== state.renderToken) return;
@@ -1895,7 +1932,7 @@ async function showHistory(m) {
   if (cur()?.operation !== "compact") settleCompact("interrupted");
   $("chat").setAttribute("aria-busy", "false");
   state.lastScrollTop = $("chat").scrollTop;
-  for (const e of state.pendingLive.splice(0)) onEvent(e, true);
+  drainPendingLive();
   historyDone(m, refreshing, cachedMetrics);
 }
 // A refresh that asked for only what was logged after the cached view: append it in place instead of redrawing the conversation.
@@ -2429,10 +2466,7 @@ function renderThreadId(id) {
 }
 // Where the last turn's time went, measured by the server from the agent's own events: one headline number (first token),
 // one stacked bar (model / tools / other) with its values in words, then the slowest tools. Nothing is said by color alone.
-function renderTurnTiming(x, phoneMs) {
-  const section = $("turn-timing");
-  section.hidden = !x;
-  if (!x) return;
+function timingHead(x) {
   const head = el("div", "tt-head");
   const big = el("span", "tt-big", x.first_ms == null ? "No output" : fmtMs(x.first_ms));
   head.append(
@@ -2440,18 +2474,12 @@ function renderTurnTiming(x, phoneMs) {
     el("span", "tt-cap", x.first_ms == null ? "" : "to first token"),
     el("span", `tt-tag${x.cold ? " cold" : ""}`, x.cold ? "Cold start" : "Warm"),
   );
-  const start = x.cold
-    ? `New agent process${x.spawn_ms != null ? `, ready in ${fmtMs(x.spawn_ms)}` : ""}`
-    : "Agent process was already running";
-  const parts = [
-    ["model", "Model", x.model_ms],
-    ["tools", "Tools", x.tool_ms],
-    ["other", "Other", x.other_ms],
-  ];
-  const total = parts.reduce((n, p) => n + p[2], 0);
-  const bar = el("div", "tt-bar");
-  bar.setAttribute("role", "img");
-  bar.setAttribute(
+  return head;
+}
+function timingBarAndLegend(parts, total) {
+  const stackBar = el("div", "tt-bar");
+  stackBar.setAttribute("role", "img");
+  stackBar.setAttribute(
     "aria-label",
     `Of ${fmtMs(total)}: ${parts.map(([, name, ms]) => `${name.toLowerCase()} ${fmtMs(ms)}`).join(", ")}`,
   );
@@ -2460,22 +2488,66 @@ function renderTurnTiming(x, phoneMs) {
     if (total && ms > 0) {
       const seg = el("i", key);
       seg.style.flexGrow = String(ms);
-      bar.append(seg);
+      stackBar.append(seg);
     }
-    const li = el("li");
-    li.append(
+    const item = el("li");
+    item.append(
       el("i", `sw ${key}`),
       el("span", "", name),
       el("b", "", fmtMs(ms)),
       el("span", "pct", total ? `${Math.round((ms / total) * 100)}%` : ""),
     );
-    legend.append(li);
+    legend.append(item);
   }
   legend.setAttribute("aria-hidden", "true"); // the bar's label already reads the same numbers
+  return { stackBar, legend };
+}
+function timingSlowTools(slow) {
+  const list = el("ol", "tt-tools");
+  list.setAttribute("aria-label", "Slowest tools");
+  for (const tool of slow) {
+    const item = el("li");
+    item.append(
+      el("span", "n", tool.name),
+      el("span", "ms", `${fmtMs(tool.ms)}${tool.error ? " · failed" : ""}`),
+    );
+    list.append(item);
+  }
+  return [el("h4", "", "Slowest tools"), list];
+}
+function timingRetryNote(retries) {
+  return el(
+    "p",
+    "tt-retry",
+    `${retries} API retr${retries === 1 ? "y" : "ies"} or rate-limit warning${retries === 1 ? "" : "s"} slowed this turn`,
+  );
+}
+function timingFullButton() {
+  const full = el("button", "btn block tb-open");
+  full.type = "button";
+  full.append(el("span", "", "Full breakdown"), icon("chev-right"));
+  full.onclick = () => state.current && openBreakdown(state.current, full);
+  return full;
+}
+function renderTurnTiming(x, phoneMs) {
+  const section = $("turn-timing");
+  section.hidden = !x;
+  if (!x) return;
+  const head = timingHead(x);
+  const start = x.cold
+    ? `New agent process${x.spawn_ms != null ? `, ready in ${fmtMs(x.spawn_ms)}` : ""}`
+    : "Agent process was already running";
+  const parts = [
+    ["model", "Model", x.model_ms],
+    ["tools", "Tools", x.tool_ms],
+    ["other", "Other", x.other_ms],
+  ];
+  const total = parts.reduce((sum, part) => sum + part[2], 0);
+  const { stackBar, legend } = timingBarAndLegend(parts, total);
   const kids = [
     head,
     el("p", "note", `${start}${phoneMs != null ? ` · ${fmtMs(phoneMs)} until shown here` : ""}`),
-    bar,
+    stackBar,
     legend,
     el(
       "p",
@@ -2483,32 +2555,9 @@ function renderTurnTiming(x, phoneMs) {
       `${x.steps} model step${x.steps === 1 ? "" : "s"} · ${x.tool_calls} tool call${x.tool_calls === 1 ? "" : "s"} · Other is startup and waiting for you`,
     ),
   ];
-  if (x.slow?.length) {
-    const list = el("ol", "tt-tools");
-    list.setAttribute("aria-label", "Slowest tools");
-    for (const tool of x.slow) {
-      const li = el("li");
-      li.append(
-        el("span", "n", tool.name),
-        el("span", "ms", `${fmtMs(tool.ms)}${tool.error ? " · failed" : ""}`),
-      );
-      list.append(li);
-    }
-    kids.push(el("h4", "", "Slowest tools"), list);
-  }
-  if (x.retries)
-    kids.push(
-      el(
-        "p",
-        "tt-retry",
-        `${x.retries} API retr${x.retries === 1 ? "y" : "ies"} or rate-limit warning${x.retries === 1 ? "" : "s"} slowed this turn`,
-      ),
-    );
-  const full = el("button", "btn block tb-open");
-  full.type = "button";
-  full.append(el("span", "", "Full breakdown"), icon("chev-right"));
-  full.onclick = () => state.current && openBreakdown(state.current, full);
-  kids.push(full);
+  if (x.slow?.length) kids.push(...timingSlowTools(x.slow));
+  if (x.retries) kids.push(timingRetryNote(x.retries));
+  kids.push(timingFullButton());
   $("turn-timing-body").replaceChildren(...kids);
 }
 // Escape in the breakdown goes back to the summary; closing the sheet always resets it.
@@ -3009,34 +3058,49 @@ function codePre(text, lang) {
   pre.append(code);
   return pre;
 }
+function toolBodyBrowse(box, input, name) {
+  box.append(el("p", "", summarize(name, input)));
+}
+function toolBodyEdit(box, input) {
+  const pre = el("pre", "diff");
+  for (const line of String(input.old_string).split("\n")) pre.append(el("div", "del", line));
+  for (const line of String(input.new_string).split("\n")) pre.append(el("div", "add", line));
+  box.append(pre);
+}
+function toolBodyImage(box, input) {
+  const preview = el("div", "prose tool-preview");
+  preview.append(localImage(input.file_path));
+  box.append(preview, codePre(JSON.stringify(input, null, 2), "json"));
+}
+function toolBodyWrite(box, input) {
+  box.append(codePre(String(input.content).slice(0, 4000), langFromPath(input.file_path)));
+}
+function toolBodyBash(box, input) {
+  // "$ cmd" with a hanging indent so wrapped lines stay under the command, and its own copy button
+  const cmd = String(input.command);
+  const row = el("div", "tool-cmd");
+  const copy = iconButton("copy", "Copy command");
+  wireCopy(copy, () => cmd, "Copy command");
+  row.append(el("span", "ps1", "$"), codePre(cmd, "bash"), copy);
+  row.firstChild.setAttribute("aria-hidden", "true");
+  box.append(row);
+}
+function toolBodyJson(box, input) {
+  box.append(codePre(JSON.stringify(input, null, 2), "json"));
+}
+// First matching rule wins; same order as the original if/else chain.
+const TOOL_BODY_RULES = [
+  [(name, input) => name === "WebSearch" && toolName(name, input) === "WebBrowse", toolBodyBrowse],
+  [(name, input) => name === "Edit" && "old_string" in input, toolBodyEdit],
+  [(name, input) => name === "Read" && isImageFile(input.file_path), toolBodyImage],
+  [(name, input) => name === "Write" && "content" in input, toolBodyWrite],
+  [(name, input) => name === "Bash" && input.command, toolBodyBash],
+];
 function toolBody(name, input) {
   const box = el("div", "body");
   input = input || {};
-  if (name === "WebSearch" && toolName(name, input) === "WebBrowse") {
-    box.append(el("p", "", summarize(name, input)));
-  } else if (name === "Edit" && "old_string" in input) {
-    const pre = el("pre", "diff");
-    for (const l of String(input.old_string).split("\n")) pre.append(el("div", "del", l));
-    for (const l of String(input.new_string).split("\n")) pre.append(el("div", "add", l));
-    box.append(pre);
-  } else if (name === "Read" && isImageFile(input.file_path)) {
-    const preview = el("div", "prose tool-preview");
-    preview.append(localImage(input.file_path));
-    box.append(preview, codePre(JSON.stringify(input, null, 2), "json"));
-  } else if (name === "Write" && "content" in input) {
-    box.append(codePre(String(input.content).slice(0, 4000), langFromPath(input.file_path)));
-  } else if (name === "Bash" && input.command) {
-    // "$ cmd" with a hanging indent so wrapped lines stay under the command, and its own copy button
-    const cmd = String(input.command);
-    const row = el("div", "tool-cmd");
-    const copy = iconButton("copy", "Copy command");
-    wireCopy(copy, () => cmd, "Copy command");
-    row.append(el("span", "ps1", "$"), codePre(cmd, "bash"), copy);
-    row.firstChild.setAttribute("aria-hidden", "true");
-    box.append(row);
-  } else {
-    box.append(codePre(JSON.stringify(input, null, 2), "json"));
-  }
+  const rule = TOOL_BODY_RULES.find(([matches]) => matches(name, input));
+  (rule ? rule[1] : toolBodyJson)(box, input, name);
   return box;
 }
 
@@ -3177,15 +3241,7 @@ function renderLive(kind) {
   if (!state.live) state.live = {};
   const L = state.live;
   if (!L[kind + "El"]) {
-    if (kind === "text") {
-      const a = asstMsg("", false);
-      L.textEl = a.root;
-      L.prose = a.prose;
-    } else {
-      const d = el("div", "msg think live");
-      d.append(icon("sparkle"), el("span", "", "Thinking…"));
-      L.thinkingEl = d;
-    }
+    createLiveElement(L, kind);
     L[kind] = "";
     push(L[kind + "El"]);
   }
@@ -3193,12 +3249,26 @@ function renderLive(kind) {
   L.raf = requestAnimationFrame(() => {
     L.raf = 0;
     const stick = following() && nearBottom();
-    if (L.textEl && L.prose) renderMarkdown(L.text || "", L.prose);
-    if (L.thinkingEl)
-      L.thinkingEl.querySelector("span").textContent =
-        "Thinking… " + (L.thinking || "").slice(-200).replace(/\s+/g, " ");
+    paintLive(L);
     if (stick) scrollDown(true);
   });
+}
+function createLiveElement(live, kind) {
+  if (kind === "text") {
+    const msg = asstMsg("", false);
+    live.textEl = msg.root;
+    live.prose = msg.prose;
+    return;
+  }
+  const box = el("div", "msg think live");
+  box.append(icon("sparkle"), el("span", "", "Thinking…"));
+  live.thinkingEl = box;
+}
+function paintLive(live) {
+  if (live.textEl && live.prose) renderMarkdown(live.text || "", live.prose);
+  if (live.thinkingEl)
+    live.thinkingEl.querySelector("span").textContent =
+      "Thinking… " + (live.thinking || "").slice(-200).replace(/\s+/g, " ");
 }
 function dropLive(kind) {
   const L = state.live;
@@ -3311,6 +3381,32 @@ function finishChip(card, chip, e) {
   const now = card.querySelector(".now");
   if (now) now.textContent = "";
 }
+function paintTaskProgress(card, e) {
+  const usage = e.usage || {};
+  card.querySelector(".stats").textContent = [
+    usage.tool_uses != null && `${usage.tool_uses} tool${usage.tool_uses === 1 ? "" : "s"}`,
+    usage.total_tokens != null && `${fmtTok(usage.total_tokens)} tokens`,
+    usage.duration_ms != null && fmtDur(usage.duration_ms),
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  card.querySelector(".now").textContent = e.description ? `Now: ${e.description}` : "";
+}
+function startBackgroundChip(card, existing, e) {
+  let chip = existing;
+  if (!chip) {
+    chip = el("span", "task-chip");
+    card.querySelector("summary .st").before(chip);
+  }
+  chip.hidden = false;
+  chip.className = "task-chip running";
+  chip.replaceChildren(el("i", "spin"), el("span", "", "in background"));
+  const done = state.doneTasks?.get(e.tool_use_id);
+  if (done) {
+    state.doneTasks.delete(e.tool_use_id);
+    finishChip(card, chip, done);
+  }
+}
 function taskEvent(e) {
   const card = state.cards.get(e.tool_use_id);
   if (!card) {
@@ -3319,33 +3415,13 @@ function taskEvent(e) {
     return;
   }
   if (e.subtype === "task_progress" && card.classList.contains("agent")) {
-    const u = e.usage || {};
-    card.querySelector(".stats").textContent = [
-      u.tool_uses != null && `${u.tool_uses} tool${u.tool_uses === 1 ? "" : "s"}`,
-      u.total_tokens != null && `${fmtTok(u.total_tokens)} tokens`,
-      u.duration_ms != null && fmtDur(u.duration_ms),
-    ]
-      .filter(Boolean)
-      .join(" · ");
-    card.querySelector(".now").textContent = e.description ? `Now: ${e.description}` : "";
+    paintTaskProgress(card, e);
     return;
   }
   // only work that outlives its tool call gets a status chip (a background subagent); a foreground command already shows its own spinner
-  let chip = card.querySelector(".task-chip");
-  if (e.subtype === "task_started" && e.is_backgrounded) {
-    if (!chip) {
-      chip = el("span", "task-chip");
-      card.querySelector("summary .st").before(chip);
-    }
-    chip.hidden = false;
-    chip.className = "task-chip running";
-    chip.replaceChildren(el("i", "spin"), el("span", "", "in background"));
-    const done = state.doneTasks?.get(e.tool_use_id);
-    if (done) {
-      state.doneTasks.delete(e.tool_use_id);
-      finishChip(card, chip, done);
-    }
-  } else if (e.subtype === "task_notification" && chip && !chip.hidden) finishChip(card, chip, e);
+  const chip = card.querySelector(".task-chip");
+  if (e.subtype === "task_started" && e.is_backgrounded) startBackgroundChip(card, chip, e);
+  else if (e.subtype === "task_notification" && chip && !chip.hidden) finishChip(card, chip, e);
   updateWorking();
 }
 
@@ -4001,6 +4077,37 @@ function renderUsage() {
 
 // ---------- controls ----------
 let submitting = false;
+function runSettingsCommand(text, box) {
+  if (text.toLowerCase() === "/effort" && $("effort").hidden) {
+    toast("This agent does not expose effort settings.");
+    return;
+  }
+  if (cur()?.status === "running") {
+    toast("Stop the running operation before changing settings.");
+    return;
+  }
+  box.value = "";
+  saveDraft();
+  closeSlash();
+  menus[text.slice(1).toLowerCase()].open();
+}
+function defaultSendMode(mode, attachments) {
+  if (!mode && !attachments.length && (questions.count(state.current) || cur()?.waiting))
+    return "steer";
+  return mode;
+}
+function attachmentSnapshot(item) {
+  return {
+    key: item.key,
+    thread: item.thread,
+    name: item.name,
+    kind: item.kind,
+    size: item.size,
+    n: item.n,
+    id: item.id,
+    order: item.order,
+  };
+}
 async function submit(mode) {
   const box = $("input");
   if (submitting || !state.current) return;
@@ -4017,42 +4124,17 @@ async function submit(mode) {
     }
     const text = box.value.trim();
     if (/^\/(model|effort)$/i.test(text)) {
-      if (text.toLowerCase() === "/effort" && $("effort").hidden) {
-        toast("This agent does not expose effort settings.");
-        return;
-      }
-      if (cur()?.status === "running") {
-        toast("Stop the running operation before changing settings.");
-        return;
-      }
-      box.value = "";
-      saveDraft();
-      closeSlash();
-      menus[text.slice(1).toLowerCase()].open();
+      runSettingsCommand(text, box);
       return;
     }
     const attachments = pending
       .filter((p) => p.id)
       .map((p) => ({ id: p.id, ...(p.n ? { n: p.n } : {}) }));
     if (!text && !attachments.length) return;
-    if (!mode && !attachments.length && (questions.count(state.current) || cur()?.waiting))
-      mode = "steer";
+    mode = defaultSendMode(mode, attachments);
     // mid-turn a message queues until the turn ends; mode "steer" (Alt+Enter, or Steer on a queued card) hands it to the agent now
     const startsTurn = !mode && cur()?.status !== "running";
-    const draft = {
-      thread,
-      text: box.value,
-      attachments: pending.map(({ key, thread, name, kind, size, n, id, order }) => ({
-        key,
-        thread,
-        name,
-        kind,
-        size,
-        n,
-        id,
-        order,
-      })),
-    };
+    const draft = { thread, text: box.value, attachments: pending.map(attachmentSnapshot) };
     if (
       sendReliable(
         { t: "send", thread: state.current, text, attachments, ...(mode ? { mode } : {}) },
@@ -4265,6 +4347,48 @@ function startUpload(pending) {
     });
 }
 
+function appendThumbPreview(row, item) {
+  if (item.kind !== "image") {
+    row.append(icon("file"), el("span", "nm", item.name), el("span", "sz", fmtSize(item.size)));
+    return;
+  }
+  const img = el("img");
+  if (item.url) img.src = item.url;
+  img.alt = item.n ? `${item.name} (Image ${item.n})` : item.name;
+  row.append(img);
+  if (item.n) row.append(el("span", "n", String(item.n)));
+}
+function thumbRetryButton(item) {
+  const retry = el("button", "btn", "Retry");
+  retry.type = "button";
+  retry.setAttribute("aria-label", `Retry ${item.name}`);
+  retry.onclick = () => {
+    startUpload(item);
+    renderThumbs();
+  };
+  return retry;
+}
+function thumbRemoveButton(item) {
+  const remove = el("button", "btn rm");
+  remove.type = "button";
+  remove.setAttribute("aria-label", `Remove ${item.name}`);
+  remove.append(icon("x"));
+  remove.onclick = () => {
+    dropPending(item);
+    discard(item);
+    if (item.n) removeToken(item.n);
+    $("input").focus();
+  };
+  return remove;
+}
+function thumbRow(item) {
+  const row = el("li", item.kind === "image" ? "" : "file");
+  if (item.busy) row.setAttribute("aria-busy", "true");
+  appendThumbPreview(row, item);
+  if (item.error) row.append(thumbRetryButton(item));
+  row.append(thumbRemoveButton(item));
+  return row;
+}
 function renderThumbs() {
   const ul = $("thumbs");
   if (!pending.some((p) => p.kind === "image")) imageCount = 0; // numbering starts again once no image is waiting
@@ -4272,43 +4396,7 @@ function renderThumbs() {
   renderAction();
   if (pending.length) $("attach").dataset.count = String(pending.length);
   else delete $("attach").dataset.count;
-  ul.replaceChildren(
-    ...pending.map((p) => {
-      const li = el("li", p.kind === "image" ? "" : "file");
-      if (p.busy) li.setAttribute("aria-busy", "true");
-      if (p.kind === "image") {
-        const img = el("img");
-        if (p.url) img.src = p.url;
-        img.alt = p.n ? `${p.name} (Image ${p.n})` : p.name;
-        li.append(img);
-        if (p.n) li.append(el("span", "n", String(p.n)));
-      } else {
-        li.append(icon("file"), el("span", "nm", p.name), el("span", "sz", fmtSize(p.size)));
-      }
-      if (p.error) {
-        const retry = el("button", "btn", "Retry");
-        retry.type = "button";
-        retry.setAttribute("aria-label", `Retry ${p.name}`);
-        retry.onclick = () => {
-          startUpload(p);
-          renderThumbs();
-        };
-        li.append(retry);
-      }
-      const rm = el("button", "btn rm");
-      rm.type = "button";
-      rm.setAttribute("aria-label", `Remove ${p.name}`);
-      rm.append(icon("x"));
-      rm.onclick = () => {
-        dropPending(p);
-        discard(p);
-        if (p.n) removeToken(p.n);
-        $("input").focus();
-      };
-      li.append(rm);
-      return li;
-    }),
-  );
+  ul.replaceChildren(...pending.map(thumbRow));
 }
 
 // serialised, so two quick pastes cannot both pass the MAX_ATTACH check while their files are still being processed
@@ -4317,6 +4405,11 @@ const addFiles = (files) => {
   const thread = state.current;
   return (adding = adding.then(() => addFilesNow(files, thread)));
 };
+function assertAttachable(file) {
+  if (!file.size) throw new Error(`${file.name || "That file"} is empty (or a folder).`);
+  if (file.size > MAX_FILE_BYTES && file.type && !file.type.startsWith("image/"))
+    throw new Error(`${file.name || "That file"} is over ${MAX_FILE_BYTES >> 20} MB.`);
+}
 async function addFilesNow(files, thread) {
   if (!thread) return;
   const list = attachmentDrafts.get(thread) || [];
@@ -4327,9 +4420,7 @@ async function addFilesNow(files, thread) {
       break;
     }
     try {
-      if (!f.size) throw new Error(`${f.name || "That file"} is empty (or a folder).`);
-      if (f.size > MAX_FILE_BYTES && f.type && !f.type.startsWith("image/"))
-        throw new Error(`${f.name || "That file"} is over ${MAX_FILE_BYTES >> 20} MB.`);
+      assertAttachable(f);
       const p = {
         key: crypto.randomUUID(),
         thread,
@@ -4618,6 +4709,49 @@ $("dlg").addEventListener("cancel", (event) => {
   if (assignmentPending) event.preventDefault();
   workflowBrief = null;
 });
+function dialogTitleText(editing, isTask) {
+  if (editing) return "Edit scheduled task";
+  return isTask ? "New scheduled task" : "New thread";
+}
+function dialogOkText(editing, isTask) {
+  if (editing) return "Save task";
+  return isTask ? "Schedule task" : "Create thread";
+}
+function fillEditingTask(task, providerId) {
+  if (!menus.dCwd.items().some((item) => item.value === task.cwd))
+    menus.dCwd.setItems([
+      ...menus.dCwd.items(),
+      { value: task.cwd, label: task.cwd.replace(/^.*\/repos\/?/, "~/repos/"), icon: "folder" },
+    ]);
+  menus.dCwd.setValue(task.cwd);
+  if (menus.dModel.items().some((item) => item.value === task.model)) {
+    menus.dModel.setValue(task.model);
+    dialogEffort(task.model, providerId);
+  }
+  menus.dEffort.setValue(task.effort || "default");
+  menus.dMode.setValue(task.mode);
+  $("d-warn").hidden = task.mode !== "bypassPermissions";
+}
+function fillTaskDialog(task, editing) {
+  const providerId = editing ? task.provider : prov("pi")?.ok ? "pi" : menus.dProv.value;
+  menus.dProv.setValue(providerId);
+  fillDialog(providerId);
+  if (editing) fillEditingTask(task, providerId);
+  $("d-title").value = editing ? task.title : "";
+  $("d-prompt").value = editing ? task.prompt : "";
+  menus.dRepeat.setValue(editing ? task.repeat : "daily");
+  menus.dDay.setValue(String(editing ? task.day : 1));
+  $("d-time").value = editing ? task.time : "09:00";
+  $("d-save").checked = editing ? task.saveOutput : true;
+  syncWhen();
+}
+function selectFirstOkProvider() {
+  const first = [...state.providers.values()].find((prov) => prov.ok)?.id;
+  if (first) {
+    menus.dProv.setValue(first);
+    fillDialog(first);
+  }
+}
 function setDialogKind(task) {
   dialogAssignment = null;
   $("d-assignment-error").hidden = true;
@@ -4633,49 +4767,14 @@ function setDialogKind(task) {
   const isTask = task !== null,
     editing = isTask && task !== "new";
   $("task-fields").hidden = $("save-field").hidden = !isTask;
-  $("dlg-title").textContent = editing
-    ? "Edit scheduled task"
-    : isTask
-      ? "New scheduled task"
-      : "New thread";
+  $("dlg-title").textContent = dialogTitleText(editing, isTask);
   $("dlg-sub").textContent = isTask
     ? "Runs on this server with nobody watching. Each run opens a thread you can reply to."
     : "Run a coding agent in one of your folders.";
   $("d-title").required = $("d-prompt").required = isTask;
-  if (isTask) {
-    const id = editing ? task.provider : prov("pi")?.ok ? "pi" : menus.dProv.value;
-    menus.dProv.setValue(id);
-    fillDialog(id);
-    if (editing) {
-      if (!menus.dCwd.items().some((i) => i.value === task.cwd))
-        menus.dCwd.setItems([
-          ...menus.dCwd.items(),
-          { value: task.cwd, label: task.cwd.replace(/^.*\/repos\/?/, "~/repos/"), icon: "folder" },
-        ]);
-      menus.dCwd.setValue(task.cwd);
-      if (menus.dModel.items().some((i) => i.value === task.model)) {
-        menus.dModel.setValue(task.model);
-        dialogEffort(task.model, id);
-      }
-      menus.dEffort.setValue(task.effort || "default");
-      menus.dMode.setValue(task.mode);
-      $("d-warn").hidden = task.mode !== "bypassPermissions";
-    }
-    $("d-title").value = editing ? task.title : "";
-    $("d-prompt").value = editing ? task.prompt : "";
-    menus.dRepeat.setValue(editing ? task.repeat : "daily");
-    menus.dDay.setValue(String(editing ? task.day : 1));
-    $("d-time").value = editing ? task.time : "09:00";
-    $("d-save").checked = editing ? task.saveOutput : true;
-    syncWhen();
-  } else if (wasTask) {
-    const first = [...state.providers.values()].find((p) => p.ok)?.id;
-    if (first) {
-      menus.dProv.setValue(first);
-      fillDialog(first);
-    }
-  }
-  $("d-ok").textContent = editing ? "Save task" : isTask ? "Schedule task" : "Create thread";
+  if (isTask) fillTaskDialog(task, editing);
+  else if (wasTask) selectFirstOkProvider();
+  $("d-ok").textContent = dialogOkText(editing, isTask);
   dialogFork = null;
   $("context-field").hidden = true;
   $("cwd-field").hidden = false;
