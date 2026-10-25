@@ -97,12 +97,29 @@ const P95_BAND: CoverageBand = {
 
 const fixed3 = (value: number) => value.toFixed(3);
 
+/** Without a champion comparison, a soft-band miss fails only beyond binomial noise of the held-out count. */
+function noiseReasons(
+  band: CoverageBand,
+  coverage: number,
+  heldout: number | null,
+  text: string,
+): string[] {
+  if (heldout === null || heldout <= 0) return [`${text}.`];
+  const { nominal } = band;
+  const limit = MISS_SE_MULTIPLE * Math.sqrt((nominal * (1 - nominal)) / heldout);
+  if (Math.abs(coverage - nominal) <= limit) return [];
+  return [
+    `${text} and ${fixed3(Math.abs(coverage - nominal))} from ${fixed(nominal)} exceeds noise limit ${fixed3(limit)} (n=${heldout}).`,
+  ];
+}
+
 /** Reasons for one quantile: hard sanity bounds always, then absolute bounds relative to the champion. */
 function bandReasons(
   band: CoverageBand,
   coverage: number,
   champion: number | null,
   samples: number,
+  heldout: number | null,
 ): string[] {
   const { label, nominal } = band;
   if (coverage < band.hardMin)
@@ -112,7 +129,7 @@ function bandReasons(
   if (coverage >= band.min && coverage <= band.max) return [];
   const bound = coverage < band.min ? `below ${fixed(band.min)}` : `above ${fixed(band.max)}`;
   const text = `${label} coverage ${fixed3(coverage)} is ${bound}`;
-  if (champion === null || samples <= 0) return [`${text}.`];
+  if (champion === null || samples <= 0) return noiseReasons(band, coverage, heldout, text);
   const excess = Math.abs(coverage - nominal) - Math.abs(champion - nominal);
   const limit = MISS_SE_MULTIPLE * Math.sqrt((nominal * (1 - nominal)) / samples);
   if (excess <= limit) return [];
@@ -121,11 +138,15 @@ function bandReasons(
   ];
 }
 
-function coverageReasons(value: Challenger, champion: ChampionCoverage | null): string[] {
+function coverageReasons(
+  value: Challenger,
+  champion: ChampionCoverage | null,
+  heldout: number | null,
+): string[] {
   const samples = champion?.samples ?? 0;
   return [
-    ...bandReasons(P80_BAND, value.p80Coverage, champion?.p80 ?? null, samples),
-    ...bandReasons(P95_BAND, value.p95Coverage, champion?.p95 ?? null, samples),
+    ...bandReasons(P80_BAND, value.p80Coverage, champion?.p80 ?? null, samples, heldout),
+    ...bandReasons(P95_BAND, value.p95Coverage, champion?.p95 ?? null, samples, heldout),
   ];
 }
 
@@ -215,7 +236,11 @@ function decide(artifact: unknown, compareChampion: boolean): PromotionDecision 
   const baseline = compareChampion ? championBaseline(model) : null;
   const scored = baseline !== null && typeof baseline !== "string" ? baseline : null;
   const championCoverage = scored ? readChampionCoverage(model, scored.samples) : null;
-  const failures = coverageReasons(value, championCoverage);
+  const failures = coverageReasons(
+    value,
+    championCoverage,
+    finite(model.sampleCount) ? model.sampleCount : null,
+  );
   if (model.beatsPinballBaseline !== true)
     failures.push("challenger does not beat the pinball baseline.");
   const notes: string[] = [];
