@@ -1,73 +1,64 @@
 {
-  "title": "Tool card liveness after history replay",
-  "subtitle": "Authoritative runtime snapshot reconciles missing completion events",
+  "title": "Share prompt path",
+  "subtitle": "Composer draft shrinks to 1-2 lines; the untrusted-asset procedure moves into the share-intake skill",
   "items": [
-    {
-      "group": "Node server",
-      "sub": "server/threads.ts",
-      "border": "dashed",
-      "icon": "server",
-      "items": [
-        {
-          "id": "runtime",
-          "label": "Runtime tool state",
-          "tech": "Provider lifecycle",
-          "desc": "Snapshot foreground and background tool identities",
-          "icon": "activity"
-        },
-        {
-          "id": "history",
-          "label": "History response",
-          "tech": "WebSocket history",
-          "desc": "Events plus versioned workState snapshot",
-          "icon": "history"
-        }
-      ]
-    },
     {
       "group": "Browser",
       "sub": "public/app.js",
       "border": "solid",
+      "color": "blue",
       "icon": "monitor",
       "items": [
         {
-          "id": "cards",
-          "label": "Tool cards",
-          "tech": "showHistory / showDelta",
-          "desc": "Reconcile replayed cards with authoritative liveness",
-          "icon": "panels-top-left"
+          "id": "sui",
+          "label": "Share sheet",
+          "tech": "?share_text, New thread dialog",
+          "desc": "Picks the thread provider and posts the link",
+          "icon": "share-2",
+          "color": "blue"
         },
         {
-          "id": "lifecycle",
-          "label": "Turn lifecycle",
-          "tech": "result / aborted",
-          "desc": "Settle stale tools while preserving live background work",
-          "icon": "circle-stop"
+          "id": "scomposer",
+          "label": "Composer draft",
+          "tech": "#input",
+          "desc": "Prompt and uploads wait for Send",
+          "icon": "pen-line",
+          "color": "blue"
+        }
+      ]
+    },
+    {
+      "group": "Node server",
+      "sub": "server/index.ts, server/share/",
+      "border": "solid",
+      "color": "slate",
+      "icon": "server",
+      "items": [
+        {
+          "id": "shandler",
+          "label": "handleShare",
+          "tech": "POST /api/share",
+          "desc": "Fetches media, calls sharePrompt with the thread provider only",
+          "icon": "route",
+          "color": "slate"
         },
         {
-          "id": "badge",
-          "label": "Header badge",
-          "tech": "updateWorking",
-          "desc": "Count reconciled live agents",
-          "icon": "badge"
+          "id": "sprompt",
+          "label": "Share prompt",
+          "tech": "server/share/prompt.ts",
+          "desc": "1-2 line prompt that names the share-intake skill",
+          "icon": "message-square-text",
+          "color": "slate"
         }
       ]
     },
     {
       "group": "Claude thread",
-      "sub": "server/share/prompt.ts",
+      "sub": "sandboxed shares from Instagram, X, Reddit, YouTube",
       "border": "solid",
       "color": "indigo",
       "icon": "message-square",
       "items": [
-        {
-          "id": "sprompt",
-          "label": "Share prompt",
-          "tech": "server/share/prompt.ts",
-          "desc": "Five-step flow with trace path and vetted dir",
-          "icon": "message-square-text",
-          "color": "indigo"
-        },
         {
           "id": "sagent",
           "label": "Main agent",
@@ -75,6 +66,14 @@
           "desc": "Sees counts and the verdict, not the report",
           "icon": "bot",
           "color": "indigo"
+        },
+        {
+          "id": "sskill",
+          "label": "share-intake skill",
+          "tech": "brain skills/share-intake",
+          "desc": "Five-step untrusted-asset procedure, loaded on demand",
+          "icon": "book-open-text",
+          "color": "purple"
         }
       ]
     },
@@ -84,6 +83,7 @@
       "border": "solid",
       "color": "teal",
       "icon": "wrench",
+      "direction": "row",
       "items": [
         {
           "id": "strace",
@@ -101,8 +101,7 @@
           "icon": "folder-check",
           "color": "teal"
         }
-      ],
-      "direction": "row"
+      ]
     },
     {
       "group": "Sandboxed subagents",
@@ -132,29 +131,24 @@
   ],
   "edges": [
     {
-      "from": "runtime",
-      "to": "history",
-      "label": "Attach tool liveness"
+      "from": "sui",
+      "to": "shandler",
+      "label": "POST link"
     },
     {
-      "from": "history",
-      "to": "cards",
-      "label": "Replay events"
-    },
-    {
-      "from": "lifecycle",
-      "to": "cards",
-      "label": "Reconcile pending work"
-    },
-    {
-      "from": "cards",
-      "to": "badge",
-      "label": "Count live agents"
+      "from": "shandler",
+      "to": "sprompt",
+      "label": "builds the draft"
     },
     {
       "from": "sprompt",
+      "to": "scomposer",
+      "label": "prompt text"
+    },
+    {
+      "from": "scomposer",
       "to": "sagent",
-      "label": "drafts the task"
+      "label": "user taps Send"
     },
     {
       "from": "sagent",
@@ -185,6 +179,11 @@
       "from": "svetted",
       "to": "sagent",
       "label": "opens if SAFE"
+    },
+    {
+      "from": "sagent",
+      "to": "sskill",
+      "label": "loads the procedure"
     }
   ]
 }
