@@ -166,7 +166,7 @@ try {
     );
   assert.equal(guard.sample({ rssBytes: 100, ticks: 2700, time: 31_000 }).reason, 2);
   assert.equal(
-    new ResourceGuard().sample({ rssBytes: 1024 ** 3 + 1, ticks: 0, time: 1 }).reason,
+    new ResourceGuard().sample({ rssBytes: 8 * 1024 ** 3 + 1, ticks: 0, time: 1 }).reason,
     1,
   );
   for (let i = 0; i < 5000; i++)

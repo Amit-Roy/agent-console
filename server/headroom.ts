@@ -150,7 +150,7 @@ async function check(epoch: number) {
         healthy = false;
         lastError =
           reason === 1
-            ? "Headroom disabled: RSS exceeded 1024 MiB"
+            ? "Headroom disabled: RSS exceeded 8192 MiB"
             : "Headroom disabled: CPU exceeded 80% for 30 seconds";
         diagnostic("breaker", { reason });
         terminate(p);

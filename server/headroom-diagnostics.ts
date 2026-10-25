@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 
 const LIMIT = 256 * 1024;
+const MAX_RSS_BYTES = 8 * 1024 * 1024 * 1024;
 type Event = "start" | "exit" | "spawn-error" | "stop" | "resource" | "breaker" | "output";
 const EVENTS = new Set(["start", "exit", "spawn-error", "stop", "resource", "breaker", "output"]);
 function trimPrevious(previous: string) {
@@ -104,7 +105,7 @@ export class ResourceGuard {
     return {
       cpuPercent,
       reason:
-        current.rssBytes > 1024 * 1024 * 1024
+        current.rssBytes > MAX_RSS_BYTES
           ? 1
           : this.busySince !== undefined && current.time - this.busySince >= 30_000
             ? 2
