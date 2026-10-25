@@ -166,6 +166,20 @@ export function markUntrusted(thread: string, uploadId: string) {
     fs.writeFileSync(untrustedMarker(thread, uploadId), "", { mode: 0o600 });
 }
 
+/** Adopts every file of one share; when `untrusted`, marks each one, the caption note included. */
+export function adoptShareFiles(
+  thread: string,
+  sources: { path: string; name: string }[],
+  untrusted: boolean,
+  maxBytes: number,
+) {
+  return sources.map((source) => {
+    const adopted = adoptUpload(thread, source.path, source.name, maxBytes);
+    if (untrusted) markUntrusted(thread, adopted.id);
+    return adopted;
+  });
+}
+
 /** One stored upload as an Attachment; `rawNumber` is the untrusted browser-chosen image label. */
 function loadAttachment(thread: string, uploadId: string, rawNumber: unknown): Attachment {
   const dir = attachDir(thread, uploadId);
