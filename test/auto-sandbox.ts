@@ -181,6 +181,76 @@ else:
     assert.equal(readFileSync(join(main, "important.txt"), "utf8"), "main unchanged\n");
     assert.equal(readFileSync(join(sibling, "important.txt"), "utf8"), "sibling unchanged\n");
     assert.doesNotMatch(readFileSync(join(main, ".git/config"), "utf8"), /escape/);
+    const secretDir = join(root, "secret"),
+      allowed = join(root, "allowed");
+    mkdirSync(secretDir);
+    mkdirSync(allowed);
+    writeFileSync(join(secretDir, "token"), "fake-secret\n");
+    writeFileSync(join(allowed, "ok.txt"), "readable\n");
+    for (const name of ["secret", "allowed"]) {
+      writeFileSync(join(root, name, "tool.sh"), "#!/bin/sh\necho ran\n", { mode: 0o755 });
+    }
+    const system = ["/usr", "/bin", "/lib", "/lib64", "/etc", "/proc", "/dev"].flatMap((path) => [
+      "--read",
+      path,
+    ]);
+    const readArgs = [launcher, ...system, "--read", allowed, "--write", own];
+    const readCheck = spawnSync(
+      python,
+      [
+        ...readArgs,
+        "--",
+        python,
+        "-c",
+        `
+import errno, os, pathlib, subprocess, sys
+secret, allowed, own, parent = sys.argv[1], pathlib.Path(sys.argv[2]), pathlib.Path(sys.argv[3]), sys.argv[4]
+def denied(fn):
+    try:
+        fn()
+    except PermissionError as error:
+        assert error.errno in (errno.EACCES, errno.EPERM), error
+    else:
+        raise AssertionError('operation unexpectedly allowed')
+denied(lambda: open(secret + '/token').read())
+denied(lambda: os.listdir(secret))
+assert (allowed / 'ok.txt').read_text() == 'readable\\n'
+denied(lambda: subprocess.run([secret + '/tool.sh']))
+assert subprocess.run([str(allowed / 'tool.sh')], capture_output=True).stdout == b'ran\\n'
+assert subprocess.run(['/usr/bin/env', 'true']).returncode == 0
+assert subprocess.run(['ls', '/usr']).returncode == 0
+denied(lambda: open('/proc/' + parent + '/environ').read())
+(own / 'w').write_text('write ok')
+assert (own / 'w').read_text() == 'write ok'
+print('read mode verified')
+`,
+        secretDir,
+        allowed,
+        own,
+        String(process.pid),
+      ],
+      { cwd: root, encoding: "utf8", timeout: 30_000 },
+    );
+    assert.equal(
+      readCheck.status,
+      0,
+      `${readCheck.error || readCheck.stderr}\n${readCheck.stdout}`,
+    );
+    const fileRule = run(python, [
+      launcher,
+      ...system,
+      "--read",
+      join(allowed, "ok.txt"),
+      "--read",
+      join(root, "missing-path"),
+      "--write",
+      own,
+      "--",
+      "cat",
+      join(allowed, "ok.txt"),
+    ]);
+    assert.equal(fileRule.status, 0, fileRule.stderr);
+    assert.equal(fileRule.stdout, "readable\n");
     const broad = run(python, [launcher, "--write", "/", "--", "true"]);
     assert.equal(broad.status, 78);
     console.log(
