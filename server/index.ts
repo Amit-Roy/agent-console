@@ -639,7 +639,10 @@ app.post("/api/agent-tools/:name", express.json({ limit: "1mb" }), async (req, r
 });
 
 // Headroom's own OTLP exporter reports over loopback with no session cookie; the handler rejects any non-loopback caller.
-app.post("/v1/metrics", metricsIngest(() => headroomProfile));
+app.post(
+  "/v1/metrics",
+  metricsIngest(() => headroomProfile),
+);
 
 // everything below requires the session cookie
 app.use((req, res, next) => {

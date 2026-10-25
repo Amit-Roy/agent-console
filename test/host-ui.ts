@@ -22,11 +22,17 @@ function seedProfile(file: string) {
   const now = Date.now();
   const stepMinutes = [10, 22, 35, 48];
   const rssAt = (minute: number) =>
-    500 * MIB + stepMinutes.filter((step) => minute >= step).length * 142.5 * MIB + minute * 0.05 * MIB;
+    500 * MIB +
+    stepMinutes.filter((step) => minute >= step).length * 142.5 * MIB +
+    minute * 0.05 * MIB;
   for (let minute = 0; minute <= 60; minute++) {
     const sampledAt = now - (60 - minute) * MINUTE + 1000;
     const rss = rssAt(minute);
-    store.recordSample(pid, { rssBytes: rss, time: sampledAt }, { anon: rss * 0.72, fileBacked: rss * 0.2 });
+    store.recordSample(
+      pid,
+      { rssBytes: rss, time: sampledAt },
+      { anon: rss * 0.72, fileBacked: rss * 0.2 },
+    );
     if (minute % 2 === 0) {
       store.recordMetrics(
         pid,
@@ -138,7 +144,12 @@ async function headroomEmptyStates(page: any, name: string) {
       "Allocation sites need AGENT_CONSOLE_HEADROOM_TRACEMALLOC=1 (adds CPU)",
   );
   await page.unroute("**/api/host/headroom-profile*");
-  await stubProfile(page, () => ({ rss: [], snapshots: [], metrics: {}, sites: { at: null, rows: [] } }));
+  await stubProfile(page, () => ({
+    rss: [],
+    snapshots: [],
+    metrics: {},
+    sites: { at: null, rows: [] },
+  }));
   await page.click('#hr-range button[data-range="24h"]');
   await page.waitForSelector("#hr-empty:not([hidden])");
   check(
@@ -374,7 +385,9 @@ for (const [name, viewport, scheme] of [
   const body = await res.json();
   check(
     "api: headroom profile shape",
-    Array.isArray(body.rss) && Array.isArray(body.snapshots) && body.sites?.rows?.length === SITE_COUNT,
+    Array.isArray(body.rss) &&
+      Array.isArray(body.snapshots) &&
+      body.sites?.rows?.length === SITE_COUNT,
     JSON.stringify(body).slice(0, 120),
   );
 }

@@ -3,16 +3,16 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { diagnostic, ResourceGuard, resource } from "./headroom-diagnostics.ts";
-import { privacyEnv } from "./privacy.ts";
 import {
-  HeadroomProfileStore,
+  type HeadroomProfileStore,
+  ingestOtlp,
   MAX_OTLP_BYTES,
   OtlpDecodeError,
   ProfileTrigger,
-  ingestOtlp,
   readSmapsRollup,
   type SnapshotTrigger,
 } from "./headroom-profile.ts";
+import { privacyEnv } from "./privacy.ts";
 import { fileEnv } from "./providers/env.ts";
 
 // Headroom defaults on: its CPU/RSS guard is a circuit breaker, not an OS quota.
@@ -122,7 +122,8 @@ function readCapped(req: IncomingMessage): Promise<Buffer | null> {
     let size = 0;
     req.on("data", (chunk: Buffer) => {
       size += chunk.length;
-      if (size > MAX_OTLP_BYTES) resolve(null); // keep draining so the 413 reaches the sender
+      if (size > MAX_OTLP_BYTES)
+        resolve(null); // keep draining so the 413 reaches the sender
       else chunks.push(chunk);
     });
     req.on("end", () => resolve(Buffer.concat(chunks)));
@@ -133,8 +134,7 @@ function readCapped(req: IncomingMessage): Promise<Buffer | null> {
 /** POST /v1/metrics: OTLP/HTTP protobuf from the local Headroom proxy only. Mount before any auth middleware. */
 export function metricsIngest(getStore: () => HeadroomProfileStore | undefined) {
   return async (req: IncomingMessage, res: ServerResponse) => {
-    const finish = (status: number) =>
-      void res.writeHead(status, { Connection: "close" }).end();
+    const finish = (status: number) => void res.writeHead(status, { Connection: "close" }).end();
     const proxied = req.headers["x-forwarded-for"] || req.headers.forwarded;
     if (!LOOPBACK.has(req.socket.remoteAddress ?? "") || proxied) return finish(403);
     if (!String(req.headers["content-type"] || "").startsWith("application/x-protobuf"))

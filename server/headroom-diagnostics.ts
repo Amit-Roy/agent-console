@@ -4,8 +4,25 @@ import path from "node:path";
 
 const LIMIT = 256 * 1024;
 const MAX_RSS_BYTES = 8 * 1024 * 1024 * 1024;
-type Event = "start" | "exit" | "spawn-error" | "stop" | "resource" | "breaker" | "output" | "snapshot";
-const EVENTS = new Set(["start", "exit", "spawn-error", "stop", "resource", "breaker", "output", "snapshot"]);
+type Event =
+  | "start"
+  | "exit"
+  | "spawn-error"
+  | "stop"
+  | "resource"
+  | "breaker"
+  | "output"
+  | "snapshot";
+const EVENTS = new Set([
+  "start",
+  "exit",
+  "spawn-error",
+  "stop",
+  "resource",
+  "breaker",
+  "output",
+  "snapshot",
+]);
 function trimPrevious(previous: string) {
   if (!fs.existsSync(previous)) return;
   const old = fs.lstatSync(previous);

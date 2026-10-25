@@ -6,7 +6,12 @@ import protobuf from "protobufjs";
 
 const DAY_MS = 86_400_000;
 export const PROFILE_RETENTION_DAYS = 7;
-const CAPS = { headroom_rss: 20_000, headroom_metric: 200_000, headroom_site: 100_000, headroom_snapshot: 500 };
+const CAPS = {
+  headroom_rss: 20_000,
+  headroom_metric: 200_000,
+  headroom_site: 100_000,
+  headroom_snapshot: 500,
+};
 const SAMPLE_GAP_MS = 60_000;
 export const MAX_OTLP_BYTES = 1024 * 1024;
 const MIB = 1024 * 1024;
@@ -61,7 +66,9 @@ export class HeadroomProfileStore {
   recordSample(pid: number, sample: { rssBytes: number; time: number }, smaps?: Smaps | null) {
     if (!Number.isFinite(pid) || !Number.isFinite(sample.rssBytes) || !Number.isFinite(sample.time))
       return false;
-    const last = this.db.prepare("SELECT MAX(at) AS at FROM headroom_rss WHERE pid=?").get(pid) as any;
+    const last = this.db
+      .prepare("SELECT MAX(at) AS at FROM headroom_rss WHERE pid=?")
+      .get(pid) as any;
     if (last?.at != null && sample.time - last.at < SAMPLE_GAP_MS) return false;
     this.db
       .prepare("INSERT INTO headroom_rss(at,pid,rss,anon,file_backed) VALUES(?,?,?,?,?)")
@@ -84,7 +91,9 @@ export class HeadroomProfileStore {
       "INSERT INTO headroom_metric(at,pid,name,attr,value) VALUES(?,?,?,?,?)",
     );
     const kept = rows.filter((row) => METRIC_ALLOWLIST.has(row.name) && Number.isFinite(row.value));
-    this.inTransaction(() => kept.forEach((row) => insert.run(at, pid, row.name, row.attr, row.value)));
+    this.inTransaction(() => {
+      for (const row of kept) insert.run(at, pid, row.name, row.attr, row.value);
+    });
     this.touch(kept.length, at);
     return kept.length;
   }
@@ -94,9 +103,14 @@ export class HeadroomProfileStore {
       "INSERT INTO headroom_site(at,pid,location,bytes,count) VALUES(?,?,?,?,?)",
     );
     const kept = rows.filter(
-      (row) => LOCATION_PATTERN.test(row.location) && Number.isFinite(row.bytes) && Number.isFinite(row.count),
+      (row) =>
+        LOCATION_PATTERN.test(row.location) &&
+        Number.isFinite(row.bytes) &&
+        Number.isFinite(row.count),
     );
-    this.inTransaction(() => kept.forEach((row) => insert.run(at, pid, row.location, row.bytes, row.count)));
+    this.inTransaction(() => {
+      for (const row of kept) insert.run(at, pid, row.location, row.bytes, row.count);
+    });
     this.touch(kept.length, at);
     return kept.length;
   }
@@ -127,7 +141,9 @@ export class HeadroomProfileStore {
       .get(since) as any;
     if (!latest) return { at: null as number | null, rows: [] as any[] };
     const batch = (at: number) =>
-      this.db.prepare("SELECT location,bytes,count FROM headroom_site WHERE pid=? AND at=?").all(latest.pid, at) as any[];
+      this.db
+        .prepare("SELECT location,bytes,count FROM headroom_site WHERE pid=? AND at=?")
+        .all(latest.pid, at) as any[];
     const before = this.db
       .prepare("SELECT MAX(at) AS at FROM headroom_site WHERE pid=? AND at<?")
       .get(latest.pid, latest.at) as any;
@@ -162,9 +178,13 @@ export class HeadroomProfileStore {
 
   prune(now = Date.now()) {
     for (const [table, cap] of Object.entries(this.caps)) {
-      this.db.prepare(`DELETE FROM ${table} WHERE at < ?`).run(now - PROFILE_RETENTION_DAYS * DAY_MS);
       this.db
-        .prepare(`DELETE FROM ${table} WHERE id <= (SELECT id FROM ${table} ORDER BY id DESC LIMIT 1 OFFSET ?)`)
+        .prepare(`DELETE FROM ${table} WHERE at < ?`)
+        .run(now - PROFILE_RETENTION_DAYS * DAY_MS);
+      this.db
+        .prepare(
+          `DELETE FROM ${table} WHERE id <= (SELECT id FROM ${table} ORDER BY id DESC LIMIT 1 OFFSET ?)`,
+        )
         .run(cap);
     }
   }
@@ -245,7 +265,9 @@ message NumberDataPoint { repeated KeyValue attributes = 7; oneof value { double
 message KeyValue { string key = 1; AnyValue value = 2; }
 message AnyValue { oneof value { string string_value = 1; bool bool_value = 2; int64 int_value = 3; double double_value = 4; } }
 `;
-export const REQUEST_TYPE = protobuf.parse(OTLP_PROTO).root.lookupType("otlp.ExportMetricsServiceRequest");
+export const REQUEST_TYPE = protobuf
+  .parse(OTLP_PROTO)
+  .root.lookupType("otlp.ExportMetricsServiceRequest");
 
 export class OtlpDecodeError extends Error {
   constructor(message: string) {
@@ -279,7 +301,10 @@ function collectPoint(name: string, point: any, out: DecodedOtlp, sites: Map<str
   if (value == null) return;
   const attrs = attrMap(point.attributes);
   const location = attrs.get("code.location");
-  if (typeof location === "string" && (name === "headroom.alloc.bytes" || name === "headroom.alloc.count")) {
+  if (
+    typeof location === "string" &&
+    (name === "headroom.alloc.bytes" || name === "headroom.alloc.count")
+  ) {
     if (!LOCATION_PATTERN.test(location)) return;
     const site = sites.get(location) ?? { location, bytes: 0, count: 0 };
     if (name === "headroom.alloc.bytes") site.bytes = value;
