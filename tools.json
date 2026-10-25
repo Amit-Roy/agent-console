@@ -48,6 +48,17 @@
       "description": "Backfill token telemetry for repositories.",
       "usage": ["token-telemetry backfill [--dry-run] [owner/name ...]"],
       "tags": ["tokens", "usage", "cost", "backfill", "stats"]
+    },
+    {
+      "name": "transcript-redact",
+      "path": "bin/transcript-redact",
+      "description": "Scan, remove or verify credentials in stored session transcripts, archives and derived SQLite caches. Preserves live login credentials; reports counts only.",
+      "usage": [
+        "transcript-redact scan --json",
+        "transcript-redact apply --json",
+        "transcript-redact verify --scope all --json"
+      ],
+      "tags": ["credentials", "redact", "transcripts", "sessions", "cleanup"]
     }
   ],
   "internal": []

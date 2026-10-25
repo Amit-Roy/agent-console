@@ -109,6 +109,7 @@ export class SessionSearch {
   private db: DatabaseSync;
   private pending: Promise<void> | undefined;
   private closed = false;
+  private maintenance = false;
   /** Archive state lives in threads.json, not the logs, so it is refreshed on every sync rather than indexed. */
   private archived = new Set<string>();
   private dataDir: string;
@@ -175,6 +176,7 @@ export class SessionSearch {
   }
 
   private scheduleCleanup() {
+    if (this.closed || this.maintenance || this.cleanupTimer) return;
     this.cleanupTimer = setTimeout(() => this.cleanupStep(), 0);
   }
 
@@ -186,7 +188,7 @@ export class SessionSearch {
   /** One small, time-bounded batch of the user_version 2 migration; yields to the event loop between batches. */
   private cleanupStep() {
     this.cleanupTimer = undefined;
-    if (this.closed || this.cleanupPaused()) return;
+    if (this.closed || this.maintenance || this.cleanupPaused()) return;
     try {
       const began = performance.now();
       const phase = ECHO_PHASES.find((entry) => this.phaseLast(entry) < this.phaseMax(entry));
@@ -256,7 +258,7 @@ export class SessionSearch {
   /** Catch the index up shortly after start and every minute, so queries rarely wait. */
   private scheduleBackground() {
     const tick = () => {
-      if (!this.closed) this.start().catch((error) => this.logOnce(error));
+      if (!this.closed && !this.maintenance) this.start().catch((error) => this.logOnce(error));
     };
     const first = setTimeout(tick, BACKGROUND_START_MS);
     const every = setInterval(tick, BACKGROUND_EVERY_MS);
@@ -276,6 +278,7 @@ export class SessionSearch {
   /** Single-flight refresh; callers share one promise. */
   private start() {
     if (this.closed) throw new Error("Session search is closed.");
+    if (this.maintenance) throw new Error("Session search is in maintenance.");
     if (!this.pending) {
       this.pending = this.refresh().finally(() => {
         this.pending = undefined;
@@ -291,6 +294,7 @@ export class SessionSearch {
 
   /** Wait for the refresh at most SYNC_WAIT_MS; returns true when answering from a stale index. */
   private async sync() {
+    if (this.maintenance) throw new Error("Session search is in maintenance.");
     const run = this.start();
     const limit = Number(process.env.AGENT_CONSOLE_SEARCH_SYNC_MS ?? SYNC_WAIT_MS);
     let timer: NodeJS.Timeout | undefined;
@@ -298,8 +302,11 @@ export class SessionSearch {
       timer = setTimeout(() => resolve(true), Number.isFinite(limit) ? limit : SYNC_WAIT_MS);
     });
     try {
-      return await Promise.race([run.then(() => false), waited]);
+      const stale = await Promise.race([run.then(() => false), waited]);
+      if (this.maintenance) throw new Error("Session search is in maintenance.");
+      return stale;
     } catch (error) {
+      if (this.maintenance) throw new Error("Session search is in maintenance.");
       if (!this.hasIndex()) throw error;
       this.logOnce(error);
       return true;
@@ -561,6 +568,45 @@ export class SessionSearch {
   /** Start an initial background build before the first provider or browser query. */
   async warm() {
     await this.start();
+  }
+
+  async beginMaintenance() {
+    if (this.closed) throw new Error("Session search is closed.");
+    if (this.maintenance) throw new Error("Session search is already in maintenance.");
+    this.maintenance = true;
+    if (this.cleanupTimer) clearTimeout(this.cleanupTimer);
+    this.cleanupTimer = undefined;
+    try {
+      await this.pending;
+    } catch (error) {
+      this.maintenance = false;
+      if (this.echoPending && !this.cleanupPaused()) this.scheduleCleanup();
+      throw error;
+    }
+  }
+
+  private checkpoint() {
+    const result = this.db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get() as any;
+    if (Number(result.busy) !== 0) throw new Error("Session search index checkpoint is busy.");
+  }
+
+  async endMaintenance(rebuild: boolean) {
+    if (!this.maintenance) throw new Error("Session search is not in maintenance.");
+    try {
+      if (!rebuild || this.closed) return;
+      this.db.exec("PRAGMA secure_delete=ON;");
+      this.db.exec(
+        "DELETE FROM session_fts; DELETE FROM events; DELETE FROM sessions; DELETE FROM pr_calls; DELETE FROM prs; DELETE FROM echo_calls;",
+      );
+      this.finishCleanup();
+      this.db.exec("VACUUM;");
+      this.checkpoint();
+      await this.refresh();
+      this.checkpoint();
+    } finally {
+      this.maintenance = false;
+      if (this.echoPending && !this.closed && !this.cleanupPaused()) this.scheduleCleanup();
+    }
   }
 
   async search(input: SessionSearchInput) {

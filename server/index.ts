@@ -87,6 +87,7 @@ import { createTelemetryService } from "./token-telemetry.ts";
 import { startToolPriority } from "./tool-priority.ts";
 import { gateToolCall } from "./tool-token.ts";
 import { createToolWatch } from "./tool-watch.ts";
+import { TranscriptRedaction } from "./transcript-redaction.ts";
 import {
   EFFORT_STEPS,
   type EffortStep,
@@ -169,6 +170,11 @@ const schedules = new Schedules(threads, broadcast);
 const ideas = new Ideas();
 const brainGraph = new BrainGraph();
 const sessionSearch = new SessionSearch(DATA_DIR);
+const transcriptRedaction = new TranscriptRedaction({
+  dataDir: DATA_DIR,
+  threads,
+  search: sessionSearch,
+});
 // Agent tools (Pi extension providers/console-tools.mjs) call back over loopback with a per-process secret, never the session cookie
 const TOOL_TOKEN = crypto.randomBytes(24).toString("base64url");
 process.env.AGENT_CONSOLE_TOOL_URL = `http://${HOST}:${PORT}/api/agent-tools`;
@@ -606,15 +612,17 @@ app.post("/api/agent-tools/:name", express.json({ limit: "1mb" }), async (req, r
     if (gate.error) throw new Error(gate.error);
     const input = req.body ?? {};
     const result =
-      req.params.name === "cli_search"
-        ? cliSearch.search(input)
-        : req.params.name === "session_search"
-          ? await sessionSearch.search(input)
-          : req.params.name === "session_read"
-            ? await sessionSearch.read(input)
-            : req.params.name === "pi_research"
-              ? await piResearch(input, thread)
-              : schedules.tool(req.params.name, thread, input);
+      req.params.name === "session_redact"
+        ? transcriptRedaction.tool(input, thread ? threads.get(thread) : undefined)
+        : req.params.name === "cli_search"
+          ? cliSearch.search(input)
+          : req.params.name === "session_search"
+            ? await sessionSearch.search(input)
+            : req.params.name === "session_read"
+              ? await sessionSearch.read(input)
+              : req.params.name === "pi_research"
+                ? await piResearch(input, thread)
+                : schedules.tool(req.params.name, thread, input);
     res.setHeader("Cache-Control", "no-store");
     res.json(result);
   } catch (e: any) {
@@ -1818,6 +1826,7 @@ for (const sig of ["SIGINT", "SIGTERM"] as const) {
         .join("\n");
     } catch {}
     console.log(`[${new Date().toISOString()}] stopping on ${sig}; newest processes:\n${newest}`);
+    await transcriptRedaction.close();
     schedules.shutdown();
     benchmarks.close();
     threads.shutdown();

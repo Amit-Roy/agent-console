@@ -23,6 +23,24 @@ const id = { id: { type: "string", description: "Task id or exact title, from sc
 
 export const TOOLS = [
   {
+    name: "session_redact",
+    label: "Clean session credentials",
+    description:
+      "Scan, remove, or verify credentials in stored session transcripts and caches. Returns an immediate job id. Poll status with job until complete, failed, or incomplete. scan is the default; apply changes stored transcripts. Reports contain counts only. Live login credentials are preserved.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        action: { type: "string", enum: ["scan", "apply", "verify", "status"] },
+        scope: { type: "string", enum: ["all", "console", "native"] },
+        job: {
+          type: "string",
+          description: "Job id returned by a start action; required for status.",
+        },
+      },
+    },
+  },
+  {
     name: "session_search",
     label: "Search past sessions",
     description:
