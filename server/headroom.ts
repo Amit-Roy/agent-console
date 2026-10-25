@@ -168,6 +168,9 @@ function spawnProxy() {
     OPENBLAS_NUM_THREADS: "1",
     NUMEXPR_NUM_THREADS: "1",
     TOKENIZERS_PARALLELISM: "false",
+    // glibc keeps freed heap pages; fewer arenas and a low trim threshold return them sooner.
+    MALLOC_ARENA_MAX: process.env.MALLOC_ARENA_MAX ?? "2",
+    MALLOC_TRIM_THRESHOLD_: process.env.MALLOC_TRIM_THRESHOLD_ ?? "131072",
   };
   Object.assign(env, profileEnv(settings));
   if (env.ANTHROPIC_BASE_URL?.replace(/\/+$/, "") === URL_) delete env.ANTHROPIC_BASE_URL;
