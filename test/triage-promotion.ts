@@ -47,6 +47,29 @@ assert.equal(pass.bootstrap, false);
 assert.equal(pass.metrics.p80Coverage, 0.82);
 assert.equal(pass.metrics.championMeanPinball, 1);
 
+// Noise-aware coverage when no champion comparison exists (heldout n = quantileModel.sampleCount).
+const noChampionNoise = (p80: number, sampleCount?: number) =>
+  promotionDecision(
+    artifact(
+      { quantiles: quantiles(p80), ...(sampleCount === undefined ? {} : { sampleCount }) },
+      null,
+    ),
+  );
+assert.equal(noChampionNoise(0.719, 32).promote, true);
+assert.deepEqual(
+  noChampionNoise(0.719, 32).reasons.filter((reason) => reason.startsWith("p80")),
+  [],
+);
+assert.equal(noChampionNoise(0.59, 32).promote, false);
+const strict200 = noChampionNoise(0.65, 200);
+assert.equal(strict200.promote, false);
+assert.match(strict200.reasons[0] ?? "", /p80 coverage 0\.650 is below 0\.75 and .*noise limit/);
+const unknownN = artifact({ quantiles: quantiles(0.719) }, null);
+delete (unknownN.validation as Json & { quantileModel: Json }).quantileModel.sampleCount;
+const unknownDecision = promotionDecision(unknownN);
+assert.equal(unknownDecision.promote, false);
+assert.match(unknownDecision.reasons[0] ?? "", /p80 coverage 0\.719 is below 0\.75\./);
+
 // Missing or malformed challenger.
 for (const bad of [
   undefined,
@@ -86,9 +109,18 @@ const bootCover = (p80: number, p95 = 0.95) =>
 assert.equal(bootCover(0.75).promote, true);
 assert.equal(bootCover(0.92).promote, true);
 assert.equal(bootCover(0.9, 0.9).promote, true);
-assert.deepEqual(bootCover(0.7).reasons, ["p80 coverage 0.700 is below 0.75."]);
-assert.deepEqual(bootCover(0.95).reasons, ["p80 coverage 0.950 is above 0.92."]);
-assert.deepEqual(bootCover(0.8, 0.85).reasons, ["p95 coverage 0.850 is below 0.90."]);
+assert.match(
+  bootCover(0.7).reasons[0] ?? "",
+  /^p80 coverage 0\.700 is below 0\.75 and .*noise limit/,
+);
+assert.match(
+  bootCover(0.95).reasons[0] ?? "",
+  /^p80 coverage 0\.950 is above 0\.92 and .*noise limit/,
+);
+assert.match(
+  bootCover(0.8, 0.85).reasons[0] ?? "",
+  /^p95 coverage 0\.850 is below 0\.90 and .*noise limit/,
+);
 assert.equal(promotionDecision(noChampion(quantiles(0.95))).bootstrap, true);
 assert.equal(promotionDecision(noChampion(quantiles(0.95))).promote, false);
 
@@ -97,7 +129,7 @@ const noCoverage = champion({ quantiles: undefined });
 const fallback = promotionDecision(artifact({ quantiles: quantiles(0.95) }, noCoverage));
 assert.equal(fallback.promote, false);
 assert.equal(fallback.bootstrap, false);
-assert.deepEqual(fallback.reasons, ["p80 coverage 0.950 is above 0.92."]);
+assert.match(fallback.reasons[0] ?? "", /^p80 coverage 0\.950 is above 0\.92 and .*noise limit/);
 assert.equal(fallback.metrics.championP80Coverage, null);
 assert.equal(fallback.metrics.championP95Coverage, null);
 
