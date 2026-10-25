@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Held-out benchmark of effort quantile-tree candidates on one calibration dataset.
 
-Candidates: `current` (live artifact params), `stable` (TREE_PARAMS), with external rows
+Candidates: `current` (live artifact params), `stable` (TREE_PARAMS), `intent` (stable plus
+request-intent features, needs request text; bench-only), with external rows
 `stable+swe-chat-prior`, and `qrf` (quantile regression forest, bench-only). External rows are train-only: never held out, never in the ceiling.
-Prints one line per candidate plus `best <name>`; writes summary.json under --out.
+Prints one line per candidate, `<name> real ...` lines when held-out rows split into real and
+probe sessions (row `origin`/`real` marker, else history console links), plus `best <name>`; writes summary.json under --out.
 """
 
 import argparse
@@ -13,6 +15,7 @@ import json
 import math
 import os
 import pickle
+import re
 import sys
 import time
 from pathlib import Path
@@ -62,6 +65,44 @@ FOREST_GRID = [
 # The newest fifth of the training rows picks the forest settings; held-out rows never do.
 FOREST_VALID_FRACTION = 0.2
 TARGET_METRIC = "totalTokens"
+# Row origins that mark probe sessions; a row with none of these (or no marker) counts as real.
+PROBE_ORIGINS = {"sdk-cli", "sdk-py", "codex_exec", "probe"}
+INTENT_NAME = "intent"
+REQUEST_WINDOW = 2000
+QUESTION_START = re.compile(
+    r"^\s*(what|why|how|is|are|can|could|should|do|does|which|where|when|who|any)\b", re.I | re.M
+)
+EDIT_WORDS = re.compile(
+    r"\b(fix|implement|add|build|refactor|create|write|change|update|remove|delete|rename|migrate"
+    r"|enforce|install|configure|set ?up|wire|hook|make)\b",
+    re.I,
+)
+SHIP_WORDS = re.compile(
+    r"\b(deploy|ship|merge|push|commit|pr|pull request|release|restart)\b", re.I
+)
+RESEARCH_WORDS = re.compile(
+    r"\b(research|compare|benchmark|evaluate|investigate|analy[sz]e|audit|explore|options"
+    r"|alternatives|recommend)\b",
+    re.I,
+)
+DEBUG_WORDS = re.compile(
+    r"\b(error|bug|broken|fails?|failing|crash|stuck|not working|doesn'?t work|wrong|flaky"
+    r"|502|404|500|timeout|exception|traceback)\b",
+    re.I,
+)
+IMAGE_MARK = re.compile(r"\[Image #\d+\]|\[Attached files")
+ISSUE_REF = re.compile(r"(issue|pr)\s*#\d+|#\d{2,}", re.I)
+NUMBERED_ASK = re.compile(r"^\s*(?:[-*]|\d+[.)])\s+", re.M)
+INTENT_FEATURES = [
+    "iQuestion",
+    "iEdit",
+    "iShip",
+    "iResearch",
+    "iDebug",
+    "iImage",
+    "iIssue",
+    "iEnum",
+]
 
 
 class BenchError(Exception):
@@ -102,7 +143,64 @@ def load_external(path):
     return numpy.array(matrix, dtype=float), numpy.array(target, dtype=float)
 
 
-def load_samples(dataset_path):
+def intent_features(request):
+    """Deterministic intent cues of the first request window (bench-only candidate features)."""
+    head = request[:REQUEST_WINDOW]
+    return {
+        "iQuestion": float(bool(QUESTION_START.search(head) or head.rstrip().endswith("?"))),
+        "iEdit": math.log1p(len(EDIT_WORDS.findall(head))),
+        "iShip": float(bool(SHIP_WORDS.search(head))),
+        "iResearch": float(bool(RESEARCH_WORDS.search(head))),
+        "iDebug": float(bool(DEBUG_WORDS.search(head))),
+        "iImage": float(bool(IMAGE_MARK.search(head))),
+        "iIssue": float(bool(ISSUE_REF.search(head))),
+        "iEnum": math.log1p(len(NUMBERED_ASK.findall(head))),
+    }
+
+
+def load_history(path):
+    """Session-history tasks by id, or {} when the file is absent or unreadable."""
+    try:
+        tasks = json.loads(Path(path).read_text())["tasks"]
+        return {task["id"]: task for task in tasks if isinstance(task, dict) and "id" in task}
+    except (OSError, ValueError, KeyError, TypeError):
+        return {}
+
+
+def row_is_real(sample, task):
+    """True/False from the row's own marker, else from history provenance; None when unknown."""
+    if isinstance(sample.get("origin"), str):
+        return sample["origin"] not in PROBE_ORIGINS
+    if isinstance(sample.get("real"), bool):
+        return sample["real"]
+    provenance = task.get("provenance") if task else None
+    if isinstance(provenance, dict):
+        # A non-console-linked native session is a probe.
+        return bool(provenance.get("consoleThreads"))
+    return None
+
+
+def annotate(samples, history):
+    """Attach `_real` (bool or None) and `_request` (text or None) to each row."""
+    for sample in samples:
+        task = history.get(sample["sampleId"])
+        request = sample.get("request")
+        if not isinstance(request, str) and task:
+            request = task.get("request")
+        sample["_real"] = row_is_real(sample, task)
+        sample["_request"] = request if isinstance(request, str) else None
+    return samples
+
+
+def with_intent(samples):
+    """Copies of the rows whose text also carries the intent features."""
+    return [
+        {**sample, "text": {**sample["text"], **intent_features(sample["_request"])}}
+        for sample in samples
+    ]
+
+
+def load_samples(dataset_path, history_path=None):
     try:
         dataset = json.loads(Path(dataset_path).read_text())
         samples, _ = fit.validate_dataset(dataset)
@@ -111,7 +209,9 @@ def load_samples(dataset_path):
     usable = [sample for sample in samples if fit.quantile_text(sample)]
     if len(usable) < 6:
         raise BenchError("dataset", "fewer than six rows carry request features")
-    return usable
+    if history_path is None:
+        history_path = Path(dataset_path).with_name("triage-session-history.json")
+    return annotate(usable, load_history(history_path))
 
 
 def matrix_of(rows):
@@ -184,6 +284,14 @@ def fit_predict(train, held, spec):
     return fit_heads(train, held, spec["params"], spec["external"])
 
 
+def real_rows(held):
+    """Indexes of held-out rows marked real; empty unless some are real and some are probes."""
+    marks = [sample["_real"] for sample in held]
+    if None in marks or all(marks) or not any(marks):
+        return []
+    return [index for index, real in enumerate(marks) if real]
+
+
 def score(logs, held, cap):
     """Mean pinball over the levels and p80/p95 coverage, as the runtime would price them."""
     stacked = numpy.maximum.accumulate(numpy.minimum(logs, cap), axis=1)
@@ -239,6 +347,10 @@ def run_candidate(samples, spec):
     elapsed = time.monotonic() - started
     logs = logs + numpy.array([offsets[name] for name in fit.QUANTILE_LEVELS])
     result = score(logs, held, math.log1p(ceiling))
+    real = real_rows(held)
+    if real:
+        subset = score(logs[real], [held[index] for index in real], math.log1p(ceiling))
+        result["real"] = {**subset, "heldout": len(real)}
     return {**result, "nodes": nodes, "sizeKb": size / 1024, "fitSec": elapsed, "offsets": offsets}
 
 
@@ -271,8 +383,15 @@ def rolling_gap(samples, spec):
 
 
 def evaluate(spec, samples):
-    result = run_candidate(samples, spec)
-    result["gap"] = rolling_gap(samples, spec)
+    features = fit.QUANTILE_FEATURES[:]
+    # Forked workers own their copy; the restore keeps in-process callers clean.
+    fit.QUANTILE_FEATURES[:] = features + spec.get("extraFeatures", [])
+    try:
+        rows = with_intent(samples) if spec.get("extraFeatures") else samples
+        result = run_candidate(rows, spec)
+        result["gap"] = rolling_gap(rows, spec)
+    finally:
+        fit.QUANTILE_FEATURES[:] = features
     result["name"] = spec["name"]
     return result
 
@@ -288,11 +407,20 @@ def candidate_line(result):
     )
 
 
+def real_line(result):
+    real = result["real"]
+    cov = real["coverage"]
+    return (
+        f"{result['name']} real pinball {real['pinball']:.3f} "
+        f"cov {cov['p80']:.2f}/{cov['p95']:.2f} n {real['heldout']}"
+    )
+
+
 def forest_available():
     return importlib.util.find_spec("quantile_forest") is not None
 
 
-def candidate_specs(artifact_path, external):
+def candidate_specs(artifact_path, external, samples=()):
     """Every runnable candidate; the forest is skipped when quantile-forest is not installed."""
     specs = [
         {
@@ -320,6 +448,17 @@ def candidate_specs(artifact_path, external):
                 "offsets": "own-rows",
             }
         )
+    if samples and all(sample["_request"] is not None for sample in samples):
+        specs.append(
+            {
+                "name": INTENT_NAME,
+                "kind": "trees",
+                "params": fit.TREE_PARAMS,
+                "external": None,
+                "offsets": "fitter",
+                "extraFeatures": INTENT_FEATURES,
+            }
+        )
     if forest_available():
         specs.append(
             {"name": "qrf", "kind": "forest", "params": None, "external": None, "offsets": "none"}
@@ -340,17 +479,18 @@ def chosen_specs(specs, names):
 
 
 def benchmark(args):
-    samples = load_samples(args.dataset)
+    samples = load_samples(args.dataset, args.history)
     try:
         train, held, ceiling = split_ceiling(samples)
     except ValueError as error:
         raise BenchError("split", str(error)) from error
     external = load_external(args.external_rows) if args.external_rows else None
-    plan = chosen_specs(candidate_specs(args.artifact or "", external), args.candidates)
+    plan = chosen_specs(candidate_specs(args.artifact or "", external, samples), args.candidates)
     # One single-threaded worker per candidate keeps the wall time near the slowest one.
     with concurrent.futures.ProcessPoolExecutor(max_workers=len(plan)) as pool:
         pending = [pool.submit(evaluate, spec, samples) for spec in plan]
         results = [job.result() for job in pending]
+    held_real = len(real_rows(held))
     best = min(results, key=lambda result: result["pinball"])["name"]
     return {
         "best": best,
@@ -359,6 +499,7 @@ def benchmark(args):
         "heldout": len(held),
         "ceiling": ceiling,
         "externalRows": 0 if external is None else len(external[1]),
+        **({"realHeldout": held_real} if held_real else {}),
     }
 
 
@@ -375,6 +516,10 @@ def parse_args(argv):
     parser.add_argument("--out", required=True, type=Path)
     parser.add_argument("--artifact", help="live artifact whose fit parameters define `current`")
     parser.add_argument("--external-rows", help="feature rows from effort-data-features.ts")
+    parser.add_argument(
+        "--history",
+        help="session history giving request text and console links; default: next to --dataset",
+    )
     parser.add_argument("--candidates", help="comma-separated names to run; default all")
     parser.add_argument("--json", action="store_true", help="print summary.json instead of lines")
     return parser.parse_args(argv)
@@ -393,6 +538,9 @@ def main(argv=None):
         return 0
     for result in summary["candidates"]:
         print(candidate_line(result))
+    for result in summary["candidates"]:
+        if "real" in result:
+            print(real_line(result))
     print(f"best {summary['best']} out {target}")
     return 0
 

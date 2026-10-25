@@ -332,6 +332,9 @@ function preflightReason(
     /^(?:mock|test-fixture|fixture)[-_]/i.test(threadId)
   )
     return "explicitSyntheticSession";
+  // Quota window openers (server/index.ts) send a one-word probe; they are not user work.
+  if (typeof thread.title === "string" && thread.title.startsWith("Window opener"))
+    return "quotaWindowOpener";
   if (thread.status !== "idle" || thread.operation || thread.background > 0)
     return "activeOrUnconfirmedIdle";
   if (logError) return "invalidOrOversizedLog";
@@ -606,6 +609,8 @@ function evaluateThread(context: ConsoleContext, threadId: string): ThreadOutcom
   const link = sessionLink(threadId, thread, identities);
   const base = { provider, link, logRead };
   const preflight = preflightReason(thread, threadId, provider, logError, logFile);
+  // Unlinked, so its native transcript is judged by origin alone and dropped as a probe.
+  if (preflight === "quotaWindowOpener") return { provider, logRead, reason: preflight };
   if (preflight || !thread) return { ...base, reason: preflight };
   const input = { context, thread, threadId, provider, ledger, logFile, events, identities };
   return { ...base, ...evaluateSession(input) };

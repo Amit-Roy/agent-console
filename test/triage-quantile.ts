@@ -302,3 +302,27 @@ test("validator and walker accept depth-2 and depth-3 heads", () => {
     }
   }
 });
+
+test("shapeFrom takes layout from the draft and content from the text", () => {
+  const draft = "fix it";
+  const rewrite = "- fix `src/a.ts` v1.2\n- add tests?\n- run tests";
+  const plain = requestFeatures(rewrite);
+  const shaped = requestFeatures(rewrite, { shapeFrom: draft });
+  const draftOnly = requestFeatures(draft);
+  const layout = [
+    "size",
+    "lines",
+    "logChars",
+    "logLines",
+    "bullets",
+    "questions",
+    "verbs",
+    "logVerbs",
+    "fence",
+    "checklist",
+  ] as const;
+  for (const key of layout) assert.equal(shaped[key], draftOnly[key], key);
+  for (const key of ["refs", "logRefs", "logPaths", "tests", "versions"] as const)
+    assert.equal(shaped[key], plain[key], key);
+  assert.deepEqual(requestFeatures(rewrite, {}), plain);
+});
