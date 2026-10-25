@@ -34,8 +34,9 @@ Object.assign(globalThis, { document, window });
 setArchIcons({ bot: '<circle cx="12" cy="12" r="3"/>' });
 const box = document.getElementById("c");
 await buildArch(example, box);
-const countNodes = (items: any[]): number =>
-  items.reduce((n, i) => n + ("group" in i ? countNodes(i.items) : 1), 0);
+type Item = { group?: string; items?: Item[] };
+const countNodes = (items: Item[]): number =>
+  items.reduce((n, i) => n + (i.items ? countNodes(i.items) : 1), 0);
 assert.equal(box.querySelectorAll(".node[data-id]").length, countNodes(example.items));
 assert.equal(box.__archEdges.length, example.edges.length);
 assert.ok(box.querySelector(".legend"));

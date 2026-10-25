@@ -1449,6 +1449,17 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
         : "Upload failed.",
   });
 });
+// The ```arch route worker runs libavoid's embind glue, which needs eval. Only the worker script (and the module it
+// imports) gets a CSP allowing it; Chromium applies a dedicated worker's own response CSP, the page CSP stays strict.
+const ARCH_WORKER_SCRIPTS = new Set(["/arch-route-worker.js", "/vendor/libavoid/index.js"]);
+app.use((req, res, next) => {
+  if (ARCH_WORKER_SCRIPTS.has(req.path))
+    res.setHeader(
+      "Content-Security-Policy",
+      "default-src 'none'; script-src 'self' 'unsafe-eval' 'wasm-unsafe-eval'; connect-src 'self'",
+    );
+  next();
+});
 app.use(express.static(path.join(ROOT, "public"), { index: "index.html", extensions: ["html"] }));
 
 boot.mark("routes");

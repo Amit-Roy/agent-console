@@ -2,7 +2,7 @@
 // brain/skills/pr-evidence) as a styled diagram: title, nested groups, nodes (icon tile, label, tech, desc, status pill,
 // step badge) and a legend. Icons come only from the vendored Lucide map (/vendor/lucide/icons.json); anything else
 // (d2:, file paths, unknown names) gets a fallback glyph. Nothing is fetched from remote URLs.
-// Arrow routing is a separate step: routeArch(container) is a stub; edges live on container.__archEdges.
+// Arrows: routeArch(container) routes in a libavoid (WASM) module worker and draws the edges (container.__archEdges) as an SVG overlay.
 
 export const COLORS = {
   blue: "#2563eb",
@@ -81,7 +81,7 @@ function checkItems(items, where, ids, errors) {
     errors.push(`${where}: items must be a non-empty list`);
     return;
   }
-  items.forEach((item, index) => checkItem(item, `${where} item ${index + 1}`, ids, errors));
+  for (const [index, item] of items.entries()) checkItem(item, `${where} item ${index + 1}`, ids, errors);
 }
 
 function checkItem(item, where, ids, errors) {
@@ -126,7 +126,7 @@ export function validateArch(spec) {
   checkItems(spec.items, "spec", ids, errors);
   const edges = spec.edges ?? [];
   if (!Array.isArray(edges)) errors.push("edges must be a list");
-  else edges.forEach((edge, index) => checkEdge(edge, index, ids, errors));
+  else for (const [index, edge] of edges.entries()) checkEdge(edge, index, ids, errors);
   return errors;
 }
 
@@ -317,8 +317,311 @@ export function buildArch(spec, container) {
   });
 }
 
-/** Stub: a later worker draws the edges (container.__archEdges) over container.__archCanvas. */
-export function routeArch(_container) {}
+// ---------- routing: measured here, routed by libavoid in a module worker (public/arch-route-worker.js) ----------
+// libavoid's embind glue needs eval, which the page CSP forbids; the worker script carries its own CSP.
+const WORKER_URL = "/arch-route-worker.js";
+const REROUTE_DELAY = 100;
+const ROUTE_TIMEOUT = 15000;
+let routeWorker = null;
+let nextRequest = 1;
+const pending = new Map(); // requestId -> { resolve, reject, timer }
+
+function settle(requestId, outcome) {
+  const entry = pending.get(requestId);
+  if (!entry) return;
+  pending.delete(requestId);
+  clearTimeout(entry.timer);
+  outcome(entry);
+}
+
+// A failed worker (load error, WASM abort) is dropped; the next pass starts a fresh one.
+function dropWorker(reason) {
+  routeWorker?.terminate();
+  routeWorker = null;
+  for (const requestId of [...pending.keys()]) settle(requestId, (entry) => entry.reject(new Error(reason)));
+}
+
+function getWorker() {
+  if (routeWorker) return routeWorker;
+  routeWorker = new Worker(WORKER_URL, { type: "module", name: "arch-route" });
+  routeWorker.onmessage = ({ data }) => {
+    if (data.error) dropWorker(data.error);
+    else settle(data.requestId, (entry) => entry.resolve(data));
+  };
+  routeWorker.onerror = (event) => {
+    event.preventDefault?.();
+    dropWorker(event.message || "arch route worker failed to load");
+  };
+  return routeWorker;
+}
+
+// One shared worker, reused across diagrams and passes; WASM loads once per worker.
+function requestRoutes(layout, edges) {
+  const requestId = nextRequest++;
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => dropWorker("arch routing timed out"), ROUTE_TIMEOUT);
+    pending.set(requestId, { resolve, reject, timer });
+    getWorker().postMessage({ requestId, ...layout, edges });
+  });
+}
+
+// Route cache: same edges, node rects (rounded) and canvas size give the same routes, so re-renders and
+// streaming of an unchanged diagram skip the worker. In memory, least recently used out past ROUTE_CACHE_SIZE.
+const ROUTE_CACHE_SIZE = 30;
+const routeCache = new Map();
+
+function hashText(text) {
+  let djb = 5381;
+  let fnv = 2166136261;
+  for (let index = 0; index < text.length; index++) {
+    const code = text.charCodeAt(index);
+    djb = ((djb << 5) + djb + code) | 0;
+    fnv = Math.imul(fnv ^ code, 16777619);
+  }
+  return `${(djb >>> 0).toString(36)}.${(fnv >>> 0).toString(36)}.${text.length}`;
+}
+
+function routeKey(layout, edges, size) {
+  const round = (box) => [box.id, box.l, box.t, box.r, box.b].map((value) => (typeof value === "number" ? Math.round(value) : value));
+  const rects = [...layout.boxes.values()].map(round);
+  const headers = layout.headers.map((box) => [box.l, box.t, box.r, box.b].map(Math.round));
+  return hashText(JSON.stringify([edges, rects, headers, size]));
+}
+
+function cachedRoutes(key) {
+  const hit = routeCache.get(key);
+  if (hit) {
+    routeCache.delete(key);
+    routeCache.set(key, hit);
+  }
+  return hit;
+}
+
+function rememberRoutes(key, result) {
+  routeCache.set(key, result);
+  if (routeCache.size > ROUTE_CACHE_SIZE) routeCache.delete(routeCache.keys().next().value);
+}
+
+function relativeRect(element, origin) {
+  const rect = element.getBoundingClientRect();
+  return {
+    l: rect.left - origin.left,
+    t: rect.top - origin.top,
+    r: rect.right - origin.left,
+    b: rect.bottom - origin.top,
+  };
+}
+
+function unionRect(rects) {
+  return {
+    l: Math.min(...rects.map((rect) => rect.l)),
+    t: Math.min(...rects.map((rect) => rect.t)),
+    r: Math.max(...rects.map((rect) => rect.r)),
+    b: Math.max(...rects.map((rect) => rect.b)),
+  };
+}
+
+// Node and group boxes plus group titles (obstacles, so wires never cross them), relative to the canvas.
+function measureCanvas(canvas) {
+  const origin = canvas.getBoundingClientRect();
+  const boxes = new Map();
+  for (const element of canvas.querySelectorAll("[data-id]")) {
+    const group = element.classList.contains("group");
+    boxes.set(element.dataset.id, { id: element.dataset.id, group, ...relativeRect(element, origin) });
+  }
+  const headers = [];
+  for (const header of canvas.querySelectorAll(".group > header")) {
+    const parts = [...header.children].map((part) => relativeRect(part, origin));
+    if (parts.length) headers.push(unionRect(parts));
+  }
+  return { boxes, headers };
+}
+
+// ---------- overlay ----------
+const ROUND = 10;
+function roundedPath(points) {
+  let path = `M${points[0][0]},${points[0][1]}`;
+  for (let index = 1; index < points.length - 1; index++) {
+    const [prev, corner, next] = [points[index - 1], points[index], points[index + 1]];
+    const before = Math.min(ROUND, Math.hypot(corner[0] - prev[0], corner[1] - prev[1]) / 2);
+    const after = Math.min(ROUND, Math.hypot(next[0] - corner[0], next[1] - corner[1]) / 2);
+    const inX = Math.sign(corner[0] - prev[0]);
+    const inY = Math.sign(corner[1] - prev[1]);
+    const outX = Math.sign(next[0] - corner[0]);
+    const outY = Math.sign(next[1] - corner[1]);
+    path += ` L${corner[0] - inX * before},${corner[1] - inY * before}`;
+    path += ` Q${corner[0]},${corner[1]} ${corner[0] + outX * after},${corner[1] + outY * after}`;
+  }
+  const last = points[points.length - 1];
+  return `${path} L${last[0]},${last[1]}`;
+}
+
+function svgElement(tag, attrs) {
+  const element = document.createElementNS(SVG_NS, tag);
+  for (const [name, value] of Object.entries(attrs)) element.setAttribute(name, String(value));
+  return element;
+}
+
+// Colours are CSS variables of the node pill palette, so a theme switch recolours wires without a reroute.
+function arrowMarkers(prefix) {
+  const defs = svgElement("defs", {});
+  for (const status of Object.keys(STATUSES)) {
+    const marker = svgElement("marker", {
+      id: `${prefix}-${status}`,
+      viewBox: "0 0 10 10",
+      refX: 9,
+      refY: 5,
+      markerWidth: 7,
+      markerHeight: 7,
+      orient: "auto-start-reverse",
+    });
+    const tip = svgElement("path", { d: "M0,0 L10,5 L0,10 z" });
+    tip.style.fill = `var(--a-${status})`;
+    marker.append(tip);
+    defs.append(marker);
+  }
+  return defs;
+}
+
+function wirePath(edge, points, prefix) {
+  const path = svgElement("path", {
+    d: roundedPath(points),
+    fill: "none",
+    "stroke-width": edge.status === "unchanged" ? 1.75 : 2.5,
+    "marker-end": `url(#${prefix}-${edge.status})`,
+  });
+  path.classList.add("wire", edge.status);
+  path.style.stroke = `var(--a-${edge.status})`;
+  if (edge.dashed || edge.status === "removed") path.setAttribute("stroke-dasharray", "7 5");
+  if (edge.both) path.setAttribute("marker-start", `url(#${prefix}-${edge.status})`);
+  return path;
+}
+
+function edgeChip(edge) {
+  const chip = div(`edge-label ${edge.status}`);
+  if (edge.step) chip.append(span("step", edge.step));
+  if (edge.label) chip.append(span("text", edge.label));
+  return chip;
+}
+
+const CHIP_PAD = 3;
+const overlaps = (first, second) =>
+  first.l < second.r + CHIP_PAD && first.r > second.l - CHIP_PAD && first.t < second.b + CHIP_PAD && first.b > second.t - CHIP_PAD;
+
+function longestSegment(points) {
+  let best = [points[0], points[1]];
+  let bestLength = -1;
+  for (const [index, start] of points.slice(0, -1).entries()) {
+    const end = points[index + 1];
+    const length = Math.hypot(end[0] - start[0], end[1] - start[1]);
+    if (length > bestLength) [best, bestLength] = [[start, end], length];
+  }
+  return best;
+}
+
+// Chip centres to try: the path midpoint, then ±25% and ±50% from the centre of the longest segment.
+function chipSpots(points, midpoint) {
+  const [start, end] = longestSegment(points);
+  const along = (share) => [start[0] + (end[0] - start[0]) * share, start[1] + (end[1] - start[1]) * share];
+  return [midpoint, along(0.75), along(0.25), along(1), along(0)];
+}
+
+// First spot whose chip box clears every node and every chip placed so far; else the path midpoint.
+function placeChip(chip, spots, obstacles) {
+  const halfWidth = chip.offsetWidth / 2;
+  const halfHeight = chip.offsetHeight / 2;
+  const boxAt = ([left, top]) => ({ l: left - halfWidth, r: left + halfWidth, t: top - halfHeight, b: top + halfHeight });
+  const spot = spots.find((candidate) => !obstacles.some((other) => overlaps(boxAt(candidate), other))) || spots[0];
+  chip.style.left = `${spot[0]}px`;
+  chip.style.top = `${spot[1]}px`;
+  obstacles.push(boxAt(spot));
+}
+
+let overlayCount = 0;
+function drawOverlay(canvas, edges, { routes, labels }, layout) {
+  for (const old of canvas.querySelectorAll(":scope > svg.wires, :scope > .edge-label")) old.remove();
+  const prefix = `arch-arrow-${++overlayCount}`;
+  const svg = svgElement("svg", { class: "wires", "aria-hidden": "true" });
+  svg.append(arrowMarkers(prefix));
+  const chips = [];
+  for (const [index, points] of routes.entries()) {
+    if (points.length < 2) continue;
+    const edge = edges[index];
+    svg.append(wirePath(edge, points, prefix));
+    if (edge.label || edge.step) chips.push({ chip: edgeChip(edge), spots: chipSpots(points, labels[index]) });
+  }
+  canvas.append(svg, ...chips.map((item) => item.chip));
+  const obstacles = [...layout.boxes.values()].filter((box) => !box.group);
+  for (const { chip, spots } of chips) placeChip(chip, spots, obstacles);
+}
+
+// ---------- routing lifecycle ----------
+const canvasSize = (canvas) => `${canvas.offsetWidth}x${canvas.offsetHeight}`;
+const laidOut = (canvas) =>
+  canvas.isConnected && typeof canvas.getBoundingClientRect === "function" && canvas.offsetWidth > 0;
+
+async function routeNow(container) {
+  const canvas = container.__archCanvas;
+  const edges = container.__archEdges;
+  if (!laidOut(canvas)) return; // not attached or hidden yet: the ResizeObserver routes once it has a size
+  // Late web fonts can widen a group title without resizing the canvas: measure once they are in.
+  if (document.fonts && document.fonts.status !== "loaded") await document.fonts.ready;
+  if (canvas !== container.__archCanvas || !laidOut(canvas)) return;
+  const size = canvasSize(canvas);
+  container.__archSize = size;
+  const started = performance.now();
+  const layout = measureCanvas(canvas);
+  const key = routeKey(layout, edges, size);
+  let result = cachedRoutes(key);
+  container.dataset.routeCache = result ? "hit" : "miss";
+  if (!result) {
+    result = await requestRoutes(layout, edges);
+    rememberRoutes(key, result);
+    if (canvas !== container.__archCanvas || canvasSize(canvas) !== container.__archSize) return; // rebuilt or resized meanwhile
+  }
+  drawOverlay(canvas, edges, result, layout);
+  container.dataset.routeMs = (performance.now() - started).toFixed(1);
+  container.dataset.routerMs = result.routerMs.toFixed(1); // libavoid pass alone, inside the worker
+}
+
+function safeRoute(container) {
+  return routeNow(container).catch((err) => {
+    // Routing is decoration: the boxes stay readable without wires.
+    container.dataset.routeError = String(err?.message || err);
+    console.warn("arch: edge routing failed", err);
+  });
+}
+
+// Debounced reroute when the canvas changes size. The overlay is absolutely positioned inside the canvas, so
+// drawing it never resizes the canvas and cannot retrigger the observer.
+function watchResize(container) {
+  container.__archObserver?.disconnect();
+  if (typeof ResizeObserver === "undefined") return;
+  const canvas = container.__archCanvas;
+  let timer = 0;
+  const observer = new ResizeObserver(() => {
+    if (!laidOut(canvas) || canvasSize(canvas) === container.__archSize) return;
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      if (canvasSize(canvas) !== container.__archSize) safeRoute(container);
+    }, REROUTE_DELAY);
+  });
+  observer.observe(canvas);
+  container.__archObserver = observer;
+}
+
+/**
+ * Draws container.__archEdges over container.__archCanvas: libavoid routes all edges in one orthogonal pass in a
+ * lazily started module worker, then an SVG overlay gets paths, arrowheads, label chips and step badges. Reroutes
+ * on resize. The last pass's duration in ms (measure + worker round trip + draw; the first pass also includes the
+ * worker start and WASM load) is in data-route-ms.
+ */
+export function routeArch(container) {
+  const canvas = container.__archCanvas;
+  if (!canvas || !container.__archEdges?.length) return Promise.resolve();
+  watchResize(container);
+  return safeRoute(container);
+}
 
 // ---------- styles (ported from brain/bin/pr-architecture, with dark variables) ----------
 const ARCH_CSS = `
@@ -377,7 +680,9 @@ const ARCH_CSS = `
 .arch .node > .pill { position:absolute; top:-10px; right:-8px; }
 .arch .group > header .pill { margin-left:auto; }
 .arch svg.wires { position:absolute; inset:0; z-index:1; overflow:visible; pointer-events:none; }
-.arch .edge-label { position:absolute; z-index:2; display:flex; align-items:center; gap:6px; max-width:132px; padding:3px 8px; border-radius:8px; background:var(--a-box); border:1px solid var(--a-line); font-size:12px; font-weight:600; line-height:1.25; text-align:center; transform:translate(-50%, -50%); }
+.arch .edge-label { position:absolute; z-index:2; display:flex; align-items:center; gap:6px; width:max-content; max-width:132px; padding:3px 8px; border-radius:8px; background:var(--a-box); border:1px solid var(--a-line); color:var(--a-ink); font-size:12px; font-weight:600; line-height:1.25; text-align:center; transform:translate(-50%, -50%); pointer-events:none; }
+.arch .edge-label.added, .arch .edge-label.modified, .arch .edge-label.removed { border-color:var(--status); background:var(--status-fill); color:color-mix(in srgb, var(--status) 80%, var(--a-ink)); }
+.arch .edge-label .step { min-width:20px; height:20px; font-size:11px; }
 .arch .legend { display:flex; flex-wrap:wrap; align-items:center; gap:10px 22px; margin-top:28px; padding-top:14px; border-top:1px solid var(--a-rule); color:var(--a-sub); font-size:12.5px; font-weight:500; }
 .arch .legend b { font-weight:700; color:var(--a-ink); }
 .arch .legend .key { display:inline-flex; align-items:center; gap:8px; }
