@@ -1,3 +1,4 @@
+import type { GithubRequest } from "./github-triage.ts";
 import { TRIAGE_COMMENT_MARKER } from "./triage-comment.ts";
 import {
   type Job,
@@ -8,7 +9,10 @@ import {
   type TriageContext,
 } from "./triage-types.ts";
 
-export function actorLogin(ctx: TriageContext): Promise<string> {
+export function actorLogin(ctx: {
+  github: GithubRequest;
+  actor?: Promise<string>;
+}): Promise<string> {
   return (ctx.actor ??= ctx
     .github("GET", "user")
     .then((user) => {

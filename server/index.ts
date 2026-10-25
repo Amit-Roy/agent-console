@@ -26,6 +26,7 @@ import {
   limited,
   makeToken,
   PASSWORD,
+  PROXY_PROOF_ON,
   passwordOk,
   recordFail,
   setCookie,
@@ -1525,6 +1526,8 @@ wss.on("connection", (ws) => {
     let m: any;
     try {
       m = JSON.parse(String(raw));
+      if (m?.thread != null && !isId(m.thread)) throw new Error("Invalid thread id.");
+      if (m?.t === "read" && m.id != null && !isId(m.id)) throw new Error("Invalid thread id.");
       switch (m.t) {
         case "ping":
           return reply({ t: "pong" });
@@ -1751,7 +1754,7 @@ server.listen(PORT, HOST, () => {
   console.log(`agent-console listening on http://${HOST}:${PORT}`);
   console.log(
     CODER_HOSTS.length
-      ? `auth: Coder SSO for ${CODER_HOSTS.join(", ")} (password cookie still works elsewhere)`
+      ? `auth: Coder SSO for ${CODER_HOSTS.join(", ")} (password cookie still works elsewhere); proxy proof ${PROXY_PROOF_ON ? "on" : "OFF (host-only)"}`
       : "auth: password only",
   );
   if (process.env.AGENT_CONSOLE_SHOW_PASSWORD) console.log(`password: ${PASSWORD}`);

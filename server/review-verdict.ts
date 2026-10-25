@@ -1,6 +1,7 @@
 import { DIRECT_REPOS } from "./automation/policy.ts";
 import { redoPrompt } from "./automation/review-prompts.ts";
 import { MAX_REVIEWS, type ReviewContext, type ThreadLike, VERDICT } from "./review-context.ts";
+import { actorLogin } from "./triage-github.ts";
 import type { IssueRun } from "./window-dispatch.ts";
 
 export async function discussionOf(
@@ -21,15 +22,24 @@ export async function discussionOf(
   throw new Error("Review discussion exceeds the 2000-comment evidence limit");
 }
 
+/** Verdict comments written by the reviewer's own GitHub login; strangers on a public repo cannot forge one. */
+export async function reviewerVerdicts(ctx: ReviewContext, comments: any[]): Promise<any[]> {
+  const login = (await actorLogin(ctx)).toLowerCase();
+  return (Array.isArray(comments) ? comments : []).filter(
+    (comment: any) =>
+      VERDICT.test(String(comment?.body ?? "")) &&
+      String(comment?.user?.login ?? "").toLowerCase() === login,
+  );
+}
+
 /** The newest verdict the reviewer posted on the PR after it started, if any. */
 async function verdictOf(
   ctx: ReviewContext,
   run: IssueRun,
 ): Promise<{ approved: boolean; body: string } | undefined> {
   const comments = await discussionOf(ctx, run, run.pr!);
-  const mine = (Array.isArray(comments) ? comments : []).filter(
+  const mine = (await reviewerVerdicts(ctx, comments)).filter(
     (comment: any) =>
-      VERDICT.test(String(comment?.body ?? "")) &&
       Date.parse(comment.created_at) >= Math.floor((run.startedAt ?? 0) / 1000) * 1000 &&
       (run.verdictAfter === undefined || Number(comment.id) > run.verdictAfter),
   );
