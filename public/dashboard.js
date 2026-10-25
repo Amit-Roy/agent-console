@@ -248,64 +248,98 @@ function allocatedFee(monthly, from, to) {
   return total;
 }
 const feeKnown = (p) => Number.isFinite(monthlyFees[p]) && monthlyFees[p] >= 0;
+function comparisonKpis(figures) {
+  const { measured, comparable, configured, api, fees, complete } = figures;
+  const values = el("div", "comparison-values");
+  values.append(
+    kpi(
+      "Estimated API cost",
+      measured.length ? usd(api) : "—",
+      `${measured.length}/${comparable.length} matching turns priced · ${configured.map((provider) => provMeta(provider)[0]).join(" + ") || "no fees configured"}`,
+    ),
+    kpi(
+      "Your allocated subscription cost",
+      configured.length ? usd(fees) : "Not configured",
+      `${usd(configured.reduce((sum, provider) => sum + monthlyFees[provider], 0))}/month · prorated by UTC calendar day`,
+    ),
+    kpi(
+      "API estimate minus subscriptions",
+      complete ? `${api < fees ? "−" : ""}${usd(Math.abs(api - fees))}` : "—",
+      complete
+        ? api >= fees
+          ? "API estimate is higher"
+          : "Subscription allocation is higher"
+        : "Requires fees and full API cost coverage",
+    ),
+  );
+  return values;
+}
+function drawSubscriptionComparison(panelBox, result, cur) {
+  const providers = ["claude", "codex"];
+  const active = providers.filter((provider) => cur.turns.some((t) => t.provider === provider));
+  const missing = active.filter((provider) => !feeKnown(provider));
+  const configured = providers.filter(feeKnown);
+  panelBox.querySelector(".head .sub").textContent = configured.length
+    ? `${configured.map((provider) => `${provMeta(provider)[0]}: ${usd(monthlyFees[provider])}/month`).join(" · ")}. Fees are editable.`
+    : "Set your monthly subscription fees to compare.";
+  const comparable = cur.turns.filter((t) => configured.includes(t.provider));
+  const measured = comparable.filter((t) => t.accounting === 2 && t.cost != null);
+  const api = measured.reduce((sum, t) => sum + t.cost, 0);
+  const fees = configured.reduce(
+    (sum, provider) => sum + allocatedFee(monthlyFees[provider], range.from, range.to),
+    0,
+  );
+  const complete =
+    !missing.length && comparable.length > 0 && measured.length === comparable.length;
+  const values = comparisonKpis({ measured, comparable, configured, api, fees, complete });
+  const note = missing.length
+    ? `Enter your monthly ${missing.map((provider) => (provider === "codex" ? "Codex / ChatGPT" : "Claude")).join(" and ")} fee to compare.`
+    : "Enter the full monthly fee you pay, including any taxes you want counted. Use 0 for no paid plan.";
+  result.replaceChildren(
+    values,
+    el("p", "note", note),
+    el(
+      "p",
+      "note",
+      "This compares recorded console activity with allocated plan fees, not a bill or a claim of savings. Pi / pay-as-you-go activity is excluded. Fees apply across this selected range; adjust them if your plan changed.",
+    ),
+  );
+}
+function saveSubscriptionFees(form, status, redraw) {
+  if (!form.reportValidity()) return;
+  const next = {};
+  for (const input of form.querySelectorAll("input"))
+    if (input.value.trim()) next[input.name] = Number(input.value);
+  monthlyFees = next;
+  try {
+    localStorage.setItem(PLAN_KEY, JSON.stringify(next));
+    status.textContent = "Saved in this browser.";
+  } catch {
+    status.textContent = "Applied for this page; this browser could not save your fees.";
+  }
+  redraw();
+}
+function buildFeeInput(provider, name) {
+  const label = el("label", "", name),
+    input = el("input");
+  input.type = "number";
+  input.min = "0";
+  input.max = "100000";
+  input.step = "0.01";
+  input.inputMode = "decimal";
+  input.name = provider;
+  input.value = feeKnown(provider) ? String(monthlyFees[provider]) : "";
+  input.placeholder = "Not configured";
+  label.append(input);
+  return label;
+}
 function subscriptionPanel(cur) {
-  const p = panel(
+  const panelBox = panel(
     "API estimate vs your subscriptions",
     "Your configured monthly subscription fees.",
   );
   const result = el("div", "comparison-result");
-  const draw = () => {
-    const providers = ["claude", "codex"];
-    const active = providers.filter((provider) => cur.turns.some((t) => t.provider === provider));
-    const missing = active.filter((provider) => !feeKnown(provider));
-    const configured = providers.filter(feeKnown);
-    p.querySelector(".head .sub").textContent = configured.length
-      ? `${configured.map((provider) => `${provMeta(provider)[0]}: ${usd(monthlyFees[provider])}/month`).join(" · ")}. Fees are editable.`
-      : "Set your monthly subscription fees to compare.";
-    const comparable = cur.turns.filter((t) => configured.includes(t.provider));
-    const measured = comparable.filter((t) => t.accounting === 2 && t.cost != null);
-    const api = measured.reduce((sum, t) => sum + t.cost, 0);
-    const fees = configured.reduce(
-      (sum, provider) => sum + allocatedFee(monthlyFees[provider], range.from, range.to),
-      0,
-    );
-    const complete =
-      !missing.length && comparable.length > 0 && measured.length === comparable.length;
-    const values = el("div", "comparison-values");
-    values.append(
-      kpi(
-        "Estimated API cost",
-        measured.length ? usd(api) : "—",
-        `${measured.length}/${comparable.length} matching turns priced · ${configured.map((p) => provMeta(p)[0]).join(" + ") || "no fees configured"}`,
-      ),
-      kpi(
-        "Your allocated subscription cost",
-        configured.length ? usd(fees) : "Not configured",
-        `${usd(configured.reduce((sum, provider) => sum + monthlyFees[provider], 0))}/month · prorated by UTC calendar day`,
-      ),
-      kpi(
-        "API estimate minus subscriptions",
-        complete ? `${api < fees ? "−" : ""}${usd(Math.abs(api - fees))}` : "—",
-        complete
-          ? api >= fees
-            ? "API estimate is higher"
-            : "Subscription allocation is higher"
-          : "Requires fees and full API cost coverage",
-      ),
-    );
-    const note = missing.length
-      ? `Enter your monthly ${missing.map((p) => (p === "codex" ? "Codex / ChatGPT" : "Claude")).join(" and ")} fee to compare.`
-      : "Enter the full monthly fee you pay, including any taxes you want counted. Use 0 for no paid plan.";
-    result.replaceChildren(
-      values,
-      el("p", "note", note),
-      el(
-        "p",
-        "note",
-        "This compares recorded console activity with allocated plan fees, not a bill or a claim of savings. Pi / pay-as-you-go activity is excluded. Fees apply across this selected range; adjust them if your plan changed.",
-      ),
-    );
-  };
+  const draw = () => drawSubscriptionComparison(panelBox, result, cur);
   draw();
   const settings = el("details", "subscription-settings");
   settings.append(el("summary", "", "Set your monthly subscription fees"));
@@ -313,43 +347,20 @@ function subscriptionPanel(cur) {
   for (const [provider, name] of [
     ["claude", "Claude combined monthly fee (USD)"],
     ["codex", "Codex / ChatGPT monthly fee (USD)"],
-  ]) {
-    const label = el("label", "", name),
-      input = el("input");
-    input.type = "number";
-    input.min = "0";
-    input.max = "100000";
-    input.step = "0.01";
-    input.inputMode = "decimal";
-    input.name = provider;
-    input.value = feeKnown(provider) ? String(monthlyFees[provider]) : "";
-    input.placeholder = "Not configured";
-    label.append(input);
-    form.append(label);
-  }
+  ])
+    form.append(buildFeeInput(provider, name));
   const save = el("button", "btn primary", "Save fees");
   save.type = "submit";
   const status = el("p", "note", "Stored only in this browser. Leave a fee blank to clear it.");
   status.setAttribute("role", "status");
   form.append(save);
-  form.onsubmit = (e) => {
-    e.preventDefault();
-    if (!form.reportValidity()) return;
-    const next = {};
-    for (const input of form.querySelectorAll("input"))
-      if (input.value.trim()) next[input.name] = Number(input.value);
-    monthlyFees = next;
-    try {
-      localStorage.setItem(PLAN_KEY, JSON.stringify(next));
-      status.textContent = "Saved in this browser.";
-    } catch {
-      status.textContent = "Applied for this page; this browser could not save your fees.";
-    }
-    draw();
+  form.onsubmit = (event) => {
+    event.preventDefault();
+    saveSubscriptionFees(form, status, draw);
   };
   settings.append(form, status);
-  p.append(result, settings);
-  return p;
+  panelBox.append(result, settings);
+  return panelBox;
 }
 function delta(now, before) {
   if (before == null || !isFinite(before)) return "";
@@ -686,46 +697,61 @@ function dayList(from, to) {
   return out;
 }
 let metric = "tokens";
-function render(cur, prev) {
-  const root = $("dm");
-  const cs = sumTurns(cur.turns),
-    ps = prev ? sumTurns(prev.turns) : null;
-  const sv = savedOf(cur),
-    pv = prev ? savedOf(prev) : null;
-  const days = dayList(range.from, range.to);
-  const idx = new Map(days.map((d, i) => [d.key, i]));
-
+function buildKpis(current, previous, saved) {
   const kpis = el("div", "kpis");
   kpis.append(
-    kpi("Turns", fmt(cs.turns), ps ? delta(cs.turns, ps.turns) : "", false),
+    kpi("Turns", fmt(current.turns), previous ? delta(current.turns, previous.turns) : "", false),
     kpi(
       "Input tokens",
-      cs.knownTokens ? fmt(cs.in) : "—",
-      `${fmt(cs.cache)} cache reads included`,
+      current.knownTokens ? fmt(current.in) : "—",
+      `${fmt(current.cache)} cache reads included`,
       false,
     ),
     kpi(
       "Output tokens",
-      cs.knownTokens ? fmt(cs.out) : "—",
-      `${cs.knownTokens}/${cs.turns} turns counted`,
+      current.knownTokens ? fmt(current.out) : "—",
+      `${current.knownTokens}/${current.turns} turns counted`,
       false,
     ),
     kpi(
       "Estimated API cost",
-      cs.knownCost ? usd(cs.cost) : "—",
-      `${cs.knownCost}/${cs.turns} turns priced${cs.knownCost < cs.turns ? " · partial coverage" : ""} · public list prices`,
+      current.knownCost ? usd(current.cost) : "—",
+      `${current.knownCost}/${current.turns} turns priced${current.knownCost < current.turns ? " · partial coverage" : ""} · public list prices`,
       false,
     ),
-    kpi("RTK output reduction", fmt(sv.rtk), "Command output; all local CLI activity", true),
+    kpi("RTK output reduction", fmt(saved.rtk), "Command output; all local CLI activity", true),
     kpi(
       "Headroom input reduction",
-      fmt(sv.hr),
+      fmt(saved.hr),
       "Claude + Codex proxy activity; separate scope",
       true,
     ),
   );
+  return kpis;
+}
 
-  // usage chart with a metric switch
+function turnMetricValue(turn) {
+  if (metric === "turns") return 1;
+  if (metric === "cost") return turn.accounting === 2 ? turn.cost || 0 : 0;
+  return tokensOf(turn);
+}
+function drawUsageChart(chart) {
+  const { cur, days, idx, provs, series, usageBody } = chart;
+  const format = { tokens: fmt, turns: fmt, cost: usd }[metric];
+  const rows = days.map((day) => ({ ...day, values: series.map(() => 0) }));
+  for (const turn of cur.turns) {
+    const dayIndex = idx.get(localDay(turn.ts));
+    if (dayIndex == null) continue;
+    rows[dayIndex].values[provs.indexOf(turn.provider)] += turnMetricValue(turn);
+  }
+  usageBody.replaceChildren(
+    cur.turns.length
+      ? barChart(rows, series, format)
+      : el("div", "empty-c", "No turns in this range."),
+    ...(series.length ? [legend(series.map((entry) => [entry.name, entry.color]))] : []),
+  );
+}
+function buildUsagePanel(cur, days, idx) {
   const seg = el("div", "seg");
   seg.setAttribute("role", "group");
   seg.setAttribute("aria-label", "Metric");
@@ -735,213 +761,229 @@ function render(cur, prev) {
     seg,
   );
   const usageBody = el("div");
-  const provs = [...new Set(cur.turns.map((t) => t.provider))].sort();
-  const series = provs.map((p) => ({ name: provMeta(p)[0], color: css(provMeta(p)[1]), p }));
-  const drawUsage = () => {
-    const f = { tokens: fmt, turns: fmt, cost: usd }[metric];
-    const rows = days.map((d) => ({ ...d, values: series.map(() => 0) }));
-    for (const t of cur.turns) {
-      const i = idx.get(localDay(t.ts));
-      if (i == null) continue;
-      const k = provs.indexOf(t.provider);
-      rows[i].values[k] +=
-        metric === "turns"
-          ? 1
-          : metric === "cost"
-            ? t.accounting === 2
-              ? t.cost || 0
-              : 0
-            : tokensOf(t);
-    }
-    usageBody.replaceChildren(
-      cur.turns.length
-        ? barChart(rows, series, f)
-        : el("div", "empty-c", "No turns in this range."),
-      ...(series.length ? [legend(series.map((s) => [s.name, s.color]))] : []),
-    );
-  };
-  for (const [k, label] of [
+  const provs = [...new Set(cur.turns.map((turn) => turn.provider))].sort();
+  const series = provs.map((provider) => ({
+    name: provMeta(provider)[0],
+    color: css(provMeta(provider)[1]),
+    p: provider,
+  }));
+  const chart = { cur, days, idx, provs, series, usageBody };
+  for (const [key, label] of [
     ["tokens", "Tokens"],
     ["turns", "Turns"],
     ["cost", "Cost"],
   ]) {
-    const b = el("button", "", label);
-    b.type = "button";
-    b.setAttribute("aria-pressed", String(k === metric));
-    b.onclick = () => {
-      metric = k;
-      for (const x of seg.children) x.setAttribute("aria-pressed", String(x === b));
-      drawUsage();
+    const button = el("button", "", label);
+    button.type = "button";
+    button.setAttribute("aria-pressed", String(key === metric));
+    button.onclick = () => {
+      metric = key;
+      for (const sibling of seg.children)
+        sibling.setAttribute("aria-pressed", String(sibling === button));
+      drawUsageChart(chart);
     };
-    seg.append(b);
+    seg.append(button);
   }
-  drawUsage();
+  drawUsageChart(chart);
   usagePanel.append(usageBody);
+  return { usagePanel };
+}
 
-  // savings chart
+function buildSavingsRows(cur, days, idx) {
+  const rows = days.map((day) => ({ ...day, values: [0, 0] }));
+  for (const entry of cur.rtk?.daily || []) {
+    const dayIndex = idx.get(entry.date);
+    if (dayIndex != null) rows[dayIndex].values[0] += entry.saved_tokens || 0;
+  }
+  for (const entry of cur.headroom?.daily || []) {
+    const dayIndex = idx.get(entry.timestamp.slice(0, 10));
+    if (dayIndex != null) rows[dayIndex].values[1] += entry.tokens_saved || 0;
+  }
+  return rows;
+}
+function buildSavingsPanel(saved, savingsRows) {
   const savePanel = panel(
     "Context saved",
     "Separate measurements by source day; scopes can overlap and must not be added",
   );
-  const hrSeries = [
+  const savingsSeries = [
     { name: "RTK (command output)", color: css("--c-rtk") },
     { name: "Headroom (compression)", color: css("--c-headroom") },
   ];
-  const srows = days.map((d) => ({ ...d, values: [0, 0] }));
-  for (const d of cur.rtk?.daily || []) {
-    const i = idx.get(d.date);
-    if (i != null) srows[i].values[0] += d.saved_tokens || 0;
-  }
-  for (const d of cur.headroom?.daily || []) {
-    const i = idx.get(d.timestamp.slice(0, 10));
-    if (i != null) srows[i].values[1] += d.tokens_saved || 0;
-  }
   savePanel.append(
-    sv.rtk || sv.hr
-      ? barChart(srows, hrSeries, fmt)
+    saved.rtk || saved.hr
+      ? barChart(savingsRows, savingsSeries, fmt)
       : el("div", "empty-c", "No savings recorded in this range."),
-    legend(hrSeries.map((s) => [s.name, s.color])),
+    legend(savingsSeries.map((entry) => [entry.name, entry.color])),
   );
+  return savePanel;
+}
 
-  // breakdowns
+function collectBreakdowns(cur) {
   const byTool = new Map(),
     byThread = new Map();
-  for (const t of cur.turns) {
-    for (const [n, c] of Object.entries(t.tools || {})) byTool.set(n, (byTool.get(n) || 0) + c);
-    const th = byThread.get(t.thread) || { turns: 0, tokens: 0, cost: 0, p: t.provider };
-    th.turns++;
-    th.tokens += tokensOf(t);
-    th.cost += t.accounting === 2 ? t.cost || 0 : 0;
-    byThread.set(t.thread, th);
+  for (const turn of cur.turns) {
+    for (const [name, count] of Object.entries(turn.tools || {}))
+      byTool.set(name, (byTool.get(name) || 0) + count);
+    const thread = byThread.get(turn.thread) || {
+      turns: 0,
+      tokens: 0,
+      cost: 0,
+      p: turn.provider,
+    };
+    thread.turns++;
+    thread.tokens += tokensOf(turn);
+    thread.cost += turn.accounting === 2 ? turn.cost || 0 : 0;
+    byThread.set(turn.thread, thread);
   }
-  const top = (m, n = 8) => [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, n);
-  const modelPanel = panel("Models", "Tokens and estimated API cost by actual model");
+  return { byTool, byThread };
+}
+function topEntries(counts, limit = 8) {
+  return [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, limit);
+}
+function collectModelUsage(cur) {
   const byModel = new Map();
-  for (const turn of cur.turns.filter((t) => t.accounting === 2))
-    for (const m of turn.models || []) {
-      const row = byModel.get(m.model) || { in: 0, out: 0, cost: 0, known: false };
-      row.in += (m.fresh || 0) + (m.cacheWrite || 0) + (m.cacheRead || 0);
-      row.out += m.output || 0;
-      if (m.cost != null) {
-        row.cost += m.cost;
+  for (const turn of cur.turns.filter((entry) => entry.accounting === 2))
+    for (const usage of turn.models || []) {
+      const row = byModel.get(usage.model) || { in: 0, out: 0, cost: 0, known: false };
+      row.in += (usage.fresh || 0) + (usage.cacheWrite || 0) + (usage.cacheRead || 0);
+      row.out += usage.output || 0;
+      if (usage.cost != null) {
+        row.cost += usage.cost;
         row.known = true;
       }
-      byModel.set(m.model, row);
+      byModel.set(usage.model, row);
     }
+  return byModel;
+}
+function buildModelPanel(cur) {
+  const modelPanel = panel("Models", "Tokens and estimated API cost by actual model");
+  const byModel = collectModelUsage(cur);
   const table = el("div", "mtab");
-  table.append(...["Model", "In", "Out", "Cost"].map((h) => el("div", "h", h)));
-  for (const [name, r] of [...byModel]
-    .filter(([, r]) => r.in || r.out || r.cost)
+  table.append(...["Model", "In", "Out", "Cost"].map((heading) => el("div", "h", heading)));
+  for (const [name, row] of [...byModel]
+    .filter(([, entry]) => entry.in || entry.out || entry.cost)
     .sort((a, b) => b[1].cost - a[1].cost || b[1].in - a[1].in)) {
-    const n = el("div", "n", name);
-    n.title = name;
+    const nameCell = el("div", "n", name);
+    nameCell.title = name;
     table.append(
-      n,
-      el("div", "", fmt(r.in)),
-      el("div", "", fmt(r.out)),
-      el("div", "", r.known ? usd(r.cost) : "—"),
+      nameCell,
+      el("div", "", fmt(row.in)),
+      el("div", "", fmt(row.out)),
+      el("div", "", row.known ? usd(row.cost) : "—"),
     );
   }
   modelPanel.append(byModel.size ? table : el("div", "empty-c", "No model usage in this range."));
+  return modelPanel;
+}
+function buildToolPanel(byTool) {
   const toolPanel = panel("Tools", "What the agents reached for");
   toolPanel.append(
     hbars(
-      top(byTool, 10).map(([name, value]) => ({ name, value, color: css("--c-used") })),
-      (v) => `${fmt(v)} calls`,
+      topEntries(byTool, 10).map(([name, value]) => ({ name, value, color: css("--c-used") })),
+      (value) => `${fmt(value)} calls`,
     ),
   );
+  return toolPanel;
+}
+function buildThreadPanel(cur, byThread) {
   const threadPanel = panel("Busiest threads", "By turns");
   threadPanel.append(
     hbars(
       [...byThread.entries()]
         .sort((a, b) => b[1].turns - a[1].turns)
         .slice(0, 8)
-        .map(([id, v]) => ({
-          name: cur.titles?.[id] || "Thread",
-          value: v.turns,
-          color: css(provMeta(v.p)[1]),
-          extra: v.tokens ? `${fmt(v.tokens)} tok` : "",
+        .map(([threadId, info]) => ({
+          name: cur.titles?.[threadId] || "Thread",
+          value: info.turns,
+          color: css(provMeta(info.p)[1]),
+          extra: info.tokens ? `${fmt(info.tokens)} tok` : "",
         })),
-      (v) => `${v} turns`,
+      (value) => `${value} turns`,
     ),
   );
-  const heatPanel = panel("When you work", "Turns by weekday and hour, local time");
-  heatPanel.append(heatmap(cur.turns));
+  return threadPanel;
+}
 
-  // savings sources
-  const srcs = el("div", "srcs");
-  const rt = cur.rtk,
-    hr = cur.headroom;
-  const rtkIn = (rt?.daily || []).reduce((s, d) => s + (d.input_tokens || 0), 0),
-    rtkCmd = (rt?.daily || []).reduce((s, d) => s + (d.commands || 0), 0);
-  const rtkP = el("section", "panel src");
-  const rh = el("div", "head");
-  const rt1 = el("div");
-  rt1.append(
+function buildDefinitionList(pairs) {
+  const list = el("dl");
+  for (const [term, value] of pairs) list.append(el("dt", "", term), el("dd", "", value));
+  return list;
+}
+function buildRtkSource(cur, saved) {
+  const rtk = cur.rtk;
+  const rtkIn = (rtk?.daily || []).reduce((sum, day) => sum + (day.input_tokens || 0), 0),
+    rtkCmd = (rtk?.daily || []).reduce((sum, day) => sum + (day.commands || 0), 0);
+  const rtkPanel = el("section", "panel src");
+  const head = el("div", "head");
+  const titleBox = el("div");
+  titleBox.append(
     el("h2", "", "RTK"),
     el("p", "sub", "Filters noisy command output before the agent reads it"),
   );
-  rh.append(rt1, el("span", `chip-s ${rt ? "ok" : "off"}`, rt ? "Active" : "Not found"));
-  rtkP.append(rh);
-  const dl1 = el("dl");
-  for (const [k, v] of [
-    ["Commands tracked", fmt(rtkCmd)],
-    ["Captured output before filtering", fmt(rtkIn)],
-    ["Tokens saved", fmt(sv.rtk)],
-    ["Reduction", rtkIn ? pct((sv.rtk / rtkIn) * 100) : "–"],
-  ])
-    dl1.append(el("dt", "", k), el("dd", "", v));
-  rtkP.append(
-    dl1,
+  head.append(titleBox, el("span", `chip-s ${rtk ? "ok" : "off"}`, rtk ? "Active" : "Not found"));
+  rtkPanel.append(head);
+  rtkPanel.append(
+    buildDefinitionList([
+      ["Commands tracked", fmt(rtkCmd)],
+      ["Captured output before filtering", fmt(rtkIn)],
+      ["Tokens saved", fmt(saved.rtk)],
+      ["Reduction", rtkIn ? pct((saved.rtk / rtkIn) * 100) : "–"],
+    ]),
     el(
       "p",
       "note",
       "All local RTK activity. Filtering commands compress output; proxy/bypass only track it.",
     ),
   );
-  const hrP = el("section", "panel src");
-  const hh = el("div", "head");
-  const ht = el("div");
-  ht.append(el("h2", "", "Headroom"), el("p", "sub", "Compresses Claude and Codex model input"));
-  hh.append(
-    ht,
+  return rtkPanel;
+}
+function buildHeadroomSource(cur, saved) {
+  const headroom = cur.headroom;
+  const headroomPanel = el("section", "panel src");
+  const head = el("div", "head");
+  const titleBox = el("div");
+  titleBox.append(
+    el("h2", "", "Headroom"),
+    el("p", "sub", "Compresses Claude and Codex model input"),
+  );
+  head.append(
+    titleBox,
     el(
       "span",
-      `chip-s ${hr?.running ? "ok" : "off"}`,
-      !hr?.enabled ? "Disabled" : hr.running ? "Running" : "Offline",
+      `chip-s ${headroom?.running ? "ok" : "off"}`,
+      !headroom?.enabled ? "Disabled" : headroom.running ? "Running" : "Offline",
     ),
   );
-  hrP.append(hh);
-  const hd = hr?.daily || [];
-  const sum = (k) => hd.reduce((s, d) => s + (d[k] || 0), 0);
-  const dl2 = el("dl");
-  for (const [k, v] of [
-    ["Compressed tokens saved", fmt(sv.hr)],
-    ["Input tokens sent", fmt(sum("total_input_tokens_delta"))],
-    ["Prompt-cache reads", fmt(sum("cache_read_tokens_delta"))],
-    ["Compression value (est.)", usd(sum("compression_savings_usd_delta"))],
-    ["Tool-schema deferral (est.)", fmt(sum("tool_tokens_saved_delta"))],
-  ])
-    dl2.append(el("dt", "", k), el("dd", "", v));
-  hrP.append(
-    dl2,
+  headroomPanel.append(head);
+  const daily = headroom?.daily || [];
+  const sum = (field) => daily.reduce((total, day) => total + (day[field] || 0), 0);
+  headroomPanel.append(
+    buildDefinitionList([
+      ["Compressed tokens saved", fmt(saved.hr)],
+      ["Input tokens sent", fmt(sum("total_input_tokens_delta"))],
+      ["Prompt-cache reads", fmt(sum("cache_read_tokens_delta"))],
+      ["Compression value (est.)", usd(sum("compression_savings_usd_delta"))],
+      ["Tool-schema deferral (est.)", fmt(sum("tool_tokens_saved_delta"))],
+    ]),
     el(
       "p",
       "note",
-      hr?.error
-        ? hr.error
+      headroom?.error
+        ? headroom.error
         : "Claude threads only: Codex (ChatGPT sign-in) and Pi (OpenRouter) use hosts the proxy cannot serve. Tool-schema deferral is an estimate and is not counted in Tokens saved.",
     ),
   );
-  srcs.append(rtkP, hrP);
+  return headroomPanel;
+}
 
-  // table
-  const tbl = el("details", "table");
-  tbl.append(el("summary", "", "Show data as a table"));
-  const t = el("table");
+function buildDataTable(cur, days, idx, savingsRows) {
+  const details = el("details", "table");
+  details.append(el("summary", "", "Show data as a table"));
+  const table = el("table");
   const thead = el("thead");
-  const hr0 = el("tr");
-  for (const c of [
+  const headRow = el("tr");
+  for (const column of [
     "Day (UTC)",
     "Turns",
     "Known tokens",
@@ -949,57 +991,37 @@ function render(cur, prev) {
     "RTK saved",
     "Headroom saved",
   ])
-    hr0.append(el("th", "", c));
-  thead.append(hr0);
-  t.append(thead);
-  const tb = el("tbody");
+    headRow.append(el("th", "", column));
+  thead.append(headRow);
+  table.append(thead);
+  const tbody = el("tbody");
   const perDay = days.map(() => []);
-  for (const x of cur.turns) {
-    const i = idx.get(localDay(x.ts));
-    if (i != null) perDay[i].push(x);
+  for (const turn of cur.turns) {
+    const dayIndex = idx.get(localDay(turn.ts));
+    if (dayIndex != null) perDay[dayIndex].push(turn);
   }
-  days.forEach((d, i) => {
-    const s = sumTurns(perDay[i]),
-      r = el("tr");
-    for (const c of [
-      d.title,
-      s.turns,
-      s.knownTokens ? fmt(s.tokens) : "Unknown",
-      s.knownCost ? usd(s.cost) : "Unknown",
-      fmt(srows[i].values[0]),
-      fmt(srows[i].values[1]),
+  days.forEach((day, dayIndex) => {
+    const totals = sumTurns(perDay[dayIndex]),
+      row = el("tr");
+    for (const cell of [
+      day.title,
+      totals.turns,
+      totals.knownTokens ? fmt(totals.tokens) : "Unknown",
+      totals.knownCost ? usd(totals.cost) : "Unknown",
+      fmt(savingsRows[dayIndex].values[0]),
+      fmt(savingsRows[dayIndex].values[1]),
     ])
-      r.append(el("td", "", String(c)));
-    tb.append(r);
+      row.append(el("td", "", String(cell)));
+    tbody.append(row);
   });
-  t.append(tb);
-  const sc = el("div", "scroll");
-  sc.append(t);
-  tbl.append(sc);
+  table.append(tbody);
+  const scroll = el("div", "scroll");
+  scroll.append(table);
+  details.append(scroll);
+  return details;
+}
 
-  const g1 = el("div", "grid2");
-  g1.append(usagePanel, savePanel);
-  const g2 = el("div", "grid2");
-  g2.append(modelPanel, toolPanel);
-  const g3 = el("div", "grid2");
-  g3.append(threadPanel, heatPanel);
-  const priceNote = el(
-    "p",
-    "muted",
-    "Estimated API cost uses public per-model input, cached-input, cache-write and output rates where usage is available. Unpriced turns are excluded. This is not your subscription bill.",
-  );
-  if (cur.turns.some((t) => hasTokens(t) && t.accounting !== 2))
-    priceNote.append(
-      " Historical token counts are shown as recorded; their cache categories and old costs are unverified.",
-    );
-  const pricingDetails = el("details", "pricing-details");
-  pricingDetails.append(
-    el(
-      "summary",
-      "",
-      `Pricing basis${cur.pricing?.verifiedAt ? ` · verified ${cur.pricing.verifiedAt}` : ""}`,
-    ),
-  );
+function appendPricingSources(pricingDetails, cur) {
   const sourceList = el("p", "note");
   for (const source of cur.pricing?.sources || []) {
     // Accept public HTTPS references only; never turn arbitrary response text into markup.
@@ -1015,21 +1037,70 @@ function render(cur, prev) {
     } catch {}
   }
   if (sourceList.childNodes.length) pricingDetails.append(sourceList);
+}
+function buildPricingNotes(cur) {
+  const priceNote = el(
+    "p",
+    "muted",
+    "Estimated API cost uses public per-model input, cached-input, cache-write and output rates where usage is available. Unpriced turns are excluded. This is not your subscription bill.",
+  );
+  if (cur.turns.some((turn) => hasTokens(turn) && turn.accounting !== 2))
+    priceNote.append(
+      " Historical token counts are shown as recorded; their cache categories and old costs are unverified.",
+    );
+  const pricingDetails = el("details", "pricing-details");
+  pricingDetails.append(
+    el(
+      "summary",
+      "",
+      `Pricing basis${cur.pricing?.verifiedAt ? ` · verified ${cur.pricing.verifiedAt}` : ""}`,
+    ),
+  );
+  appendPricingSources(pricingDetails, cur);
   for (const assumption of cur.pricing?.assumptions || [])
     pricingDetails.append(el("p", "note", assumption));
+  return { priceNote, pricingDetails };
+}
+
+function buildGrid(left, right) {
+  const grid = el("div", "grid2");
+  grid.append(left, right);
+  return grid;
+}
+function render(cur, prev) {
+  const root = $("dm");
+  const currentTotals = sumTurns(cur.turns),
+    previousTotals = prev ? sumTurns(prev.turns) : null;
+  const saved = savedOf(cur);
+  const days = dayList(range.from, range.to);
+  const idx = new Map(days.map((day, dayIndex) => [day.key, dayIndex]));
+  const kpis = buildKpis(currentTotals, previousTotals, saved);
+  const { usagePanel } = buildUsagePanel(cur, days, idx);
+  const savingsRows = buildSavingsRows(cur, days, idx);
+  const savePanel = buildSavingsPanel(saved, savingsRows);
+  const { byTool, byThread } = collectBreakdowns(cur);
+  const modelPanel = buildModelPanel(cur);
+  const toolPanel = buildToolPanel(byTool);
+  const threadPanel = buildThreadPanel(cur, byThread);
+  const heatPanel = panel("When you work", "Turns by weekday and hour, local time");
+  heatPanel.append(heatmap(cur.turns));
+  const srcs = el("div", "srcs");
+  srcs.append(buildRtkSource(cur, saved), buildHeadroomSource(cur, saved));
+  const tbl = buildDataTable(cur, days, idx, savingsRows);
+  const { priceNote, pricingDetails } = buildPricingNotes(cur);
   root.replaceChildren(
     kpis,
     priceNote,
     ...(cur.pricing ? [pricingDetails] : []),
     subscriptionPanel(cur),
-    g1,
+    buildGrid(usagePanel, savePanel),
     latencyPanel(cur.latency),
     srcs,
-    g2,
-    g3,
+    buildGrid(modelPanel, toolPanel),
+    buildGrid(threadPanel, heatPanel),
     tbl,
   );
-  if (cur.turns.some((x) => x.b))
+  if (cur.turns.some((turn) => turn.b))
     root.append(
       el(
         "p",

@@ -551,12 +551,9 @@ function renderMounts(disk) {
     },
   );
 }
-async function loadDu(path = duPath) {
-  const d = await getJSON(`/api/host/du?path=${encodeURIComponent(path)}`);
-  duPath = d.path;
-  const crumbs = $("du-crumbs");
+function renderDuCrumbs(crumbs, duData) {
   crumbs.replaceChildren();
-  const parts = d.path === "/" ? [""] : d.path.split("/");
+  const parts = duData.path === "/" ? [""] : duData.path.split("/");
   parts.forEach((seg, i) => {
     const p = parts.slice(0, i + 1).join("/") || "/";
     const b = el("button", "", i === 0 ? "/" : seg);
@@ -565,43 +562,47 @@ async function loadDu(path = duPath) {
     if (i === parts.length - 1) b.setAttribute("aria-current", "location");
     crumbs.append(b);
   });
-  if (d.size) crumbs.append(el("span", "total", bytes(d.size)));
+  if (duData.size) crumbs.append(el("span", "total", bytes(duData.size)));
+}
+function buildDuRow(child, maxSize) {
+  const row = el(child.more ? "button" : "div", "hrow du");
+  if (child.more) {
+    row.type = "button";
+    row.dataset.path = child.path;
+  }
+  const name = el("div", "hname");
+  name.append(el("b", "", child.path.split("/").pop()));
+  const meterBar = el("div", "meter");
+  const fill = el("i");
+  fill.style.width = `${(child.size / maxSize) * 100}%`;
+  meterBar.append(fill);
+  name.append(meterBar);
+  row.append(
+    name,
+    el("div", "hnum", bytes(child.size)),
+    el("span", "hchev", child.more ? "›" : ""),
+  );
+  return row;
+}
+function duEmptyText(duData) {
+  if (duData.scannedAt) return "Nothing larger than 16 MB here.";
+  if (duData.scanning) return "Scanning the disk. This takes about two minutes.";
+  return "No scan yet.";
+}
+async function loadDu(path = duPath) {
+  const duData = await getJSON(`/api/host/du?path=${encodeURIComponent(path)}`);
+  duPath = duData.path;
+  renderDuCrumbs($("du-crumbs"), duData);
   const rows = $("du-rows");
   rows.replaceChildren();
-  const max = d.children[0]?.size || 1;
-  for (const c of d.children) {
-    const r = el(c.more ? "button" : "div", "hrow du");
-    if (c.more) {
-      r.type = "button";
-      r.dataset.path = c.path;
-    }
-    const name = el("div", "hname");
-    name.append(el("b", "", c.path.split("/").pop()));
-    const bar = el("div", "meter");
-    const fill = el("i");
-    fill.style.width = `${(c.size / max) * 100}%`;
-    bar.append(fill);
-    name.append(bar);
-    r.append(name, el("div", "hnum", bytes(c.size)), el("span", "hchev", c.more ? "›" : ""));
-    rows.append(r);
-  }
-  if (!d.children.length)
-    rows.append(
-      el(
-        "div",
-        "empty-c",
-        d.scannedAt
-          ? "Nothing larger than 16 MB here."
-          : d.scanning
-            ? "Scanning the disk. This takes about two minutes."
-            : "No scan yet.",
-      ),
-    );
-  $("du-note").textContent = d.scannedAt
-    ? `Scanned ${ago(d.scannedAt)}${d.scanning ? " · rescanning…" : ""}. Folders under 16 MB are hidden.`
+  const max = duData.children[0]?.size || 1;
+  for (const child of duData.children) rows.append(buildDuRow(child, max));
+  if (!duData.children.length) rows.append(el("div", "empty-c", duEmptyText(duData)));
+  $("du-note").textContent = duData.scannedAt
+    ? `Scanned ${ago(duData.scannedAt)}${duData.scanning ? " · rescanning…" : ""}. Folders under 16 MB are hidden.`
     : "";
-  $("du-rescan").disabled = d.scanning;
-  return d;
+  $("du-rescan").disabled = duData.scanning;
+  return duData;
 }
 $("storage").addEventListener("click", (e) => {
   const b = e.target.closest("button[data-path]");

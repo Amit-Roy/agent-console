@@ -50,6 +50,75 @@ async function investigate(btn) {
   }
 }
 
+function handleCrashDialogClose(view) {
+  clearInterval(view.timer);
+  view.request?.abort();
+  view.dialog.remove();
+  if (current !== view) return;
+  current = null;
+  const back = view.trigger?.isConnected
+    ? view.trigger
+    : document.querySelector('[data-sec="crashes"] .crash-log-btn');
+  back?.focus();
+}
+
+function renderCrashes(view, data) {
+  view.updated.textContent = `Updated ${clock(Date.now())}`;
+  if (!data.crashes.length) {
+    view.body.replaceChildren(el("p", "sub", "No crashes in the last 24 h"));
+    return;
+  }
+  const open = new Set(
+    [...view.body.querySelectorAll("details[open]")].map((d) => d.dataset.key).filter(Boolean),
+  );
+  const cards = data.crashes.map((crash) => {
+    const card = crashCard(crash);
+    card.dataset.key = `${crash.at}-${crash.pid}`;
+    card.open = open.has(card.dataset.key);
+    return card;
+  });
+  const count =
+    data.total > data.crashes.length
+      ? `Showing the latest ${data.crashes.length} of ${data.total} crashes.`
+      : `${data.total} crash${data.total === 1 ? "" : "es"}.`;
+  view.body.replaceChildren(el("p", "sub", count), ...cards);
+}
+
+function showCrashLoadError(view, error) {
+  const message = el("p", "job-debug-error", error.message || "The crash log could not be loaded.");
+  message.setAttribute("role", "alert");
+  view.body.replaceChildren(
+    message,
+    button("Retry", () => loadCrashes(view)),
+  );
+}
+
+async function loadCrashes(view, quiet = false) {
+  view.request?.abort();
+  const request = (view.request = new AbortController());
+  view.refresh.disabled = true;
+  if (!quiet) {
+    const loading = el("p", "sub", "Loading crash log…");
+    loading.setAttribute("role", "status");
+    view.body.replaceChildren(loading);
+  }
+  try {
+    const response = await fetch("/api/security/crashes", {
+      cache: "no-store",
+      signal: request.signal,
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || `Request failed (${response.status})`);
+    if (current !== view || request !== view.request || !view.dialog.open) return;
+    renderCrashes(view, data);
+  } catch (error) {
+    if (request.signal.aborted || current !== view || request !== view.request) return;
+    showCrashLoadError(view, error);
+  } finally {
+    if (current === view && request === view.request) view.refresh.disabled = false;
+  }
+}
+
 export function openCrashLog(trigger) {
   current?.dialog.close();
   const dialog = el("dialog", "job-debug crash-log");
@@ -61,86 +130,26 @@ export function openCrashLog(trigger) {
   const body = el("div", "job-debug-body");
   const actions = el("div", "row job-debug-actions");
   const ask = button("Investigate with agent", () => investigate(ask));
-  const refresh = button("Refresh", () => load());
+  const refresh = button("Refresh", () => loadCrashes(view));
   const close = button("Close", () => dialog.close());
   close.autofocus = true;
   actions.append(ask, refresh, close);
   dialog.append(title, updated, actions, body);
-  const view = { dialog, request: null, timer: 0, trigger: trigger ?? document.activeElement };
+  const view = {
+    dialog,
+    updated,
+    body,
+    refresh,
+    request: null,
+    timer: 0,
+    trigger: trigger ?? document.activeElement,
+  };
   current = view;
-  dialog.addEventListener("close", () => {
-    clearInterval(view.timer);
-    view.request?.abort();
-    dialog.remove();
-    if (current === view) {
-      current = null;
-      const back = view.trigger?.isConnected
-        ? view.trigger
-        : document.querySelector('[data-sec="crashes"] .crash-log-btn');
-      back?.focus();
-    }
-  });
+  dialog.addEventListener("close", () => handleCrashDialogClose(view));
   document.body.append(dialog);
   dialog.showModal();
-  load();
+  loadCrashes(view);
   view.timer = setInterval(() => {
-    if (document.visibilityState === "visible") load(true);
+    if (document.visibilityState === "visible") loadCrashes(view, true);
   }, REFRESH_MS);
-
-  async function load(quiet = false) {
-    view.request?.abort();
-    const request = (view.request = new AbortController());
-    refresh.disabled = true;
-    if (!quiet) {
-      const loading = el("p", "sub", "Loading crash log…");
-      loading.setAttribute("role", "status");
-      body.replaceChildren(loading);
-    }
-    try {
-      const response = await fetch("/api/security/crashes", {
-        cache: "no-store",
-        signal: request.signal,
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || `Request failed (${response.status})`);
-      if (current !== view || request !== view.request || !dialog.open) return;
-      render(data);
-    } catch (error) {
-      if (request.signal.aborted || current !== view || request !== view.request) return;
-      const message = el(
-        "p",
-        "job-debug-error",
-        error.message || "The crash log could not be loaded.",
-      );
-      message.setAttribute("role", "alert");
-      body.replaceChildren(
-        message,
-        button("Retry", () => load()),
-      );
-    } finally {
-      if (current === view && request === view.request) refresh.disabled = false;
-    }
-  }
-
-  function render(data) {
-    updated.textContent = `Updated ${clock(Date.now())}`;
-    if (!data.crashes.length) {
-      body.replaceChildren(el("p", "sub", "No crashes in the last 24 h"));
-      return;
-    }
-    const open = new Set(
-      [...body.querySelectorAll("details[open]")].map((d) => d.dataset.key).filter(Boolean),
-    );
-    const cards = data.crashes.map((crash) => {
-      const card = crashCard(crash);
-      card.dataset.key = `${crash.at}-${crash.pid}`;
-      card.open = open.has(card.dataset.key);
-      return card;
-    });
-    const count =
-      data.total > data.crashes.length
-        ? `Showing the latest ${data.crashes.length} of ${data.total} crashes.`
-        : `${data.total} crash${data.total === 1 ? "" : "es"}.`;
-    body.replaceChildren(el("p", "sub", count), ...cards);
-  }
 }

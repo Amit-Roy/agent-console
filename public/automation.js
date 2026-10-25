@@ -149,21 +149,17 @@ function secRows(p) {
   const down = rows.filter((r) => r.id === "status-host");
   return down.length ? [...down, ...out] : out;
 }
-function securityView(id, pipeline) {
-  const p = pipeline || pipelineOfStep(id);
-  if (!isSecurity(p)) return null;
-  if (!sec) return { state: "idle", sub: secError ? "Status unavailable" : "Loading…" };
-  const all = secRows(p);
-  if (id === "push") {
-    const bad = all.filter((r) => r.tone === "bad").length;
-    const last = all.reduce((a, b) => Math.max(a, b.lastRun || 0), 0) || null;
-    return {
-      state: bad ? "failed" : "idle",
-      ...(last ? { lastAt: last } : {}),
-      sub: bad ? "Alert raised" : "Ready",
-    };
-  }
-  const mapped = SEC_ROW_MAP[id] ? all.filter((r) => SEC_ROW_MAP[id].includes(r.id)) : [];
+function securityPushView(all) {
+  const bad = all.filter((row) => row.tone === "bad").length;
+  const last = all.reduce((a, b) => Math.max(a, b.lastRun || 0), 0) || null;
+  return {
+    state: bad ? "failed" : "idle",
+    ...(last ? { lastAt: last } : {}),
+    sub: bad ? "Alert raised" : "Ready",
+  };
+}
+function securityRowsView(id, all) {
+  const mapped = SEC_ROW_MAP[id] ? all.filter((row) => SEC_ROW_MAP[id].includes(row.id)) : [];
   const rows = mapped.length ? mapped : all;
   if (!rows.length) return { state: "idle", sub: "No check reported" };
   const worst = rows.reduce((a, b) => (TONE_RANK[b.tone] > TONE_RANK[a.tone] ? b : a));
@@ -174,6 +170,13 @@ function securityView(id, pipeline) {
     sub: rows.length > 1 ? `${worst.label} · ${rows.length} checks` : worst.label,
     say: worst.detail || worst.schedule,
   };
+}
+function securityView(id, pipeline) {
+  const pipelineInfo = pipeline || pipelineOfStep(id);
+  if (!isSecurity(pipelineInfo)) return null;
+  if (!sec) return { state: "idle", sub: secError ? "Status unavailable" : "Loading…" };
+  const all = secRows(pipelineInfo);
+  return id === "push" ? securityPushView(all) : securityRowsView(id, all);
 }
 /** The selected workflow owns a shared step (the phone alert, the transport) while it is open. */
 function currentPipeline(id) {
@@ -220,91 +223,97 @@ function stepNode(n) {
   return b;
 }
 
+function buildArrow(name, label) {
+  const arrow = el("span", "arrow");
+  arrow.append(icon(name));
+  if (label) arrow.append(el("span", "", label));
+  return arrow;
+}
+function buildChainLink(edges, ph, id, j, inLoop, box) {
+  const prev = (!inLoop && ph.loop?.steps.find((x) => edges.has(`${x}>${id}`))) || ph.steps[j - 1];
+  const fwd = edges.get(`${prev}>${id}`),
+    back = inLoop && box && edges.get(`${id}>${prev}`);
+  const link = el("span", `link${back ? " loop" : ""}`);
+  link.dataset.to = id;
+  link.append(buildArrow("next", fwd?.label));
+  if (back) link.append(buildArrow("back", back.label));
+  return link;
+}
+function buildPhase(s, ph, i, edges) {
+  const phaseItem = el("li", "phase");
+  phaseItem.append(el("h3", "", `${i + 1}. ${ph.label}`));
+  const chain = el("div", "chain");
+  let box;
+  ph.steps.forEach((id, j) => {
+    const flowNode = s.flow.nodes.find((x) => x.id === id);
+    if (!flowNode) return;
+    const inLoop = ph.loop?.steps.includes(id);
+    if (j) (inLoop && box ? box : chain).append(buildChainLink(edges, ph, id, j, inLoop, box));
+    if (inLoop && !box) {
+      box = el("div", "cycle");
+      box.append(el("span", "cap", ph.loop.label));
+      chain.append(box);
+    }
+    (inLoop ? box : chain).append(stepNode(flowNode));
+  });
+  phaseItem.append(chain);
+  return phaseItem;
+}
 function buildChain(s, p) {
   const edges = new Map(s.flow.edges.map((e) => [`${e.from}>${e.to}`, e]));
-  const arrow = (name, label) => {
-    const a = el("span", "arrow");
-    a.append(icon(name));
-    if (label) a.append(el("span", "", label));
-    return a;
-  };
   const phases = el("ol", "phases");
   p.phases.forEach((ph, i) => {
-    const li = el("li", "phase");
-    li.append(el("h3", "", `${i + 1}. ${ph.label}`));
-    const chain = el("div", "chain");
-    let box;
-    ph.steps.forEach((id, j) => {
-      const n = s.flow.nodes.find((x) => x.id === id);
-      if (!n) return;
-      const inLoop = ph.loop?.steps.includes(id);
-      if (j) {
-        const prev =
-          (!inLoop && ph.loop?.steps.find((x) => edges.has(`${x}>${id}`))) || ph.steps[j - 1];
-        const fwd = edges.get(`${prev}>${id}`),
-          back = inLoop && box && edges.get(`${id}>${prev}`);
-        const link = el("span", `link${back ? " loop" : ""}`);
-        link.dataset.to = id;
-        link.append(arrow("next", fwd?.label));
-        if (back) link.append(arrow("back", back.label));
-        (inLoop && box ? box : chain).append(link);
-      }
-      if (inLoop && !box) {
-        box = el("div", "cycle");
-        box.append(el("span", "cap", ph.loop.label));
-        chain.append(box);
-      }
-      (inLoop ? box : chain).append(stepNode(n));
-    });
-    li.append(chain);
-    phases.append(li);
+    phases.append(buildPhase(s, ph, i, edges));
   });
   return phases;
 }
 
-function updateFlow(s) {
-  for (const st of s.steps) {
-    const b = document.querySelector(`[data-step="${st.id}"]`);
-    if (!b) continue;
-    const v = viewOf(st.id);
-    b.dataset.state = v.state;
-    const sub =
-      v.sub ??
-      (v.state === "idle"
-        ? STATE_TEXT.idle
-        : `${STATE_TEXT[v.state]}${v.lastAt ? ` · ${when(v.lastAt, s.now)}` : ""}`);
-    b.querySelector(".ns").textContent = sub;
-    const node = s.flow.nodes.find((n) => n.id === st.id);
-    b.setAttribute(
-      "aria-label",
-      `${node?.label}: ${STATE_TEXT[v.state].toLowerCase()}${v.failures ? `, ${v.failures} failures in 24 hours` : ""}`,
-    );
-    let badge = b.querySelector(".badge");
-    const count = v.failures || 0;
-    if (count) {
-      if (!badge) {
-        badge = el("span", "badge");
-        b.append(badge);
-      }
-      badge.textContent = String(count);
-    } else badge?.remove();
-    document
-      .querySelector(`.link[data-to="${st.id}"]`)
-      ?.classList.toggle("live", v.state === "active");
-  }
-  for (const t of s.triggers) {
-    const w = document.querySelector(`[data-trigger="${t.id}"] .w`);
-    if (w) w.textContent = t.enabled ? (t.lastAt ? when(t.lastAt, s.now) : "waiting") : "off";
-    const sw = document.querySelector(`[data-trigger="${t.id}"] .tog`);
-    if (sw) {
-      sw.textContent = t.enabled ? "On" : "Off";
-      sw.setAttribute("aria-checked", String(t.enabled));
-      sw.setAttribute("aria-label", `${t.label}: ${t.enabled ? "on" : "off"}`);
-      sw.disabled = false;
-      sw.onclick = () => toggle(TOGGLES[t.id], !t.enabled, sw);
+function updateStepNode(s, stepInfo) {
+  const stepButton = document.querySelector(`[data-step="${stepInfo.id}"]`);
+  if (!stepButton) return;
+  const stepView = viewOf(stepInfo.id);
+  stepButton.dataset.state = stepView.state;
+  const sub =
+    stepView.sub ??
+    (stepView.state === "idle"
+      ? STATE_TEXT.idle
+      : `${STATE_TEXT[stepView.state]}${stepView.lastAt ? ` · ${when(stepView.lastAt, s.now)}` : ""}`);
+  stepButton.querySelector(".ns").textContent = sub;
+  const node = s.flow.nodes.find((n) => n.id === stepInfo.id);
+  stepButton.setAttribute(
+    "aria-label",
+    `${node?.label}: ${STATE_TEXT[stepView.state].toLowerCase()}${stepView.failures ? `, ${stepView.failures} failures in 24 hours` : ""}`,
+  );
+  let badge = stepButton.querySelector(".badge");
+  const count = stepView.failures || 0;
+  if (count) {
+    if (!badge) {
+      badge = el("span", "badge");
+      stepButton.append(badge);
     }
-    document.querySelector(`[data-trigger="${t.id}"]`)?.classList.toggle("off", !t.enabled);
+    badge.textContent = String(count);
+  } else badge?.remove();
+  document
+    .querySelector(`.link[data-to="${stepInfo.id}"]`)
+    ?.classList.toggle("live", stepView.state === "active");
+}
+function updateTrigger(t, now) {
+  const waitLabel = document.querySelector(`[data-trigger="${t.id}"] .w`);
+  if (waitLabel)
+    waitLabel.textContent = t.enabled ? (t.lastAt ? when(t.lastAt, now) : "waiting") : "off";
+  const switchButton = document.querySelector(`[data-trigger="${t.id}"] .tog`);
+  if (switchButton) {
+    switchButton.textContent = t.enabled ? "On" : "Off";
+    switchButton.setAttribute("aria-checked", String(t.enabled));
+    switchButton.setAttribute("aria-label", `${t.label}: ${t.enabled ? "on" : "off"}`);
+    switchButton.disabled = false;
+    switchButton.onclick = () => toggle(TOGGLES[t.id], !t.enabled, switchButton);
   }
+  document.querySelector(`[data-trigger="${t.id}"]`)?.classList.toggle("off", !t.enabled);
+}
+function updateFlow(s) {
+  for (const stepInfo of s.steps) updateStepNode(s, stepInfo);
+  for (const trigger of s.triggers) updateTrigger(trigger, s.now);
 }
 
 // ---------- sidebar ----------
@@ -520,33 +529,37 @@ function hooksPanel(s) {
   return p;
 }
 
+function runRetryText(run) {
+  if (run.role !== "work") return "";
+  const retry = [];
+  if (run.retryAttempts != null) retry.push(`Retries ${run.retryAttempts}`);
+  if (run.recoveries != null && run.retriesRemaining != null)
+    retry.push(`Task budget: ${run.recoveries} used, ${run.retriesRemaining} remaining`);
+  if (run.premiumStatus) retry.push(`Premium ${run.premiumStatus}`);
+  return retry.join(" · ");
+}
+function buildRunRow(run) {
+  const runItem = el("li");
+  const titleLink = el("a", "a", run.title);
+  titleLink.href = `/#thread=${encodeURIComponent(run.thread)}`;
+  const name = el("span", "a");
+  name.append(titleLink);
+  runItem.append(
+    name,
+    el("span", "b", `${run.role} · ${run.effort} · ${run.state}`),
+    el("span", "c", run.key),
+  );
+  const retryText = runRetryText(run);
+  if (retryText) runItem.append(el("span", "c", retryText));
+  return runItem;
+}
 function runsPanel(s, p) {
-  const list = p.id === "pr" ? s.runs.filter((r) => r.role !== "debug") : [];
+  const list = p.id === "pr" ? s.runs.filter((run) => run.role !== "debug") : [];
   const box = panel("Runs", "Threads this workflow started");
   const ul = el("ul", "rows");
   ul.id = "runs";
   if (!list.length) box.append(empty("No runs from this workflow yet."));
-  for (const r of list) {
-    const li = el("li");
-    const a = el("a", "a", r.title);
-    a.href = `/#thread=${encodeURIComponent(r.thread)}`;
-    const name = el("span", "a");
-    name.append(a);
-    li.append(
-      name,
-      el("span", "b", `${r.role} · ${r.effort} · ${r.state}`),
-      el("span", "c", r.key),
-    );
-    if (r.role === "work") {
-      const retry = [];
-      if (r.retryAttempts != null) retry.push(`Retries ${r.retryAttempts}`);
-      if (r.recoveries != null && r.retriesRemaining != null)
-        retry.push(`Task budget: ${r.recoveries} used, ${r.retriesRemaining} remaining`);
-      if (r.premiumStatus) retry.push(`Premium ${r.premiumStatus}`);
-      if (retry.length) li.append(el("span", "c", retry.join(" · ")));
-    }
-    ul.append(li);
-  }
+  for (const run of list) ul.append(buildRunRow(run));
   if (list.length) box.append(ul);
   return box;
 }
@@ -649,6 +662,56 @@ async function runNow(kind, btn) {
     btn.disabled = false;
   }
 }
+function secRowFacts(row) {
+  return [
+    row.schedule,
+    row.lastRun
+      ? `Last run ${when(row.lastRun, sec.generatedAt)}`
+      : row.continuous
+        ? "Always on"
+        : "Never run",
+    row.next ? `Next ${until(row.next, sec.generatedAt)}` : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+function buildSecAction(label, className, action) {
+  const button = el("button", className, label);
+  button.type = "button";
+  button.onclick = () => action(button);
+  const cell = el("span", "c");
+  cell.append(button);
+  return cell;
+}
+function buildSecRow(row) {
+  const rowItem = el("li", `sec-row ${row.tone}`);
+  rowItem.dataset.sec = row.id;
+  rowItem.dataset.tone = row.tone;
+  const name = el("span", "a");
+  name.append(el("span", `sdot ${row.tone}`));
+  const nameLink = el("a", "", row.name);
+  nameLink.href = row.link;
+  if (/^https:/.test(row.link)) {
+    nameLink.target = "_blank";
+    nameLink.rel = "noopener noreferrer";
+  }
+  name.append(nameLink);
+  const state = el("span", `b st ${row.tone}`, row.label);
+  const facts = el("span", "c", secRowFacts(row));
+  rowItem.append(name, state, facts);
+  if (row.detail) rowItem.append(el("span", row.tone === "bad" ? "c bad" : "c", row.detail));
+  if (row.runnable)
+    rowItem.append(
+      buildSecAction(
+        row.runnable === "quick-scan" ? "Run quick scan" : "Run now",
+        "btn sm run-now",
+        (button) => runNow(row.runnable, button),
+      ),
+    );
+  if (row.id === "crashes")
+    rowItem.append(buildSecAction("Log", "btn sm crash-log-btn", (button) => openCrashLog(button)));
+  return rowItem;
+}
 function securityChecks(p) {
   const box = panel("Runs and checks", "The VPS units behind this workflow · Updated every minute");
   box.id = "sec-auto";
@@ -662,59 +725,7 @@ function securityChecks(p) {
   }
   const ul = el("ul", "rows sec-rows");
   ul.id = "sec-rows";
-  for (const r of secRows(p)) {
-    const li = el("li", `sec-row ${r.tone}`);
-    li.dataset.sec = r.id;
-    li.dataset.tone = r.tone;
-    const name = el("span", "a");
-    name.append(el("span", `sdot ${r.tone}`));
-    const a = el("a", "", r.name);
-    a.href = r.link;
-    if (/^https:/.test(r.link)) {
-      a.target = "_blank";
-      a.rel = "noopener noreferrer";
-    }
-    name.append(a);
-    const state = el("span", `b st ${r.tone}`, r.label);
-    const facts = el(
-      "span",
-      "c",
-      [
-        r.schedule,
-        r.lastRun
-          ? `Last run ${when(r.lastRun, sec.generatedAt)}`
-          : r.continuous
-            ? "Always on"
-            : "Never run",
-        r.next ? `Next ${until(r.next, sec.generatedAt)}` : "",
-      ]
-        .filter(Boolean)
-        .join(" · "),
-    );
-    li.append(name, state, facts);
-    if (r.detail) li.append(el("span", r.tone === "bad" ? "c bad" : "c", r.detail));
-    if (r.runnable) {
-      const b = el(
-        "button",
-        "btn sm run-now",
-        r.runnable === "quick-scan" ? "Run quick scan" : "Run now",
-      );
-      b.type = "button";
-      b.onclick = () => runNow(r.runnable, b);
-      const c = el("span", "c");
-      c.append(b);
-      li.append(c);
-    }
-    if (r.id === "crashes") {
-      const b = el("button", "btn sm crash-log-btn", "Log");
-      b.type = "button";
-      b.onclick = () => openCrashLog(b);
-      const c = el("span", "c");
-      c.append(b);
-      li.append(c);
-    }
-    ul.append(li);
-  }
+  for (const row of secRows(p)) ul.append(buildSecRow(row));
   if (sec.stale)
     box.append(el("div", "empty-c", "The VPS did not answer; showing the last answer."));
   box.append(ul);
@@ -767,6 +778,30 @@ function detailHead(item) {
   return head;
 }
 
+function tagZone(node, zone) {
+  node.dataset.zone = zone;
+  return node;
+}
+function buildColumns(s, p) {
+  const cols = el("div", "cols");
+  cols.append(tagZone(triggersPanel(s, p), "triggers"), tagZone(failuresPanel(s, p), "failures"));
+  return cols;
+}
+function pipelineSections(s, p) {
+  if (isSecurity(p)) return [tagZone(securityChecks(p), "checks")];
+  if (p.id === "pr") {
+    const cols2 = el("div", "cols");
+    cols2.append(tagZone(runsPanel(s, p), "runs"), tagZone(hooksPanel(s), "hooks"));
+    return [buildColumns(s, p), cols2, tagZone(configPanel(s, "dispatch"), "config")];
+  }
+  if (p.id === "windows") return [buildColumns(s, p), tagZone(configPanel(s, "opener"), "config")];
+  if (p.id === "effort") {
+    const cols2 = el("div", "cols");
+    cols2.append(tagZone(retrainPanel(s, p), "retrain"), tagZone(effortStepsPanel(s, p), "steps"));
+    return [buildColumns(s, p), cols2];
+  }
+  return [buildColumns(s, p)];
+}
 function buildDetail(s) {
   const item = navItems().find((i) => i.id === selected) || navItems()[0];
   const p = pipelineOf(item.id);
@@ -776,34 +811,7 @@ function buildDetail(s) {
     const flow = el("section", "wf-flow panel");
     flow.dataset.pipeline = p.id;
     flow.append(buildChain(s, p));
-    nodes.push(flow);
-  }
-  const tagged = (node, zone) => {
-    node.dataset.zone = zone;
-    return node;
-  };
-  if (p && isSecurity(p)) {
-    nodes.push(tagged(securityChecks(p), "checks"));
-  } else if (p && p.id === "pr") {
-    const cols = el("div", "cols");
-    cols.append(tagged(triggersPanel(s, p), "triggers"), tagged(failuresPanel(s, p), "failures"));
-    const cols2 = el("div", "cols");
-    cols2.append(tagged(runsPanel(s, p), "runs"), tagged(hooksPanel(s), "hooks"));
-    nodes.push(cols, cols2, tagged(configPanel(s, "dispatch"), "config"));
-  } else if (p && p.id === "windows") {
-    const cols = el("div", "cols");
-    cols.append(tagged(triggersPanel(s, p), "triggers"), tagged(failuresPanel(s, p), "failures"));
-    nodes.push(cols, tagged(configPanel(s, "opener"), "config"));
-  } else if (p && p.id === "effort") {
-    const cols = el("div", "cols");
-    cols.append(tagged(triggersPanel(s, p), "triggers"), tagged(failuresPanel(s, p), "failures"));
-    const cols2 = el("div", "cols");
-    cols2.append(tagged(retrainPanel(s, p), "retrain"), tagged(effortStepsPanel(s, p), "steps"));
-    nodes.push(cols, cols2);
-  } else if (p) {
-    const cols = el("div", "cols");
-    cols.append(tagged(triggersPanel(s, p), "triggers"), tagged(failuresPanel(s, p), "failures"));
-    nodes.push(cols);
+    nodes.push(flow, ...pipelineSections(s, p));
   }
   main.replaceChildren(...nodes);
   main.setAttribute("aria-busy", "false");
@@ -823,6 +831,43 @@ const modeChip = (label, c) => {
   return el("span", `chip-s ${!on ? "off" : c.dryRun ? "dry" : "live"}`, `${label}: ${text}`);
 };
 
+function zoneMakers(s, p) {
+  return {
+    triggers: () => (p ? triggersPanel(s, p) : null),
+    failures: () => failuresPanel(s, p),
+    runs: () => (p?.id === "pr" ? runsPanel(s, p) : null),
+    hooks: () => hooksPanel(s),
+    config: () =>
+      p?.id === "pr"
+        ? configPanel(s, "dispatch")
+        : p?.id === "windows"
+          ? configPanel(s, "opener")
+          : null,
+    checks: () => securityChecks(p),
+    retrain: () => (p?.id === "effort" ? retrainPanel(s, p) : null),
+    steps: () => (p?.id === "effort" ? effortStepsPanel(s, p) : null),
+  };
+}
+function refreshDetailInPlace(s) {
+  const pipeline = pipelineOf(selected);
+  const head = $("am").querySelector(".wf-head");
+  if (pipeline && head) {
+    const state = workflowState(pipeline);
+    const chip = head.querySelector(".chip-s");
+    if (chip) {
+      chip.className = `chip-s wf-state ${state.tone}`;
+      chip.textContent = state.text;
+    }
+  }
+  // Refresh the panels in place: the step boxes keep their pulse and keyboard focus.
+  const make = zoneMakers(s, pipeline);
+  for (const zone of document.querySelectorAll("[data-zone]")) {
+    const fresh = make[zone.dataset.zone]?.();
+    if (!fresh) continue;
+    fresh.dataset.zone = zone.dataset.zone;
+    zone.replaceWith(fresh);
+  }
+}
 function render(s) {
   const focusedFailure = document.activeElement?.dataset?.failure;
   snap = s;
@@ -834,40 +879,7 @@ function render(s) {
   buildNav();
   buildPicker();
   if (detailFor !== selected) buildDetail(s);
-  else {
-    const p = pipelineOf(selected);
-    const head = $("am").querySelector(".wf-head");
-    if (p && head) {
-      const st = workflowState(p);
-      const chip = head.querySelector(".chip-s");
-      if (chip) {
-        chip.className = `chip-s wf-state ${st.tone}`;
-        chip.textContent = st.text;
-      }
-    }
-    // Refresh the panels in place: the step boxes keep their pulse and keyboard focus.
-    const make = {
-      triggers: () => (p ? triggersPanel(s, p) : null),
-      failures: () => failuresPanel(s, p),
-      runs: () => (p?.id === "pr" ? runsPanel(s, p) : null),
-      hooks: () => hooksPanel(s),
-      config: () =>
-        p?.id === "pr"
-          ? configPanel(s, "dispatch")
-          : p?.id === "windows"
-            ? configPanel(s, "opener")
-            : null,
-      checks: () => securityChecks(p),
-      retrain: () => (p?.id === "effort" ? retrainPanel(s, p) : null),
-      steps: () => (p?.id === "effort" ? effortStepsPanel(s, p) : null),
-    };
-    for (const zone of document.querySelectorAll("[data-zone]")) {
-      const fresh = make[zone.dataset.zone]?.();
-      if (!fresh) continue;
-      fresh.dataset.zone = zone.dataset.zone;
-      zone.replaceWith(fresh);
-    }
-  }
+  else refreshDetailInPlace(s);
   updateNav();
   updateFlow(s);
   if (focusedFailure) findFailure(focusedFailure)?.focus({ preventScroll: true });
@@ -875,6 +887,28 @@ function render(s) {
 }
 
 // ---------- drawer ----------
+function addSecurityDrawerFacts(add, id, p, st) {
+  const rows = SEC_ROW_MAP[id]
+    ? secRows(p).filter((row) => SEC_ROW_MAP[id].includes(row.id))
+    : secRows(p);
+  add("State", STATE_TEXT[st.state] || st.state);
+  if (!rows.length) add("Checks", "The VPS did not report this step.");
+  for (const row of rows) {
+    add(row.name, `${row.label} · ${row.schedule}`);
+    if (row.lastRun)
+      add("Last run", `${when(row.lastRun, sec.generatedAt)} (${time(row.lastRun)})`);
+    if (row.next) add("Next run", until(row.next, sec.generatedAt));
+    if (row.detail) add("Detail", row.detail);
+  }
+  add("Where", "VPS units; full results are on the Security page.");
+}
+function addStepDrawerFacts(add, st) {
+  add("State", STATE_TEXT[st.state] || st.state);
+  if (st.lastAt) add("Last event", `${when(st.lastAt, snap.now)} (${time(st.lastAt)})`);
+  if (st.lastMsg) add("Last message", st.lastMsg);
+  add("Running now", String(st.open ?? 0));
+  add("Failures, 24 h", String(st.failures ?? 0));
+}
 function fillDrawerFacts(id) {
   const st = viewOf(id),
     node = snap.flow.nodes.find((n) => n.id === id);
@@ -885,26 +919,8 @@ function fillDrawerFacts(id) {
   f.replaceChildren();
   const add = (k, v) => f.append(el("dt", "", k), el("dd", "", v));
   const p = currentPipeline(id) || pipelineOfStep(id);
-  if (isSecurity(p)) {
-    const rows = SEC_ROW_MAP[id]
-      ? secRows(p).filter((r) => SEC_ROW_MAP[id].includes(r.id))
-      : secRows(p);
-    add("State", STATE_TEXT[st.state] || st.state);
-    if (!rows.length) add("Checks", "The VPS did not report this step.");
-    for (const r of rows) {
-      add(r.name, `${r.label} · ${r.schedule}`);
-      if (r.lastRun) add("Last run", `${when(r.lastRun, sec.generatedAt)} (${time(r.lastRun)})`);
-      if (r.next) add("Next run", until(r.next, sec.generatedAt));
-      if (r.detail) add("Detail", r.detail);
-    }
-    add("Where", "VPS units; full results are on the Security page.");
-  } else {
-    add("State", STATE_TEXT[st.state] || st.state);
-    if (st.lastAt) add("Last event", `${when(st.lastAt, snap.now)} (${time(st.lastAt)})`);
-    if (st.lastMsg) add("Last message", st.lastMsg);
-    add("Running now", String(st.open ?? 0));
-    add("Failures, 24 h", String(st.failures ?? 0));
-  }
+  if (isSecurity(p)) addSecurityDrawerFacts(add, id, p, st);
+  else addStepDrawerFacts(add, st);
 }
 
 function renderLog() {

@@ -44,6 +44,13 @@
     const value = input.value.trim() === "" ? null : Number(input.value);
     return Number.isFinite(value) && value >= minimum && value <= maximum ? value : null;
   }
+  function tokenPrice(model, key, useCache) {
+    if (useCache && key === "cacheRead" && number(model.cacheReadPrice) !== null)
+      return model.cacheReadPrice;
+    if (useCache && key === "cacheWrite" && number(model.cacheWritePrice) !== null)
+      return model.cacheWritePrice;
+    return key === "output" ? number(model.outputPrice) : number(model.inputPrice);
+  }
   function modelCost(model, usage, activeHours, useCache) {
     const categories = ["fresh", "cacheRead", "cacheWrite", "output"];
     if (
@@ -55,11 +62,7 @@
     for (const key of categories) {
       const tokens = usage[key];
       if (!tokens) continue;
-      let price = key === "output" ? number(model.outputPrice) : number(model.inputPrice);
-      if (useCache && key === "cacheRead" && number(model.cacheReadPrice) !== null)
-        price = model.cacheReadPrice;
-      if (useCache && key === "cacheWrite" && number(model.cacheWritePrice) !== null)
-        price = model.cacheWritePrice;
+      const price = tokenPrice(model, key, useCache);
       if (price === null || price < 0) return null;
       cost += (tokens * price) / 1e6;
     }
@@ -292,9 +295,7 @@
       "No models match this view. Lower the quality floor or show all scored models.",
     );
   }
-  function render() {
-    if (!data) return;
-    renderSubscriptions();
+  function readSettings() {
     const usage = data.usage || {},
       snapshot = data.snapshot || {},
       scoreKey = $("score").value;
@@ -312,27 +313,41 @@
       quality !== null &&
       (!override || activeHours !== null) &&
       ($("budget").value.trim() === "" || budget !== null);
-    if (!valid || !$("controls").checkValidity()) {
-      text("recommendation-title", "Check your comparison settings");
-      text(
-        "recommendation-detail",
-        "Enter values within the displayed limits to update this comparison.",
-      );
-      text("recommendation-cost", "");
-      text(
-        "subscription-overflow",
-        "Correct the comparison settings to estimate an overflow scenario.",
-      );
-      rows = [];
-      renderTable();
-      renderChart();
-      text("leader", "");
-      text("selection", "");
-      text("formula", "");
-      text("usage-note", "Correct the settings to update usage and cost assumptions.");
-      return;
-    }
-    rows = (snapshot.models || [])
+    return {
+      usage,
+      snapshot,
+      scoreKey,
+      hours,
+      days,
+      quality,
+      override,
+      activeHours,
+      budget,
+      valid,
+    };
+  }
+  function renderInvalidSettings() {
+    text("recommendation-title", "Check your comparison settings");
+    text(
+      "recommendation-detail",
+      "Enter values within the displayed limits to update this comparison.",
+    );
+    text("recommendation-cost", "");
+    text(
+      "subscription-overflow",
+      "Correct the comparison settings to estimate an overflow scenario.",
+    );
+    rows = [];
+    renderTable();
+    renderChart();
+    text("leader", "");
+    text("selection", "");
+    text("formula", "");
+    text("usage-note", "Correct the settings to update usage and cost assumptions.");
+  }
+  function buildModelRows(settings) {
+    const { usage, snapshot, scoreKey, activeHours, hours, days } = settings;
+    return (snapshot.models || [])
       .filter((model) => number(model[scoreKey]) !== null)
       .map((model, index) => {
         const hourly = modelCost(model, usage, activeHours, $("cache").value === "known");
@@ -345,6 +360,8 @@
           monthly: hourly === null ? null : (hourly * hours * days * 52) / 12,
         };
       });
+  }
+  function markQualified(quality) {
     const bestScore = rows.length ? Math.max(...rows.map((row) => row.score)) : null;
     const floor = bestScore === null ? null : (bestScore * quality) / 100;
     rows.forEach((row) => {
@@ -359,51 +376,43 @@
             (other.monthly < row.monthly || other.score > row.score),
         );
     });
-    const eligible = rows
-      .filter(
-        (row) =>
-          row.qualified && row.monthly !== null && (budget === null || row.monthly <= budget),
-      )
-      .sort((a, b) => a.monthly - b.monthly || b.score - a.score);
-    const recommendation = eligible[0];
-    renderOverflow(recommendation);
-    const complete =
-      number(usage.turns) !== null &&
-      number(usage.measuredTurns) !== null &&
-      usage.turns > 0 &&
-      usage.measuredTurns === usage.turns;
-    const partial = !complete;
-    if (recommendation) {
-      text("recommendation-title", recommendation.name);
-      text(
-        "recommendation-detail",
-        `Lowest API-only equivalent at ≥${format(floor)} score (${quality}% of the best ${scoreKey} score)${budget === null ? "" : ` within ${money(budget)}/month`}. ${$("cache").value === "known" ? "Assumes your observed cache mix continues." : "All input is priced at standard rates."} ${partial ? "Partial usage coverage: this estimate may understate your full burn." : "Assumes the measured token mix and activity rate continue."}`,
-      );
-      $("recommendation-cost").replaceChildren(
-        document.createTextNode(`${money(recommendation.monthly)}/mo`),
-      );
-      const small = document.createElement("small");
-      small.textContent = `Full-workload API equivalent · ${money(recommendation.weekly)}/week · ${money(recommendation.hourly)}/active hour`;
-      $("recommendation-cost").append(small);
-    } else {
-      text(
-        "recommendation-title",
-        !rows.length
-          ? "No benchmark snapshot available"
-          : rows.every((row) => row.monthly === null)
-            ? "More usage measurement needed"
-            : "No priced model meets your settings",
-      );
-      text(
-        "recommendation-detail",
-        !rows.length
-          ? "Use Refresh benchmarks to fetch a snapshot when the API quota allows."
-          : rows.every((row) => row.monthly === null)
-            ? "Cost projections need positive active hours and complete token categories. An observed active hours override can supply your own denominator."
-            : "Raise the budget or lower the quality floor. Models with unknown costs cannot qualify for a budget recommendation.",
-      );
-      text("recommendation-cost", "");
-    }
+    return floor;
+  }
+  function renderRecommendation(recommendation, settings, floor, partial) {
+    const { scoreKey, quality, budget } = settings;
+    text("recommendation-title", recommendation.name);
+    text(
+      "recommendation-detail",
+      `Lowest API-only equivalent at ≥${format(floor)} score (${quality}% of the best ${scoreKey} score)${budget === null ? "" : ` within ${money(budget)}/month`}. ${$("cache").value === "known" ? "Assumes your observed cache mix continues." : "All input is priced at standard rates."} ${partial ? "Partial usage coverage: this estimate may understate your full burn." : "Assumes the measured token mix and activity rate continue."}`,
+    );
+    $("recommendation-cost").replaceChildren(
+      document.createTextNode(`${money(recommendation.monthly)}/mo`),
+    );
+    const small = document.createElement("small");
+    small.textContent = `Full-workload API equivalent · ${money(recommendation.weekly)}/week · ${money(recommendation.hourly)}/active hour`;
+    $("recommendation-cost").append(small);
+  }
+  function renderNoRecommendation() {
+    text(
+      "recommendation-title",
+      !rows.length
+        ? "No benchmark snapshot available"
+        : rows.every((row) => row.monthly === null)
+          ? "More usage measurement needed"
+          : "No priced model meets your settings",
+    );
+    text(
+      "recommendation-detail",
+      !rows.length
+        ? "Use Refresh benchmarks to fetch a snapshot when the API quota allows."
+        : rows.every((row) => row.monthly === null)
+          ? "Cost projections need positive active hours and complete token categories. An observed active hours override can supply your own denominator."
+          : "Raise the budget or lower the quality floor. Models with unknown costs cannot qualify for a budget recommendation.",
+    );
+    text("recommendation-cost", "");
+  }
+  function renderLeaderAndUsage(settings, partial) {
+    const { usage, scoreKey, override, activeHours, hours, days } = settings;
     const leader = [...rows].sort((a, b) => b.score - a.score)[0];
     text(
       "leader",
@@ -425,6 +434,8 @@
         ? usage.assumptions.join(" ")
         : "Token accounting and active time may be incomplete. Different models can need different token counts and retries for the same task.",
     );
+  }
+  function renderStatusNotes(snapshot) {
     text(
       "cache-note",
       $("cache").value === "known"
@@ -446,6 +457,36 @@
       "schedule",
       `${data.weekly ? "Weekly refresh enabled." : "Weekly refresh disabled."}${data.nextRefreshAt ? ` Next scheduled refresh: ${date(data.nextRefreshAt)}.` : ""}${data.refreshAllowedAt && data.refreshAllowedAt > Date.now() ? ` On-demand refresh available ${date(data.refreshAllowedAt)}.` : ""}`,
     );
+  }
+  function render() {
+    if (!data) return;
+    renderSubscriptions();
+    const settings = readSettings();
+    if (!settings.valid || !$("controls").checkValidity()) {
+      renderInvalidSettings();
+      return;
+    }
+    const { usage, snapshot, budget } = settings;
+    rows = buildModelRows(settings);
+    const floor = markQualified(settings.quality);
+    const eligible = rows
+      .filter(
+        (row) =>
+          row.qualified && row.monthly !== null && (budget === null || row.monthly <= budget),
+      )
+      .sort((a, b) => a.monthly - b.monthly || b.score - a.score);
+    const recommendation = eligible[0];
+    renderOverflow(recommendation);
+    const complete =
+      number(usage.turns) !== null &&
+      number(usage.measuredTurns) !== null &&
+      usage.turns > 0 &&
+      usage.measuredTurns === usage.turns;
+    const partial = !complete;
+    if (recommendation) renderRecommendation(recommendation, settings, floor, partial);
+    else renderNoRecommendation();
+    renderLeaderAndUsage(settings, partial);
+    renderStatusNotes(snapshot);
     $("weekly").checked = !!data.weekly;
     renderTable();
     renderChart();
