@@ -98,11 +98,10 @@ function config(): {
   };
 }
 
-export function sources(): Source[] {
-  const cfg = config().sources;
+function defaultSourceList(): any[] {
   const c = confDir(),
     h = home();
-  const list: any[] = cfg ?? [
+  return [
     ...[
       path.join(c, "env"),
       path.join(h, ".config", "agentmail", "env"),
@@ -113,26 +112,40 @@ export function sources(): Source[] {
     { type: "single", path: path.join(c, "model-rate-token"), only: true },
     ...DEFAULT_GH_REPOS.map((repo) => ({ type: "github", repo })),
   ];
+}
+
+function addGithubSource(spec: any, seen: Set<string>, out: Source[]) {
+  const id = sid(`github:${spec.repo}`);
+  if (seen.has(id)) return;
+  seen.add(id);
+  out.push({ id, kind: "github", repo: spec.repo, label: `GitHub · ${spec.repo}` });
+}
+
+function addFileSources(spec: any, seen: Set<string>, out: Source[]) {
+  for (const f of expandGlob(expand(spec.path))) {
+    // defaults show only files that exist; explicitly configured paths always show so keys can be added
+    if ((spec.only || f.includes("*")) && !exists(f)) continue;
+    const id = sid(`${spec.type}:${f}`);
+    if (seen.has(id)) continue;
+    seen.add(id);
+    out.push({ id, kind: spec.type, file: f, label: tail(f) });
+  }
+}
+
+export function sources(): Source[] {
+  const list: any[] = config().sources ?? defaultSourceList();
   list.push(...config().extra); // stores added from the page
   const out: Source[] = [],
     seen = new Set<string>();
-  for (const s of list) {
-    if (s?.type === "github" && typeof s.repo === "string" && /^[\w.-]+\/[\w.-]+$/.test(s.repo)) {
-      const id = sid(`github:${s.repo}`);
-      if (!seen.has(id)) {
-        seen.add(id);
-        out.push({ id, kind: "github", repo: s.repo, label: `GitHub · ${s.repo}` });
-      }
-    } else if ((s?.type === "env" || s?.type === "single") && typeof s.path === "string") {
-      for (const f of expandGlob(expand(s.path))) {
-        // defaults show only files that exist; explicitly configured paths always show so keys can be added
-        if ((s.only || f.includes("*")) && !exists(f)) continue;
-        const id = sid(`${s.type}:${f}`);
-        if (!seen.has(id)) {
-          seen.add(id);
-          out.push({ id, kind: s.type, file: f, label: tail(f) });
-        }
-      }
+  for (const spec of list) {
+    if (
+      spec?.type === "github" &&
+      typeof spec.repo === "string" &&
+      /^[\w.-]+\/[\w.-]+$/.test(spec.repo)
+    ) {
+      addGithubSource(spec, seen, out);
+    } else if ((spec?.type === "env" || spec?.type === "single") && typeof spec.path === "string") {
+      addFileSources(spec, seen, out);
     }
   }
   return out;
@@ -255,19 +268,27 @@ function readEnv(file: string) {
   return [...new Map(entries.map((e) => [e.key, e])).values()];
 }
 
+function replaceEnvLine(
+  line: string,
+  key: string,
+  value: string | null,
+): { hit: boolean; text: string | null } {
+  const m = !line.trimStart().startsWith("#") ? ENV_LINE.exec(line) : null;
+  if (!m || m[2] !== key) return { hit: false, text: line };
+  if (value === null) return { hit: true, text: null };
+  const p = parseValue(m[4]);
+  return { hit: true, text: `${m[1]}${m[2]}${m[3]}${formatValue(value, p.quote)}${p.rest}` };
+}
+
 function writeEnv(file: string, key: string, value: string | null) {
   const text = exists(file) ? fs.readFileSync(file, "utf8") : "";
   const lines = text === "" ? [] : text.split("\n");
   const out: string[] = [];
   let hit = false;
   for (const line of lines) {
-    const m = !line.trimStart().startsWith("#") ? ENV_LINE.exec(line) : null;
-    if (m && m[2] === key) {
-      hit = true;
-      if (value === null) continue;
-      const p = parseValue(m[4]);
-      out.push(`${m[1]}${m[2]}${m[3]}${formatValue(value, p.quote)}${p.rest}`);
-    } else out.push(line);
+    const replaced = replaceEnvLine(line, key, value);
+    if (replaced.hit) hit = true;
+    if (replaced.text !== null) out.push(replaced.text);
   }
   if (value === null && !hit) throw new VaultError(404, "No such key.");
   if (value !== null && !hit) {
@@ -463,40 +484,43 @@ const shape = (s: Source, x: Extra, mtime: number | null) =>
         viewable: x.viewable,
       });
 
+function listMtime(s: Source, extra: Extra[]): number | null {
+  if (s.file && exists(s.file)) return fs.statSync(s.file).mtimeMs;
+  if (s.kind === "virtual") return Math.max(0, ...extra.map((x) => Date.parse(x.updatedAt) || 0));
+  return null;
+}
+
+async function listSource(s: Source, all: Extra[], showAll: boolean, opts: { mine?: boolean }) {
+  const base = { id: s.id, label: s.label, canAdd: s.kind === "env" || s.kind === "github" };
+  try {
+    const real = await realEntries(s);
+    const have = new Set(real.map((e) => e.key));
+    const extra = all.filter((x) => owns(s, x) && !have.has(x.key));
+    // every extra in a file group takes the file's mtime, like the real keys; a label group shares its newest time
+    const mtime = listMtime(s, extra);
+    let entries = [
+      ...real.map((e) => ({ ...e, ...(opts.mine ? { mine: true } : {}) })),
+      ...extra.map((x) => ({ ...shape(s, x, mtime), ...(opts.mine ? { mine: false } : {}) })),
+    ];
+    if ((s.kind === "env" || s.kind === "virtual") && !showAll)
+      entries = entries.filter((e) => SECRETISH.test(e.key));
+    entries.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+    return { ...base, entries };
+  } catch (e) {
+    return {
+      ...base,
+      entries: [],
+      error: e instanceof VaultError ? e.message : "This source could not be read.",
+    };
+  }
+}
+
 export async function listVault(opts: { mine?: boolean } = {}) {
   const all = loadExtras(),
     srcs = sources(),
     showAll = config().showAllKeys;
   const out = await Promise.all(
-    [...srcs, ...extraGroups(all, srcs)].map(async (s) => {
-      const base = { id: s.id, label: s.label, canAdd: s.kind === "env" || s.kind === "github" };
-      try {
-        const real = await realEntries(s);
-        const have = new Set(real.map((e) => e.key));
-        const extra = all.filter((x) => owns(s, x) && !have.has(x.key));
-        // every extra in a file group takes the file's mtime, like the real keys; a label group shares its newest time
-        const mtime =
-          s.file && exists(s.file)
-            ? fs.statSync(s.file).mtimeMs
-            : s.kind === "virtual"
-              ? Math.max(0, ...extra.map((x) => Date.parse(x.updatedAt) || 0))
-              : null;
-        let entries = [
-          ...real.map((e) => ({ ...e, ...(opts.mine ? { mine: true } : {}) })),
-          ...extra.map((x) => ({ ...shape(s, x, mtime), ...(opts.mine ? { mine: false } : {}) })),
-        ];
-        if ((s.kind === "env" || s.kind === "virtual") && !showAll)
-          entries = entries.filter((e) => SECRETISH.test(e.key));
-        entries.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
-        return { ...base, entries };
-      } catch (e) {
-        return {
-          ...base,
-          entries: [],
-          error: e instanceof VaultError ? e.message : "This source could not be read.",
-        };
-      }
-    }),
+    [...srcs, ...extraGroups(all, srcs)].map((s) => listSource(s, all, showAll, opts)),
   );
   return { sources: out };
 }
@@ -540,31 +564,53 @@ function alertExtra(what: string, key: string, c: Client) {
   ]).catch((e) => console.warn("vault alert failed:", oneLine(e?.message, 80)));
 }
 
+function setExtra(s: Source, key: string, v: string, c: Client) {
+  const all = loadExtras(),
+    at = all.findIndex((e) => owns(s, e) && e.key === key);
+  all[at] = { ...all[at], value: v, updatedAt: new Date().toISOString() };
+  saveExtras(all);
+  audit("set", s, key);
+  alertExtra("changed", key, c);
+}
+
+async function setReal(s: Source, key: string, v: string) {
+  if (s.kind === "virtual") throw new VaultError(404, "No such key.");
+  if (s.kind === "github") await gh(["secret", "set", key, "-R", s.repo!], v);
+  else if (s.kind === "env") writeEnv(s.file!, key, v);
+  else {
+    const had = exists(s.file!) && fs.readFileSync(s.file!, "utf8").endsWith("\n");
+    atomicWrite(s.file!, v + (had ? "\n" : ""));
+  }
+  audit("set", s, key);
+}
+
 export function setSecret(id: string, key: string, value: unknown, c: Client = NOBODY) {
   const s = find(id);
   checkKey(s, key);
   const v = checkValue(value);
   return serial(async () => {
     const x = await extraAt(s, key);
-    if (x) {
-      const all = loadExtras(),
-        at = all.findIndex((e) => owns(s, e) && e.key === key);
-      all[at] = { ...all[at], value: v, updatedAt: new Date().toISOString() };
-      saveExtras(all);
-      audit("set", s, key);
-      alertExtra("changed", key, c);
-    } else {
-      if (s.kind === "virtual") throw new VaultError(404, "No such key.");
-      if (s.kind === "github") await gh(["secret", "set", key, "-R", s.repo!], v);
-      else if (s.kind === "env") writeEnv(s.file!, key, v);
-      else {
-        const had = exists(s.file!) && fs.readFileSync(s.file!, "utf8").endsWith("\n");
-        atomicWrite(s.file!, v + (had ? "\n" : ""));
-      }
-      audit("set", s, key);
-    }
+    if (x) setExtra(s, key, v, c);
+    else await setReal(s, key, v);
     return { ok: true, ...(ownEnv(s) ? { restartNeeded: true } : {}) };
   });
+}
+
+function deleteExtra(s: Source, key: string, c: Client) {
+  saveExtras(loadExtras().filter((e) => !(owns(s, e) && e.key === key)));
+  audit("delete", s, key);
+  alertExtra("changed", key, c);
+}
+
+async function deleteReal(s: Source, key: string) {
+  if (s.kind === "virtual") throw new VaultError(404, "No such key.");
+  if (s.kind === "github") await gh(["secret", "delete", key, "-R", s.repo!]);
+  else if (s.kind === "env") writeEnv(s.file!, key, null);
+  else {
+    if (!exists(s.file!)) throw new VaultError(404, "No such key.");
+    fs.unlinkSync(fs.realpathSync(s.file!));
+  }
+  audit("delete", s, key);
 }
 
 export function deleteSecret(id: string, key: string, c: Client = NOBODY) {
@@ -572,20 +618,8 @@ export function deleteSecret(id: string, key: string, c: Client = NOBODY) {
   checkKey(s, key);
   return serial(async () => {
     const x = await extraAt(s, key);
-    if (x) {
-      saveExtras(loadExtras().filter((e) => !(owns(s, e) && e.key === key)));
-      audit("delete", s, key);
-      alertExtra("changed", key, c);
-    } else {
-      if (s.kind === "virtual") throw new VaultError(404, "No such key.");
-      if (s.kind === "github") await gh(["secret", "delete", key, "-R", s.repo!]);
-      else if (s.kind === "env") writeEnv(s.file!, key, null);
-      else {
-        if (!exists(s.file!)) throw new VaultError(404, "No such key.");
-        fs.unlinkSync(fs.realpathSync(s.file!));
-      }
-      audit("delete", s, key);
-    }
+    if (x) deleteExtra(s, key, c);
+    else await deleteReal(s, key);
     return { ok: true, ...(ownEnv(s) ? { restartNeeded: true } : {}) };
   });
 }
@@ -593,71 +627,96 @@ export function deleteSecret(id: string, key: string, c: Client = NOBODY) {
 /* ---------- add a store (env file under $HOME, or a GitHub repo) ---------- */
 const inside = (root: string, p: string) => p === root || p.startsWith(root + path.sep);
 const storeId = (e: any) => sid(e.type === "env" ? `env:${e.path}` : `github:${e.repo}`);
+function envHomeRoot(): string {
+  try {
+    return fs.realpathSync(home());
+  } catch {
+    throw new VaultError(500, "The vault is unavailable.");
+  }
+}
+
+function envParentDir(want: string): string {
+  try {
+    return fs.realpathSync(path.dirname(want));
+  } catch {
+    throw new VaultError(400, "That folder does not exist.");
+  }
+}
+
+function statEnvFile(file: string, root: string): fs.Stats | null {
+  let st: fs.Stats | null = null;
+  try {
+    st = fs.lstatSync(file);
+  } catch {}
+  if (st?.isSymbolicLink()) {
+    let to = "";
+    try {
+      to = fs.realpathSync(file);
+    } catch {}
+    if (!to || !inside(root, to))
+      throw new VaultError(400, "The file must be inside your home folder.");
+    st = fs.statSync(file);
+  }
+  return st;
+}
+
+function envStoreEntry(raw: string) {
+  if (!raw || /[\0\n\r]/.test(raw) || !(raw.startsWith("~/") || path.isAbsolute(raw)))
+    throw new VaultError(400, "Use a path like ~/project/.env.");
+  const want = path.resolve(expand(raw));
+  const root = envHomeRoot();
+  const parent = envParentDir(want);
+  if (!inside(root, parent) || !path.basename(want))
+    throw new VaultError(400, "The file must be inside your home folder.");
+  const file = path.join(parent, path.basename(want));
+  const st = statEnvFile(file, root);
+  if (st && !st.isFile()) throw new VaultError(400, "That path is not a file.");
+  if (!st) {
+    try {
+      fs.closeSync(fs.openSync(file, "wx", 0o600));
+    } catch {
+      throw new VaultError(400, "Could not create that file.");
+    }
+  }
+  return { type: "env", path: file };
+}
+
+async function githubStoreEntry(raw: string) {
+  if (!/^[\w.-]+\/[\w.-]+$/.test(raw)) throw new VaultError(400, "Use owner/name.");
+  try {
+    await gh(["repo", "view", raw, "--json", "name"]);
+  } catch {
+    throw new VaultError(400, "GitHub could not find that repo.");
+  }
+  return { type: "github", repo: raw };
+}
+
+async function newStoreEntry(type: unknown, raw: string) {
+  if (type === "env") return envStoreEntry(raw);
+  if (type === "github") return githubStoreEntry(raw);
+  throw new VaultError(400, "Choose env file or GitHub repo.");
+}
+
+function saveStoreEntry(entry: any) {
+  const cfgFile = path.join(confDir(), "vault-sources.json");
+  let cfg: any = {};
+  try {
+    cfg = JSON.parse(fs.readFileSync(cfgFile, "utf8"));
+  } catch {}
+  if (Array.isArray(cfg)) cfg = { sources: cfg };
+  if (!cfg || typeof cfg !== "object") cfg = {};
+  cfg.extra = [...(Array.isArray(cfg.extra) ? cfg.extra : []), entry];
+  atomicWrite(cfgFile, JSON.stringify(cfg, null, 2) + "\n");
+}
+
 export function addStore(type: unknown, value: unknown) {
   return serial(async () => {
-    let entry: any;
     const raw = typeof value === "string" ? value.trim() : "";
-    if (type === "env") {
-      if (!raw || /[\0\n\r]/.test(raw) || !(raw.startsWith("~/") || path.isAbsolute(raw)))
-        throw new VaultError(400, "Use a path like ~/project/.env.");
-      const want = path.resolve(expand(raw));
-      let root: string, parent: string;
-      try {
-        root = fs.realpathSync(home());
-      } catch {
-        throw new VaultError(500, "The vault is unavailable.");
-      }
-      try {
-        parent = fs.realpathSync(path.dirname(want));
-      } catch {
-        throw new VaultError(400, "That folder does not exist.");
-      }
-      if (!inside(root, parent) || !path.basename(want))
-        throw new VaultError(400, "The file must be inside your home folder.");
-      const file = path.join(parent, path.basename(want));
-      let st: fs.Stats | null = null;
-      try {
-        st = fs.lstatSync(file);
-      } catch {}
-      if (st?.isSymbolicLink()) {
-        let to = "";
-        try {
-          to = fs.realpathSync(file);
-        } catch {}
-        if (!to || !inside(root, to))
-          throw new VaultError(400, "The file must be inside your home folder.");
-        st = fs.statSync(file);
-      }
-      if (st && !st.isFile()) throw new VaultError(400, "That path is not a file.");
-      if (!st) {
-        try {
-          fs.closeSync(fs.openSync(file, "wx", 0o600));
-        } catch {
-          throw new VaultError(400, "Could not create that file.");
-        }
-      }
-      entry = { type: "env", path: file };
-    } else if (type === "github") {
-      if (!/^[\w.-]+\/[\w.-]+$/.test(raw)) throw new VaultError(400, "Use owner/name.");
-      try {
-        await gh(["repo", "view", raw, "--json", "name"]);
-      } catch {
-        throw new VaultError(400, "GitHub could not find that repo.");
-      }
-      entry = { type: "github", repo: raw };
-    } else throw new VaultError(400, "Choose env file or GitHub repo.");
+    const entry = await newStoreEntry(type, raw);
     const id = storeId(entry),
       known = sources().find((x) => x.id === id);
     if (known) return { ok: true, id, label: known.label };
-    const cfgFile = path.join(confDir(), "vault-sources.json");
-    let cfg: any = {};
-    try {
-      cfg = JSON.parse(fs.readFileSync(cfgFile, "utf8"));
-    } catch {}
-    if (Array.isArray(cfg)) cfg = { sources: cfg };
-    if (!cfg || typeof cfg !== "object") cfg = {};
-    cfg.extra = [...(Array.isArray(cfg.extra) ? cfg.extra : []), entry];
-    atomicWrite(cfgFile, JSON.stringify(cfg, null, 2) + "\n");
+    saveStoreEntry(entry);
     const added = sources().find((x) => x.id === id);
     if (!added) throw new VaultError(500, "The vault is unavailable.");
     audit("add-store", added, "-");

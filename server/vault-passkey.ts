@@ -54,339 +54,397 @@ export class PasskeyError extends Error {
   }
 }
 
-export function createPasskeys(d: Deps) {
-  const storeFile = () => path.join(d.confDir(), "vault-passkeys.json");
-  const challenges = new Map<string, Challenge>();
-  const grants = new Map<string, { expires: number; session: string }>();
-  let lastAlert = 0;
+type Grant = { expires: number; session: string };
+type Context = {
+  deps: Deps;
+  challenges: Map<string, Challenge>;
+  grants: Map<string, Grant>;
+  lastAlert: number;
+};
+type Handler = (req: express.Request, res: express.Response) => Promise<unknown> | unknown;
 
-  function load(): Store {
-    try {
-      const j = JSON.parse(fs.readFileSync(storeFile(), "utf8"));
-      if (Array.isArray(j?.credentials) && typeof j.userID === "string") return j;
-    } catch {}
-    return { userID: crypto.randomBytes(32).toString("base64url"), credentials: [] };
-  }
-  const save = (s: Store) => d.atomicWrite(storeFile(), JSON.stringify(s, null, 2) + "\n");
-  const publicList = (s: Store) =>
-    s.credentials.map((c) => ({
-      id: c.id,
-      name: c.name,
-      createdAt: c.createdAt,
-      lastUsedAt: c.lastUsedAt,
-    }));
+const storeFile = (ctx: Context) => path.join(ctx.deps.confDir(), "vault-passkeys.json");
 
-  const cookies = (req: express.Request) =>
-    Object.fromEntries(
-      String(req.headers.cookie || "")
-        .split(";")
-        .map((p) => p.trim().split(/=(.*)/s).slice(0, 2))
-        .filter((p) => p[0]),
-    );
-  const session = (req: express.Request) =>
-    crypto
-      .createHash("sha256")
-      .update(cookies(req).ac_session || "")
-      .digest("hex");
-  const origin = (req: express.Request) => [
-    ...new Set([String(req.headers.origin || ""), ...d.origins()].filter(Boolean)),
-  ];
-  const rpID = (req: express.Request) =>
-    d.rpId() ||
-    String(req.headers.host || "")
-      .replace(/:\d+$/, "")
-      .replace(/^\[|\]$/g, "");
+function loadStore(ctx: Context): Store {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(storeFile(ctx), "utf8"));
+    if (Array.isArray(parsed?.credentials) && typeof parsed.userID === "string") return parsed;
+  } catch {}
+  return { userID: crypto.randomBytes(32).toString("base64url"), credentials: [] };
+}
+const saveStore = (ctx: Context, store: Store) =>
+  ctx.deps.atomicWrite(storeFile(ctx), JSON.stringify(store, null, 2) + "\n");
+const publicList = (store: Store) =>
+  store.credentials.map((cred) => ({
+    id: cred.id,
+    name: cred.name,
+    createdAt: cred.createdAt,
+    lastUsedAt: cred.lastUsedAt,
+  }));
 
-  function sweep() {
-    const now = Date.now();
-    for (const [k, v] of challenges) if (v.expires <= now) challenges.delete(k);
-    for (const [k, v] of grants) if (v.expires <= now) grants.delete(k);
-  }
-  function issue(req: express.Request, kind: Challenge["kind"], challenge: string, first = false) {
-    sweep();
-    const cid = crypto.randomBytes(16).toString("base64url");
-    challenges.set(cid, {
-      challenge,
-      kind,
-      expires: Date.now() + CHALLENGE_TTL,
-      first,
-      session: session(req),
-    });
-    return cid;
-  }
-  /* single use: removed whether or not the response verifies */
-  function take(req: express.Request, cid: unknown, kind: Challenge["kind"]): Challenge {
-    const c = typeof cid === "string" ? challenges.get(cid) : undefined;
-    if (typeof cid === "string") challenges.delete(cid);
-    if (!c || c.kind !== kind || c.expires <= Date.now() || c.session !== session(req))
-      throw new PasskeyError(400, "That request expired. Try again.");
-    return c;
-  }
+const cookies = (req: express.Request) =>
+  Object.fromEntries(
+    String(req.headers.cookie || "")
+      .split(";")
+      .map((part) => part.trim().split(/=(.*)/s).slice(0, 2))
+      .filter((pair) => pair[0]),
+  );
+const sessionOf = (req: express.Request) =>
+  crypto
+    .createHash("sha256")
+    .update(cookies(req).ac_session || "")
+    .digest("hex");
+const originsOf = (ctx: Context, req: express.Request) => [
+  ...new Set([String(req.headers.origin || ""), ...ctx.deps.origins()].filter(Boolean)),
+];
+const rpIdOf = (ctx: Context, req: express.Request) =>
+  ctx.deps.rpId() ||
+  String(req.headers.host || "")
+    .replace(/:\d+$/, "")
+    .replace(/^\[|\]$/g, "");
 
-  /* ---------- grant ---------- */
-  function hasGrant(req: express.Request, consume: boolean): boolean {
-    const t = cookies(req)[COOKIE],
-      g = t ? grants.get(t) : undefined;
-    if (!t || !g || g.expires <= Date.now() || g.session !== session(req)) {
-      if (t) grants.delete(t);
-      return false;
+function sweep(ctx: Context) {
+  const now = Date.now();
+  for (const [key, entry] of ctx.challenges) if (entry.expires <= now) ctx.challenges.delete(key);
+  for (const [key, entry] of ctx.grants) if (entry.expires <= now) ctx.grants.delete(key);
+}
+function issue(
+  ctx: Context,
+  req: express.Request,
+  kind: Challenge["kind"],
+  challenge: string,
+  first = false,
+) {
+  sweep(ctx);
+  const cid = crypto.randomBytes(16).toString("base64url");
+  ctx.challenges.set(cid, {
+    challenge,
+    kind,
+    expires: Date.now() + CHALLENGE_TTL,
+    first,
+    session: sessionOf(req),
+  });
+  return cid;
+}
+/* single use: removed whether or not the response verifies */
+function take(
+  ctx: Context,
+  req: express.Request,
+  cid: unknown,
+  kind: Challenge["kind"],
+): Challenge {
+  const found = typeof cid === "string" ? ctx.challenges.get(cid) : undefined;
+  if (typeof cid === "string") ctx.challenges.delete(cid);
+  if (
+    !found ||
+    found.kind !== kind ||
+    found.expires <= Date.now() ||
+    found.session !== sessionOf(req)
+  )
+    throw new PasskeyError(400, "That request expired. Try again.");
+  return found;
+}
+
+/* ---------- grant ---------- */
+function hasGrant(ctx: Context, req: express.Request, consume: boolean): boolean {
+  const token = cookies(req)[COOKIE],
+    grant = token ? ctx.grants.get(token) : undefined;
+  if (!token || !grant || grant.expires <= Date.now() || grant.session !== sessionOf(req)) {
+    if (token) ctx.grants.delete(token);
+    return false;
+  }
+  if (consume) ctx.grants.delete(token);
+  return true;
+}
+const cookieHeader = (value: string, maxAge: number) =>
+  `${COOKIE}=${value}; Path=/api/vault; HttpOnly; SameSite=Strict; Secure; Max-Age=${maxAge}`;
+/* a fresh grant bound to the caller's session, delivered as the grant cookie */
+function openGrant(ctx: Context, req: express.Request, res: express.Response) {
+  const token = crypto.randomBytes(24).toString("base64url");
+  ctx.grants.set(token, { expires: Date.now() + GRANT_TTL, session: sessionOf(req) });
+  res.append("Set-Cookie", cookieHeader(token, GRANT_TTL / 1000));
+}
+/* Use as middleware on value-changing routes. Delete grants are single-use. */
+function requireGrant(ctx: Context, consume: boolean): express.RequestHandler {
+  return (req, res, next) => {
+    if (hasGrant(ctx, req, consume)) {
+      if (consume) res.append("Set-Cookie", cookieHeader("", 0));
+      return next();
     }
-    if (consume) grants.delete(t);
-    return true;
+    res.status(401).json({
+      error: "Confirm with your passkey first.",
+      stepUp: true,
+      enrolled: loadStore(ctx).credentials.length > 0,
+    });
+  };
+}
+
+function fail(ctx: Context, req: express.Request, what: string) {
+  ctx.deps.audit("passkey-failed", "-", what);
+  const now = Date.now();
+  if (now - ctx.lastAlert < ALERT_EVERY) return;
+  ctx.lastAlert = now;
+  const fwd = String(req.headers["x-forwarded-for"] || "")
+    .replace(/[\r\n\0]+/g, " ")
+    .slice(0, 120);
+  void ctx.deps
+    .alert("[Agent Console] vault passkey failed", [
+      `Time: ${new Date(now).toISOString()}`,
+      `Client IP: ${req.ip || req.socket.remoteAddress || ""}${fwd ? ` (forwarded ${fwd})` : ""}`,
+      `User-agent: ${String(req.headers["user-agent"] || "")
+        .replace(/[\r\n\0]+/g, " ")
+        .slice(0, 200)}`,
+      `Step: ${what}`,
+    ])
+    .catch((error) =>
+      console.warn("vault alert failed:", String(error?.message || "").slice(0, 80)),
+    );
+}
+
+function wrap(handler: Handler): express.RequestHandler {
+  return async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    try {
+      res.json(await handler(req, res));
+    } catch (error: any) {
+      if (error instanceof PasskeyError)
+        return void res.status(error.status).json({ error: error.message, ...error.extra });
+      res.status(500).json({ error: "Passkeys are unavailable." });
+    }
+  };
+}
+
+/* ---------- enrollment ---------- */
+// The first passkey needs nothing beyond the console login; later ones need a live grant.
+async function registerOptions(ctx: Context, req: express.Request) {
+  const store = loadStore(ctx),
+    first = store.credentials.length === 0;
+  if (!first && !hasGrant(ctx, req, false))
+    throw new PasskeyError(401, "Confirm with your passkey first.", { stepUp: true });
+  const options = await generateRegistrationOptions({
+    rpName: "Agent Console",
+    rpID: rpIdOf(ctx, req),
+    userName: "owner",
+    userDisplayName: "Agent Console owner",
+    userID: isoBase64URL.toBuffer(store.userID),
+    attestationType: "none",
+    excludeCredentials: store.credentials.map((cred) => ({
+      id: cred.id,
+      transports: cred.transports as any,
+    })),
+    authenticatorSelection: {
+      authenticatorAttachment: "platform",
+      residentKey: "preferred",
+      userVerification: "required",
+    },
+  });
+  (options as any).hints = ["client-device"];
+  return { cid: issue(ctx, req, "reg", options.challenge, first), options };
+}
+
+async function verifyRegistration(ctx: Context, req: express.Request, challenge: Challenge) {
+  let verification: Awaited<ReturnType<typeof verifyRegistrationResponse>>;
+  try {
+    verification = await verifyRegistrationResponse({
+      response: req.body?.response,
+      expectedChallenge: challenge.challenge,
+      expectedOrigin: originsOf(ctx, req),
+      expectedRPID: rpIdOf(ctx, req),
+      requireUserVerification: true,
+    });
+  } catch {
+    fail(ctx, req, "registration");
+    throw new PasskeyError(400, "The passkey could not be verified.");
   }
-  const cookieHeader = (value: string, maxAge: number) =>
-    `${COOKIE}=${value}; Path=/api/vault; HttpOnly; SameSite=Strict; Secure; Max-Age=${maxAge}`;
-  /* Use as middleware on value-changing routes. Delete grants are single-use. */
-  const requireGrant =
-    (consume: boolean): express.RequestHandler =>
-    (req, res, next) => {
-      if (hasGrant(req, consume)) {
-        if (consume) res.append("Set-Cookie", cookieHeader("", 0));
-        return next();
-      }
-      res.status(401).json({
-        error: "Confirm with your passkey first.",
-        stepUp: true,
-        enrolled: load().credentials.length > 0,
-      });
-    };
-
-  function fail(req: express.Request, what: string) {
-    d.audit("passkey-failed", "-", what);
-    const now = Date.now();
-    if (now - lastAlert < ALERT_EVERY) return;
-    lastAlert = now;
-    const fwd = String(req.headers["x-forwarded-for"] || "")
-      .replace(/[\r\n\0]+/g, " ")
-      .slice(0, 120);
-    void d
-      .alert("[Agent Console] vault passkey failed", [
-        `Time: ${new Date(now).toISOString()}`,
-        `Client IP: ${req.ip || req.socket.remoteAddress || ""}${fwd ? ` (forwarded ${fwd})` : ""}`,
-        `User-agent: ${String(req.headers["user-agent"] || "")
-          .replace(/[\r\n\0]+/g, " ")
-          .slice(0, 200)}`,
-        `Step: ${what}`,
-      ])
-      .catch((e) => console.warn("vault alert failed:", String(e?.message || "").slice(0, 80)));
+  if (!verification.verified) {
+    fail(ctx, req, "registration");
+    throw new PasskeyError(400, "The passkey could not be verified.");
   }
+  return verification;
+}
 
-  const wrap =
-    (
-      fn: (req: express.Request, res: express.Response) => Promise<unknown> | unknown,
-    ): express.RequestHandler =>
-    async (req, res) => {
-      res.set("Cache-Control", "no-store");
-      try {
-        res.json(await fn(req, res));
-      } catch (e: any) {
-        if (e instanceof PasskeyError)
-          return void res.status(e.status).json({ error: e.message, ...e.extra });
-        res.status(500).json({ error: "Passkeys are unavailable." });
-      }
-    };
+const passkeyName = (req: express.Request, store: Store) =>
+  String(req.body?.name || "")
+    .replace(/[\r\n\0]+/g, " ")
+    .trim()
+    .slice(0, 40) || `Passkey ${store.credentials.length + 1}`;
 
-  function mount(
-    app: express.Express,
-    sameOrigin: express.RequestHandler,
-    json: express.RequestHandler,
+async function registerVerify(ctx: Context, req: express.Request, res: express.Response) {
+  const challenge = take(ctx, req, req.body?.cid, "reg");
+  const store = loadStore(ctx);
+  if (challenge.first !== (store.credentials.length === 0))
+    throw new PasskeyError(400, "That request expired. Try again.");
+  const verification = await verifyRegistration(ctx, req, challenge);
+  // this device's own authenticator only: a thief could otherwise enrol their phone through the cross-device QR flow,
+  // which reports "cross-platform". Transports are not checked: synced platform passkeys often list "hybrid" too.
+  if (
+    req.body?.response?.authenticatorAttachment !== "platform" ||
+    !verification.registrationInfo.userVerified
   ) {
-    const P = "/api/vault";
-    app.get(
-      `${P}/passkeys`,
-      wrap(() => {
-        const s = load();
-        return { enrolled: s.credentials.length, passkeys: publicList(s), granted: false };
-      }),
-    );
-    app.get(
-      `${P}/grant`,
-      wrap((req) => ({ granted: hasGrant(req, false) })),
-    );
-
-    // Enrollment: the first passkey needs nothing beyond the console login; later ones need a live grant.
-    app.post(
-      `${P}/passkeys/register/options`,
-      sameOrigin,
-      json,
-      wrap(async (req) => {
-        const s = load(),
-          first = s.credentials.length === 0;
-        if (!first && !hasGrant(req, false))
-          throw new PasskeyError(401, "Confirm with your passkey first.", { stepUp: true });
-        const options = await generateRegistrationOptions({
-          rpName: "Agent Console",
-          rpID: rpID(req),
-          userName: "owner",
-          userDisplayName: "Agent Console owner",
-          userID: isoBase64URL.toBuffer(s.userID),
-          attestationType: "none",
-          excludeCredentials: s.credentials.map((c) => ({
-            id: c.id,
-            transports: c.transports as any,
-          })),
-          authenticatorSelection: {
-            authenticatorAttachment: "platform",
-            residentKey: "preferred",
-            userVerification: "required",
-          },
-        });
-        (options as any).hints = ["client-device"];
-        return { cid: issue(req, "reg", options.challenge, first), options };
-      }),
-    );
-    app.post(
-      `${P}/passkeys/register/verify`,
-      sameOrigin,
-      json,
-      wrap(async (req, res) => {
-        const c = take(req, req.body?.cid, "reg");
-        const s = load();
-        if (c.first !== (s.credentials.length === 0))
-          throw new PasskeyError(400, "That request expired. Try again.");
-        let v: Awaited<ReturnType<typeof verifyRegistrationResponse>>;
-        try {
-          v = await verifyRegistrationResponse({
-            response: req.body?.response,
-            expectedChallenge: c.challenge,
-            expectedOrigin: origin(req),
-            expectedRPID: rpID(req),
-            requireUserVerification: true,
-          });
-        } catch {
-          fail(req, "registration");
-          throw new PasskeyError(400, "The passkey could not be verified.");
-        }
-        if (!v.verified) {
-          fail(req, "registration");
-          throw new PasskeyError(400, "The passkey could not be verified.");
-        }
-        // this device's own authenticator only: a thief could otherwise enrol their phone through the cross-device QR flow,
-        // which reports "cross-platform". Transports are not checked: synced platform passkeys often list "hybrid" too.
-        if (
-          req.body?.response?.authenticatorAttachment !== "platform" ||
-          !v.registrationInfo.userVerified
-        ) {
-          fail(req, "registration: not a local platform authenticator");
-          throw new PasskeyError(
-            400,
-            "Use this device's own fingerprint or face unlock, not another device or a security key.",
-          );
-        }
-        const cr = v.registrationInfo.credential;
-        const name =
-          String(req.body?.name || "")
-            .replace(/[\r\n\0]+/g, " ")
-            .trim()
-            .slice(0, 40) || `Passkey ${s.credentials.length + 1}`;
-        s.credentials.push({
-          id: cr.id,
-          publicKey: isoBase64URL.fromBuffer(cr.publicKey),
-          counter: cr.counter,
-          transports: cr.transports as string[] | undefined,
-          name,
-          createdAt: new Date().toISOString(),
-          lastUsedAt: null,
-        });
-        save(s);
-        d.audit("passkey-add", "-", name);
-        // the passkey just proved presence and verification, so it also opens a write grant
-        const t = crypto.randomBytes(24).toString("base64url");
-        grants.set(t, { expires: Date.now() + GRANT_TTL, session: session(req) });
-        res.append("Set-Cookie", cookieHeader(t, GRANT_TTL / 1000));
-        return { ok: true, passkeys: publicList(s) };
-      }),
-    );
-    app.delete(
-      `${P}/passkeys/:id`,
-      sameOrigin,
-      requireGrant(true),
-      wrap((req) => {
-        const s = load(),
-          n = s.credentials.length;
-        const gone = s.credentials.find((c) => c.id === req.params.id);
-        s.credentials = s.credentials.filter((c) => c.id !== req.params.id);
-        if (s.credentials.length === n) throw new PasskeyError(404, "No such passkey.");
-        save(s);
-        d.audit("passkey-remove", "-", gone!.name);
-        return { ok: true, passkeys: publicList(s) };
-      }),
-    );
-
-    // Step-up: assertion with required user verification, then a grant cookie.
-    app.post(
-      `${P}/stepup/options`,
-      sameOrigin,
-      wrap(async (req) => {
-        const s = load();
-        if (!s.credentials.length)
-          throw new PasskeyError(409, "No passkey is set up yet.", { setup: true });
-        const options = await generateAuthenticationOptions({
-          rpID: rpID(req),
-          userVerification: "required",
-          allowCredentials: s.credentials.map((c) => ({
-            id: c.id,
-            transports: c.transports as any,
-          })),
-        });
-        return { cid: issue(req, "auth", options.challenge), options };
-      }),
-    );
-    app.post(
-      `${P}/stepup/verify`,
-      sameOrigin,
-      json,
-      wrap(async (req, res) => {
-        const c = take(req, req.body?.cid, "auth");
-        const s = load();
-        const cred = s.credentials.find((x) => x.id === req.body?.response?.id);
-        if (!cred) {
-          fail(req, "assertion: unknown credential");
-          throw new PasskeyError(401, "That passkey is not registered.");
-        }
-        let v: Awaited<ReturnType<typeof verifyAuthenticationResponse>>;
-        try {
-          v = await verifyAuthenticationResponse({
-            response: req.body.response,
-            expectedChallenge: c.challenge,
-            expectedOrigin: origin(req),
-            expectedRPID: rpID(req),
-            requireUserVerification: true,
-            credential: {
-              id: cred.id,
-              publicKey: isoBase64URL.toBuffer(cred.publicKey),
-              counter: cred.counter,
-              transports: cred.transports as any,
-            },
-          });
-        } catch {
-          fail(req, "assertion");
-          throw new PasskeyError(401, "The passkey could not be verified.");
-        }
-        if (!v.verified) {
-          fail(req, "assertion");
-          throw new PasskeyError(401, "The passkey could not be verified.");
-        }
-        cred.counter = v.authenticationInfo.newCounter;
-        cred.lastUsedAt = new Date().toISOString();
-        save(s);
-        const t = crypto.randomBytes(24).toString("base64url");
-        grants.set(t, { expires: Date.now() + GRANT_TTL, session: session(req) });
-        res.append("Set-Cookie", cookieHeader(t, GRANT_TTL / 1000));
-        d.audit("stepup", "-", cred.name);
-        return { ok: true, expiresIn: GRANT_TTL / 1000 };
-      }),
+    fail(ctx, req, "registration: not a local platform authenticator");
+    throw new PasskeyError(
+      400,
+      "Use this device's own fingerprint or face unlock, not another device or a security key.",
     );
   }
+  const registered = verification.registrationInfo.credential;
+  const name = passkeyName(req, store);
+  store.credentials.push({
+    id: registered.id,
+    publicKey: isoBase64URL.fromBuffer(registered.publicKey),
+    counter: registered.counter,
+    transports: registered.transports as string[] | undefined,
+    name,
+    createdAt: new Date().toISOString(),
+    lastUsedAt: null,
+  });
+  saveStore(ctx, store);
+  ctx.deps.audit("passkey-add", "-", name);
+  // the passkey just proved presence and verification, so it also opens a write grant
+  openGrant(ctx, req, res);
+  return { ok: true, passkeys: publicList(store) };
+}
+
+function removePasskey(ctx: Context, req: express.Request) {
+  const store = loadStore(ctx),
+    count = store.credentials.length;
+  const gone = store.credentials.find((cred) => cred.id === req.params.id);
+  store.credentials = store.credentials.filter((cred) => cred.id !== req.params.id);
+  if (store.credentials.length === count) throw new PasskeyError(404, "No such passkey.");
+  saveStore(ctx, store);
+  ctx.deps.audit("passkey-remove", "-", gone!.name);
+  return { ok: true, passkeys: publicList(store) };
+}
+
+/* ---------- step-up: assertion with required user verification, then a grant cookie ---------- */
+async function stepupOptions(ctx: Context, req: express.Request) {
+  const store = loadStore(ctx);
+  if (!store.credentials.length)
+    throw new PasskeyError(409, "No passkey is set up yet.", { setup: true });
+  const options = await generateAuthenticationOptions({
+    rpID: rpIdOf(ctx, req),
+    userVerification: "required",
+    allowCredentials: store.credentials.map((cred) => ({
+      id: cred.id,
+      transports: cred.transports as any,
+    })),
+  });
+  return { cid: issue(ctx, req, "auth", options.challenge), options };
+}
+
+async function verifyAssertion(
+  ctx: Context,
+  req: express.Request,
+  challenge: Challenge,
+  cred: Cred,
+) {
+  let verification: Awaited<ReturnType<typeof verifyAuthenticationResponse>>;
+  try {
+    verification = await verifyAuthenticationResponse({
+      response: req.body.response,
+      expectedChallenge: challenge.challenge,
+      expectedOrigin: originsOf(ctx, req),
+      expectedRPID: rpIdOf(ctx, req),
+      requireUserVerification: true,
+      credential: {
+        id: cred.id,
+        publicKey: isoBase64URL.toBuffer(cred.publicKey),
+        counter: cred.counter,
+        transports: cred.transports as any,
+      },
+    });
+  } catch {
+    fail(ctx, req, "assertion");
+    throw new PasskeyError(401, "The passkey could not be verified.");
+  }
+  if (!verification.verified) {
+    fail(ctx, req, "assertion");
+    throw new PasskeyError(401, "The passkey could not be verified.");
+  }
+  return verification;
+}
+
+async function stepupVerify(ctx: Context, req: express.Request, res: express.Response) {
+  const challenge = take(ctx, req, req.body?.cid, "auth");
+  const store = loadStore(ctx);
+  const cred = store.credentials.find((item) => item.id === req.body?.response?.id);
+  if (!cred) {
+    fail(ctx, req, "assertion: unknown credential");
+    throw new PasskeyError(401, "That passkey is not registered.");
+  }
+  const verification = await verifyAssertion(ctx, req, challenge, cred);
+  cred.counter = verification.authenticationInfo.newCounter;
+  cred.lastUsedAt = new Date().toISOString();
+  saveStore(ctx, store);
+  openGrant(ctx, req, res);
+  ctx.deps.audit("stepup", "-", cred.name);
+  return { ok: true, expiresIn: GRANT_TTL / 1000 };
+}
+
+function mountPasskeys(
+  ctx: Context,
+  app: express.Express,
+  sameOrigin: express.RequestHandler,
+  json: express.RequestHandler,
+) {
+  const PREFIX = "/api/vault";
+  app.get(
+    `${PREFIX}/passkeys`,
+    wrap(() => {
+      const store = loadStore(ctx);
+      return { enrolled: store.credentials.length, passkeys: publicList(store), granted: false };
+    }),
+  );
+  app.get(
+    `${PREFIX}/grant`,
+    wrap((req) => ({ granted: hasGrant(ctx, req, false) })),
+  );
+  app.post(
+    `${PREFIX}/passkeys/register/options`,
+    sameOrigin,
+    json,
+    wrap((req) => registerOptions(ctx, req)),
+  );
+  app.post(
+    `${PREFIX}/passkeys/register/verify`,
+    sameOrigin,
+    json,
+    wrap((req, res) => registerVerify(ctx, req, res)),
+  );
+  app.delete(
+    `${PREFIX}/passkeys/:id`,
+    sameOrigin,
+    requireGrant(ctx, true),
+    wrap((req) => removePasskey(ctx, req)),
+  );
+  app.post(
+    `${PREFIX}/stepup/options`,
+    sameOrigin,
+    wrap((req) => stepupOptions(ctx, req)),
+  );
+  app.post(
+    `${PREFIX}/stepup/verify`,
+    sameOrigin,
+    json,
+    wrap((req, res) => stepupVerify(ctx, req, res)),
+  );
+}
+
+export function createPasskeys(deps: Deps) {
+  const ctx: Context = { deps, challenges: new Map(), grants: new Map(), lastAlert: 0 };
   return {
-    mount,
-    requireGrant,
-    granted: (req: express.Request) => hasGrant(req, false),
+    mount: (
+      app: express.Express,
+      sameOrigin: express.RequestHandler,
+      json: express.RequestHandler,
+    ) => mountPasskeys(ctx, app, sameOrigin, json),
+    requireGrant: (consume: boolean) => requireGrant(ctx, consume),
+    granted: (req: express.Request) => hasGrant(ctx, req, false),
     expireGrants: () => {
-      for (const g of grants.values()) g.expires = 0;
+      for (const grant of ctx.grants.values()) grant.expires = 0;
     },
     resetAlertLimit: () => {
-      lastAlert = 0;
+      ctx.lastAlert = 0;
     },
   };
 }

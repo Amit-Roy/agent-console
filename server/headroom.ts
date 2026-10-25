@@ -185,6 +185,20 @@ function schedule(epoch: number) {
   timer.unref();
 }
 
+async function launchSequence(epoch: number) {
+  await stopping;
+  if (!current(epoch)) return;
+  await check(epoch);
+  const deadline = Date.now() + 10_000;
+  while (current(epoch) && !healthy && child && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    if (!current(epoch)) break;
+    const responding = await live();
+    if (current(epoch)) healthy = responding;
+  }
+  schedule(epoch);
+}
+
 export const headroom = {
   async start() {
     if (!enabled()) {
@@ -197,19 +211,7 @@ export const headroom = {
     if (active) return;
     active = true;
     const epoch = ++generation;
-    const pending = (async () => {
-      await stopping;
-      if (!current(epoch)) return;
-      await check(epoch);
-      const deadline = Date.now() + 10_000;
-      while (current(epoch) && !healthy && child && Date.now() < deadline) {
-        await new Promise((resolve) => setTimeout(resolve, 200));
-        if (!current(epoch)) break;
-        const responding = await live();
-        if (current(epoch)) healthy = responding;
-      }
-      schedule(epoch);
-    })();
+    const pending = launchSequence(epoch);
     starting = pending;
     try {
       await pending;

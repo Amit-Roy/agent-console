@@ -79,33 +79,63 @@ const tail = (p: string, n = 2) => p.split("/").filter(Boolean).slice(-n).join("
 
 /* Human label from argv: interpreters show the script they run, everything else its executable,
    plus the first plain word after it (a subcommand such as "proxy" or "agent"). */
-export function procLabel(argv: string[], comm: string): string {
-  if (!argv.length) return comm;
-  let i = 0;
-  let head = path.basename(argv[0]);
-  if (INTERPRETERS.test(head)) {
-    for (let j = 1; j < argv.length; j++) {
-      const a = argv[j];
-      if (a === "-m" || a === "-c" || a === "-e") {
-        if (a === "-m" && argv[j + 1]) {
-          head = argv[j + 1];
-          i = j + 1;
-        }
-        break;
-      }
-      if (a.startsWith("-")) continue;
-      head = a.includes("/") ? tail(a, a.startsWith("/") ? 1 : 2) : a;
-      i = j;
+function interpreterTarget(argv: string[]): { head: string; index: number } {
+  for (let pos = 1; pos < argv.length; pos++) {
+    const arg = argv[pos];
+    if (arg === "-m" || arg === "-c" || arg === "-e") {
+      if (arg === "-m" && argv[pos + 1]) return { head: argv[pos + 1], index: pos + 1 };
       break;
     }
+    if (arg.startsWith("-")) continue;
+    return { head: arg.includes("/") ? tail(arg, arg.startsWith("/") ? 1 : 2) : arg, index: pos };
   }
-  const next = argv[i + 1];
+  return { head: path.basename(argv[0]), index: 0 };
+}
+
+export function procLabel(argv: string[], comm: string): string {
+  if (!argv.length) return comm;
+  const target = INTERPRETERS.test(path.basename(argv[0]))
+    ? interpreterTarget(argv)
+    : { head: path.basename(argv[0]), index: 0 };
+  const next = argv[target.index + 1];
   const sub = next && /^[a-z][\w:-]{1,20}$/i.test(next) ? " " + next : "";
-  return (head + sub).slice(0, 48);
+  return (target.head + sub).slice(0, 48);
 }
 
 /* uid, argv and cwd never change for a live process, so they are read once per pid+starttime. */
 const slow = new Map<string, { uid: number; cmd: string; label: string; cwd: string }>();
+
+function readUid(dir: string): number {
+  try {
+    const match = /^Uid:\s+(\d+)/m.exec(fs.readFileSync(path.join(dir, "status"), "utf8"));
+    if (match) return Number(match[1]);
+  } catch {}
+  return 0;
+}
+
+function readArgv(dir: string): string[] {
+  try {
+    return fs.readFileSync(path.join(dir, "cmdline"), "utf8").split("\0").filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function readCwd(dir: string): string {
+  try {
+    return tildify(fs.readlinkSync(path.join(dir, "cwd")));
+  } catch {
+    return "";
+  }
+}
+
+function readSlowInfo(dir: string, name: string) {
+  const uid = readUid(dir);
+  const argv = readArgv(dir);
+  const cwd = readCwd(dir);
+  const cmd = argv.join(" ").replace(/\s+/g, " ").trim().slice(0, 4000);
+  return { uid, cmd: cmd || `(${name})`, label: procLabel(argv, name), cwd };
+}
 
 function readProcStat(pid: string, memTotal: number): Proc | null {
   const dir = path.join(PROC, pid);
@@ -124,21 +154,7 @@ function readProcStat(pid: string, memTotal: number): Proc | null {
     const key = `${pid}:${starttime}`;
     let info = slow.get(key);
     if (!info) {
-      let uid = 0;
-      try {
-        const m = /^Uid:\s+(\d+)/m.exec(fs.readFileSync(path.join(dir, "status"), "utf8"));
-        if (m) uid = Number(m[1]);
-      } catch {}
-      let argv: string[] = [];
-      try {
-        argv = fs.readFileSync(path.join(dir, "cmdline"), "utf8").split("\0").filter(Boolean);
-      } catch {}
-      let cwd = "";
-      try {
-        cwd = tildify(fs.readlinkSync(path.join(dir, "cwd")));
-      } catch {}
-      const cmd = argv.join(" ").replace(/\s+/g, " ").trim().slice(0, 4000);
-      info = { uid, cmd: cmd || `(${name})`, label: procLabel(argv, name), cwd };
+      info = readSlowInfo(dir, name);
       slow.set(key, info);
     }
     return {
@@ -483,6 +499,104 @@ async function portList(): Promise<Reply> {
   }
 }
 
+function readProcStatus(pid: number): Record<string, string> {
+  const status: Record<string, string> = {};
+  try {
+    for (const line of fs
+      .readFileSync(path.join(PROC, String(pid), "status"), "utf8")
+      .split("\n")) {
+      const match = /^([A-Z]+):\s+(.*)$/.exec(line);
+      if (match) status[match[1]] = match[2];
+    }
+  } catch {}
+  return status;
+}
+
+type ChildProc = { pid: number; name: string; cmd: string };
+
+function childIfParent(entryName: string, childPid: number, parentPid: number): ChildProc | null {
+  try {
+    const statLine = fs.readFileSync(path.join(PROC, entryName, "stat"), "utf8");
+    const end = statLine.lastIndexOf(")");
+    const rest = statLine
+      .slice(end + 2)
+      .trim()
+      .split(/\s+/);
+    if (Number(rest[1]) !== parentPid) return null;
+    const childName = statLine.slice(statLine.indexOf("(") + 1, end).replace(/\s+/g, " ");
+    let childCmd = "";
+    try {
+      childCmd = fs
+        .readFileSync(path.join(PROC, entryName, "cmdline"), "utf8")
+        .replace(/\0/g, " ")
+        .trim();
+    } catch {}
+    return {
+      pid: childPid,
+      name: procLabel(childCmd.split(" ").filter(Boolean), childName || `pid ${childPid}`),
+      cmd: (childCmd || `(${childName})`).slice(0, 400),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function listChildren(pid: number): ChildProc[] {
+  const children: ChildProc[] = [];
+  try {
+    for (const entry of fs.readdirSync(PROC, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const childPid = Number(entry.name);
+      if (!Number.isFinite(childPid) || childPid === pid) continue;
+      const child = childIfParent(entry.name, childPid, pid);
+      if (child) children.push(child);
+    }
+  } catch {}
+  return children;
+}
+
+function socketInodes(pid: number): Set<number> {
+  const inodes = new Set<number>();
+  for (const fdName of fs.readdirSync(path.join(PROC, String(pid), "fd"))) {
+    let target = "";
+    try {
+      target = fs.readlinkSync(path.join(PROC, String(pid), "fd", fdName));
+    } catch {
+      continue;
+    }
+    const match = /^socket:\[(\d+)\]$/.exec(target);
+    if (match) inodes.add(Number(match[1]));
+  }
+  return inodes;
+}
+
+function listeningPorts(proto: string, inodes: Set<number>): number[] {
+  const found: number[] = [];
+  try {
+    const text = fs.readFileSync(path.join(PROC, `net/${proto}`), "utf8");
+    for (const line of text.trim().split("\n").slice(1)) {
+      const fields = line.trim().split(/\s+/);
+      if (fields[3] !== "0A") continue;
+      const inode = Number(fields[9]) || 0;
+      if (!inode || !inodes.has(inode)) continue;
+      const port = Number.parseInt(fields[1].split(":")[1] ?? "", 16);
+      if (Number.isFinite(port)) found.push(port);
+    }
+  } catch {}
+  return found;
+}
+
+function processPorts(pid: number): number[] {
+  const ports: number[] = [];
+  try {
+    const inodes = socketInodes(pid);
+    if (inodes.size) {
+      for (const proto of ["tcp", "tcp6"]) ports.push(...listeningPorts(proto, inodes));
+    }
+  } catch {}
+  return ports;
+}
+
 function processDetail(pid: number): Reply {
   const p = readProcStat(String(pid), 0);
   if (!p) return { status: 404, body: { error: "Process not found." } };
@@ -497,77 +611,9 @@ function processDetail(pid: number): Reply {
   const h = Math.floor(upSec / 3600),
     min = Math.floor((upSec % 3600) / 60),
     s = Math.floor(upSec % 60);
-  const status: Record<string, string> = {};
-  try {
-    for (const line of fs
-      .readFileSync(path.join(PROC, String(pid), "status"), "utf8")
-      .split("\n")) {
-      const m = /^([A-Z]+):\s+(.*)$/.exec(line);
-      if (m) status[m[1]] = m[2];
-    }
-  } catch {}
-  const children: { pid: number; name: string; cmd: string }[] = [];
-  try {
-    for (const entry of fs.readdirSync(PROC, { withFileTypes: true })) {
-      if (!entry.isDirectory()) continue;
-      const cpid = Number(entry.name);
-      if (!Number.isFinite(cpid) || cpid === pid) continue;
-      try {
-        const cl = fs.readFileSync(path.join(PROC, entry.name, "stat"), "utf8");
-        const end = cl.lastIndexOf(")");
-        const rest = cl
-          .slice(end + 2)
-          .trim()
-          .split(/\s+/);
-        if (Number(rest[1]) === pid) {
-          const cname = cl.slice(cl.indexOf("(") + 1, end).replace(/\s+/g, " ");
-          let ccmd = "";
-          try {
-            ccmd = fs
-              .readFileSync(path.join(PROC, entry.name, "cmdline"), "utf8")
-              .replace(/\0/g, " ")
-              .trim();
-          } catch {}
-          children.push({
-            pid: cpid,
-            name: procLabel(ccmd.split(" ").filter(Boolean), cname || `pid ${cpid}`),
-            cmd: (ccmd || `(${cname})`).slice(0, 400),
-          });
-        }
-      } catch {}
-    }
-  } catch {}
-  const ports: number[] = [];
-  try {
-    const fds = fs.readdirSync(path.join(PROC, String(pid), "fd"));
-    const inodes = new Set<number>();
-    for (const fd of fds) {
-      let target = "";
-      try {
-        target = fs.readlinkSync(path.join(PROC, String(pid), "fd", fd));
-      } catch {
-        continue;
-      }
-      const m = /^socket:\[(\d+)\]$/.exec(target);
-      if (m) inodes.add(Number(m[1]));
-    }
-    if (inodes.size) {
-      for (const proto of ["tcp", "tcp6"]) {
-        try {
-          const text = fs.readFileSync(path.join(PROC, `net/${proto}`), "utf8");
-          for (const line of text.trim().split("\n").slice(1)) {
-            const f = line.trim().split(/\s+/);
-            if (f[3] !== "0A") continue;
-            const inode = Number(f[9]) || 0;
-            if (inode && inodes.has(inode)) {
-              const port = Number.parseInt(f[1].split(":")[1] ?? "", 16);
-              if (Number.isFinite(port)) ports.push(port);
-            }
-          }
-        } catch {}
-      }
-    }
-  } catch {}
+  const status = readProcStatus(pid);
+  const children = listChildren(pid);
+  const ports = processPorts(pid);
   return {
     status: 200,
     body: {
