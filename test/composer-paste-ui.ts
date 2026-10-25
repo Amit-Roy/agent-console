@@ -188,7 +188,10 @@ async function improveCases(page: Page) {
   assert.equal((await requote).status(), 200, "Check re-quotes the edited text");
   await page.waitForFunction(() => /P50/.test(document.getElementById("pi-after")!.innerText));
   assert.equal(await page.locator("#pi-chips button").count(), 0, "chips gone");
-  assert.match(await page.locator("#pi-diff").innerText(), /^(Change: P50 .* tokens|Same work, clearer wording)/);
+  assert.match(
+    await page.locator("#pi-diff").innerText(),
+    /^(Change: P50 .* tokens|Same work, clearer wording)/,
+  );
 
   await page.locator("#pi-use").click();
   await page.locator("#prompt-improve").waitFor({ state: "hidden" });
