@@ -89,4 +89,6 @@ for (const [name, parts] of Object.entries(nodes))
 fs.mkdirSync(out("vendor/lucide"), { recursive: true });
 fs.writeFileSync(out("vendor/lucide/icons.json"), JSON.stringify(icons));
 copy(nm("lucide-static/LICENSE"), out("vendor/lucide/LICENSE.txt"));
-console.log("vendored fonts + highlight.js + chart.js + cytoscape + libavoid + lucide into public/");
+console.log(
+  "vendored fonts + highlight.js + chart.js + cytoscape + libavoid + lucide into public/",
+);

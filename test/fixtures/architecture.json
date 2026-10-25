@@ -1,441 +1,441 @@
 {
- "title": "Brain PR evidence",
- "subtitle": "Agent to verified pull request",
- "direction": "row",
- "items": [
-  {
-   "group": "Agent",
-   "border": "solid",
-   "color": "indigo",
-   "icon": "user",
-   "items": [
+  "title": "Brain PR evidence",
+  "subtitle": "Agent to verified pull request",
+  "direction": "row",
+  "items": [
     {
-     "id": "agent",
-     "label": "Agent",
-     "tech": "Claude / Codex / Pi",
-     "desc": "Writes the PR spec",
-     "icon": "bot",
-     "color": "indigo"
+      "group": "Agent",
+      "border": "solid",
+      "color": "indigo",
+      "icon": "user",
+      "items": [
+        {
+          "id": "agent",
+          "label": "Agent",
+          "tech": "Claude / Codex / Pi",
+          "desc": "Writes the PR spec",
+          "icon": "bot",
+          "color": "indigo"
+        },
+        {
+          "id": "prmd",
+          "label": "pr.md + ab.json",
+          "tech": "title, summary, evidence, ab",
+          "desc": "Four authored fields",
+          "icon": "file-text",
+          "color": "indigo"
+        }
+      ]
     },
     {
-     "id": "prmd",
-     "label": "pr.md + ab.json",
-     "tech": "title, summary, evidence, ab",
-     "desc": "Four authored fields",
-     "icon": "file-text",
-     "color": "indigo"
+      "group": "pr-evidence CLI",
+      "border": "solid",
+      "color": "blue",
+      "icon": "terminal-square",
+      "items": [
+        {
+          "id": "cli",
+          "label": "create",
+          "tech": "pr-evidence create [--dry-run]",
+          "desc": "Two-line output",
+          "icon": "zap",
+          "color": "blue"
+        },
+        {
+          "id": "archdiff",
+          "label": "Architecture diff",
+          "tech": "tools/pr-evidence/arch_diff.py",
+          "desc": "docs/architecture.json base vs head",
+          "icon": "git-compare",
+          "color": "purple"
+        },
+        {
+          "id": "hasher",
+          "label": "Section hasher",
+          "tech": "tools/pr-evidence/body_hash.py",
+          "desc": "Input hash == posted hash",
+          "icon": "hash",
+          "color": "teal"
+        },
+        {
+          "id": "poster",
+          "label": "PR poster",
+          "tech": "tools/pr-evidence/pr_post.py",
+          "desc": "Guards, gh create/edit",
+          "icon": "send",
+          "color": "teal"
+        }
+      ],
+      "sub": "bin/pr-evidence"
+    },
+    {
+      "group": "Helpers",
+      "border": "dashed",
+      "color": "slate",
+      "icon": "wrench",
+      "items": [
+        {
+          "id": "render",
+          "label": "Renderer",
+          "tech": "bin/pr-architecture",
+          "desc": "Diagram PNGs + comparison",
+          "icon": "network",
+          "color": "slate"
+        },
+        {
+          "id": "preview",
+          "label": "Preview",
+          "tech": "preview.mjs",
+          "desc": "Landscape capture",
+          "icon": "monitor",
+          "color": "slate"
+        },
+        {
+          "id": "guard",
+          "label": "PR guards",
+          "tech": "pr-evidence-guard + task-issue-guard + code-quality-guard",
+          "desc": "Validate body and issue; shell case-gated per tool call",
+          "icon": "shield-check",
+          "color": "teal"
+        },
+        {
+          "id": "hookgate",
+          "label": "Hook gate",
+          "tech": "settings.json / hooks.json case prefilter",
+          "desc": "Runs guard only on matching input",
+          "icon": "filter",
+          "color": "teal"
+        },
+        {
+          "id": "ship",
+          "label": "ship",
+          "tech": "pr-ship [PR.md | N]",
+          "desc": "Wait green, merge, deploy",
+          "icon": "rocket",
+          "color": "blue"
+        }
+      ]
+    },
+    {
+      "group": "GitHub",
+      "border": "dashed",
+      "color": "slate",
+      "icon": "cloud",
+      "items": [
+        {
+          "id": "github",
+          "label": "Pull request",
+          "tech": "gh pr create/edit --attach",
+          "desc": "Body + attached images",
+          "icon": "git-pull-request",
+          "color": "slate"
+        }
+      ]
+    },
+    {
+      "group": "Tool discovery",
+      "border": "solid",
+      "color": "cyan",
+      "icon": "search",
+      "items": [
+        {
+          "id": "manifest",
+          "label": "tools.json",
+          "tech": "tools.json",
+          "desc": "Agent-facing CLIs: name, path, usage, tags",
+          "icon": "file-json",
+          "color": "cyan"
+        },
+        {
+          "id": "lint",
+          "label": "Manifest lint",
+          "tech": "test_tools_manifest.py",
+          "desc": "Every bin/ executable listed or internal",
+          "icon": "shield-check",
+          "color": "orange"
+        }
+      ]
+    },
+    {
+      "group": "Orchestrator tooling",
+      "border": "solid",
+      "color": "orange",
+      "icon": "git-branch",
+      "sub": "bin/agent-wt, bin/brief-check",
+      "items": [
+        {
+          "id": "agentwt",
+          "label": "agent-wt",
+          "tech": "bin/agent-wt new|rm|ls|prune",
+          "desc": "Fresh-base worktree; refuses unpushed or dirty removal",
+          "icon": "git-branch",
+          "color": "orange"
+        },
+        {
+          "id": "briefcheck",
+          "label": "brief-check",
+          "tech": "bin/brief-check [FILE]",
+          "desc": "Validates subagent brief fields, no model",
+          "icon": "clipboard-check",
+          "color": "orange"
+        }
+      ]
+    },
+    {
+      "group": "agent-console",
+      "sub": "agent-console#264",
+      "border": "dashed",
+      "color": "indigo",
+      "icon": "server",
+      "items": [
+        {
+          "id": "clisearch",
+          "label": "cli_search",
+          "tech": "server/cli-search.ts",
+          "desc": "BM25 MCP tool over manifests",
+          "icon": "search",
+          "color": "teal"
+        },
+        {
+          "id": "console",
+          "label": "Deploy restart",
+          "tech": "agent-console restart-when-idle",
+          "desc": "After main tree pull",
+          "icon": "server",
+          "color": "slate"
+        }
+      ]
+    },
+    {
+      "group": "Brain memory",
+      "border": "solid",
+      "color": "purple",
+      "icon": "brain",
+      "sub": "bin/brain",
+      "items": [
+        {
+          "id": "idxtop",
+          "label": "Top index",
+          "tech": "wiki/index.md (1.7 KB)",
+          "desc": "Injected every session: pins and 8 topic lines",
+          "icon": "book-open",
+          "color": "purple"
+        },
+        {
+          "id": "idxtopics",
+          "label": "Topic indexes",
+          "tech": "wiki/index-<topic>.md",
+          "desc": "Lean page lines, loaded on demand",
+          "icon": "files",
+          "color": "purple"
+        },
+        {
+          "id": "doctor",
+          "label": "brain-doctor",
+          "tech": "bin/brain-doctor",
+          "desc": "Haiku check per save",
+          "icon": "stethoscope",
+          "color": "teal"
+        },
+        {
+          "id": "brainsave",
+          "label": "brain save",
+          "tech": "bin/brain save PAGE --topic T|auto --desc D",
+          "desc": "Validate before write (nothing written on error), then index line, log, lint, doctor; exit 3 = doctor fixes",
+          "icon": "save",
+          "color": "purple"
+        },
+        {
+          "id": "brainread",
+          "label": "brain read",
+          "tech": "bin/brain read PAGE [HEADING]",
+          "desc": "Outline or named sections of a page",
+          "icon": "book-open-text",
+          "color": "purple"
+        }
+      ]
+    },
+    {
+      "group": "Measurement",
+      "border": "solid",
+      "color": "orange",
+      "icon": "gauge",
+      "items": [
+        {
+          "id": "abrun",
+          "label": "ab-run",
+          "tech": "bin/ab-run",
+          "desc": "Haiku/Sonnet A/B harness, frozen graders, tool-set gate",
+          "icon": "flask-conical",
+          "color": "orange"
+        },
+        {
+          "id": "ccshape",
+          "label": "cc-shape",
+          "tech": "bin/cc-shape",
+          "desc": "Request prefix composition and --diff",
+          "icon": "scan-search",
+          "color": "orange"
+        },
+        {
+          "id": "txattrib",
+          "label": "tx-attrib",
+          "tech": "bin/tx-attrib",
+          "desc": "Per-turn input token and cost attribution",
+          "icon": "calculator",
+          "color": "orange"
+        },
+        {
+          "id": "transcripts",
+          "label": "Claude transcripts",
+          "tech": "~/.claude/projects/*.jsonl via cc_transcript.py",
+          "desc": "Session records read by all three",
+          "icon": "file-json",
+          "color": "slate"
+        }
+      ]
     }
-   ]
-  },
-  {
-   "group": "pr-evidence CLI",
-   "border": "solid",
-   "color": "blue",
-   "icon": "terminal-square",
-   "items": [
+  ],
+  "edges": [
     {
-     "id": "cli",
-     "label": "create",
-     "tech": "pr-evidence create [--dry-run]",
-     "desc": "Two-line output",
-     "icon": "zap",
-     "color": "blue"
+      "from": "agent",
+      "to": "prmd",
+      "label": "writes"
     },
     {
-     "id": "archdiff",
-     "label": "Architecture diff",
-     "tech": "tools/pr-evidence/arch_diff.py",
-     "desc": "docs/architecture.json base vs head",
-     "icon": "git-compare",
-     "color": "purple"
+      "from": "prmd",
+      "to": "cli",
+      "label": "read"
     },
     {
-     "id": "hasher",
-     "label": "Section hasher",
-     "tech": "tools/pr-evidence/body_hash.py",
-     "desc": "Input hash == posted hash",
-     "icon": "hash",
-     "color": "teal"
+      "from": "cli",
+      "to": "archdiff",
+      "label": "specs"
     },
     {
-     "id": "poster",
-     "label": "PR poster",
-     "tech": "tools/pr-evidence/pr_post.py",
-     "desc": "Guards, gh create/edit",
-     "icon": "send",
-     "color": "teal"
+      "from": "archdiff",
+      "to": "render",
+      "label": "render"
+    },
+    {
+      "from": "cli",
+      "to": "preview",
+      "label": "capture"
+    },
+    {
+      "from": "cli",
+      "to": "poster",
+      "label": "publish"
+    },
+    {
+      "from": "poster",
+      "to": "guard",
+      "label": "check"
+    },
+    {
+      "from": "poster",
+      "to": "github",
+      "label": "post"
+    },
+    {
+      "from": "hasher",
+      "to": "github",
+      "label": "verify"
+    },
+    {
+      "from": "hookgate",
+      "to": "guard",
+      "label": "gates"
+    },
+    {
+      "from": "lint",
+      "to": "manifest",
+      "label": "checks"
+    },
+    {
+      "from": "manifest",
+      "to": "clisearch",
+      "label": "indexed by"
+    },
+    {
+      "from": "ship",
+      "to": "guard",
+      "label": "validate"
+    },
+    {
+      "from": "ship",
+      "to": "github",
+      "label": "poll + merge"
+    },
+    {
+      "from": "ship",
+      "to": "console",
+      "label": "deploy"
+    },
+    {
+      "from": "agent",
+      "to": "idxtop",
+      "label": "injected"
+    },
+    {
+      "from": "idxtop",
+      "to": "idxtopics",
+      "label": "opens"
+    },
+    {
+      "from": "doctor",
+      "to": "idxtopics",
+      "label": "reviews"
+    },
+    {
+      "from": "brainsave",
+      "to": "idxtopics",
+      "label": "upserts"
+    },
+    {
+      "from": "brainsave",
+      "to": "doctor",
+      "label": "runs"
+    },
+    {
+      "from": "brainread",
+      "to": "idxtopics",
+      "label": "opens pages from"
+    },
+    {
+      "from": "abrun",
+      "to": "ccshape",
+      "label": "gate"
+    },
+    {
+      "from": "abrun",
+      "to": "txattrib",
+      "label": "attrib"
+    },
+    {
+      "from": "ccshape",
+      "to": "transcripts",
+      "label": "reads"
+    },
+    {
+      "from": "txattrib",
+      "to": "transcripts",
+      "label": "reads"
+    },
+    {
+      "from": "abrun",
+      "to": "transcripts",
+      "label": "writes"
+    },
+    {
+      "from": "agent",
+      "to": "agentwt",
+      "label": "creates worktrees"
+    },
+    {
+      "from": "agent",
+      "to": "briefcheck",
+      "label": "validates briefs"
     }
-   ],
-   "sub": "bin/pr-evidence"
-  },
-  {
-   "group": "Helpers",
-   "border": "dashed",
-   "color": "slate",
-   "icon": "wrench",
-   "items": [
-    {
-     "id": "render",
-     "label": "Renderer",
-     "tech": "bin/pr-architecture",
-     "desc": "Diagram PNGs + comparison",
-     "icon": "network",
-     "color": "slate"
-    },
-    {
-     "id": "preview",
-     "label": "Preview",
-     "tech": "preview.mjs",
-     "desc": "Landscape capture",
-     "icon": "monitor",
-     "color": "slate"
-    },
-    {
-     "id": "guard",
-     "label": "PR guards",
-     "tech": "pr-evidence-guard + task-issue-guard + code-quality-guard",
-     "desc": "Validate body and issue; shell case-gated per tool call",
-     "icon": "shield-check",
-     "color": "teal"
-    },
-    {
-     "id": "hookgate",
-     "label": "Hook gate",
-     "tech": "settings.json / hooks.json case prefilter",
-     "desc": "Runs guard only on matching input",
-     "icon": "filter",
-     "color": "teal"
-    },
-    {
-     "id": "ship",
-     "label": "ship",
-     "tech": "pr-ship [PR.md | N]",
-     "desc": "Wait green, merge, deploy",
-     "icon": "rocket",
-     "color": "blue"
-    }
-   ]
-  },
-  {
-   "group": "GitHub",
-   "border": "dashed",
-   "color": "slate",
-   "icon": "cloud",
-   "items": [
-    {
-     "id": "github",
-     "label": "Pull request",
-     "tech": "gh pr create/edit --attach",
-     "desc": "Body + attached images",
-     "icon": "git-pull-request",
-     "color": "slate"
-    }
-   ]
-  },
-  {
-   "group": "Tool discovery",
-   "border": "solid",
-   "color": "cyan",
-   "icon": "search",
-   "items": [
-    {
-     "id": "manifest",
-     "label": "tools.json",
-     "tech": "tools.json",
-     "desc": "Agent-facing CLIs: name, path, usage, tags",
-     "icon": "file-json",
-     "color": "cyan"
-    },
-    {
-     "id": "lint",
-     "label": "Manifest lint",
-     "tech": "test_tools_manifest.py",
-     "desc": "Every bin/ executable listed or internal",
-     "icon": "shield-check",
-     "color": "orange"
-    }
-   ]
-  },
-  {
-   "group": "Orchestrator tooling",
-   "border": "solid",
-   "color": "orange",
-   "icon": "git-branch",
-   "sub": "bin/agent-wt, bin/brief-check",
-   "items": [
-    {
-     "id": "agentwt",
-     "label": "agent-wt",
-     "tech": "bin/agent-wt new|rm|ls|prune",
-     "desc": "Fresh-base worktree; refuses unpushed or dirty removal",
-     "icon": "git-branch",
-     "color": "orange"
-    },
-    {
-     "id": "briefcheck",
-     "label": "brief-check",
-     "tech": "bin/brief-check [FILE]",
-     "desc": "Validates subagent brief fields, no model",
-     "icon": "clipboard-check",
-     "color": "orange"
-    }
-   ]
-  },
-  {
-   "group": "agent-console",
-   "sub": "agent-console#264",
-   "border": "dashed",
-   "color": "indigo",
-   "icon": "server",
-   "items": [
-    {
-     "id": "clisearch",
-     "label": "cli_search",
-     "tech": "server/cli-search.ts",
-     "desc": "BM25 MCP tool over manifests",
-     "icon": "search",
-     "color": "teal"
-    },
-    {
-     "id": "console",
-     "label": "Deploy restart",
-     "tech": "agent-console restart-when-idle",
-     "desc": "After main tree pull",
-     "icon": "server",
-     "color": "slate"
-    }
-   ]
-  },
-  {
-   "group": "Brain memory",
-   "border": "solid",
-   "color": "purple",
-   "icon": "brain",
-   "sub": "bin/brain",
-   "items": [
-    {
-     "id": "idxtop",
-     "label": "Top index",
-     "tech": "wiki/index.md (1.7 KB)",
-     "desc": "Injected every session: pins and 8 topic lines",
-     "icon": "book-open",
-     "color": "purple"
-    },
-    {
-     "id": "idxtopics",
-     "label": "Topic indexes",
-     "tech": "wiki/index-<topic>.md",
-     "desc": "Lean page lines, loaded on demand",
-     "icon": "files",
-     "color": "purple"
-    },
-    {
-     "id": "doctor",
-     "label": "brain-doctor",
-     "tech": "bin/brain-doctor",
-     "desc": "Haiku check per save",
-     "icon": "stethoscope",
-     "color": "teal"
-    },
-    {
-     "id": "brainsave",
-     "label": "brain save",
-     "tech": "bin/brain save PAGE --topic T|auto --desc D",
-     "desc": "Validate before write (nothing written on error), then index line, log, lint, doctor; exit 3 = doctor fixes",
-     "icon": "save",
-     "color": "purple"
-    },
-    {
-     "id": "brainread",
-     "label": "brain read",
-     "tech": "bin/brain read PAGE [HEADING]",
-     "desc": "Outline or named sections of a page",
-     "icon": "book-open-text",
-     "color": "purple"
-    }
-   ]
-  },
-  {
-   "group": "Measurement",
-   "border": "solid",
-   "color": "orange",
-   "icon": "gauge",
-   "items": [
-    {
-     "id": "abrun",
-     "label": "ab-run",
-     "tech": "bin/ab-run",
-     "desc": "Haiku/Sonnet A/B harness, frozen graders, tool-set gate",
-     "icon": "flask-conical",
-     "color": "orange"
-    },
-    {
-     "id": "ccshape",
-     "label": "cc-shape",
-     "tech": "bin/cc-shape",
-     "desc": "Request prefix composition and --diff",
-     "icon": "scan-search",
-     "color": "orange"
-    },
-    {
-     "id": "txattrib",
-     "label": "tx-attrib",
-     "tech": "bin/tx-attrib",
-     "desc": "Per-turn input token and cost attribution",
-     "icon": "calculator",
-     "color": "orange"
-    },
-    {
-     "id": "transcripts",
-     "label": "Claude transcripts",
-     "tech": "~/.claude/projects/*.jsonl via cc_transcript.py",
-     "desc": "Session records read by all three",
-     "icon": "file-json",
-     "color": "slate"
-    }
-   ]
-  }
- ],
- "edges": [
-  {
-   "from": "agent",
-   "to": "prmd",
-   "label": "writes"
-  },
-  {
-   "from": "prmd",
-   "to": "cli",
-   "label": "read"
-  },
-  {
-   "from": "cli",
-   "to": "archdiff",
-   "label": "specs"
-  },
-  {
-   "from": "archdiff",
-   "to": "render",
-   "label": "render"
-  },
-  {
-   "from": "cli",
-   "to": "preview",
-   "label": "capture"
-  },
-  {
-   "from": "cli",
-   "to": "poster",
-   "label": "publish"
-  },
-  {
-   "from": "poster",
-   "to": "guard",
-   "label": "check"
-  },
-  {
-   "from": "poster",
-   "to": "github",
-   "label": "post"
-  },
-  {
-   "from": "hasher",
-   "to": "github",
-   "label": "verify"
-  },
-  {
-   "from": "hookgate",
-   "to": "guard",
-   "label": "gates"
-  },
-  {
-   "from": "lint",
-   "to": "manifest",
-   "label": "checks"
-  },
-  {
-   "from": "manifest",
-   "to": "clisearch",
-   "label": "indexed by"
-  },
-  {
-   "from": "ship",
-   "to": "guard",
-   "label": "validate"
-  },
-  {
-   "from": "ship",
-   "to": "github",
-   "label": "poll + merge"
-  },
-  {
-   "from": "ship",
-   "to": "console",
-   "label": "deploy"
-  },
-  {
-   "from": "agent",
-   "to": "idxtop",
-   "label": "injected"
-  },
-  {
-   "from": "idxtop",
-   "to": "idxtopics",
-   "label": "opens"
-  },
-  {
-   "from": "doctor",
-   "to": "idxtopics",
-   "label": "reviews"
-  },
-  {
-   "from": "brainsave",
-   "to": "idxtopics",
-   "label": "upserts"
-  },
-  {
-   "from": "brainsave",
-   "to": "doctor",
-   "label": "runs"
-  },
-  {
-   "from": "brainread",
-   "to": "idxtopics",
-   "label": "opens pages from"
-  },
-  {
-   "from": "abrun",
-   "to": "ccshape",
-   "label": "gate"
-  },
-  {
-   "from": "abrun",
-   "to": "txattrib",
-   "label": "attrib"
-  },
-  {
-   "from": "ccshape",
-   "to": "transcripts",
-   "label": "reads"
-  },
-  {
-   "from": "txattrib",
-   "to": "transcripts",
-   "label": "reads"
-  },
-  {
-   "from": "abrun",
-   "to": "transcripts",
-   "label": "writes"
-  },
-  {
-   "from": "agent",
-   "to": "agentwt",
-   "label": "creates worktrees"
-  },
-  {
-   "from": "agent",
-   "to": "briefcheck",
-   "label": "validates briefs"
-  }
- ]
+  ]
 }
