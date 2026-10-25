@@ -202,7 +202,7 @@
   },
   {
    "group": "Transcript maintenance",
-   "sub": "Server ownership and shared Python engine",
+   "sub": "Server ownership",
    "border": "solid",
    "color": "blue",
    "icon": "shield-check",
@@ -222,7 +222,16 @@
      "desc": "Compare snapshots; persist unchanged title and recent fields",
      "icon": "list",
      "color": "teal"
-    },
+    }
+   ]
+  },
+  {
+   "group": "Shared redaction engine",
+   "sub": "Python engine and search coordination",
+   "border": "solid",
+   "color": "teal",
+   "icon": "shield-check",
+   "items": [
     {
      "id": "red-engine",
      "label": "Credential matcher and writer",
@@ -232,20 +241,29 @@
      "color": "teal"
     },
     {
-     "id": "red-store",
-     "label": "Transcripts and SQLite",
-     "tech": "Canonical and native histories",
-     "desc": "Guarded range writes; logical FTS updates, checkpoint and audit",
-     "icon": "database",
-     "color": "slate"
-    },
-    {
      "id": "red-search",
      "label": "Search maintenance barrier",
      "tech": "session-search.ts",
      "desc": "Wait for refresh; block queries during cleanup; rebuild afterward",
      "icon": "search",
      "color": "orange"
+    }
+   ]
+  },
+  {
+   "group": "Transcript stores",
+   "sub": "Local session data",
+   "border": "solid",
+   "color": "slate",
+   "icon": "database",
+   "items": [
+    {
+     "id": "red-store",
+     "label": "Transcripts and SQLite",
+     "tech": "Canonical and native histories",
+     "desc": "Guarded range writes; logical FTS updates, checkpoint and audit",
+     "icon": "database",
+     "color": "slate"
     }
    ]
   }
