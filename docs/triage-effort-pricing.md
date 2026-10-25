@@ -12,7 +12,7 @@ Complete native records take precedence when they cover the linked session. Comp
 
 Only user sessions train the model. A native transcript with no Console thread is kept only when its origin is interactive (Claude `entrypoint` `cli`, Codex `originator` `codex-tui`; Pi has no origin field) and its working directory is not under `/tmp`, `~/scratch*` or `~/worktrees`. Console quota window openers (title `Window opener`, one-word probe) are excluded and unlinked, so their native transcripts fall to the same origin rule. The filter reads origin only, never outcome. The audit counts `exclusions.nonUserOrigin` and `quotaWindowOpener`. On 2026-10-25 this removed 306 probe rows (SDK smoke tests, A/B trials, `Reply with the single word: ok`) and left 307 sessions. Probes had taught the trees that a short request means a tiny session, so length dominated the quote.
 
-The private audit records discovered files, roots, children, duplicate identities, accounting coverage, excluded sessions, privacy refusals, feature failures, temporal purges, and final train/test counts. A session is an observed snapshot: resuming it can change its eventual total. Child usage without a reliable identity or counter is not invented.
+The private audit records discovered files, roots, children, duplicate identities, accounting coverage, excluded sessions, privacy refusals, feature failures, and final train/test counts. A session is an observed snapshot: resuming it can change its eventual total. Child usage without a reliable identity or counter is not invented.
 
 ## Learned equation
 
@@ -30,7 +30,7 @@ predicted total tokens = max(0, exp(z(x)) - 1)
 
 Training-only medians fill unknown feature values. Missingness has separate coefficients. Regularization uses strictly older completed groups. Increasing a known feature cannot reduce predicted usage. Raw token usage is the output target, never an input feature.
 
-Chronological out-of-fold residuals generate paired scenarios:
+Grouped out-of-fold residuals generate paired scenarios:
 
 ```text
 r_i = log1p(observed_total_tokens_i) - log1p(out_of_fold_prediction_i)
@@ -68,7 +68,7 @@ Every session scenario is capped at the largest total in the training split, rec
 
 This resembles an uncertainty reserve in pricing. It is not an options-market valuation. Initial messages cannot fully explain later scope changes, so whole-session usage can have substantial unexplained variance. Percentile names do not establish completion probabilities.
 
-Newest thread groups remain held out. Training outcomes must be available before a target request starts; forks and related sessions share groups. Validation reports total-token, generated-token, and input-token error against a median baseline, plus observed interval coverage. Counts are derived from the audited cohort, not fixed at four held-out cases.
+Held-out split: old and new sessions are one sample, never split by time. A thread group is held out when `int(sha256(groupId)[:8], 16) % 100 < 10`, so a group keeps its side as data grows and the champion stays scoreable on held-out rows. Fewer than 3 groups on either side falls back to the 10% (minimum 3) lowest-hash groups. There is no time purge (`groupedSplit: "sha256-10pct"`). Ridge alpha selection uses 5 grouped folds by `hash % 5`. Forks and related sessions share groups, so they never straddle the split. Validation reports total-token, generated-token, and input-token error against a median baseline, plus observed interval coverage. Counts are derived from the audited cohort, not fixed at four held-out cases.
 
 The [aggregate report](triage-effort-report.json) records the reviewed frozen snapshot below. The private live report can change after daily calibration. Source requests and session identities remain private. The model stays experimental unless its held-out evidence meets the stated validation checks. A complexity candidate that fails to beat the training-median baseline on held-out total-token error serves the historical-session distribution instead. Candidate metrics and coefficients remain visible. This fallback is not task-specific, and the data that selected it are not an independent test of that selection.
 
@@ -78,11 +78,11 @@ The frozen inventory contains 342 native transcript files: 177 roots and 165 chi
 
 Initial-request features were evaluated for 146 sessions. Twelve credential-suspect requests were not transmitted, and four requests lacked a valid model annotation. All 16 retain measured outcomes with unknown features. The fitter rejects none of the 162 complete outcomes. Sixty-three sessions have zero observed tool calls; six have explicitly measured zero usage.
 
-The chronological split has 120 training sessions, 34 held-out sessions in 32 groups, and eight sessions purged because their outcomes overlapped the test start. The former four-case holdout is superseded.
+The snapshot below used the earlier chronological split (120 training sessions, 34 held-out sessions in 32 groups, eight purged); that split is superseded by the randomized one. The former four-case holdout is superseded.
 
 The complexity candidate has total-token MAE 1,937,335,120, versus 6,997,939 for the training-median baseline. It fails the quality gate. The active estimator is the empirical historical-session baseline, with candidate coefficients and errors retained for inspection. It does not provide proven task-specific pricing.
 
-The active distribution's held-out P80 hit rate is 35.3%; P95 is 88.2%. These intervals under-cover. Session usage changed substantially across the chronological split; the quoted percentiles are historical scenarios, not 80% or 95% completion guarantees. The test selected the fallback and is not an independent test of that selection.
+The active distribution's held-out P80 hit rate is 35.3%; P95 is 88.2%. These intervals under-cover. Session usage changed substantially across the earlier chronological split; the quoted percentiles are historical scenarios, not 80% or 95% completion guarantees. The test selected the fallback and is not an independent test of that selection.
 
 ## Operation and reproduction
 
@@ -108,7 +108,7 @@ The refit on 122 training and 35 held-out sessions (33 thread groups) selected t
 
 Intervals still under-cover. Observed hit rates on the held-out block are 63% at P80 and 80% at P95. The newest sessions run longer than older ones, so older residuals understate them. Status stays `experimental`, and the comment says so. A prediction is still wide: residual P95 is about four log units. Treat P50 as a typical session and P95 as the budget to watch.
 
-Chronological rolling-origin checks on all 162 sessions agree with the held-out result: nonnegative shape features reduce log error from 4.18 to 3.50 against the running median.
+Earlier chronological rolling-origin checks on all 162 sessions agree with the held-out result: nonnegative shape features reduce log error from 4.18 to 3.50 against the running median.
 
 ## Snapshot: usage ceiling refit (2026-10-24)
 
@@ -122,7 +122,7 @@ The ridge equation prices an average session and then spreads residuals. That ca
 
 Independent heads can cross. They are rearranged into a monotone set before pricing, and every quantile is capped at the largest observed training total. The artifact stores the trees as flat node arrays (`f`, `t`, `l`, `r`, `v`), so the runtime walks them without Python. A fit fails if the exported arrays do not reproduce the fitted estimator to 1e-9.
 
-The comment reports the best guess as P50, then P75, P80, P95 and P99. Input, generated and cached channels keep the median observed share of the priced total, so a printed input plus output budget still matches the total. Holding out the newest 20% of thread groups gives pinball 0.365 with coverage 0.31 at P50, 0.88 at P80 and 0.96 at P95. P50 coverage below nominal is why the budget still uses P80 for complete requests and P95 for incomplete ones.
+The comment reports the best guess as P50, then P75, P80, P95 and P99. Input, generated and cached channels keep the median observed share of the priced total, so a printed input plus output budget still matches the total. Holding out the newest 20% of thread groups (earlier chronological split) gave pinball 0.365 with coverage 0.31 at P50, 0.88 at P80 and 0.96 at P95. P50 coverage below nominal is why the budget still uses P80 for complete requests and P95 for incomplete ones.
 
 The ridge equation stays in the artifact for structure pricing, cost-driver text and the legacy path. Artifacts without text features load unchanged and quote with the ridge equation.
 
@@ -130,7 +130,7 @@ The ridge equation stays in the artifact for structure pricing, cost-driver text
 
 The first depth-3 heads (leaf 20, L2 1.0, learning rate 0.05) moved noticeably when the newest dozen training rows changed. The heads are now `max_depth` 2, `min_samples_leaf` 80, `l2_regularization` 10, `learning_rate` 0.03 and `max_iter` 100, held in the single `TREE_PARAMS` constant of `scripts/triage-effort-fit.py`. On the real dataset this scored held-out mean pinball 0.461 against 0.479 for the installed champion. The fit pins `OMP_NUM_THREADS` to 1 before importing numpy and sklearn: these tiny trees take about 2 s single-threaded, but thread contention once stretched one fit to 2 min 47 s.
 
-With `--champion`, the fit stores `validation.quantileModel.champion.pairedDelta` = `{mean, lower90, upper90, resamples}`. It is the paired bootstrap (2000 resamples, fixed seed) of per-row mean pinball, challenger minus champion, on the shared held-out rows. Negative means the challenger is better. The fit also stores a report-only `validation.quantileModel.stability` = `{droppedNewest: 14, meanPinball, gap}`: the same heads refit without the 14 newest training rows and scored on the same held-out rows. The gap does not gate promotion.
+With `--champion`, the fit stores `validation.quantileModel.champion.pairedDelta` = `{mean, lower90, upper90, resamples}`. It is the paired bootstrap (2000 resamples, fixed seed) of per-row mean pinball, challenger minus champion, on the shared held-out rows. Negative means the challenger is better. The fit also stores a report-only `validation.quantileModel.stability` = `{droppedRows: 14, meanPinball, gap}`: the same heads refit without the 14 lowest-hash training rows and scored on the same held-out rows. The gap does not gate promotion.
 
 `promotionDecision` checks coverage against the champion. Without a scoreable champion or its coverage it uses the absolute bounds: P80 0.75-0.92, P95 at least 0.90. With champion coverage, a challenger outside those bounds still passes unless its distance from nominal (0.80, 0.95) exceeds the champion's by more than 2 standard errors, `sqrt(q(1-q)/n)` over the shared held-out rows. Reason like `p80 coverage 0.963 is above 0.92 and 0.036 further from 0.80 than champion (limit 0.077)`. Hard sanity bounds always apply: P80 0.60-0.98, P95 at least 0.80. The metrics also carry `championP80Coverage` and `championP95Coverage`. For pinball, when `pairedDelta` is present it rejects if `lower90 > 0` (challenger clearly worse, reason like `pinball worse: delta 0.07 [0.05,0.10]`) or if the challenger mean pinball is above 1.10 times the champion (hard cap). Without `pairedDelta` it keeps the older 1.02 ratio rule.
 
@@ -154,7 +154,7 @@ bin/effort-model data fetch
   next 2026-10-31 | toggles all on
   ```
 
-- `bench` scores `current` (the live artifact's recorded `parameters`, else the depth-3 legacy ones), `stable` (`TREE_PARAMS`) and, with `--external swe-chat`, `stable+swe-chat-prior` on the same frozen held-out block. The default dataset is the installed `triage-effort-training.json` beside the artifact. The prior pools the external rows at weight 0.2 after moving their median onto ours. External rows are train-only: never held out, never part of the `workloadCeiling`. Their request features come from `scripts/effort-data-features.ts` (the runtime `requestFeatures`), cached as `features.jsonl` beside `rows.jsonl`; `--external-rows PATH` overrides the default `~/.cache/agent-console/effort-data/swe-chat`. The gap is the mean over 6 rolling cut-points of the pinball change when the newest 14 training rows are dropped. It writes `summary.json` under `--out` (default `~/.cache/agent-console/effort-bench/<timestamp>/`). `stable` applies the fitter's out-of-fold conformal offsets (`conformal_offsets`), `stable+swe-chat-prior` computes its offsets from out-of-fold residuals on our training rows only (external rows join the fits, never the residuals), and `current` and `qrf` use none. Offsets are in `summary.json` per candidate. They are applied on the final split only: the rolling gap uses raw heads, because offsets would cost about 6x per cut-point. `qrf` is a bench-only quantile regression forest (`quantile-forest`, 300 trees) on the same features, split and log1p target; `min_samples_leaf` in {5, 10, 20} and `max_features` in {0.5, 1.0} are picked on the older 80% of the training rows and scored on the newest 20%. It reports `nodes n/a` and its pickled size in `kb`; there is no Node export. Every line ends with the serialized model size and fit time, and `--candidates a,b` runs a subset.
+- `bench` scores `current` (the live artifact's recorded `parameters`, else the depth-3 legacy ones), `stable` (`TREE_PARAMS`) and, with `--external swe-chat`, `stable+swe-chat-prior` on the same held-out block. The default dataset is the installed `triage-effort-training.json` beside the artifact. The prior pools the external rows at weight 0.2 after moving their median onto ours. External rows are train-only: never held out, never part of the `workloadCeiling`. Their request features come from `scripts/effort-data-features.ts` (the runtime `requestFeatures`), cached as `features.jsonl` beside `rows.jsonl`; `--external-rows PATH` overrides the default `~/.cache/agent-console/effort-data/swe-chat`. The gap is the mean over 6 rolling cut-points of the pinball change when the 14 lowest-hash training rows are dropped. It writes `summary.json` under `--out` (default `~/.cache/agent-console/effort-bench/<timestamp>/`). `stable` applies the fitter's out-of-fold conformal offsets (`conformal_offsets`), `stable+swe-chat-prior` computes its offsets from out-of-fold residuals on our training rows only (external rows join the fits, never the residuals), and `current` and `qrf` use none. Offsets are in `summary.json` per candidate. They are applied on the final split only: the rolling gap uses raw heads, because offsets would cost about 6x per cut-point. `qrf` is a bench-only quantile regression forest (`quantile-forest`, 300 trees) on the same features, split and log1p target; `min_samples_leaf` in {5, 10, 20} and `max_features` in {0.5, 1.0} are picked on the highest-hash 80% of the training rows and scored on the lowest-hash 20%. It reports `nodes n/a` and its pickled size in `kb`; there is no Node export. Every line ends with the serialized model size and fit time, and `--candidates a,b` runs a subset.
 
   ```
   stable pinball 0.463 cov 0.92/0.99 gap 0.013 nodes 2518 kb 99 fit 2.1s

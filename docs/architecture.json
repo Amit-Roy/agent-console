@@ -1,6 +1,6 @@
 {
-  "title": "Agent Console maintenance and integrations",
-  "subtitle": "Existing prompt workflows, CLI maintenance, and authenticated background MCP jobs",
+  "title": "Effort model: randomized held-out split",
+  "subtitle": "Hash-random 10% thread groups held out; grouped 5-fold; no time ordering",
   "items": [
     {
       "group": "Triage worker",
@@ -21,7 +21,7 @@
           "id": "fit",
           "label": "Quantile fitter",
           "tech": "triage-effort-fit.py",
-          "desc": "Depth 2, leaf 80; OOF conformal offsets per quantile; paired bootstrap",
+          "desc": "Depth 2, leaf 80; random 10% held-out by thread hash; grouped 5-fold",
           "icon": "trees",
           "color": "teal"
         },

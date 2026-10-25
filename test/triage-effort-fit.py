@@ -141,7 +141,7 @@ class EffortFitTests(unittest.TestCase):
         )
         self.assertEqual(
             audit["acceptedSamples"],
-            audit["trainingSamples"] + audit["heldoutSamples"] + audit["temporalPurgedSamples"],
+            audit["trainingSamples"] + audit["heldoutSamples"],
         )
         self.assertEqual(
             audit["trainingSamples"], audit["oofSamples"] + audit["trainingSamplesWithoutOof"]
@@ -167,8 +167,8 @@ class EffortFitTests(unittest.TestCase):
         self.assertEqual(artifact["cohortAudit"]["acceptedSamples"], 40)
         self.assertEqual(artifact["cohortAudit"]["rejectedSamples"], 0)
         self.assertEqual(artifact["cohortAudit"]["optionalAccountingMissing"]["toolCalls"], 40)
-        self.assertEqual(artifact["training"]["sampleCount"], 32)
-        self.assertEqual(artifact["validation"]["sampleCount"], 8)
+        self.assertEqual(artifact["training"]["sampleCount"], 34)
+        self.assertEqual(artifact["validation"]["sampleCount"], 6)
         self.assertEqual(artifact["validation"]["workloadMetric"], "totalTokens")
         self.assertEqual(artifact["estimator"], "complexity")
         self.assertIn("log1p(totalTokens)", report["formula"])
@@ -319,7 +319,7 @@ class EffortFitTests(unittest.TestCase):
         fixture = dataset()
         fixture["scope"] = "completed-session"
         rows, _ = fit.validate_dataset(fixture)
-        train, heldout, _ = fit.frozen_split(rows)
+        train, heldout, _ = fit.random_split(rows)
         totals = [s["outcomes"]["inputTokens"] + s["outcomes"]["outputTokens"] for s in train]
         baseline = fit.quantiles(totals)["p50"]
         holdout_ids = {s["sampleId"] for s in heldout}
@@ -336,14 +336,14 @@ class EffortFitTests(unittest.TestCase):
         self.assertTrue(artifact["validation"]["candidateHasLearnedComplexitySignal"])
         self.assertFalse(artifact["validation"]["hasLearnedComplexitySignal"])
         self.assertEqual(artifact["validation"]["work"], artifact["candidateValidation"]["work"])
-        self.assertEqual(artifact["training"]["scenarioCount"], 32)
-        self.assertEqual(artifact["training"]["oofSampleCount"], 28)
+        self.assertEqual(artifact["training"]["scenarioCount"], 34)
+        self.assertEqual(artifact["training"]["oofSampleCount"], 34)
         self.assertEqual(artifact["training"]["calibration"], "empirical-training-distribution")
         self.assertEqual(
             {row["sampleId"] for row in artifact["scenarios"]},
             set(artifact["training"]["sampleIds"]),
         )
-        self.assertEqual(len(artifact["candidateScenarios"]), 28)
+        self.assertEqual(len(artifact["candidateScenarios"]), 34)
         self.assertAlmostEqual(
             artifact["validation"]["activeWork"]["mae"],
             artifact["validation"]["baselineWork"]["mae"],
@@ -376,7 +376,7 @@ class EffortFitTests(unittest.TestCase):
         first, _ = fit.build_artifact(fixture)
         self.assertEqual(first["estimator"], "complexity")
         rows, _ = fit.validate_dataset(fixture)
-        train, heldout, _ = fit.frozen_split(rows)
+        train, heldout, _ = fit.random_split(rows)
         baseline = fit.quantiles([fit.observed_work(s, "totalTokens") for s in train])["p50"]
         holdout_ids = {s["sampleId"] for s in heldout}
         for sample in fixture["samples"]:
@@ -522,16 +522,15 @@ class EffortFitTests(unittest.TestCase):
             first["scenarios"][0]["outputPerWork"], second["scenarios"][0]["outputPerWork"]
         )
 
-    def test_no_group_or_time_leakage(self):
+    def test_no_group_leakage(self):
         rows, _ = fit.validate_dataset(dataset())
-        older, heldout, purged = fit.frozen_split(rows)
+        older, heldout, purged = fit.random_split(rows)
+        self.assertEqual(purged, [])
         self.assertFalse(set(s["groupId"] for s in older) & set(s["groupId"] for s in heldout))
-        self.assertLess(max(s["_time"] for s in older), min(s["_start"] for s in heldout))
         for train, validation in fit.folds(older):
             self.assertFalse(
                 set(s["groupId"] for s in train) & set(s["groupId"] for s in validation)
             )
-            self.assertLess(max(s["_time"] for s in train), min(s["_start"] for s in validation))
         artifact, _ = fit.build_artifact(dataset())
         self.assertTrue(
             set(s["sampleId"] for s in artifact["scenarios"])
@@ -542,30 +541,39 @@ class EffortFitTests(unittest.TestCase):
             & set(artifact["validation"]["sampleIds"])
         )
 
-    def test_overlap_is_purged(self):
-        fixture = dataset()
-        fixture["samples"][0]["completedAt"] = "2026-09-17T00:00:30Z"
-        rows, _ = fit.validate_dataset(fixture)
-        train, heldout, purged = fit.frozen_split(rows)
-        self.assertLess(max(s["_time"] for s in train), min(s["_start"] for s in heldout))
-        self.assertTrue(purged)
+    def test_split_is_deterministic_and_not_time_ordered(self):
+        rows, _ = fit.validate_dataset(dataset())
+        first = fit.random_split(rows)
+        second = fit.random_split(list(reversed(rows)))
+        self.assertEqual(
+            sorted(row["sampleId"] for row in first[1]),
+            sorted(row["sampleId"] for row in second[1]),
+        )
+        held_groups = {row["groupId"] for row in first[1]}
+        all_groups = fit.groups(rows)
+        self.assertEqual(len(held_groups), max(3, math.ceil(len(all_groups) * 0.1)))
+        newest = {group[0]["groupId"] for group in all_groups[-len(held_groups) :]}
+        self.assertNotEqual(held_groups, newest)
+        self.assertTrue(
+            max(row["_start"] for row in first[0]) > min(row["_start"] for row in first[1])
+        )
 
-    def test_training_outcome_during_target_run_is_unavailable(self):
+    def test_split_membership_is_stable_as_data_grows(self):
+        rows, _ = fit.validate_dataset(dataset())
+        base_held = {row["groupId"] for row in fit.random_split(rows)[1]}
         fixture = dataset()
-        # Target starts on day 17 but finishes much later. A training run
-        # completing during that target cannot be known at quote time.
-        fixture["samples"][0]["completedAt"] = "2026-09-17T00:30:00Z"
-        for sample in fixture["samples"][32:34]:
-            sample["completedAt"] = "2026-09-25T00:00:00Z"
-        rows, _ = fit.validate_dataset(fixture)
-        train, heldout, purged = fit.frozen_split(rows)
-        self.assertIn("run-0", [s["sampleId"] for s in purged])
-        self.assertNotIn("run-0", [s["sampleId"] for s in train])
-        self.assertLess(max(s["_time"] for s in train), min(s["_start"] for s in heldout))
-        for train_fold, target_fold in fit.folds(rows):
-            self.assertLess(
-                max(s["_time"] for s in train_fold), min(s["_start"] for s in target_fold)
-            )
+        for index in range(40, 60):
+            clone = copy.deepcopy(fixture["samples"][index % 40])
+            clone.update(sampleId=f"run-{index}", groupId=f"thread-{index // 2}")
+            fixture["samples"].append(clone)
+        grown, _ = fit.validate_dataset(fixture)
+        grown_held = {row["groupId"] for row in fit.random_split(grown)[1]}
+        self.assertTrue(base_held <= grown_held)
+
+    def test_folds_cover_every_group_once(self):
+        rows, _ = fit.validate_dataset(dataset())
+        seen = [row["sampleId"] for _, validation in fit.folds(rows) for row in validation]
+        self.assertEqual(sorted(seen), sorted(row["sampleId"] for row in rows))
 
     def test_unknown_is_imputed_train_only_and_visible(self):
         fixture = dataset()
@@ -790,7 +798,7 @@ class EffortFitTests(unittest.TestCase):
     def test_offsets_move_oof_coverage_toward_nominal(self):
         fixture, _ = self.quantile_fixture()
         samples, _ = fit.validate_dataset(fixture)
-        train, _, _ = fit.frozen_split(samples)
+        train, _, _ = fit.random_split(samples)
         params = {**fit.TREE_PARAMS, "max_iter": 25, "min_samples_leaf": 3, "learning_rate": 0.3}
         with mock.patch.object(fit, "TREE_PARAMS", params):
             offsets, coverage = fit.conformal_offsets(train, None)
@@ -808,7 +816,7 @@ class EffortFitTests(unittest.TestCase):
     def test_offsets_are_clamped(self):
         fixture, _ = self.quantile_fixture()
         samples, _ = fit.validate_dataset(fixture)
-        train, _, _ = fit.frozen_split(samples)
+        train, _, _ = fit.random_split(samples)
         with mock.patch.object(fit, "OFFSET_LIMIT", 0.0):
             offsets, coverage = fit.conformal_offsets(train, None)
         self.assertEqual(set(offsets.values()), {0.0})
@@ -889,7 +897,7 @@ class EffortFitTests(unittest.TestCase):
         _, artifact = self.quantile_fixture()
         validation = artifact["validation"]["quantileModel"]
         stability = validation["stability"]
-        self.assertEqual(stability["droppedNewest"], 14)
+        self.assertEqual(stability["droppedRows"], 14)
         self.assertTrue(math.isfinite(stability["meanPinball"]))
         self.assertAlmostEqual(
             stability["gap"], abs(stability["meanPinball"] - validation["meanPinball"]), delta=1e-12
