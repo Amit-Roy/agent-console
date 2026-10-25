@@ -266,6 +266,39 @@
           "color": "slate"
         }
       ]
+    },
+    {
+      "group": "Cross-thread messaging",
+      "sub": "Top-level agent calls only",
+      "border": "dashed",
+      "color": "indigo",
+      "icon": "messages-square",
+      "items": [
+        {
+          "id": "thread-msg-tools",
+          "label": "Thread discovery and send",
+          "tech": "Agent Console MCP and Pi tools",
+          "desc": "List active threads and request an attributed peer message.",
+          "icon": "messages-square",
+          "color": "indigo"
+        },
+        {
+          "id": "thread-msg-auth",
+          "label": "Root-call authorization",
+          "tech": "thread-tool-auth.ts",
+          "desc": "Live root events authorize one exact payload; child calls and replay fail closed.",
+          "icon": "shield-check",
+          "color": "orange"
+        },
+        {
+          "id": "thread-msg-delivery",
+          "label": "Attributed delivery",
+          "tech": "Threads.send",
+          "desc": "Start idle recipients or steer and queue busy recipients with sender provenance.",
+          "icon": "send",
+          "color": "teal"
+        }
+      ]
     }
   ],
   "edges": [
@@ -373,6 +406,16 @@
       "from": "red-search",
       "to": "red-store",
       "label": "Refresh after cleanup"
+    },
+    {
+      "from": "thread-msg-tools",
+      "to": "thread-msg-auth",
+      "label": "Match the live root tool call"
+    },
+    {
+      "from": "thread-msg-auth",
+      "to": "thread-msg-delivery",
+      "label": "Consume one exact-payload grant"
     }
   ]
 }
