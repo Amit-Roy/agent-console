@@ -137,7 +137,12 @@ function handleControlRequest(ctx: ControlContext, event: any) {
   }
   // Session history tools are read-only and authenticated by the Console bridge.
   // Allow only these exact names in Plan/acceptEdits; all other permission prompts retain their policy.
-  if (AUTO_ALLOWED_TOOLS.includes(req.tool_name)) {
+  const redactionAction = req.input?.action ?? "scan";
+  const redactionAllowed =
+    req.tool_name === "mcp__agent_console__session_redact" &&
+    (["scan", "verify", "status"].includes(redactionAction) ||
+      (redactionAction === "apply" && ctx.mode === "bypassPermissions"));
+  if (AUTO_ALLOWED_TOOLS.includes(req.tool_name) || redactionAllowed) {
     respondControl(ctx, event.request_id, { behavior: "allow", updatedInput: req.input ?? {} });
     return;
   }

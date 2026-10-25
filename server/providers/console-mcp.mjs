@@ -59,7 +59,10 @@ export async function handleMcp(request) {
           name: t.name,
           description: t.description,
           inputSchema: t.parameters,
-          annotations: { readOnlyHint: true, destructiveHint: false },
+          annotations: {
+            readOnlyHint: t.name !== "session_redact",
+            destructiveHint: t.name === "session_redact",
+          },
         })),
       });
     case "tools/call": {

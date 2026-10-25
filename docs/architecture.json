@@ -1,251 +1,360 @@
 {
-  "title": "Effort quotes on real sessions",
-  "subtitle": "Probe sessions out of training; improve-prompt quotes priced on the draft's shape; Opus 5.5 rewriter",
-  "items": [
+ "title": "Agent Console maintenance and integrations",
+ "subtitle": "Existing prompt workflows, CLI maintenance, and authenticated background MCP jobs",
+ "items": [
+  {
+   "group": "Triage worker",
+   "sub": "scripts/github-triage.ts",
+   "border": "dashed",
+   "color": "blue",
+   "icon": "server",
+   "items": [
     {
-      "group": "Triage worker",
-      "sub": "scripts/github-triage.ts",
-      "border": "dashed",
-      "color": "blue",
-      "icon": "server",
-      "items": [
-        {
-          "id": "sched",
-          "label": "Weekly calibrate",
-          "tech": "github-triage.ts",
-          "desc": "7-day interval, 6 h crash retry",
-          "icon": "calendar-clock",
-          "color": "blue"
-        },
-        {
-          "id": "fit",
-          "label": "Quantile fitter",
-          "tech": "triage-effort-fit.py",
-          "desc": "Depth 2, leaf 80; OOF conformal offsets per quantile; paired bootstrap",
-          "icon": "trees",
-          "color": "teal"
-        },
-        {
-          "id": "gate",
-          "label": "Promotion gate",
-          "tech": "triage-promotion.ts",
-          "desc": "Pinball: paired lower90 > 0 or ratio > 1.10. Coverage vs champion within 2 SE; hard bounds",
-          "icon": "shield-check",
-          "color": "orange"
-        },
-        {
-          "id": "sessions",
-          "label": "Session builder",
-          "tech": "triage-session-build.ts",
-          "desc": "Keeps console-linked or interactive sessions; drops probes, scratch cwd, window openers",
-          "icon": "filter",
-          "color": "teal"
-        }
-      ]
+     "id": "sched",
+     "label": "Weekly calibrate",
+     "tech": "github-triage.ts",
+     "desc": "7-day interval, 6 h crash retry",
+     "icon": "calendar-clock",
+     "color": "blue"
     },
     {
-      "group": "Local state",
-      "sub": "~/.config/agent-console",
-      "border": "solid",
-      "color": "slate",
-      "icon": "hard-drive",
-      "items": [
-        {
-          "id": "champ",
-          "label": "Live model",
-          "tech": "triage-effort-model.json",
-          "desc": "Champion; scored on held-out rows",
-          "icon": "file-check",
-          "color": "indigo"
-        },
-        {
-          "id": "chal",
-          "label": "Challenger",
-          "tech": "*.challenger.json",
-          "desc": "Kept when rejected",
-          "icon": "file-x",
-          "color": "slate"
-        }
-      ]
+     "id": "fit",
+     "label": "Quantile fitter",
+     "tech": "triage-effort-fit.py",
+     "desc": "Depth 2, leaf 80; OOF conformal offsets per quantile; paired bootstrap",
+     "icon": "trees",
+     "color": "teal"
     },
     {
-      "group": "GitHub",
-      "border": "solid",
-      "color": "slate",
-      "icon": "globe",
-      "items": [
-        {
-          "id": "gh",
-          "label": "Issue quotes",
-          "tech": "triage comment",
-          "desc": "Repriced after promote",
-          "icon": "message-square",
-          "color": "cyan"
-        }
-      ]
+     "id": "gate",
+     "label": "Promotion gate",
+     "tech": "triage-promotion.ts",
+     "desc": "Pinball: paired lower90 > 0 or ratio > 1.10. Coverage vs champion within 2 SE; hard bounds",
+     "icon": "shield-check",
+     "color": "orange"
     },
     {
-      "group": "Improve prompt",
-      "sub": "server/prompt-improve.ts",
-      "border": "dashed",
-      "color": "indigo",
-      "icon": "wand-sparkles",
-      "items": [
-        {
-          "id": "rewrite",
-          "label": "Rewriter",
-          "tech": "claude-opus-5-5",
-          "desc": "Pinned id, 60 s timeout",
-          "icon": "pen-line",
-          "color": "indigo"
-        },
-        {
-          "id": "quote",
-          "label": "Before/after quote",
-          "tech": "requestFeatures shapeFrom",
-          "desc": "Draft length and layout; added asks as unpriced hints",
-          "icon": "scale",
-          "color": "teal"
-        }
-      ]
-    },
-    {
-      "group": "Agent CLI",
-      "sub": "bin/effort-model",
-      "border": "dashed",
-      "color": "purple",
-      "icon": "terminal",
-      "items": [
-        {
-          "id": "cli",
-          "label": "effort-model",
-          "tech": "scripts/effort-model.ts",
-          "desc": "status, bench, data fetch",
-          "icon": "terminal",
-          "color": "purple"
-        },
-        {
-          "id": "bench",
-          "label": "Bench",
-          "tech": "triage-effort-bench.py",
-          "desc": "4 candidates + intent; real-row pinball and coverage",
-          "icon": "chart-column",
-          "color": "teal"
-        },
-        {
-          "id": "hf",
-          "label": "SALT-NLP/SWE-chat",
-          "tech": "odc-by parquet",
-          "desc": "Train-only rows, cached per revision",
-          "icon": "database",
-          "color": "orange"
-        }
-      ]
-    },
-    {
-      "group": "Auto-continue",
-      "sub": "server/threads.ts",
-      "border": "solid",
-      "color": "orange",
-      "icon": "repeat",
-      "items": [
-        {
-          "id": "ac-turn",
-          "label": "User turn ends idle",
-          "tech": "server/threads.ts",
-          "desc": "result event; no reply text kept",
-          "icon": "message-square",
-          "color": "blue"
-        },
-        {
-          "id": "ac-gate",
-          "label": "Auto-continue gate",
-          "tech": "threads.ts autoContinue",
-          "desc": "Fires once per idle user turn unless continueBlocked or continueParked",
-          "icon": "shield-check",
-          "color": "orange"
-        },
-        {
-          "id": "ac-send",
-          "label": "Continue prompt",
-          "tech": "auto-continue.ts",
-          "desc": "One follow-up send to the provider",
-          "icon": "send",
-          "color": "teal"
-        }
-      ]
+     "id": "sessions",
+     "label": "Session builder",
+     "tech": "triage-session-build.ts",
+     "desc": "Keeps console-linked or interactive sessions; drops probes, scratch cwd, window openers",
+     "icon": "filter",
+     "color": "teal"
     }
-  ],
-  "edges": [
+   ]
+  },
+  {
+   "group": "Local state",
+   "sub": "~/.config/agent-console",
+   "border": "solid",
+   "color": "slate",
+   "icon": "hard-drive",
+   "items": [
     {
-      "from": "sched",
-      "to": "fit",
-      "label": "Sessions + features"
+     "id": "champ",
+     "label": "Live model",
+     "tech": "triage-effort-model.json",
+     "desc": "Champion; scored on held-out rows",
+     "icon": "file-check",
+     "color": "indigo"
     },
     {
-      "from": "sessions",
-      "to": "sched",
-      "label": "Real rows"
-    },
-    {
-      "from": "rewrite",
-      "to": "quote",
-      "label": "Improved text"
-    },
-    {
-      "from": "champ",
-      "to": "quote",
-      "label": "Quantile trees"
-    },
-    {
-      "from": "champ",
-      "to": "fit",
-      "label": "--champion"
-    },
-    {
-      "from": "fit",
-      "to": "gate",
-      "label": "Artifact + validation"
-    },
-    {
-      "from": "gate",
-      "to": "champ",
-      "label": "Promote"
-    },
-    {
-      "from": "gate",
-      "to": "chal",
-      "label": "Reject"
-    },
-    {
-      "from": "champ",
-      "to": "gh",
-      "label": "Reprice"
-    },
-    {
-      "from": "cli",
-      "to": "champ",
-      "label": "status reads"
-    },
-    {
-      "from": "cli",
-      "to": "bench",
-      "label": "bench"
-    },
-    {
-      "from": "hf",
-      "to": "bench",
-      "label": "data fetch"
-    },
-    {
-      "from": "ac-turn",
-      "to": "ac-gate",
-      "label": "Idle turn end"
-    },
-    {
-      "from": "ac-gate",
-      "to": "ac-send",
-      "label": "Send once"
+     "id": "chal",
+     "label": "Challenger",
+     "tech": "*.challenger.json",
+     "desc": "Kept when rejected",
+     "icon": "file-x",
+     "color": "slate"
     }
-  ]
+   ]
+  },
+  {
+   "group": "GitHub",
+   "border": "solid",
+   "color": "slate",
+   "icon": "globe",
+   "items": [
+    {
+     "id": "gh",
+     "label": "Issue quotes",
+     "tech": "triage comment",
+     "desc": "Repriced after promote",
+     "icon": "message-square",
+     "color": "cyan"
+    }
+   ]
+  },
+  {
+   "group": "Improve prompt",
+   "sub": "server/prompt-improve.ts",
+   "border": "dashed",
+   "color": "indigo",
+   "icon": "wand-sparkles",
+   "items": [
+    {
+     "id": "rewrite",
+     "label": "Rewriter",
+     "tech": "claude-opus-5-5",
+     "desc": "Pinned id, 60 s timeout",
+     "icon": "pen-line",
+     "color": "indigo"
+    },
+    {
+     "id": "quote",
+     "label": "Before/after quote",
+     "tech": "requestFeatures shapeFrom",
+     "desc": "Draft length and layout; added asks as unpriced hints",
+     "icon": "scale",
+     "color": "teal"
+    }
+   ]
+  },
+  {
+   "group": "Agent CLI",
+   "sub": "bin/effort-model",
+   "border": "dashed",
+   "color": "purple",
+   "icon": "terminal",
+   "items": [
+    {
+     "id": "cli",
+     "label": "effort-model",
+     "tech": "scripts/effort-model.ts",
+     "desc": "status, bench, data fetch",
+     "icon": "terminal",
+     "color": "purple"
+    },
+    {
+     "id": "bench",
+     "label": "Bench",
+     "tech": "triage-effort-bench.py",
+     "desc": "4 candidates + intent; real-row pinball and coverage",
+     "icon": "chart-column",
+     "color": "teal"
+    },
+    {
+     "id": "hf",
+     "label": "SALT-NLP/SWE-chat",
+     "tech": "odc-by parquet",
+     "desc": "Train-only rows, cached per revision",
+     "icon": "database",
+     "color": "orange"
+    }
+   ]
+  },
+  {
+   "group": "Auto-continue",
+   "sub": "server/threads.ts",
+   "border": "solid",
+   "color": "orange",
+   "icon": "repeat",
+   "items": [
+    {
+     "id": "ac-turn",
+     "label": "User turn ends idle",
+     "tech": "server/threads.ts",
+     "desc": "result event; no reply text kept",
+     "icon": "message-square",
+     "color": "blue"
+    },
+    {
+     "id": "ac-gate",
+     "label": "Auto-continue gate",
+     "tech": "threads.ts autoContinue",
+     "desc": "Fires once per idle user turn unless continueBlocked or continueParked",
+     "icon": "shield-check",
+     "color": "orange"
+    },
+    {
+     "id": "ac-send",
+     "label": "Continue prompt",
+     "tech": "auto-continue.ts",
+     "desc": "One follow-up send to the provider",
+     "icon": "send",
+     "color": "teal"
+    }
+   ]
+  },
+  {
+   "group": "Transcript interfaces",
+   "sub": "CLI and authenticated Console MCP",
+   "border": "dashed",
+   "color": "purple",
+   "icon": "terminal",
+   "items": [
+    {
+     "id": "red-cli",
+     "label": "transcript-redact",
+     "tech": "bin/transcript-redact",
+     "desc": "Scan, apply, verify; aggregate results",
+     "icon": "terminal",
+     "color": "purple"
+    },
+    {
+     "id": "red-mcp",
+     "label": "session_redact",
+     "tech": "Console MCP",
+     "desc": "Start a job or read bounded status",
+     "icon": "plug",
+     "color": "purple"
+    }
+   ]
+  },
+  {
+   "group": "Transcript maintenance",
+   "sub": "Server ownership and shared Python engine",
+   "border": "solid",
+   "color": "blue",
+   "icon": "shield-check",
+   "items": [
+    {
+     "id": "red-job",
+     "label": "Background job owner",
+     "tech": "transcript-redaction.ts",
+     "desc": "Authentication, mode checks, progress and child lifecycle",
+     "icon": "workflow",
+     "color": "blue"
+    },
+    {
+     "id": "red-catalog",
+     "label": "Live catalog owner",
+     "tech": "threads.ts",
+     "desc": "Compare snapshots; persist unchanged title and recent fields",
+     "icon": "list",
+     "color": "teal"
+    },
+    {
+     "id": "red-engine",
+     "label": "Credential matcher and writer",
+     "tech": "transcript_redaction.py",
+     "desc": "Known secrets and provider signatures; preserve UTF-8 byte offsets",
+     "icon": "shield-check",
+     "color": "teal"
+    },
+    {
+     "id": "red-store",
+     "label": "Transcripts and SQLite",
+     "tech": "Canonical and native histories",
+     "desc": "Guarded range writes; logical FTS updates, checkpoint and audit",
+     "icon": "database",
+     "color": "slate"
+    },
+    {
+     "id": "red-search",
+     "label": "Search maintenance barrier",
+     "tech": "session-search.ts",
+     "desc": "Wait for refresh; block queries during cleanup; rebuild afterward",
+     "icon": "search",
+     "color": "orange"
+    }
+   ]
+  }
+ ],
+ "edges": [
+  {
+   "from": "sched",
+   "to": "fit",
+   "label": "Sessions + features"
+  },
+  {
+   "from": "sessions",
+   "to": "sched",
+   "label": "Real rows"
+  },
+  {
+   "from": "rewrite",
+   "to": "quote",
+   "label": "Improved text"
+  },
+  {
+   "from": "champ",
+   "to": "quote",
+   "label": "Quantile trees"
+  },
+  {
+   "from": "champ",
+   "to": "fit",
+   "label": "--champion"
+  },
+  {
+   "from": "fit",
+   "to": "gate",
+   "label": "Artifact + validation"
+  },
+  {
+   "from": "gate",
+   "to": "champ",
+   "label": "Promote"
+  },
+  {
+   "from": "gate",
+   "to": "chal",
+   "label": "Reject"
+  },
+  {
+   "from": "champ",
+   "to": "gh",
+   "label": "Reprice"
+  },
+  {
+   "from": "cli",
+   "to": "champ",
+   "label": "status reads"
+  },
+  {
+   "from": "cli",
+   "to": "bench",
+   "label": "bench"
+  },
+  {
+   "from": "hf",
+   "to": "bench",
+   "label": "data fetch"
+  },
+  {
+   "from": "ac-turn",
+   "to": "ac-gate",
+   "label": "Idle turn end"
+  },
+  {
+   "from": "ac-gate",
+   "to": "ac-send",
+   "label": "Send once"
+  },
+  {
+   "from": "red-cli",
+   "to": "red-engine",
+   "label": "Explicit local command"
+  },
+  {
+   "from": "red-mcp",
+   "to": "red-job",
+   "label": "Authenticated action"
+  },
+  {
+   "from": "red-job",
+   "to": "red-engine",
+   "label": "Async subprocess and safe progress"
+  },
+  {
+   "from": "red-job",
+   "to": "red-catalog",
+   "label": "Owner-mediated metadata cleanup"
+  },
+  {
+   "from": "red-job",
+   "to": "red-search",
+   "label": "Exclusive maintenance"
+  },
+  {
+   "from": "red-engine",
+   "to": "red-store",
+   "label": "Scan or preserve-byte masking"
+  },
+  {
+   "from": "red-search",
+   "to": "red-store",
+   "label": "Refresh after cleanup"
+  }
+ ]
 }
