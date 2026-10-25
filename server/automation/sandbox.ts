@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DATA_DIR } from "../auth.ts";
 import { claudeConfigDir } from "../providers/claude-accounts.ts";
+import { autoChildEnv } from "../tool-token.ts";
 
 type AutoThread = {
   id: string;
@@ -226,7 +227,7 @@ export function automationSandboxConfig(
   const tmp = privateDir(path.join(runtime, "tmp"));
   const cache = privateDir(path.join(runtime, "cache"));
   const result: NodeJS.ProcessEnv = {
-    ...env,
+    ...autoChildEnv(env, thread.id, thread.provider),
     TMPDIR: tmp,
     TMP: tmp,
     TEMP: tmp,
