@@ -205,9 +205,9 @@ try {
   };
   const common = [
     ".cargo",
-    ".gitconfig",
     ".config/git",
     ".config/gh",
+    ".gitconfig",
     ".local/bin",
     ".local/share/uv/tools",
     ".local/node-v1.2.3",
@@ -279,6 +279,52 @@ try {
         ),
       /refuses/,
     );
+  // Extras and roots inside a credential store or data dir throw, in both directions.
+  fs.mkdirSync(path.join(home, ".local", "share"), { recursive: true });
+  fs.writeFileSync(path.join(home, ".ssh", "x"), "fake-key");
+  for (const bad of [
+    path.join(home, ".ssh", "x"),
+    path.join(home, ".local", "share"),
+    path.join(home, ".local", "share", "rtk"),
+    path.join(home, ".local", "share", "uv", "credentials"),
+    path.join(home, ".claude", "skills", "nested"),
+    path.join(dataDir, "secret"),
+    path.join(home, ".config", "coderv2", "x"),
+    path.join(home, ".local", "state"),
+  ]) {
+    fs.mkdirSync(path.dirname(bad), { recursive: true });
+    if (!fs.existsSync(bad)) fs.writeFileSync(bad, "fake");
+    assert.throws(
+      () =>
+        automationSandboxConfig(
+          { ...fixture, id: "rd-bad" },
+          { ...env, AGENT_CONSOLE_AUTO_READ: bad },
+          options,
+        ),
+      /refuses/,
+      bad,
+    );
+  }
+  // A dotfile symlinked into a credential directory is copied into the run directory, never granted.
+  const dotHome = path.join(root, "dot-home");
+  const storeFile = path.join(dotHome, ".config", "coderv2", "dotfiles", "git", ".gitconfig");
+  fs.mkdirSync(path.dirname(storeFile), { recursive: true });
+  fs.writeFileSync(storeFile, "[user]\n\tname = fake\n");
+  fs.symlinkSync(storeFile, path.join(dotHome, ".gitconfig"));
+  const dotted = automationSandboxConfig({ ...fixture, id: "rd-dot" }, env, {
+    dataDir,
+    home: dotHome,
+  });
+  const gitCopy = path.join(fs.realpathSync(dataDir), "auto-runtime", "rd-dot", "gitconfig");
+  assert.equal(
+    dotted.env.GIT_CONFIG_GLOBAL,
+    path.join(dataDir, "auto-runtime", "rd-dot", "gitconfig"),
+  );
+  assert.equal(fs.readFileSync(gitCopy, "utf8"), "[user]\n\tname = fake\n");
+  assert.ok(!fs.lstatSync(gitCopy).isSymbolicLink());
+  assert.ok(
+    !dotted.readable.some((entry) => entry.includes("coderv2") || entry.endsWith(".gitconfig")),
+  );
   // Claude's shared tool-env file is copied into the run dir.
   fs.writeFileSync(path.join(dataDir, "tool-env.sh"), "renice\n");
   const claudeEnv = automationSandboxConfig(

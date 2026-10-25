@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { DATA_DIR } from "../auth.ts";
 import { claudeConfigDir } from "../providers/claude-accounts.ts";
 import { autoChildEnv } from "../tool-token.ts";
-import { autoReadRoots } from "./read-policy.ts";
+import { autoReadRoots, insideProtectedStore } from "./read-policy.ts";
 
 type AutoThread = {
   id: string;
@@ -220,6 +220,22 @@ function applyCodexSandbox(
   return original;
 }
 
+/** Dotfiles that resolve into a credential store are copied into the run directory, never granted in place. */
+function copyProtectedDotfiles(paths: SandboxPaths, result: NodeJS.ProcessEnv): void {
+  const { dataDir, home, runtime } = paths;
+  const dotfiles: [string, string][] = [
+    [".gitconfig", "GIT_CONFIG_GLOBAL"],
+    [".npmrc", "npm_config_userconfig"],
+  ];
+  for (const [name, variable] of dotfiles) {
+    const source = path.join(home, name);
+    if (!fs.existsSync(source) || !insideProtectedStore(home, dataDir, source)) continue;
+    const copy = path.join(runtime, name.slice(1));
+    fs.writeFileSync(copy, fs.readFileSync(source), { mode: 0o600 });
+    result[variable] = copy;
+  }
+}
+
 /** Claude sources this file before every Bash command; the shared copy lives outside the read allow-list. */
 function copyToolEnv(env: NodeJS.ProcessEnv, runtime: string, result: NodeJS.ProcessEnv): void {
   if (!env.CLAUDE_ENV_FILE) return;
@@ -267,6 +283,7 @@ export function automationSandboxConfig(
   else if (thread.provider === "codex") providerSource = applyCodexSandbox(env, paths, result);
   else throw new Error("Auto sandbox requires a known provider.");
   copyToolEnv(env, runtime, result);
+  copyProtectedDotfiles(paths, result);
   const readable = autoReadRoots({
     home,
     dataDir,

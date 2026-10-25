@@ -16,6 +16,8 @@ export type ReadPolicyInput = {
 
 const SYSTEM_ROOTS = ["/usr", "/bin", "/sbin", "/lib", "/lib64", "/opt", "/etc"];
 const DEVICE_ROOTS = ["/proc", "/sys", "/dev", "/run"];
+/** Single files: copied into the run directory when they resolve into a credential store. */
+const HOME_FILES = [".npmrc", ".gitconfig"];
 const HOME_TOOLCHAINS = [
   ".bun",
   ".cargo",
@@ -23,8 +25,6 @@ const HOME_TOOLCHAINS = [
   ".codegraph",
   ".agents",
   ".cache/ms-playwright",
-  ".npmrc",
-  ".gitconfig",
   ".config/git",
   ".config/gh",
 ];
@@ -89,11 +89,45 @@ function within(root: string, target: string): boolean {
   );
 }
 
-function protectedPaths(home: string, dataDir: string): string[] {
-  const list = ["/", home, dataDir];
-  for (const rel of [".ssh", ".config", ".config/coderv2", ".claude", ".codex", ".pi"])
-    list.push(path.join(home, rel));
-  return list.map((entry) => real(entry) ?? path.resolve(entry));
+/** Roots that may neither be granted nor contain a grant: ancestors of legitimate narrow grants. */
+function ancestorGuards(home: string, dataDir: string): string[] {
+  const list = [
+    "/",
+    home,
+    dataDir,
+    ...[".config", ".local/share", ".local/state"].map(inHome(home)),
+  ];
+  return list.map(canonical);
+}
+
+/** Credential and data stores: nothing may equal, contain or sit inside them, except exact policy allowances. */
+function storeGuards(home: string, dataDir: string): string[] {
+  const rels = [
+    ".ssh",
+    ".config/coderv2",
+    ".claude",
+    ".claude.json",
+    ".codex",
+    ".pi",
+    ".aws",
+    ".gnupg",
+    ".local/share/rtk",
+    ".local/share/uv/credentials",
+  ];
+  let names: string[] = [];
+  try {
+    names = fs.readdirSync(home).filter((name) => name.startsWith(".claude-"));
+  } catch {}
+  return [dataDir, ...rels.map(inHome(home)), ...names.map(inHome(home))].map(canonical);
+}
+
+const inHome = (home: string) => (rel: string) => path.join(home, rel);
+const canonical = (entry: string) => real(entry) ?? path.resolve(entry);
+
+/** True when target is a store root or inside one (for example a dotfile symlinked into a credential directory). */
+export function insideProtectedStore(home: string, dataDir: string, target: string): boolean {
+  const resolved = real(target) ?? path.resolve(target);
+  return storeGuards(home, dataDir).some((guard) => within(guard, resolved));
 }
 
 function providerRoots(input: ReadPolicyInput): string[] {
@@ -125,32 +159,51 @@ function repoRoots(home: string, env: NodeJS.ProcessEnv, repo?: string): string[
   return roots;
 }
 
+type Candidate = { target: string; policyOwned: boolean; soft?: boolean };
+
+function candidateList(input: ReadPolicyInput): Candidate[] {
+  const { home, dataDir, runtime, thread, env } = input;
+  const own = (targets: string[]): Candidate[] =>
+    targets.map((target) => ({ target, policyOwned: true }));
+  const plain = (targets: string[]): Candidate[] =>
+    targets.map((target) => ({ target, policyOwned: false }));
+  const softFiles = HOME_FILES.map((rel) => ({
+    target: path.join(home, rel),
+    policyOwned: false,
+    soft: true,
+  }));
+  const extras = (env.AGENT_CONSOLE_AUTO_READ ?? "").split(":").filter(Boolean);
+  return [
+    ...plain([...SYSTEM_ROOTS, ...DEVICE_ROOTS]),
+    ...plain(HOME_TOOLCHAINS.map(inHome(home))),
+    ...softFiles,
+    ...plain(localToolchains(home)),
+    ...plain(repoRoots(home, env, thread.repo)),
+    ...plain(input.appRoot ? [input.appRoot] : []),
+    ...own([runtime, ...providerRoots(input), path.join(dataDir, "uploads", thread.id)]),
+    ...plain(extras.map((entry) => path.resolve(entry))),
+  ];
+}
+
 /**
  * Exact read allow-list for an Auto child. Existing entries are realpathed, missing ones skipped.
- * Throws when a root equals or contains a protected credential or data path.
+ * Throws when a root equals or contains a protected path, or sits inside a credential or data store.
+ * Only the policy's own run, provider-resource and per-thread data roots may sit inside a store.
  */
 export function autoReadRoots(input: ReadPolicyInput): string[] {
-  const { home, dataDir, runtime, thread, env } = input;
-  const extras = (env.AGENT_CONSOLE_AUTO_READ ?? "").split(":").filter(Boolean);
-  const candidates = [
-    ...SYSTEM_ROOTS,
-    ...DEVICE_ROOTS,
-    ...HOME_TOOLCHAINS.map((rel) => path.join(home, rel)),
-    ...localToolchains(home),
-    ...repoRoots(home, env, thread.repo),
-    ...(input.appRoot ? [input.appRoot] : []),
-    runtime,
-    ...providerRoots(input),
-    path.join(dataDir, "uploads", thread.id),
-    ...extras.map((entry) => path.resolve(entry)),
-  ];
-  const guarded = protectedPaths(home, dataDir);
+  const { home, dataDir } = input;
+  const ancestors = ancestorGuards(home, dataDir);
+  const stores = storeGuards(home, dataDir);
   const roots: string[] = [];
-  for (const candidate of candidates) {
-    const resolved = real(candidate);
+  for (const candidate of candidateList(input)) {
+    const resolved = real(candidate.target);
     if (resolved === null) continue;
-    const bad = guarded.find((protect) => within(resolved, protect));
-    if (bad) throw new Error(`Auto read policy refuses ${resolved}: it contains ${bad}.`);
+    const inside = stores.find((guard) => within(guard, resolved));
+    if (inside && candidate.soft) continue; // copied into the run directory instead
+    const bad =
+      [...ancestors, ...stores].find((guard) => within(resolved, guard)) ??
+      (candidate.policyOwned ? undefined : inside);
+    if (bad) throw new Error(`Auto read policy refuses ${resolved}: it overlaps protected ${bad}.`);
     if (!roots.includes(resolved)) roots.push(resolved);
   }
   return roots;
