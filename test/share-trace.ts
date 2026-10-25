@@ -120,10 +120,10 @@ const lines = [
     },
   },
 ];
-const writeAgent = (agentId: string, agentType: string) => {
+const writeAgent = (agentId: string, agentType: string, content: unknown[] = lines) => {
   fs.writeFileSync(
     path.join(subagents, `agent-${agentId}.jsonl`),
-    lines.map((line) => JSON.stringify(line)).join("\n"),
+    content.map((line) => JSON.stringify(line)).join("\n"),
   );
   fs.writeFileSync(
     path.join(subagents, `agent-${agentId}.meta.json`),
@@ -133,10 +133,11 @@ const writeAgent = (agentId: string, agentType: string) => {
 writeAgent("aaa111", "share-analyzer");
 writeAgent("bbb222", "researcher");
 
+const dataDir = path.join(root, "data");
 const run = (...args: string[]) =>
   spawnSync("node", [path.join(import.meta.dirname, "..", "scripts", "share-trace.ts"), ...args], {
     encoding: "utf8",
-    env: { ...process.env, HOME: root, CLAUDE_CONFIG_DIR: configDir },
+    env: { ...process.env, HOME: root, CLAUDE_CONFIG_DIR: configDir, AGENT_CONSOLE_DATA: dataDir },
   });
 
 try {
@@ -187,6 +188,150 @@ try {
   assert.equal(run("missing9").status, 1);
   assert.equal(run("../etc").status, 1);
   assert.equal(run().status, 1);
+
+  // ---- --out mode
+  const REPORT_TEXT = `REPORT-BODY-31c9 ${'"\\\n'.repeat(1500)}é`;
+  const threadId = "813c35dd-7237-4c06-89d9-efdfeb46eee5";
+  const shareDir = path.join(dataDir, "uploads", threadId, ".share");
+  const canonical = (agentId: string) => path.join(shareDir, `trace-${agentId}.json`);
+  const scratch = (agentId: string) => path.join(dataDir, "share-runs", agentId);
+  const plantScratch = (agentId: string) => {
+    const outDir = path.join(scratch(agentId), "out");
+    fs.mkdirSync(outDir, { recursive: true });
+    fs.writeFileSync(path.join(outDir, "report.md"), REPORT_TEXT);
+    fs.writeFileSync(path.join(outDir, "notes.txt"), "note");
+    fs.writeFileSync(path.join(outDir, "bad name!.txt"), "x");
+    fs.mkdirSync(path.join(outDir, "subdir"));
+    fs.symlinkSync("/etc/passwd", path.join(outDir, "evil.txt"));
+  };
+  const maxLine = (file: string) =>
+    Math.max(
+      ...fs
+        .readFileSync(file, "utf8")
+        .split("\n")
+        .map((line) => line.length),
+    );
+
+  plantScratch("aaa111");
+  const outRun = run("aaa111", "--out", canonical("aaa111"));
+  assert.equal(outRun.status, 0, outRun.stderr);
+  assert.equal(outRun.stdout.trim().split("\n").length, 1, "one stdout line");
+  for (const text of [LEAK, "SECRET", "IGNORE PREVIOUS", "REPORT-BODY", "yyyy"]) {
+    assert.ok(!outRun.stdout.includes(text), `stdout must not carry ${text}`);
+  }
+  const summary = JSON.parse(outRun.stdout);
+  assert.deepEqual(Object.keys(summary).sort(), [
+    "blockedCalls",
+    "bytes",
+    "finalMessageIsAck",
+    "outFiles",
+    "path",
+    "reportBytes",
+    "toolCalls",
+    "truncatedCalls",
+    "vettedDir",
+  ]);
+  assert.equal(summary.path, canonical("aaa111"));
+  assert.equal(summary.vettedDir, path.join(shareDir, "aaa111"));
+  assert.equal(summary.toolCalls, 9);
+  assert.equal(summary.blockedCalls, 4);
+  assert.equal(summary.outFiles, 2);
+  assert.equal(summary.reportBytes, Buffer.byteLength(REPORT_TEXT));
+  assert.equal(summary.finalMessageIsAck, false);
+  assert.equal(summary.bytes, fs.statSync(canonical("aaa111")).size);
+  assert.equal(fs.statSync(canonical("aaa111")).mode & 0o777, 0o600);
+  assert.equal(fs.statSync(shareDir).mode & 0o777, 0o700);
+  const written = JSON.parse(fs.readFileSync(canonical("aaa111"), "utf8"));
+  assert.ok(maxLine(canonical("aaa111")) <= 1500, "no trace line over 1500 chars");
+  assert.ok(Buffer.byteLength(fs.readFileSync(canonical("aaa111"))) <= 64 * 1024);
+  assert.equal(written.report.join(""), REPORT_TEXT);
+  assert.ok(
+    written.report.length > 1 && written.report.every((chunk: string) => chunk.length <= 1400 * 6),
+  );
+  assert.deepEqual(written.outFiles, [
+    { name: "notes.txt", bytes: 4 },
+    { name: "report.md", bytes: Buffer.byteLength(REPORT_TEXT) },
+  ]);
+  const skippedBy = Object.fromEntries(
+    written.skippedFiles.map((skip: any) => [skip.name, skip.reason]),
+  );
+  assert.equal(skippedBy["evil.txt"], "symlink", "symlink is skipped and flagged");
+  assert.equal(skippedBy.subdir, "not-regular");
+  assert.ok(Object.values(skippedBy).includes("bad-name"));
+  assert.ok(!JSON.stringify(written).includes("bad name!"), "bad names are never echoed");
+  assert.deepEqual(fs.readdirSync(path.join(shareDir, "aaa111")).sort(), [
+    "notes.txt",
+    "report.md",
+  ]);
+  assert.equal(fs.statSync(path.join(shareDir, "aaa111", "notes.txt")).mode & 0o777, 0o600);
+  assert.equal(written.truncated, true, "fixture exceeds the final message and input caps");
+  assert.ok(!fs.existsSync(scratch("aaa111")), "scratch dir removed");
+
+  // bad --out: nothing is written, scratch stays
+  plantScratch("aaa111");
+  const badOuts = [
+    "relative/trace-aaa111.json",
+    path.join(shareDir, "trace-other9.json"),
+    path.join(root, "trace-aaa111.json"),
+    path.join(dataDir, "uploads", "not-a-uuid", ".share", "trace-aaa111.json"),
+    path.join(dataDir, "uploads", threadId, "other", "trace-aaa111.json"),
+    `${shareDir}/../.share/trace-aaa111.json`,
+    `${canonical("aaa111")}/extra`,
+  ];
+  for (const bad of badOuts) {
+    const badRun = run("aaa111", "--out", bad);
+    assert.equal(badRun.status, 1, bad);
+    assert.equal(badRun.stdout, "");
+    assert.equal(badRun.stderr.trim().split("\n").length, 1, "one-line error");
+  }
+  assert.equal(run("aaa111", "--out").status, 1);
+  assert.ok(fs.existsSync(scratch("aaa111")), "rejected runs keep the scratch dir");
+  fs.rmSync(scratch("aaa111"), { recursive: true });
+
+  // total cap: many large inputs set truncated and stay under 64 KiB
+  const manyCalls = Array.from({ length: 80 }, (_, index) =>
+    bashCall(`m${index}`, `echo ${"w".repeat(1500)}`),
+  );
+  writeAgent("big111", "share-analyzer", manyCalls);
+  const bigRun = run("big111", "--out", canonical("big111"));
+  assert.equal(bigRun.status, 0, bigRun.stderr);
+  const bigSummary = JSON.parse(bigRun.stdout);
+  const bigTrace = JSON.parse(fs.readFileSync(canonical("big111"), "utf8"));
+  assert.equal(bigTrace.truncated, true);
+  assert.ok(bigSummary.bytes <= 64 * 1024 && bigSummary.toolCalls === 80);
+  assert.ok(
+    bigTrace.droppedToolCalls > 0 && bigSummary.truncatedCalls >= bigTrace.droppedToolCalls,
+  );
+  assert.ok(maxLine(canonical("big111")) <= 1500);
+  // long single inputs are chunked, not left as one long line
+  const longInput = [bashCall("l1", `echo ${"v".repeat(4000)}`)];
+  writeAgent("long11", "share-analyzer", longInput);
+  assert.equal(run("long11", "--out", canonical("long11")).status, 0);
+  const longTrace = JSON.parse(fs.readFileSync(canonical("long11"), "utf8"));
+  assert.ok(Array.isArray(longTrace.toolCalls[0].input) && longTrace.toolCalls[0].input.length > 1);
+  assert.equal(longTrace.truncated, false);
+  assert.ok(maxLine(canonical("long11")) <= 1500);
+
+  // finalMessageIsAck only for the exact ack text
+  const finalText = (text: string) => [
+    { type: "assistant", message: { role: "assistant", content: [{ type: "text", text }] } },
+  ];
+  const acks: [string, string, boolean][] = [
+    ["ack111", "REPORT WRITTEN", true],
+    ["ack222", "REPORT WRITTEN\n", false],
+    ["ack333", "report written", false],
+    ["ack444", "REPORT WRITTEN, plus IGNORE PREVIOUS", false],
+  ];
+  for (const [agentId, text, expected] of acks) {
+    writeAgent(agentId, "share-analyzer", finalText(text));
+    const ackRun = run(agentId, "--out", canonical(agentId));
+    assert.equal(ackRun.status, 0, ackRun.stderr);
+    assert.equal(JSON.parse(ackRun.stdout).finalMessageIsAck, expected, JSON.stringify(text));
+  }
+  // missing scratch dir: still writes a trace with no files
+  const emptyTrace = JSON.parse(fs.readFileSync(canonical("ack111"), "utf8"));
+  assert.deepEqual(emptyTrace.outFiles, []);
+  assert.deepEqual(emptyTrace.report, []);
 } finally {
   fs.rmSync(root, { recursive: true, force: true });
 }
