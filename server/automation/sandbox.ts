@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { DATA_DIR } from "../auth.ts";
 import { claudeConfigDir } from "../providers/claude-accounts.ts";
 import { autoChildEnv } from "../tool-token.ts";
+import { autoReadRoots } from "./read-policy.ts";
 
 type AutoThread = {
   id: string;
@@ -153,7 +154,7 @@ function applyPiSandbox(
   paths: SandboxPaths,
   result: NodeJS.ProcessEnv,
   writable: string[],
-) {
+): string {
   const { dataDir, home, runtime } = paths;
   const config = privateDir(path.join(runtime, "pi"));
   const original = env.PI_CODING_AGENT_DIR || path.join(home, ".pi", "agent");
@@ -182,6 +183,7 @@ function applyPiSandbox(
     linkReadableResource(path.join(original, resource), path.join(config, resource));
   result.PI_CODING_AGENT_DIR = config;
   writable.push(privateDir(path.join(dataDir, "pi-sessions", thread.id)));
+  return original;
 }
 
 function applyClaudeSandbox(
@@ -189,7 +191,7 @@ function applyClaudeSandbox(
   env: NodeJS.ProcessEnv,
   paths: SandboxPaths,
   result: NodeJS.ProcessEnv,
-) {
+): string {
   const { home, runtime } = paths;
   const config = privateDir(path.join(runtime, "claude"));
   const original = claudeConfigDir(thread.claudeAccount, env, home);
@@ -198,9 +200,14 @@ function applyClaudeSandbox(
   if ((!thread.claudeAccount || thread.claudeAccount === "sunny") && !env.CLAUDE_CONFIG_DIR)
     seedFile(path.join(home, ".claude.json"), path.join(config, ".claude.json"));
   result.CLAUDE_CONFIG_DIR = config;
+  return original;
 }
 
-function applyCodexSandbox(env: NodeJS.ProcessEnv, paths: SandboxPaths, result: NodeJS.ProcessEnv) {
+function applyCodexSandbox(
+  env: NodeJS.ProcessEnv,
+  paths: SandboxPaths,
+  result: NodeJS.ProcessEnv,
+): string {
   const { home, runtime } = paths;
   const config = privateDir(path.join(runtime, "codex"));
   const original = env.CODEX_HOME || path.join(home, ".codex");
@@ -210,6 +217,19 @@ function applyCodexSandbox(env: NodeJS.ProcessEnv, paths: SandboxPaths, result: 
   // The standalone helper launcher resolves packages under CODEX_HOME; keep it on the shared install.
   result.CODEX_HELPER_PACKAGE_ROOT =
     env.CODEX_HELPER_PACKAGE_ROOT || path.join(original, "packages");
+  return original;
+}
+
+/** Claude sources this file before every Bash command; the shared copy lives outside the read allow-list. */
+function copyToolEnv(env: NodeJS.ProcessEnv, runtime: string, result: NodeJS.ProcessEnv): void {
+  if (!env.CLAUDE_ENV_FILE) return;
+  const copy = path.join(runtime, "tool-env.sh");
+  try {
+    fs.writeFileSync(copy, fs.readFileSync(env.CLAUDE_ENV_FILE), { mode: 0o600 });
+    result.CLAUDE_ENV_FILE = copy;
+  } catch {
+    delete result.CLAUDE_ENV_FILE;
+  }
 }
 
 /** Prepare only per-thread writable state. This function does not probe the kernel. */
@@ -218,7 +238,7 @@ export function automationSandboxConfig(
   env: NodeJS.ProcessEnv,
   options: { dataDir?: string; home?: string } = {},
 ) {
-  if (!automated(thread)) return { env, writable: [] as string[] };
+  if (!automated(thread)) return { env, writable: [] as string[], readable: [] as string[] };
   if (!/^[a-zA-Z0-9_-]+$/.test(thread.id)) throw new Error("Invalid Auto thread ID.");
   assertAutomationProject(thread);
   const dataDir = path.resolve(options.dataDir ?? DATA_DIR);
@@ -239,11 +259,24 @@ export function automationSandboxConfig(
   };
   const writable = [fs.realpathSync(thread.cwd), runtime];
   const paths: SandboxPaths = { dataDir, home, runtime };
-  if (thread.provider === "pi") applyPiSandbox(thread, env, paths, result, writable);
-  else if (thread.provider === "claude") applyClaudeSandbox(thread, env, paths, result);
-  else if (thread.provider === "codex") applyCodexSandbox(env, paths, result);
+  let providerSource: string;
+  if (thread.provider === "pi")
+    providerSource = applyPiSandbox(thread, env, paths, result, writable);
+  else if (thread.provider === "claude")
+    providerSource = applyClaudeSandbox(thread, env, paths, result);
+  else if (thread.provider === "codex") providerSource = applyCodexSandbox(env, paths, result);
   else throw new Error("Auto sandbox requires a known provider.");
-  return { env: result, writable };
+  copyToolEnv(env, runtime, result);
+  const readable = autoReadRoots({
+    home,
+    dataDir,
+    runtime,
+    thread: { id: thread.id, provider: thread.provider, repo: thread.issueRun?.repo },
+    providerSource,
+    env,
+    appRoot: fileURLToPath(new URL("../..", import.meta.url)),
+  });
+  return { env: result, writable, readable };
 }
 
 /**
@@ -289,9 +322,22 @@ export function launch(t: AutoThread, command: string, args: string[], env: Node
     { ...t, provider: t.provider ?? path.basename(command) },
     env,
   );
+  const killSwitch = env.AGENT_CONSOLE_AUTO_READ_SANDBOX === "off";
+  if (killSwitch)
+    console.warn(
+      `[auto-sandbox] read allow-list disabled by AGENT_CONSOLE_AUTO_READ_SANDBOX=off for thread ${t.id}; reads are unrestricted.`,
+    );
+  const reads = killSwitch ? [] : config.readable.flatMap((dir) => ["--read", dir]);
   return {
     command: "python3",
-    args: [launcher, ...config.writable.flatMap((dir) => ["--write", dir]), "--", command, ...args],
+    args: [
+      launcher,
+      ...reads,
+      ...config.writable.flatMap((dir) => ["--write", dir]),
+      "--",
+      command,
+      ...args,
+    ],
     env: config.env,
   };
 }
