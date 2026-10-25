@@ -77,7 +77,9 @@ EDIT_WORDS = re.compile(
     r"|enforce|install|configure|set ?up|wire|hook|make)\b",
     re.I,
 )
-SHIP_WORDS = re.compile(r"\b(deploy|ship|merge|push|commit|pr|pull request|release|restart)\b", re.I)
+SHIP_WORDS = re.compile(
+    r"\b(deploy|ship|merge|push|commit|pr|pull request|release|restart)\b", re.I
+)
 RESEARCH_WORDS = re.compile(
     r"\b(research|compare|benchmark|evaluate|investigate|analy[sz]e|audit|explore|options"
     r"|alternatives|recommend)\b",
