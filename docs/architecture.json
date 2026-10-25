@@ -334,12 +334,12 @@
   {
    "from": "red-job",
    "to": "red-engine",
-   "label": "Async subprocess and safe progress"
+   "label": "Run engine"
   },
   {
    "from": "red-job",
    "to": "red-catalog",
-   "label": "Owner-mediated metadata cleanup"
+   "label": "Update fields"
   },
   {
    "from": "red-job",
