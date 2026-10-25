@@ -23,7 +23,7 @@
           "tech": "sitecustomize.py via PYTHONPATH",
           "desc": "OTel SDK: cpython memory/GC, malloc free-held, opt-in tracemalloc top 20",
           "icon": "activity",
-          "color": "green"
+          "color": "cyan"
         }
       ]
     },
@@ -48,7 +48,7 @@
           "tech": "POST /v1/metrics",
           "desc": "Loopback only; protobufjs decode; name allowlist",
           "icon": "inbox",
-          "color": "green"
+          "color": "cyan"
         },
         {
           "id": "api",
@@ -56,7 +56,7 @@
           "tech": "GET /api/host/headroom-profile",
           "desc": "RSS series, snapshots, metrics, sites",
           "icon": "plug",
-          "color": "green"
+          "color": "cyan"
         },
         {
           "id": "hostui",
