@@ -23,6 +23,7 @@ export interface ThreadSpec {
   claudeAccount?: ClaudeAccount;
   sessionId?: string;
   issueRun?: { role: "work" | "review" | "debug" }; // Unattended issue runs require filesystem isolation.
+  schedule?: { task: string }; // a scheduled task's run; the nightly dream is task "dream"
   forkFrom?: string; // a forked thread's first run continues a copy of this session instead of starting fresh (adapters that can)
 }
 

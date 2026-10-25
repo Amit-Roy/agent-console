@@ -5,7 +5,7 @@ import { launch as sandboxLaunch } from "../automation/sandbox.ts";
 import { headroom } from "../headroom.ts";
 import { toolEnvFile } from "../tool-priority.ts";
 import { threadDir } from "../uploads.ts";
-import { stylePreamble } from "./brain.ts";
+import { personaFor, personaPath, stylePreamble } from "./brain.ts";
 import { claudeConfigDir, requireClaudeAccount } from "./claude-accounts.ts";
 import { consoleMcpServer } from "./console-mcp.mjs";
 import { parseJson, spawnLines } from "./proc.ts";
@@ -257,7 +257,7 @@ interface ClaudeRun {
   requests: number;
 }
 
-function claudeStartArgs(thread: ThreadSpec): string[] {
+export function claudeStartArgs(thread: ThreadSpec): string[] {
   const args = [
     "-p",
     "--input-format",
@@ -278,6 +278,8 @@ function claudeStartArgs(thread: ThreadSpec): string[] {
   if (thread.effort && thread.effort !== "default") args.push("--effort", thread.effort);
   args.push(...claudeConsoleSettingsArgs(thread.advisor));
   args.push(...leanMcpArgs());
+  const persona = personaFor(thread);
+  if (fs.existsSync(personaPath(persona))) args.push("--agent", persona); // replaces the default system prompt; the persona carries the role rules
   const style = stylePreamble();
   if (style) args.push("--append-system-prompt", style); // brain index arrives via the user hook
   fs.mkdirSync(threadDir(thread.id), { recursive: true, mode: 0o700 });
