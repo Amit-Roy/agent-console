@@ -146,6 +146,128 @@ export function resumeDue(
     .map(([p]) => p);
 }
 
+type Room = Map<string, { resetsAt: number; used: number; full: boolean; left: number }>;
+
+const minutesLeft = (window: { resetsAt: number }, nowMs: number) =>
+  Math.round((window.resetsAt - nowMs) / 60_000);
+
+function openIssuesByRank(input: { issues: Issue[]; done: Set<string> }): Issue[] {
+  return input.issues
+    .filter(
+      (issue) =>
+        !input.done.has(issueKey(issue)) &&
+        !issue.labels.includes("manual") &&
+        effortOf(issue.labels),
+    )
+    .sort(
+      (first, second) => rank(first.labels) - rank(second.labels) || first.number - second.number,
+    );
+}
+
+function buildRoom(usage: Record<string, ProviderUsage>, nowMs: number, cfg: Config): Room {
+  const room: Room = new Map();
+  for (const provider of ["claude", "codex"]) {
+    const window = expiring(usage[provider], nowMs, cfg);
+    if (window) room.set(provider, { ...window, left: cfg.perWindow });
+  }
+  return room;
+}
+
+// Deep work first: it needs the most quota, so it gets first pick of what is expiring.
+// Premium slots left without Deep work take the next issue by priority, then effort. Work that would otherwise run on Pi
+// gets the low-effort FILL routes; BAU kept off Pi keeps its own BAU route.
+function planPremiumWindows(
+  open: Issue[],
+  room: Room,
+  cfg: Config,
+  nowMs: number,
+  out: Decision[],
+): Set<Issue> {
+  const piWork = (effort: Effort) =>
+    effort === "trivial" ||
+    (effort === "bau" && cfg.routing.mode === "live" && cfg.routing.bauOnPi);
+  const byPriority = open
+    .filter((issue) => effortOf(issue.labels) !== "deep")
+    .sort(
+      (first, second) =>
+        rank(first.labels) - rank(second.labels) ||
+        EFFORT_ORDER.indexOf(effortOf(first.labels)!) -
+          EFFORT_ORDER.indexOf(effortOf(second.labels)!) ||
+        first.number - second.number,
+    );
+  const fill = new Set<Issue>();
+  const deepIssues = open.filter((issue) => effortOf(issue.labels) === "deep");
+  for (const issue of [...deepIssues, ...byPriority]) {
+    const effort = effortOf(issue.labels)!;
+    const pool = effort === "deep" ? ROUTES.deep : piWork(effort) ? FILL : ROUTES.bau;
+    const route = pool.find((candidate) => {
+      const window = room.get(candidate.provider);
+      return !!window && window.left > 0 && !window.full;
+    });
+    if (!route) continue;
+    const window = room.get(route.provider)!;
+    window.left--;
+    fill.add(issue);
+    out.push({
+      key: issueKey(issue),
+      issue,
+      effort,
+      route,
+      premium: pool === FILL,
+      window: {
+        provider: route.provider,
+        resetsAt: window.resetsAt,
+        used: Math.round(window.used),
+      },
+      reason: `${route.provider} window ends in ${minutesLeft(window, nowMs)} min at ${Math.round(window.used)}% used${effort === "deep" ? "" : "; no Deep work left"}`,
+    });
+  }
+  return fill;
+}
+
+// Trivial work runs on Pi but needs a Sonnet/Sol reviewer, so it also draws on an expiring window, even a full one.
+function planReviewedTrivial(issue: Issue, room: Room, nowMs: number, out: Decision[]) {
+  const route = REVIEWERS.find((candidate) => {
+    const window = room.get(candidate.provider);
+    return !!window && window.left > 0;
+  });
+  if (!route) return;
+  const window = room.get(route.provider)!;
+  window.left--;
+  out.push({
+    key: issueKey(issue),
+    issue,
+    effort: "trivial",
+    route: ROUTES.trivial[0],
+    window: { provider: route.provider, resetsAt: window.resetsAt, used: Math.round(window.used) },
+    reason: `${route.provider} window ends in ${minutesLeft(window, nowMs)} min at ${Math.round(window.used)}% used; reviewer ${route.model}`,
+  });
+}
+
+function planRemainingIssue(
+  issue: Issue,
+  effort: Effort,
+  ctx: { room: Room; cfg: Config; nowMs: number; piLeft: { count: number }; out: Decision[] },
+) {
+  // Live Pi workers use their own capacity; premium review can wait until the PR is ready.
+  if (
+    ctx.cfg.routing.mode === "live" &&
+    (effort === "trivial" || (effort === "bau" && ctx.cfg.routing.bauOnPi))
+  ) {
+    if (ctx.piLeft.count-- > 0)
+      ctx.out.push({
+        key: issueKey(issue),
+        issue,
+        effort,
+        route: ROUTES.trivial[0],
+        reason: "Pi work is independent of premium reset windows",
+      });
+    return;
+  }
+  if (effort !== "trivial") return; // BAU had its premium chance above
+  planReviewedTrivial(issue, ctx.room, ctx.nowMs, ctx.out);
+}
+
 /** Pure: which open issues to start now. `done` holds keys already assigned (any window). */
 export function plan(input: {
   now: number;
@@ -155,90 +277,16 @@ export function plan(input: {
   cfg?: Partial<Config>;
 }): Decision[] {
   const cfg = { ...DEFAULTS, ...input.cfg };
-  const open = input.issues
-    .filter(
-      (i) => !input.done.has(issueKey(i)) && !i.labels.includes("manual") && effortOf(i.labels),
-    )
-    .sort((a, b) => rank(a.labels) - rank(b.labels) || a.number - b.number);
-  const room = new Map<string, { resetsAt: number; used: number; full: boolean; left: number }>();
-  for (const p of ["claude", "codex"]) {
-    const e = expiring(input.usage[p], input.now, cfg);
-    if (e) room.set(p, { ...e, left: cfg.perWindow });
-  }
+  const open = openIssuesByRank(input);
+  const room = buildRoom(input.usage, input.now, cfg);
   const out: Decision[] = [];
-  const minutes = (w: { resetsAt: number }) => Math.round((w.resetsAt - input.now) / 60_000);
-  // Deep work first: it needs the most quota, so it gets first pick of what is expiring.
-  // Premium slots left without Deep work take the next issue by priority, then effort. Work that would otherwise run on Pi
-  // gets the low-effort FILL routes; BAU kept off Pi keeps its own BAU route.
-  const piWork = (e: Effort) =>
-    e === "trivial" || (e === "bau" && cfg.routing.mode === "live" && cfg.routing.bauOnPi);
-  const byPriority = open
-    .filter((i) => effortOf(i.labels) !== "deep")
-    .sort(
-      (a, b) =>
-        rank(a.labels) - rank(b.labels) ||
-        EFFORT_ORDER.indexOf(effortOf(a.labels)!) - EFFORT_ORDER.indexOf(effortOf(b.labels)!) ||
-        a.number - b.number,
-    );
-  const fill = new Set<Issue>();
-  for (const issue of [...open.filter((i) => effortOf(i.labels) === "deep"), ...byPriority]) {
-    const effort = effortOf(issue.labels)!;
-    const pool = effort === "deep" ? ROUTES.deep : piWork(effort) ? FILL : ROUTES.bau;
-    const route = pool.find((r) => {
-      const w = room.get(r.provider);
-      return !!w && w.left > 0 && !w.full;
-    });
-    if (!route) continue;
-    const w = room.get(route.provider)!;
-    w.left--;
-    fill.add(issue);
-    out.push({
-      key: issueKey(issue),
-      issue,
-      effort,
-      route,
-      premium: pool === FILL,
-      window: { provider: route.provider, resetsAt: w.resetsAt, used: Math.round(w.used) },
-      reason: `${route.provider} window ends in ${minutes(w)} min at ${Math.round(w.used)}% used${effort === "deep" ? "" : "; no Deep work left"}`,
-    });
-  }
-  let piLeft = cfg.perWindow;
-  for (const effort of ["bau", "trivial"] as Effort[]) {
-    for (const issue of open.filter((i) => effortOf(i.labels) === effort && !fill.has(i))) {
-      // Live Pi workers use their own capacity; premium review can wait until the PR is ready.
-      if (
-        cfg.routing.mode === "live" &&
-        (effort === "trivial" || (effort === "bau" && cfg.routing.bauOnPi))
-      ) {
-        if (piLeft-- > 0)
-          out.push({
-            key: issueKey(issue),
-            issue,
-            effort,
-            route: ROUTES.trivial[0],
-            reason: "Pi work is independent of premium reset windows",
-          });
-        continue;
-      }
-      // Trivial work runs on Pi but needs a Sonnet/Sol reviewer, so it also draws on an expiring window, even a full one.
-      if (effort !== "trivial") continue; // BAU had its premium chance above
-      const route = REVIEWERS.find((r) => {
-        const w = room.get(r.provider);
-        return !!w && w.left > 0;
-      });
-      if (!route) continue;
-      const w = room.get(route.provider)!;
-      w.left--;
-      out.push({
-        key: issueKey(issue),
-        issue,
-        effort,
-        route: ROUTES.trivial[0],
-        window: { provider: route.provider, resetsAt: w.resetsAt, used: Math.round(w.used) },
-        reason: `${route.provider} window ends in ${minutes(w)} min at ${Math.round(w.used)}% used; reviewer ${route.model}`,
-      });
-    }
-  }
+  const fill = planPremiumWindows(open, room, cfg, input.now, out);
+  const ctx = { room, cfg, nowMs: input.now, piLeft: { count: cfg.perWindow }, out };
+  for (const effort of ["bau", "trivial"] as Effort[])
+    for (const issue of open.filter(
+      (candidate) => effortOf(candidate.labels) === effort && !fill.has(candidate),
+    ))
+      planRemainingIssue(issue, effort, ctx);
   return out;
 }
 
@@ -392,6 +440,87 @@ export const defaultDirs = () => ({
   worktrees: process.env.AGENT_CONSOLE_WORKTREES || path.join(os.homedir(), "worktrees"),
 });
 
+type CheckoutContext = { git: Git; cwd: string; branch: string; remote: string };
+
+function pathExists(target: string): boolean {
+  try {
+    fs.lstatSync(target);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function verifyPrivateCheckout(ctx: CheckoutContext, checkBranch = true) {
+  const { git, cwd } = ctx;
+  const metadata = path.join(cwd, ".git");
+  if (
+    fs.lstatSync(cwd).isSymbolicLink() ||
+    !fs.lstatSync(metadata).isDirectory() ||
+    fs.lstatSync(metadata).isSymbolicLink()
+  )
+    throw new Error(`Refusing non-private checkout at ${cwd}`);
+  if (
+    fs.realpathSync(await git(cwd, "rev-parse", "--show-toplevel")) !== cwd ||
+    fs.realpathSync(await git(cwd, "rev-parse", "--path-format=absolute", "--git-common-dir")) !==
+      metadata
+  )
+    throw new Error(`Refusing shared Git metadata at ${cwd}`);
+  if (
+    (checkBranch && (await git(cwd, "rev-parse", "--abbrev-ref", "HEAD")) !== ctx.branch) ||
+    (await git(cwd, "remote", "get-url", "origin")) !== ctx.remote
+  )
+    throw new Error(`Refusing stale checkout at ${cwd}`);
+}
+
+async function cloneCheckout(ctx: CheckoutContext, main: string, base: string) {
+  const { git, cwd } = ctx;
+  // Transport cloning copies committed objects only, with no hardlinks or alternates to the live repository.
+  // Only the default branch is copied: local agent branches would drag their whole history into every clone.
+  await git(
+    main,
+    "clone",
+    "-q",
+    "--no-local",
+    "--no-hardlinks",
+    "--no-checkout",
+    "--single-branch",
+    "--branch",
+    base,
+    main,
+    cwd,
+  );
+  try {
+    await git(cwd, "remote", "set-url", "origin", ctx.remote);
+    await git(cwd, "remote", "set-branches", "origin", "*");
+    await git(cwd, "fetch", "-q", "origin");
+    await git(cwd, "checkout", "-q", "-b", ctx.branch, `origin/${base}`);
+    await verifyPrivateCheckout(ctx);
+  } catch (error) {
+    fs.rmSync(cwd, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+async function reuseCheckout(ctx: CheckoutContext) {
+  try {
+    await verifyPrivateCheckout(ctx);
+  } catch (error: any) {
+    throw new Error(`Refusing existing checkout: ${error.message}`);
+  }
+}
+
+function claimCheckoutMarker(cwd: string, exists: boolean) {
+  const marker = path.join(cwd, ".git", "agent-console-auto");
+  if (!exists) fs.writeFileSync(marker, "private-checkout-v1\n", { mode: 0o600, flag: "wx" });
+  else if (
+    !fs.lstatSync(marker).isFile() ||
+    fs.lstatSync(marker).isSymbolicLink() ||
+    fs.readFileSync(marker, "utf8") !== "private-checkout-v1\n"
+  )
+    throw new Error("Refusing unowned private checkout");
+}
+
 /** Create a private clone with its own Git metadata. Shared worktrees are never reused. */
 export async function addWorktree(o: {
   repo: string;
@@ -417,75 +546,11 @@ export async function addWorktree(o: {
   o.step?.("clone");
   fs.mkdirSync(o.dirs.worktrees, { recursive: true });
   const cwd = path.join(fs.realpathSync(o.dirs.worktrees), o.dirName);
-  const exists = (() => {
-    try {
-      fs.lstatSync(cwd);
-      return true;
-    } catch {
-      return false;
-    }
-  })();
-  const privateCheckout = async (checkBranch = true) => {
-    const metadata = path.join(cwd, ".git");
-    if (
-      fs.lstatSync(cwd).isSymbolicLink() ||
-      !fs.lstatSync(metadata).isDirectory() ||
-      fs.lstatSync(metadata).isSymbolicLink()
-    )
-      throw new Error(`Refusing non-private checkout at ${cwd}`);
-    if (
-      fs.realpathSync(await git(cwd, "rev-parse", "--show-toplevel")) !== cwd ||
-      fs.realpathSync(await git(cwd, "rev-parse", "--path-format=absolute", "--git-common-dir")) !==
-        metadata
-    )
-      throw new Error(`Refusing shared Git metadata at ${cwd}`);
-    if (
-      (checkBranch && (await git(cwd, "rev-parse", "--abbrev-ref", "HEAD")) !== o.branch) ||
-      (await git(cwd, "remote", "get-url", "origin")) !== remote
-    )
-      throw new Error(`Refusing stale checkout at ${cwd}`);
-  };
-  if (exists) {
-    try {
-      await privateCheckout();
-    } catch (e: any) {
-      throw new Error(`Refusing existing checkout: ${e.message}`);
-    }
-  } else {
-    // Transport cloning copies committed objects only, with no hardlinks or alternates to the live repository.
-    // Only the default branch is copied: local agent branches would drag their whole history into every clone.
-    await git(
-      main,
-      "clone",
-      "-q",
-      "--no-local",
-      "--no-hardlinks",
-      "--no-checkout",
-      "--single-branch",
-      "--branch",
-      base,
-      main,
-      cwd,
-    );
-    try {
-      await git(cwd, "remote", "set-url", "origin", remote);
-      await git(cwd, "remote", "set-branches", "origin", "*");
-      await git(cwd, "fetch", "-q", "origin");
-      await git(cwd, "checkout", "-q", "-b", o.branch, `origin/${base}`);
-      await privateCheckout();
-    } catch (e) {
-      fs.rmSync(cwd, { recursive: true, force: true });
-      throw e;
-    }
-  }
-  const marker = path.join(cwd, ".git", "agent-console-auto");
-  if (!exists) fs.writeFileSync(marker, "private-checkout-v1\n", { mode: 0o600, flag: "wx" });
-  else if (
-    !fs.lstatSync(marker).isFile() ||
-    fs.lstatSync(marker).isSymbolicLink() ||
-    fs.readFileSync(marker, "utf8") !== "private-checkout-v1\n"
-  )
-    throw new Error("Refusing unowned private checkout");
+  const exists = pathExists(cwd);
+  const ctx: CheckoutContext = { git, cwd, branch: o.branch, remote };
+  if (exists) await reuseCheckout(ctx);
+  else await cloneCheckout(ctx, main, base);
+  claimCheckoutMarker(cwd, exists);
   const created = !exists;
   return {
     cwd,
@@ -495,7 +560,7 @@ export async function addWorktree(o: {
     remove: async () => {
       if (!created) return;
       try {
-        await privateCheckout(false);
+        await verifyPrivateCheckout(ctx, false);
         fs.rmSync(cwd, { recursive: true, force: true });
       } catch {}
     },
@@ -598,8 +663,7 @@ export async function openIssues(
   return out;
 }
 
-/** Append-only ledger: decisions and the keys they cover. Dry runs are logged but never block a later real run. */
-export function createDispatcher(opts: {
+type DispatcherOptions = {
   usage: () => Record<string, ProviderUsage>;
   github?: GithubRequest;
   dir?: string;
@@ -608,116 +672,168 @@ export function createDispatcher(opts: {
   events?: EventLog;
   active?: () => { provider: string; role: string }[];
   failures?: () => Record<string, number>;
-}) {
-  const dir = opts.dir ?? DATA_DIR;
-  const ledger = path.join(dir, "window-dispatch.jsonl");
-  const now = opts.now ?? Date.now;
-  const ev = opts.events;
-  const read = () => {
-    try {
-      return fs
-        .readFileSync(ledger, "utf8")
-        .split("\n")
-        .filter(Boolean)
-        .map((l) => JSON.parse(l));
-    } catch {
-      return [];
-    }
-  };
-  const append = (row: object) =>
-    fs.appendFileSync(ledger, JSON.stringify(row) + "\n", { mode: 0o600 });
-  async function tick() {
-    const cfg = loadConfig(path.join(dir, "window-dispatch.json"));
-    if (!cfg.enabled) return [];
-    const run = `tick:${now()}`;
-    ev?.record({ step: "dispatcher", kind: "start", run, msg: "tick" });
-    try {
-      const issues = await openIssues(cfg.repos, opts.github, cfg.authors);
-      const rows = read();
-      const done = new Set<string>(rows.filter((r) => !r.dryRun).map((r) => r.key));
-      const live = !cfg.dryRun && !!opts.start;
-      const seen = new Set<string>(
-        rows.filter((r) => r.dryRun).map((r) => `${r.key}@${r.window?.resetsAt}`),
-      );
-      const planned = plan({ now: now(), usage: opts.usage(), issues, done, cfg }).filter(
-        (d) => live || !seen.has(`${d.key}@${d.window?.resetsAt}`),
-      );
-      const picked: Decision[] = [];
-      let deferred = 0;
-      const active = [...(opts.active?.() ?? [])];
-      for (let d of planned) {
-        const rr = routeWork({
-          role: "work",
-          effort: d.effort,
-          premium: d.premium,
-          usage: opts.usage(),
-          active,
-          now: now(),
-          flags: { bauOnPi: cfg.routing.bauOnPi },
-          failures: opts.failures?.(),
-        });
-        const shadow = { decision: rr.decision, route: rr.route, why: rr.why };
-        ev?.record({
-          step: "router",
-          kind: rr.decision === "defer" ? "info" : "ok",
-          ref: d.key,
-          msg: `${cfg.routing.mode}: ${rr.decision}${rr.route ? ` ${rr.route.provider}/${rr.route.model}` : ""} — ${rr.why}`,
-          data: { legacy: d.route, router: rr.route },
-        });
-        if (cfg.routing.mode === "live") {
-          if (rr.decision === "defer") {
-            deferred++;
-            continue;
-          } // not marked done: the next tick tries again
-          if (rr.decision === "route") {
-            d = { ...d, route: rr.route! };
-            active.push({ provider: d.route.provider, role: "work" });
-          }
-        }
-        picked.push(d);
-        // Logged before the start so a crash cannot start the same issue twice; a failed start stays in the ledger with its error and is not retried.
-        const row = {
-          ts: now(),
-          dryRun: !live,
-          key: d.key,
-          effort: d.effort,
-          route: d.route,
-          window: d.window,
-          reason: d.reason,
-          shadow,
-        };
-        append(row);
-        if (!live) continue;
-        const wt = `worktree:${d.key}`;
-        ev?.record({ step: "worktree", kind: "start", run: wt, ref: d.key });
-        try {
-          const started = await opts.start!(d);
-          ev?.record({ step: "worktree", kind: "ok", run: wt, ref: d.key });
-          ev?.record({
-            step: "worker",
-            kind: "start",
-            run: `work:${(started as any)?.thread ?? d.key}`,
-            ref: d.key,
-            msg: `${d.route.provider}/${d.route.model}`,
-            data: { thread: (started as any)?.thread },
-          });
-        } catch (e: any) {
-          const error = String(e?.message ?? e).slice(0, 300);
-          append({ ...row, error });
-          ev?.record({ step: "worktree", kind: "fail", run: wt, ref: d.key, msg: error });
-        }
-      }
-      ev?.record({
-        step: "dispatcher",
-        kind: "ok",
-        run,
-        msg: `picked ${picked.length}${deferred ? `, deferred ${deferred}` : ""}${picked.length || deferred ? "" : ` (no eligible Pi work or premium window in its last ${cfg.leadMinutes} min, or ${cfg.lowUsageLeadMinutes} min below ${cfg.lowUsagePct}% used, with room)`}`,
-      });
-      return picked;
-    } catch (e: any) {
-      ev?.record({ step: "dispatcher", kind: "fail", run, msg: String(e?.message ?? e) });
-      throw e;
-    }
+};
+type DispatcherContext = {
+  opts: DispatcherOptions;
+  dir: string;
+  ledger: string;
+  now: () => number;
+};
+
+function readLedger(ctx: DispatcherContext): any[] {
+  try {
+    return fs
+      .readFileSync(ctx.ledger, "utf8")
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+  } catch {
+    return [];
   }
-  return { tick };
+}
+
+const appendLedger = (ctx: DispatcherContext, row: object) =>
+  fs.appendFileSync(ctx.ledger, JSON.stringify(row) + "\n", { mode: 0o600 });
+
+// Shadow-routes one planned decision; in live mode the router may defer it or replace its route.
+function applyRouter(
+  ctx: DispatcherContext,
+  cfg: Config,
+  decision: Decision,
+  active: { provider: string; role: string }[],
+) {
+  const routed = routeWork({
+    role: "work",
+    effort: decision.effort,
+    premium: decision.premium,
+    usage: ctx.opts.usage(),
+    active,
+    now: ctx.now(),
+    flags: { bauOnPi: cfg.routing.bauOnPi },
+    failures: ctx.opts.failures?.(),
+  });
+  const shadow = { decision: routed.decision, route: routed.route, why: routed.why };
+  ctx.opts.events?.record({
+    step: "router",
+    kind: routed.decision === "defer" ? "info" : "ok",
+    ref: decision.key,
+    msg: `${cfg.routing.mode}: ${routed.decision}${routed.route ? ` ${routed.route.provider}/${routed.route.model}` : ""} — ${routed.why}`,
+    data: { legacy: decision.route, router: routed.route },
+  });
+  let picked = decision;
+  if (cfg.routing.mode === "live" && routed.decision === "route") {
+    picked = { ...decision, route: routed.route! };
+    active.push({ provider: picked.route.provider, role: "work" });
+  }
+  const deferred = cfg.routing.mode === "live" && routed.decision === "defer";
+  return { picked, shadow, deferred };
+}
+
+async function startDecisionLive(ctx: DispatcherContext, decision: Decision, row: object) {
+  const events = ctx.opts.events;
+  const worktreeRun = `worktree:${decision.key}`;
+  events?.record({ step: "worktree", kind: "start", run: worktreeRun, ref: decision.key });
+  try {
+    const started = await ctx.opts.start!(decision);
+    events?.record({ step: "worktree", kind: "ok", run: worktreeRun, ref: decision.key });
+    events?.record({
+      step: "worker",
+      kind: "start",
+      run: `work:${(started as any)?.thread ?? decision.key}`,
+      ref: decision.key,
+      msg: `${decision.route.provider}/${decision.route.model}`,
+      data: { thread: (started as any)?.thread },
+    });
+  } catch (error: any) {
+    const message = String(error?.message ?? error).slice(0, 300);
+    appendLedger(ctx, { ...row, error: message });
+    events?.record({
+      step: "worktree",
+      kind: "fail",
+      run: worktreeRun,
+      ref: decision.key,
+      msg: message,
+    });
+  }
+}
+
+async function dispatchPlanned(
+  ctx: DispatcherContext,
+  cfg: Config,
+  planned: Decision[],
+  live: boolean,
+) {
+  const picked: Decision[] = [];
+  let deferred = 0;
+  const active = [...(ctx.opts.active?.() ?? [])];
+  for (const decision of planned) {
+    const routed = applyRouter(ctx, cfg, decision, active);
+    if (routed.deferred) {
+      deferred++;
+      continue; // not marked done: the next tick tries again
+    }
+    const chosen = routed.picked;
+    picked.push(chosen);
+    // Logged before the start so a crash cannot start the same issue twice; a failed start stays in the ledger with its error and is not retried.
+    const row = {
+      ts: ctx.now(),
+      dryRun: !live,
+      key: chosen.key,
+      effort: chosen.effort,
+      route: chosen.route,
+      window: chosen.window,
+      reason: chosen.reason,
+      shadow: routed.shadow,
+    };
+    appendLedger(ctx, row);
+    if (live) await startDecisionLive(ctx, chosen, row);
+  }
+  return { picked, deferred };
+}
+
+function summaryMessage(cfg: Config, pickedCount: number, deferred: number): string {
+  return `picked ${pickedCount}${deferred ? `, deferred ${deferred}` : ""}${pickedCount || deferred ? "" : ` (no eligible Pi work or premium window in its last ${cfg.leadMinutes} min, or ${cfg.lowUsageLeadMinutes} min below ${cfg.lowUsagePct}% used, with room)`}`;
+}
+
+async function dispatchTick(ctx: DispatcherContext) {
+  const cfg = loadConfig(path.join(ctx.dir, "window-dispatch.json"));
+  if (!cfg.enabled) return [];
+  const events = ctx.opts.events;
+  const run = `tick:${ctx.now()}`;
+  events?.record({ step: "dispatcher", kind: "start", run, msg: "tick" });
+  try {
+    const issues = await openIssues(cfg.repos, ctx.opts.github, cfg.authors);
+    const rows = readLedger(ctx);
+    const done = new Set<string>(rows.filter((row) => !row.dryRun).map((row) => row.key));
+    const live = !cfg.dryRun && !!ctx.opts.start;
+    const seen = new Set<string>(
+      rows.filter((row) => row.dryRun).map((row) => `${row.key}@${row.window?.resetsAt}`),
+    );
+    const planned = plan({ now: ctx.now(), usage: ctx.opts.usage(), issues, done, cfg }).filter(
+      (decision) => live || !seen.has(`${decision.key}@${decision.window?.resetsAt}`),
+    );
+    const { picked, deferred } = await dispatchPlanned(ctx, cfg, planned, live);
+    events?.record({
+      step: "dispatcher",
+      kind: "ok",
+      run,
+      msg: summaryMessage(cfg, picked.length, deferred),
+    });
+    return picked;
+  } catch (error: any) {
+    events?.record({ step: "dispatcher", kind: "fail", run, msg: String(error?.message ?? error) });
+    throw error;
+  }
+}
+
+/** Append-only ledger: decisions and the keys they cover. Dry runs are logged but never block a later real run. */
+export function createDispatcher(opts: DispatcherOptions) {
+  const dir = opts.dir ?? DATA_DIR;
+  const ctx: DispatcherContext = {
+    opts,
+    dir,
+    ledger: path.join(dir, "window-dispatch.jsonl"),
+    now: opts.now ?? Date.now,
+  };
+  return { tick: () => dispatchTick(ctx) };
 }

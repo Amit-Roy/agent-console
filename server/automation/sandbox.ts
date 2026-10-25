@@ -144,18 +144,85 @@ function linkReadableResource(source: string, target: string): void {
   }
 }
 
+type SandboxPaths = { dataDir: string; home: string; runtime: string };
+
+function applyPiSandbox(
+  thread: AutoThread,
+  env: NodeJS.ProcessEnv,
+  paths: SandboxPaths,
+  result: NodeJS.ProcessEnv,
+  writable: string[],
+) {
+  const { dataDir, home, runtime } = paths;
+  const config = privateDir(path.join(runtime, "pi"));
+  const original = env.PI_CODING_AGENT_DIR || path.join(home, ".pi", "agent");
+  // Pi locks settings while reading them. Copies keep those locks and OAuth
+  // refreshes private; resource symlinks remain read-only under Landlock.
+  for (const file of [
+    "auth.json",
+    "settings.json",
+    "models.json",
+    "models-store.json",
+    "mcp.json",
+    "mcp-auth.json",
+  ])
+    seedFile(path.join(original, file), path.join(config, file));
+  for (const resource of [
+    "AGENTS.md",
+    "extensions",
+    "skills",
+    "prompts",
+    "themes",
+    "bin",
+    "vendor",
+    "npm",
+    "git",
+  ])
+    linkReadableResource(path.join(original, resource), path.join(config, resource));
+  result.PI_CODING_AGENT_DIR = config;
+  writable.push(privateDir(path.join(dataDir, "pi-sessions", thread.id)));
+}
+
+function applyClaudeSandbox(
+  thread: AutoThread,
+  env: NodeJS.ProcessEnv,
+  paths: SandboxPaths,
+  result: NodeJS.ProcessEnv,
+) {
+  const { home, runtime } = paths;
+  const config = privateDir(path.join(runtime, "claude"));
+  const original = claudeConfigDir(thread.claudeAccount, env, home);
+  for (const file of [".credentials.json", ".claude.json", "settings.json"])
+    seedFile(path.join(original, file), path.join(config, file));
+  if ((!thread.claudeAccount || thread.claudeAccount === "sunny") && !env.CLAUDE_CONFIG_DIR)
+    seedFile(path.join(home, ".claude.json"), path.join(config, ".claude.json"));
+  result.CLAUDE_CONFIG_DIR = config;
+}
+
+function applyCodexSandbox(env: NodeJS.ProcessEnv, paths: SandboxPaths, result: NodeJS.ProcessEnv) {
+  const { home, runtime } = paths;
+  const config = privateDir(path.join(runtime, "codex"));
+  const original = env.CODEX_HOME || path.join(home, ".codex");
+  for (const file of ["auth.json", "config.toml", "models_cache.json"])
+    seedFile(path.join(original, file), path.join(config, file));
+  result.CODEX_HOME = config;
+  // The standalone helper launcher resolves packages under CODEX_HOME; keep it on the shared install.
+  result.CODEX_HELPER_PACKAGE_ROOT =
+    env.CODEX_HELPER_PACKAGE_ROOT || path.join(original, "packages");
+}
+
 /** Prepare only per-thread writable state. This function does not probe the kernel. */
 export function automationSandboxConfig(
-  t: AutoThread,
+  thread: AutoThread,
   env: NodeJS.ProcessEnv,
   options: { dataDir?: string; home?: string } = {},
 ) {
-  if (!automated(t)) return { env, writable: [] as string[] };
-  if (!/^[a-zA-Z0-9_-]+$/.test(t.id)) throw new Error("Invalid Auto thread ID.");
-  assertAutomationProject(t);
+  if (!automated(thread)) return { env, writable: [] as string[] };
+  if (!/^[a-zA-Z0-9_-]+$/.test(thread.id)) throw new Error("Invalid Auto thread ID.");
+  assertAutomationProject(thread);
   const dataDir = path.resolve(options.dataDir ?? DATA_DIR);
   const home = options.home ?? os.homedir();
-  const runtime = privateDir(path.join(dataDir, "auto-runtime", t.id));
+  const runtime = privateDir(path.join(dataDir, "auto-runtime", thread.id));
   const tmp = privateDir(path.join(runtime, "tmp"));
   const cache = privateDir(path.join(runtime, "cache"));
   const result: NodeJS.ProcessEnv = {
@@ -169,55 +236,12 @@ export function automationSandboxConfig(
       env.PLAYWRIGHT_BROWSERS_PATH ??
       path.join(env.XDG_CACHE_HOME || path.join(home, ".cache"), "ms-playwright"),
   };
-  const writable = [fs.realpathSync(t.cwd), runtime];
-  if (t.provider === "pi") {
-    const config = privateDir(path.join(runtime, "pi"));
-    const original = env.PI_CODING_AGENT_DIR || path.join(home, ".pi", "agent");
-    // Pi locks settings while reading them. Copies keep those locks and OAuth
-    // refreshes private; resource symlinks remain read-only under Landlock.
-    for (const file of [
-      "auth.json",
-      "settings.json",
-      "models.json",
-      "models-store.json",
-      "mcp.json",
-      "mcp-auth.json",
-    ])
-      seedFile(path.join(original, file), path.join(config, file));
-    for (const resource of [
-      "AGENTS.md",
-      "extensions",
-      "skills",
-      "prompts",
-      "themes",
-      "bin",
-      "vendor",
-      "npm",
-      "git",
-    ])
-      linkReadableResource(path.join(original, resource), path.join(config, resource));
-    result.PI_CODING_AGENT_DIR = config;
-    writable.push(privateDir(path.join(dataDir, "pi-sessions", t.id)));
-  } else if (t.provider === "claude") {
-    const config = privateDir(path.join(runtime, "claude"));
-    const original = claudeConfigDir(t.claudeAccount, env, home);
-    for (const file of [".credentials.json", ".claude.json", "settings.json"])
-      seedFile(path.join(original, file), path.join(config, file));
-    if ((!t.claudeAccount || t.claudeAccount === "sunny") && !env.CLAUDE_CONFIG_DIR)
-      seedFile(path.join(home, ".claude.json"), path.join(config, ".claude.json"));
-    result.CLAUDE_CONFIG_DIR = config;
-  } else if (t.provider === "codex") {
-    const config = privateDir(path.join(runtime, "codex"));
-    const original = env.CODEX_HOME || path.join(home, ".codex");
-    for (const file of ["auth.json", "config.toml", "models_cache.json"])
-      seedFile(path.join(original, file), path.join(config, file));
-    result.CODEX_HOME = config;
-    // The standalone helper launcher resolves packages under CODEX_HOME; keep it on the shared install.
-    result.CODEX_HELPER_PACKAGE_ROOT =
-      env.CODEX_HELPER_PACKAGE_ROOT || path.join(original, "packages");
-  } else {
-    throw new Error("Auto sandbox requires a known provider.");
-  }
+  const writable = [fs.realpathSync(thread.cwd), runtime];
+  const paths: SandboxPaths = { dataDir, home, runtime };
+  if (thread.provider === "pi") applyPiSandbox(thread, env, paths, result, writable);
+  else if (thread.provider === "claude") applyClaudeSandbox(thread, env, paths, result);
+  else if (thread.provider === "codex") applyCodexSandbox(env, paths, result);
+  else throw new Error("Auto sandbox requires a known provider.");
   return { env: result, writable };
 }
 

@@ -179,6 +179,60 @@ export function finalText(events: any[]): string {
 
 type Emit = (msg: unknown) => void;
 
+function resolveAgent(input: TaskInput, base?: Task) {
+  const providerId =
+    input.provider ?? base?.provider ?? (PROVIDERS.get("pi")?.status().ok ? "pi" : "claude");
+  const prov = PROVIDERS.get(providerId);
+  if (!prov) throw new Error("Unknown agent.");
+  const model =
+    input.model && prov.models().includes(input.model)
+      ? input.model
+      : providerId === base?.provider && !input.model
+        ? base.model
+        : prov.defaultModel();
+  if (!model) throw new Error(`${prov.label} has no models available.`);
+  const mode =
+    input.mode && prov.modes.includes(input.mode)
+      ? input.mode
+      : providerId === base?.provider && !input.mode
+        ? base.mode
+        : prov.defaultMode;
+  const effortIn =
+    input.effort ??
+    (providerId === base?.provider && model === base?.model ? base.effort : undefined);
+  const effort =
+    effortIn && effortIn !== "default" && prov.modelDetails?.()[model]?.efforts.includes(effortIn)
+      ? effortIn
+      : "default";
+  return { prov, model, mode, effort };
+}
+
+function resolveCwd(input: TaskInput, base?: Task): string {
+  const cwd = path.resolve(String(input.cwd ?? base?.cwd ?? path.join(os.homedir(), "repos")));
+  const home = os.homedir();
+  if (cwd !== home && !cwd.startsWith(home + path.sep))
+    throw new Error("Folder must be inside your home folder.");
+  if (!fs.statSync(cwd, { throwIfNoEntry: false })?.isDirectory())
+    throw new Error("Folder does not exist.");
+  return cwd;
+}
+
+function resolveWhen(input: TaskInput, base?: Task) {
+  const repeat = (input.repeat ?? base?.repeat ?? "daily") as Repeat;
+  if (!REPEATS.includes(repeat)) throw new Error(`Repeat must be one of: ${REPEATS.join(", ")}.`);
+  const time = String(input.time ?? base?.time ?? "09:00");
+  if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(time))
+    throw new Error("Time must be HH:MM, 24-hour (for example 09:00).");
+  const dayIn = input.day ?? base?.day ?? 1;
+  const day =
+    typeof dayIn === "string" && !/^\d$/.test(dayIn)
+      ? DAYS.indexOf(dayIn.slice(0, 3).toLowerCase())
+      : Number(dayIn);
+  if (!(day >= 0 && day <= 6))
+    throw new Error("Day must be a weekday name (mon, tue, …) or 0–6 with 0 = Sunday.");
+  return { repeat, time, day };
+}
+
 export class Schedules {
   private tasks = new Map<string, Task>();
   private removedBuiltins = new Set<string>(); // ids of built-in tasks the user deleted
@@ -296,48 +350,9 @@ export class Schedules {
       .slice(0, 20_000);
     if (!title) throw new Error("Give the task a name.");
     if (!prompt) throw new Error("Write what the agent should do.");
-    const providerId =
-      input.provider ?? base?.provider ?? (PROVIDERS.get("pi")?.status().ok ? "pi" : "claude");
-    const prov = PROVIDERS.get(providerId);
-    if (!prov) throw new Error("Unknown agent.");
-    const model =
-      input.model && prov.models().includes(input.model)
-        ? input.model
-        : providerId === base?.provider && !input.model
-          ? base.model
-          : prov.defaultModel();
-    if (!model) throw new Error(`${prov.label} has no models available.`);
-    const mode =
-      input.mode && prov.modes.includes(input.mode)
-        ? input.mode
-        : providerId === base?.provider && !input.mode
-          ? base.mode
-          : prov.defaultMode;
-    const effortIn =
-      input.effort ??
-      (providerId === base?.provider && model === base?.model ? base.effort : undefined);
-    const effort =
-      effortIn && effortIn !== "default" && prov.modelDetails?.()[model]?.efforts.includes(effortIn)
-        ? effortIn
-        : "default";
-    const cwd = path.resolve(String(input.cwd ?? base?.cwd ?? path.join(os.homedir(), "repos")));
-    const home = os.homedir();
-    if (cwd !== home && !cwd.startsWith(home + path.sep))
-      throw new Error("Folder must be inside your home folder.");
-    if (!fs.statSync(cwd, { throwIfNoEntry: false })?.isDirectory())
-      throw new Error("Folder does not exist.");
-    const repeat = (input.repeat ?? base?.repeat ?? "daily") as Repeat;
-    if (!REPEATS.includes(repeat)) throw new Error(`Repeat must be one of: ${REPEATS.join(", ")}.`);
-    const time = String(input.time ?? base?.time ?? "09:00");
-    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(time))
-      throw new Error("Time must be HH:MM, 24-hour (for example 09:00).");
-    const dayIn = input.day ?? base?.day ?? 1;
-    const day =
-      typeof dayIn === "string" && !/^\d$/.test(dayIn)
-        ? DAYS.indexOf(dayIn.slice(0, 3).toLowerCase())
-        : Number(dayIn);
-    if (!(day >= 0 && day <= 6))
-      throw new Error("Day must be a weekday name (mon, tue, …) or 0–6 with 0 = Sunday.");
+    const { prov, model, mode, effort } = resolveAgent(input, base);
+    const cwd = resolveCwd(input, base);
+    const { repeat, time, day } = resolveWhen(input, base);
     const tz = validZone(input.tz) ?? base?.tz ?? this.tz;
     return {
       title,

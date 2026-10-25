@@ -16,80 +16,72 @@ interface Row {
   reason: string | null;
 }
 
-export function createTriageBridge(opts: { dbPath: string; events: EventLog; now?: () => number }) {
-  const seen = new Map<string, string>();
-  let cursor = 0;
-  const rows = (): Row[] => {
-    if (!fs.existsSync(opts.dbPath)) return [];
-    let db: DatabaseSync | undefined;
-    try {
-      db = new DatabaseSync(opts.dbPath, { readOnly: true });
-      return db
-        .prepare(
-          "SELECT delivery,repo,number,status,attempts,updated,model,reason FROM github_triage WHERE updated >= ? ORDER BY updated, rowid",
-        )
-        .all(cursor) as unknown as Row[];
-    } catch {
-      return [];
-    } finally {
-      try {
-        db?.close();
-      } catch {}
-    }
-  };
-  // History before this process started is not new activity.
-  for (const r of rows()) {
-    cursor = Math.max(cursor, r.updated);
-  }
-  for (const r of rows()) seen.set(r.delivery, `${r.status}:${r.attempts}:${r.updated}`);
+type TriageState = {
+  opts: { dbPath: string; events: EventLog; now?: () => number };
+  seen: Map<string, string>;
+  cursor: number;
+};
 
-  function poll(): number {
-    let n = 0;
-    for (const r of rows()) {
-      const key = `${r.status}:${r.attempts}:${r.updated}`;
-      if (seen.get(r.delivery) === key) continue;
-      seen.set(r.delivery, key);
-      cursor = Math.max(cursor, r.updated);
-      const ref = `${r.repo}#${r.number}`,
-        run = `triage:${r.delivery}`,
-        why = r.reason ?? "webhook";
-      if (r.status === "queued")
-        opts.events.record({
-          step: "triage",
-          kind: "start",
-          run,
-          ref,
-          msg: r.attempts ? `queued again after attempt ${r.attempts}` : `queued (${why})`,
-        });
-      else if (r.status === "running")
-        opts.events.record({ step: "triage", kind: "start", run, ref, msg: `running (${why})` });
-      else if (r.status === "done")
-        opts.events.record({
-          step: "triage",
-          kind: "ok",
-          run,
-          ref,
-          msg: `labeled by ${r.model ?? "unknown model"}`,
-        });
-      else if (r.status === "skipped")
-        opts.events.record({
-          step: "triage",
-          kind: "ok",
-          run,
-          ref,
-          msg: `already complete (${why})`,
-        });
-      else
-        opts.events.record({
-          step: "triage",
-          kind: "fail",
-          run,
-          ref,
-          msg: `failed after ${r.attempts} attempts`,
-        });
-      n++;
-    }
-    return n;
+function readTriageRows(state: TriageState): Row[] {
+  if (!fs.existsSync(state.opts.dbPath)) return [];
+  let db: DatabaseSync | undefined;
+  try {
+    db = new DatabaseSync(state.opts.dbPath, { readOnly: true });
+    return db
+      .prepare(
+        "SELECT delivery,repo,number,status,attempts,updated,model,reason FROM github_triage WHERE updated >= ? ORDER BY updated, rowid",
+      )
+      .all(state.cursor) as unknown as Row[];
+  } catch {
+    return [];
+  } finally {
+    try {
+      db?.close();
+    } catch {}
   }
-  return { poll };
+}
+
+function triageEvent(row: Row): { kind: "start" | "ok" | "fail"; msg: string } {
+  const why = row.reason ?? "webhook";
+  if (row.status === "queued")
+    return {
+      kind: "start",
+      msg: row.attempts ? `queued again after attempt ${row.attempts}` : `queued (${why})`,
+    };
+  if (row.status === "running") return { kind: "start", msg: `running (${why})` };
+  if (row.status === "done")
+    return { kind: "ok", msg: `labeled by ${row.model ?? "unknown model"}` };
+  if (row.status === "skipped") return { kind: "ok", msg: `already complete (${why})` };
+  return { kind: "fail", msg: `failed after ${row.attempts} attempts` };
+}
+
+function pollTriage(state: TriageState): number {
+  let count = 0;
+  for (const row of readTriageRows(state)) {
+    const key = `${row.status}:${row.attempts}:${row.updated}`;
+    if (state.seen.get(row.delivery) === key) continue;
+    state.seen.set(row.delivery, key);
+    state.cursor = Math.max(state.cursor, row.updated);
+    const { kind, msg } = triageEvent(row);
+    state.opts.events.record({
+      step: "triage",
+      kind,
+      run: `triage:${row.delivery}`,
+      ref: `${row.repo}#${row.number}`,
+      msg,
+    });
+    count++;
+  }
+  return count;
+}
+
+export function createTriageBridge(opts: { dbPath: string; events: EventLog; now?: () => number }) {
+  const state: TriageState = { opts, seen: new Map<string, string>(), cursor: 0 };
+  // History before this process started is not new activity.
+  for (const row of readTriageRows(state)) {
+    state.cursor = Math.max(state.cursor, row.updated);
+  }
+  for (const row of readTriageRows(state))
+    state.seen.set(row.delivery, `${row.status}:${row.attempts}:${row.updated}`);
+  return { poll: () => pollTriage(state) };
 }

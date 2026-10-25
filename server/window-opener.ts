@@ -89,7 +89,7 @@ export function needsOpen(u: ProviderUsage | undefined, now: number): boolean {
   return w.used === 0 && !!u && w.resetsAt - u.updatedAt >= FULL_WINDOW_MS - IDLE_SLACK_MS;
 }
 
-export function createOpener(opts: {
+type OpenerOptions = {
   usage: () => Record<string, ProviderUsage>;
   refresh?: () => Promise<void>; // fresh quota readings (Codex can be asked on demand; Claude only reports during turns)
   open?: (
@@ -101,85 +101,120 @@ export function createOpener(opts: {
   dir?: string;
   now?: () => number;
   events?: EventLog;
-}) {
-  const dir = opts.dir ?? DATA_DIR;
-  const ledger = path.join(dir, "window-opener.jsonl");
-  const now = opts.now ?? Date.now;
-  const lastOpened = new Map<string, number>();
+};
+
+type OpenerContext = {
+  opts: OpenerOptions;
+  dir: string;
+  ledger: string;
+  now: () => number;
+  lastOpened: Map<string, number>;
+};
+
+function loadLedger(ledger: string, lastOpened: Map<string, number>) {
   try {
-    for (const l of fs.readFileSync(ledger, "utf8").split("\n").filter(Boolean)) {
-      const r = JSON.parse(l);
-      if (!r.dryRun && !r.error)
-        lastOpened.set(r.account ? `${r.provider}:${r.account}` : r.provider, r.ts);
+    for (const line of fs.readFileSync(ledger, "utf8").split("\n").filter(Boolean)) {
+      const row = JSON.parse(line);
+      if (!row.dryRun && !row.error)
+        lastOpened.set(row.account ? `${row.provider}:${row.account}` : row.provider, row.ts);
     }
   } catch {}
-  // usage key per quota window: Claude fans out per account, Nefro's key is "claude:nefro"
-  const targets = (providers: string[]) =>
-    providers.flatMap((p) =>
-      p === "claude"
-        ? (opts.claudeAccounts?.() ?? ["sunny"]).map((a) =>
-            a === "nefro" ? "claude:nefro" : "claude",
-          )
-        : [p],
-    );
-  async function tick() {
-    const cfg = loadOpenerConfig(path.join(dir, "window-dispatch.json"));
-    if (!cfg.enabled) return [];
-    const ev = opts.events;
-    if (!inHours(now(), cfg)) {
-      ev?.record({
-        step: "opener",
-        kind: "info",
-        msg: `nothing to do: outside ${cfg.from}–${cfg.to} ${cfg.tz}`,
+}
+
+// usage key per quota window: Claude fans out per account, Nefro's key is "claude:nefro"
+function openerTargets(ctx: OpenerContext, providers: string[]) {
+  return providers.flatMap((provider) =>
+    provider === "claude"
+      ? (ctx.opts.claudeAccounts?.() ?? ["sunny"]).map((account) =>
+          account === "nefro" ? "claude:nefro" : "claude",
+        )
+      : [provider],
+  );
+}
+
+function keyIsDue(ctx: OpenerContext, key: string, live: boolean): boolean {
+  if (!needsOpen(ctx.opts.usage()[key], ctx.now())) return false;
+  if (ctx.now() - (ctx.lastOpened.get(key) ?? 0) < MIN_GAP_MS) return false;
+  // A dry run logs once per gap too, so the log shows what would have happened rather than a line per tick.
+  if (!live && ctx.now() - (ctx.lastOpened.get("dry:" + key) ?? 0) < MIN_GAP_MS) return false;
+  return true;
+}
+
+// Returns true when the window counts as opened; false when the open failed.
+async function openKey(ctx: OpenerContext, key: string, live: boolean): Promise<boolean> {
+  const events = ctx.opts.events;
+  const [provider, account] = key.split(":");
+  const row = {
+    ts: ctx.now(),
+    dryRun: !live,
+    provider,
+    ...(account ? { account } : {}),
+    ...OPENER_ROUTES[provider],
+  };
+  fs.appendFileSync(ctx.ledger, JSON.stringify(row) + "\n", { mode: 0o600 });
+  ctx.lastOpened.set(live ? key : "dry:" + key, ctx.now());
+  const run = `open:${key}:${ctx.now()}`;
+  events?.record({ step: "opener", kind: "start", run, ref: key });
+  if (live)
+    try {
+      await ctx.opts.open!(provider, OPENER_ROUTES[provider], account);
+    } catch (error: any) {
+      ctx.lastOpened.delete(key); // a failed open does not count; the next tick may try again
+      const message = String(error?.message ?? error).slice(0, 300);
+      fs.appendFileSync(ctx.ledger, JSON.stringify({ ...row, error: message }) + "\n", {
+        mode: 0o600,
       });
-      return [];
+      events?.record({ step: "opener", kind: "fail", run, ref: key, msg: `${key}: ${message}` });
+      return false;
     }
-    await opts.refresh?.().catch(() => {});
-    const live = !cfg.dryRun && !!opts.open;
-    const opened: string[] = [];
-    for (const key of targets(cfg.providers)) {
-      const [provider, account] = key.split(":");
-      if (!needsOpen(opts.usage()[key], now())) continue;
-      if (now() - (lastOpened.get(key) ?? 0) < MIN_GAP_MS) continue;
-      // A dry run logs once per gap too, so the log shows what would have happened rather than a line per tick.
-      if (!live && now() - (lastOpened.get("dry:" + key) ?? 0) < MIN_GAP_MS) continue;
-      const row = {
-        ts: now(),
-        dryRun: !live,
-        provider,
-        ...(account ? { account } : {}),
-        ...OPENER_ROUTES[provider],
-      };
-      fs.appendFileSync(ledger, JSON.stringify(row) + "\n", { mode: 0o600 });
-      lastOpened.set(live ? key : "dry:" + key, now());
-      const run = `open:${key}:${now()}`;
-      ev?.record({ step: "opener", kind: "start", run, ref: key });
-      if (live)
-        try {
-          await opts.open!(provider, OPENER_ROUTES[provider], account);
-        } catch (e: any) {
-          lastOpened.delete(key); // a failed open does not count; the next tick may try again
-          const error = String(e?.message ?? e).slice(0, 300);
-          fs.appendFileSync(ledger, JSON.stringify({ ...row, error }) + "\n", { mode: 0o600 });
-          ev?.record({ step: "opener", kind: "fail", run, ref: key, msg: `${key}: ${error}` });
-          continue;
-        }
-      ev?.record({
-        step: "opener",
-        kind: "ok",
-        run,
-        ref: key,
-        msg: live ? `opened ${key}` : `would open ${key} (dry run)`,
-      });
-      opened.push(key);
-    }
-    if (!opened.length)
-      ev?.record({
-        step: "opener",
-        kind: "info",
-        msg: `nothing to do: ${targets(cfg.providers).every((k) => !needsOpen(opts.usage()[k], now())) ? "every window is live" : "an open was tried in the last 10 minutes"}`,
-      });
-    return opened;
+  events?.record({
+    step: "opener",
+    kind: "ok",
+    run,
+    ref: key,
+    msg: live ? `opened ${key}` : `would open ${key} (dry run)`,
+  });
+  return true;
+}
+
+async function openerTick(ctx: OpenerContext) {
+  const cfg = loadOpenerConfig(path.join(ctx.dir, "window-dispatch.json"));
+  if (!cfg.enabled) return [];
+  const events = ctx.opts.events;
+  if (!inHours(ctx.now(), cfg)) {
+    events?.record({
+      step: "opener",
+      kind: "info",
+      msg: `nothing to do: outside ${cfg.from}–${cfg.to} ${cfg.tz}`,
+    });
+    return [];
   }
+  await ctx.opts.refresh?.().catch(() => {});
+  const live = !cfg.dryRun && !!ctx.opts.open;
+  const opened: string[] = [];
+  for (const key of openerTargets(ctx, cfg.providers)) {
+    if (!keyIsDue(ctx, key, live)) continue;
+    if (await openKey(ctx, key, live)) opened.push(key);
+  }
+  if (!opened.length)
+    events?.record({
+      step: "opener",
+      kind: "info",
+      msg: `nothing to do: ${openerTargets(ctx, cfg.providers).every((key) => !needsOpen(ctx.opts.usage()[key], ctx.now())) ? "every window is live" : "an open was tried in the last 10 minutes"}`,
+    });
+  return opened;
+}
+
+export function createOpener(opts: OpenerOptions) {
+  const dir = opts.dir ?? DATA_DIR;
+  const ctx: OpenerContext = {
+    opts,
+    dir,
+    ledger: path.join(dir, "window-opener.jsonl"),
+    now: opts.now ?? Date.now,
+    lastOpened: new Map<string, number>(),
+  };
+  loadLedger(ctx.ledger, ctx.lastOpened);
+  const tick = () => openerTick(ctx);
   return { tick };
 }

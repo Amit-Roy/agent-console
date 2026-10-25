@@ -128,165 +128,213 @@ export interface MonitorDeps {
 type Reading = { breach: boolean; value: number; threshold: number; message: string };
 type Tracker = { breaches: number; clears: number; firing?: { id: string; since: number } };
 
+type MonitorContext = {
+  deps: MonitorDeps;
+  config: MonitorConfig;
+  trackers: Map<SignalId, Tracker>;
+  seq: number;
+  busy: boolean;
+};
+
+function emitAlert(ctx: MonitorContext, alert: Alert) {
+  try {
+    ctx.deps.onAlert(alert);
+  } catch (error) {
+    console.warn("Monitor alert delivery failed:", (error as Error)?.message);
+  }
+}
+
+function feedSignal(
+  ctx: MonitorContext,
+  signal: SignalId,
+  need: number,
+  reading: Reading,
+  severity: Alert["severity"],
+  escalate: boolean,
+) {
+  const tracker = ctx.trackers.get(signal) ?? { breaches: 0, clears: 0 };
+  ctx.trackers.set(signal, tracker);
+  if (reading.breach) {
+    tracker.clears = 0;
+    if (!tracker.firing && ++tracker.breaches >= need) {
+      tracker.firing = { id: `${signal}-${ctx.deps.now()}-${++ctx.seq}`, since: ctx.deps.now() };
+      emitAlert(ctx, {
+        id: tracker.firing.id,
+        signal,
+        state: "firing",
+        severity,
+        value: reading.value,
+        threshold: reading.threshold,
+        message: reading.message,
+        since: tracker.firing.since,
+        escalate,
+      });
+    }
+    return;
+  }
+  tracker.breaches = 0;
+  if (tracker.firing && ++tracker.clears >= ctx.config.clearAfter) {
+    emitAlert(ctx, {
+      id: tracker.firing.id,
+      signal,
+      state: "resolved",
+      severity,
+      value: reading.value,
+      threshold: reading.threshold,
+      message: `${signal} back to normal: ${reading.message}`,
+      since: tracker.firing.since,
+      escalate,
+    });
+    tracker.firing = undefined;
+    tracker.clears = 0;
+  }
+}
+
+const safeRead = <T>(read: () => T): T | undefined => {
+  try {
+    return read();
+  } catch {
+    return undefined;
+  }
+};
+
+function sampleHost(ctx: MonitorContext) {
+  const host = safeRead(ctx.deps.host);
+  if (!host) return;
+  const config = ctx.config;
+  feedSignal(
+    ctx,
+    "cpu",
+    config.cpu.breaches,
+    {
+      breach: host.cpu >= config.cpu.pct,
+      value: host.cpu,
+      threshold: config.cpu.pct,
+      message: `CPU ${host.cpu.toFixed(1)}% (limit ${config.cpu.pct}%)`,
+    },
+    "critical",
+    true,
+  );
+  feedSignal(
+    ctx,
+    "ram",
+    config.ram.breaches,
+    {
+      breach: host.mem >= config.ram.pct,
+      value: host.mem,
+      threshold: config.ram.pct,
+      message: `RAM ${host.mem.toFixed(1)}% used (limit ${config.ram.pct}%)`,
+    },
+    "critical",
+    true,
+  );
+}
+
+function sampleAgents(ctx: MonitorContext) {
+  const config = ctx.config;
+  const failed = safeRead(() => ctx.deps.agentFailures(config.agents.windowMs));
+  if (failed === undefined) return;
+  feedSignal(
+    ctx,
+    "agents",
+    1,
+    {
+      breach: failed >= config.agents.failures,
+      value: failed,
+      threshold: config.agents.failures,
+      message: `${failed} agent runs failed in the last ${Math.round(config.agents.windowMs / MIN)} min (limit ${config.agents.failures})`,
+    },
+    "critical",
+    true,
+  );
+}
+
+function consoleProblem(
+  config: MonitorConfig,
+  probe: { ok: boolean; ms: number },
+  lag: number,
+): string {
+  if (!probe.ok) return "loopback request failed";
+  if (probe.ms > config.console.slowMs)
+    return `loopback request took ${probe.ms} ms (limit ${config.console.slowMs})`;
+  if (lag > config.console.lagMs)
+    return `event-loop lag ${Math.round(lag)} ms (limit ${config.console.lagMs})`;
+  return "";
+}
+
+async function sampleConsole(ctx: MonitorContext) {
+  const config = ctx.config;
+  const lag = safeRead(ctx.deps.lag) ?? 0;
+  const probe = await ctx.deps.probe().catch(() => ({ ok: false, ms: 0 }));
+  const why = consoleProblem(config, probe, lag);
+  feedSignal(
+    ctx,
+    "console",
+    config.console.breaches,
+    {
+      breach: !!why,
+      value: !probe.ok ? 0 : Math.max(probe.ms, lag),
+      threshold:
+        !probe.ok || probe.ms > config.console.slowMs
+          ? config.console.slowMs
+          : config.console.lagMs,
+      message: why ? `Console unhealthy: ${why}` : "Console responding",
+    },
+    "critical",
+    true,
+  );
+}
+
+function sampleHeadroom(ctx: MonitorContext) {
+  const headroom = safeRead(ctx.deps.headroom);
+  if (!headroom) return;
+  const bad = headroom.enabled && !headroom.running; // disabled is a choice, not a failure
+  feedSignal(
+    ctx,
+    "headroom",
+    ctx.config.headroom.breaches,
+    {
+      breach: bad,
+      value: bad ? 1 : 0,
+      threshold: 1,
+      message: bad
+        ? `Headroom proxy not running${headroom.latched ? " (circuit breaker latched)" : ""}${headroom.error ? `: ${headroom.error}` : ""}`
+        : "Headroom proxy running or disabled",
+    },
+    "warning",
+    false,
+  );
+}
+
+async function monitorTick(ctx: MonitorContext) {
+  if (ctx.busy) return; // a slow probe must not stack ticks
+  ctx.busy = true;
+  try {
+    sampleHost(ctx);
+    sampleAgents(ctx);
+    await sampleConsole(ctx);
+    sampleHeadroom(ctx);
+  } finally {
+    ctx.busy = false;
+  }
+}
+
 export function createMonitor(deps: MonitorDeps) {
-  const c = deps.config;
-  const trackers = new Map<SignalId, Tracker>();
-  let seq = 0,
-    busy = false;
-
-  function feed(
-    signal: SignalId,
-    need: number,
-    r: Reading,
-    severity: Alert["severity"],
-    escalate: boolean,
-  ) {
-    const tr = trackers.get(signal) ?? { breaches: 0, clears: 0 };
-    trackers.set(signal, tr);
-    if (r.breach) {
-      tr.clears = 0;
-      if (!tr.firing && ++tr.breaches >= need) {
-        tr.firing = { id: `${signal}-${deps.now()}-${++seq}`, since: deps.now() };
-        emit({
-          id: tr.firing.id,
-          signal,
-          state: "firing",
-          severity,
-          value: r.value,
-          threshold: r.threshold,
-          message: r.message,
-          since: tr.firing.since,
-          escalate,
-        });
-      }
-    } else {
-      tr.breaches = 0;
-      if (tr.firing && ++tr.clears >= c.clearAfter) {
-        emit({
-          id: tr.firing.id,
-          signal,
-          state: "resolved",
-          severity,
-          value: r.value,
-          threshold: r.threshold,
-          message: `${signal} back to normal: ${r.message}`,
-          since: tr.firing.since,
-          escalate,
-        });
-        tr.firing = undefined;
-        tr.clears = 0;
-      }
-    }
-  }
-  function emit(a: Alert) {
-    try {
-      deps.onAlert(a);
-    } catch (error) {
-      console.warn("Monitor alert delivery failed:", (error as Error)?.message);
-    }
-  }
-  const safe = <T>(read: () => T): T | undefined => {
-    try {
-      return read();
-    } catch {
-      return undefined;
-    }
+  const ctx: MonitorContext = {
+    deps,
+    config: deps.config,
+    trackers: new Map<SignalId, Tracker>(),
+    seq: 0,
+    busy: false,
   };
-
-  async function tick() {
-    if (busy) return; // a slow probe must not stack ticks
-    busy = true;
-    try {
-      const host = safe(deps.host);
-      if (host) {
-        feed(
-          "cpu",
-          c.cpu.breaches,
-          {
-            breach: host.cpu >= c.cpu.pct,
-            value: host.cpu,
-            threshold: c.cpu.pct,
-            message: `CPU ${host.cpu.toFixed(1)}% (limit ${c.cpu.pct}%)`,
-          },
-          "critical",
-          true,
-        );
-        feed(
-          "ram",
-          c.ram.breaches,
-          {
-            breach: host.mem >= c.ram.pct,
-            value: host.mem,
-            threshold: c.ram.pct,
-            message: `RAM ${host.mem.toFixed(1)}% used (limit ${c.ram.pct}%)`,
-          },
-          "critical",
-          true,
-        );
-      }
-      const failed = safe(() => deps.agentFailures(c.agents.windowMs));
-      if (failed !== undefined) {
-        feed(
-          "agents",
-          1,
-          {
-            breach: failed >= c.agents.failures,
-            value: failed,
-            threshold: c.agents.failures,
-            message: `${failed} agent runs failed in the last ${Math.round(c.agents.windowMs / MIN)} min (limit ${c.agents.failures})`,
-          },
-          "critical",
-          true,
-        );
-      }
-      const lag = safe(deps.lag) ?? 0;
-      const probe = await deps.probe().catch(() => ({ ok: false, ms: 0 }));
-      const why = !probe.ok
-        ? "loopback request failed"
-        : probe.ms > c.console.slowMs
-          ? `loopback request took ${probe.ms} ms (limit ${c.console.slowMs})`
-          : lag > c.console.lagMs
-            ? `event-loop lag ${Math.round(lag)} ms (limit ${c.console.lagMs})`
-            : "";
-      feed(
-        "console",
-        c.console.breaches,
-        {
-          breach: !!why,
-          value: !probe.ok ? 0 : Math.max(probe.ms, lag),
-          threshold: !probe.ok || probe.ms > c.console.slowMs ? c.console.slowMs : c.console.lagMs,
-          message: why ? `Console unhealthy: ${why}` : "Console responding",
-        },
-        "critical",
-        true,
-      );
-      const h = safe(deps.headroom);
-      if (h) {
-        const bad = h.enabled && !h.running; // disabled is a choice, not a failure
-        feed(
-          "headroom",
-          c.headroom.breaches,
-          {
-            breach: bad,
-            value: bad ? 1 : 0,
-            threshold: 1,
-            message: bad
-              ? `Headroom proxy not running${h.latched ? " (circuit breaker latched)" : ""}${h.error ? `: ${h.error}` : ""}`
-              : "Headroom proxy running or disabled",
-          },
-          "warning",
-          false,
-        );
-      }
-    } finally {
-      busy = false;
-    }
-  }
-
   return {
-    tick,
+    tick: () => monitorTick(ctx),
     status: () =>
-      [...trackers].map(([signal, t]) => ({ signal, firing: !!t.firing, breaches: t.breaches })),
+      [...ctx.trackers].map(([signal, tracker]) => ({
+        signal,
+        firing: !!tracker.firing,
+        breaches: tracker.breaches,
+      })),
   };
 }
 
@@ -339,154 +387,197 @@ export interface EscalationDeps {
 
 const DAY = 24 * 60 * MIN;
 
-export function createEscalation(deps: EscalationDeps) {
-  const cfg = deps.config;
-  const incidents = new Map<SignalId, Incident>();
-  let starts: number[] = []; // times of live thread starts, for the gap and daily cap
+type EscalationContext = {
+  deps: EscalationDeps;
+  config: MonitorConfig["escalation"];
+  incidents: Map<SignalId, Incident>;
+  starts: number[]; // times of live thread starts, for the gap and daily cap
+};
 
-  const say = (msg: string, ref: string, kind: NewEvent["kind"] = "info") =>
-    deps.log({ step: "escalate", kind, ref, msg });
+function sayEscalation(
+  ctx: EscalationContext,
+  msg: string,
+  ref: string,
+  kind: NewEvent["kind"] = "info",
+) {
+  ctx.deps.log({ step: "escalate", kind, ref, msg });
+}
 
-  function prompt(i: Incident, level: string) {
-    return [
-      `Workspace monitor alert (${level}): ${i.message}`,
-      `Signal: ${i.signal}. Incident ${i.id}, open since ${new Date(i.openedAt).toISOString()}.`,
-      i.threads.length
-        ? `Earlier responders did not resolve it: threads ${i.threads.join(", ")}.`
-        : "You are the first responder.",
-      `Investigate read-only on this host: find the cause (top processes, recent failures, logs). Do not restart, kill or change anything.`,
-      `End with the cause and the exact fix you recommend. This is an unattended run: do not ask questions.`,
-    ].join("\n");
+function incidentPrompt(incident: Incident, level: string) {
+  return [
+    `Workspace monitor alert (${level}): ${incident.message}`,
+    `Signal: ${incident.signal}. Incident ${incident.id}, open since ${new Date(incident.openedAt).toISOString()}.`,
+    incident.threads.length
+      ? `Earlier responders did not resolve it: threads ${incident.threads.join(", ")}.`
+      : "You are the first responder.",
+    `Investigate read-only on this host: find the cause (top processes, recent failures, logs). Do not restart, kill or change anything.`,
+    `End with the cause and the exact fix you recommend. This is an unattended run: do not ask questions.`,
+  ].join("\n");
+}
+
+function escalationGate(ctx: EscalationContext): string | undefined {
+  const config = ctx.config;
+  const nowMs = ctx.deps.now();
+  ctx.starts = ctx.starts.filter((startedAt) => nowMs - startedAt < DAY);
+  if (ctx.starts.length >= config.maxThreadsPerDay)
+    return `daily cap of ${config.maxThreadsPerDay} threads reached`;
+  if (ctx.starts.length && nowMs - ctx.starts[ctx.starts.length - 1] < config.minGapMs)
+    return `another thread started less than ${Math.round(config.minGapMs / MIN)} min ago`;
+}
+
+function startRoute(
+  ctx: EscalationContext,
+  incident: Incident,
+  level: { name: string },
+  route: Route,
+) {
+  const thread = ctx.deps.threads.create({
+    ...route,
+    cwd: ctx.deps.cwd,
+    mode: "plan",
+    title: `monitor ${incident.signal}: ${level.name} ${route.provider}`,
+  });
+  ctx.deps.threads.send(thread.id, incidentPrompt(incident, level.name));
+  incident.threads.push(thread.id);
+  ctx.starts.push(ctx.deps.now());
+  sayEscalation(
+    ctx,
+    `${level.name} ${route.provider} ${route.model} started thread ${thread.id}`,
+    incident.signal,
+  );
+}
+
+function startLevel(ctx: EscalationContext, incident: Incident) {
+  const level = LEVELS[incident.level],
+    ref = incident.signal;
+  if (ctx.config.mode !== "live") {
+    sayEscalation(
+      ctx,
+      `dry run: would start ${level.name} (${level.routes.map((route) => `${route.provider} ${route.model}`).join(", else ")}) for ${incident.message}`,
+      ref,
+    );
+    return;
   }
-
-  function gate(): string | undefined {
-    const t = deps.now();
-    starts = starts.filter((s) => t - s < DAY);
-    if (starts.length >= cfg.maxThreadsPerDay)
-      return `daily cap of ${cfg.maxThreadsPerDay} threads reached`;
-    if (starts.length && t - starts[starts.length - 1] < cfg.minGapMs)
-      return `another thread started less than ${Math.round(cfg.minGapMs / MIN)} min ago`;
+  const blocked = escalationGate(ctx);
+  if (blocked) {
+    sayEscalation(ctx, `gated: ${level.name} not started, ${blocked}`, ref);
+    return;
   }
-
-  function startLevel(i: Incident) {
-    const level = LEVELS[i.level],
-      ref = i.signal;
-    if (cfg.mode !== "live") {
-      say(
-        `dry run: would start ${level.name} (${level.routes.map((r) => `${r.provider} ${r.model}`).join(", else ")}) for ${i.message}`,
+  for (const route of level.routes) {
+    try {
+      startRoute(ctx, incident, level, route);
+      return;
+    } catch (error) {
+      sayEscalation(
+        ctx,
+        `${level.name} ${route.provider} could not start: ${(error as Error)?.message ?? error}`,
         ref,
       );
-      return;
     }
-    const blocked = gate();
-    if (blocked) {
-      say(`gated: ${level.name} not started, ${blocked}`, ref);
-      return;
-    }
-    for (const route of level.routes) {
-      try {
-        const th = deps.threads.create({
-          ...route,
-          cwd: deps.cwd,
-          mode: "plan",
-          title: `monitor ${i.signal}: ${level.name} ${route.provider}`,
-        });
-        deps.threads.send(th.id, prompt(i, level.name));
-        i.threads.push(th.id);
-        starts.push(deps.now());
-        say(`${level.name} ${route.provider} ${route.model} started thread ${th.id}`, ref);
-        return;
-      } catch (error) {
-        say(
-          `${level.name} ${route.provider} could not start: ${(error as Error)?.message ?? error}`,
-          ref,
-        );
-      }
-    }
-    say(`${level.name} could not start on any provider`, ref);
   }
+  sayEscalation(ctx, `${level.name} could not start on any provider`, ref);
+}
 
-  function tellOwner(i: Incident) {
-    i.ownerNotified = true;
-    i.level = 4;
-    say(`owner notified: ${i.message}`, i.signal, "fail");
-    try {
-      void Promise.resolve(
-        deps.notify({
-          title: `Monitor ${i.signal}: ${i.message}`,
-          thread: i.threads.at(-1) ?? "monitor",
-        }),
-      ).catch(() => console.warn("Monitor owner notification failed."));
-    } catch {
-      console.warn("Monitor owner notification failed.");
-    }
+function tellOwner(ctx: EscalationContext, incident: Incident) {
+  incident.ownerNotified = true;
+  incident.level = 4;
+  sayEscalation(ctx, `owner notified: ${incident.message}`, incident.signal, "fail");
+  try {
+    void Promise.resolve(
+      ctx.deps.notify({
+        title: `Monitor ${incident.signal}: ${incident.message}`,
+        thread: incident.threads.at(-1) ?? "monitor",
+      }),
+    ).catch(() => console.warn("Monitor owner notification failed."));
+  } catch {
+    console.warn("Monitor owner notification failed.");
   }
+}
 
-  function step(i: Incident) {
-    if (i.level < 3) {
-      startLevel(i);
-      i.level++;
-      i.nextAt = deps.now() + cfg.waitMs[Math.min(i.level - 1, 2)];
-    } else if (i.level === 3) tellOwner(i);
-  }
+function stepIncident(ctx: EscalationContext, incident: Incident) {
+  if (incident.level < 3) {
+    startLevel(ctx, incident);
+    incident.level++;
+    incident.nextAt = ctx.deps.now() + ctx.config.waitMs[Math.min(incident.level - 1, 2)];
+  } else if (incident.level === 3) tellOwner(ctx, incident);
+}
 
-  function handle(a: Alert) {
-    const now = deps.now(),
-      open = incidents.get(a.signal);
-    if (a.state === "resolved") {
-      if (!open || open.resolvedAt) return;
-      open.resolvedAt = now;
-      say(
-        `${a.signal} resolved; escalation stopped${open.level < 4 ? ` before ${open.level < 3 ? LEVELS[open.level].name : "the owner"}` : " after the owner was told"}`,
-        a.signal,
-      );
-      return;
-    }
-    if (open && (!open.resolvedAt || now - open.resolvedAt < cfg.cooldownMs)) {
-      // same incident: a flapping check never restarts the chain
-      if (open.resolvedAt) {
-        open.resolvedAt = undefined;
-        open.nextAt = now + cfg.waitMs[Math.min(Math.max(open.level - 1, 0), 2)];
-        say(
-          `${a.signal} fired again within the cooldown; incident reopened, chain continues`,
-          a.signal,
-        );
-      }
-      return;
-    }
-    const i: Incident = {
-      signal: a.signal,
-      id: a.id,
-      message: a.message,
-      openedAt: now,
-      level: 0,
-      nextAt: now,
-      threads: [],
-      ownerNotified: false,
-    };
-    incidents.set(a.signal, i);
-    say(`${a.signal} firing: ${a.message}`, a.signal);
-    if (!a.escalate || cfg.mode === "off") {
-      tellOwner(i);
-      return;
-    }
-    if (cfg.mode === "dry-run") {
-      while (i.level < 3) {
-        startLevel(i);
-        i.level++;
-      }
-      tellOwner(i);
-      return;
-    }
-    step(i);
+function handleResolved(ctx: EscalationContext, alert: Alert, nowMs: number) {
+  const open = ctx.incidents.get(alert.signal);
+  if (!open || open.resolvedAt) return;
+  open.resolvedAt = nowMs;
+  sayEscalation(
+    ctx,
+    `${alert.signal} resolved; escalation stopped${open.level < 4 ? ` before ${open.level < 3 ? LEVELS[open.level].name : "the owner"}` : " after the owner was told"}`,
+    alert.signal,
+  );
+}
+
+// Same incident: a flapping check never restarts the chain.
+function reopenIncident(ctx: EscalationContext, alert: Alert, open: Incident, nowMs: number) {
+  if (!open.resolvedAt) return;
+  open.resolvedAt = undefined;
+  open.nextAt = nowMs + ctx.config.waitMs[Math.min(Math.max(open.level - 1, 0), 2)];
+  sayEscalation(
+    ctx,
+    `${alert.signal} fired again within the cooldown; incident reopened, chain continues`,
+    alert.signal,
+  );
+}
+
+function openIncident(ctx: EscalationContext, alert: Alert, nowMs: number) {
+  const incident: Incident = {
+    signal: alert.signal,
+    id: alert.id,
+    message: alert.message,
+    openedAt: nowMs,
+    level: 0,
+    nextAt: nowMs,
+    threads: [],
+    ownerNotified: false,
+  };
+  ctx.incidents.set(alert.signal, incident);
+  sayEscalation(ctx, `${alert.signal} firing: ${alert.message}`, alert.signal);
+  if (!alert.escalate || ctx.config.mode === "off") {
+    tellOwner(ctx, incident);
+    return;
   }
+  if (ctx.config.mode === "dry-run") {
+    while (incident.level < 3) {
+      startLevel(ctx, incident);
+      incident.level++;
+    }
+    tellOwner(ctx, incident);
+    return;
+  }
+  stepIncident(ctx, incident);
+}
+
+function handleAlert(ctx: EscalationContext, alert: Alert) {
+  const nowMs = ctx.deps.now(),
+    open = ctx.incidents.get(alert.signal);
+  if (alert.state === "resolved") return handleResolved(ctx, alert, nowMs);
+  if (open && (!open.resolvedAt || nowMs - open.resolvedAt < ctx.config.cooldownMs))
+    return reopenIncident(ctx, alert, open, nowMs);
+  openIncident(ctx, alert, nowMs);
+}
+
+export function createEscalation(deps: EscalationDeps) {
+  const ctx: EscalationContext = {
+    deps,
+    config: deps.config,
+    incidents: new Map<SignalId, Incident>(),
+    starts: [],
+  };
+  const handle = (alert: Alert) => handleAlert(ctx, alert);
 
   /** Run on every monitor tick: starts the next level of any incident that is still unresolved and due. */
   function advance() {
-    const now = deps.now();
-    for (const i of incidents.values())
-      if (!i.resolvedAt && i.level < 4 && now >= i.nextAt) step(i);
+    const nowMs = deps.now();
+    for (const incident of ctx.incidents.values())
+      if (!incident.resolvedAt && incident.level < 4 && nowMs >= incident.nextAt)
+        stepIncident(ctx, incident);
   }
 
-  return { handle, advance, incidents: () => [...incidents.values()] };
+  return { handle, advance, incidents: () => [...ctx.incidents.values()] };
 }

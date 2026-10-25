@@ -13,6 +13,62 @@ export interface PendingQuestion {
   async?: true;
 }
 
+function validateAnswerValues(question: Question, values: unknown): string[] {
+  if (
+    !Array.isArray(values) ||
+    !values.length ||
+    values.length > 20 ||
+    values.some((value) => typeof value !== "string" || !value.trim() || value.length > 10_000)
+  )
+    throw new Error("Answer each question before continuing.");
+  if (!question.multiSelect && values.length !== 1)
+    throw new Error("Choose one answer for this question.");
+  if (new Set(values).size !== values.length) throw new Error("Duplicate answer.");
+  if (
+    question.options.length &&
+    !question.allowOther &&
+    values.some((value) => !question.options.some((option) => option.label === value))
+  )
+    throw new Error("Choose one of the available answers.");
+  return values;
+}
+
+function collectAnswers(
+  request: PendingQuestion,
+  raw: Record<string, unknown>,
+  answers: Record<string, string[]>,
+) {
+  for (const key of Object.keys(raw))
+    if (!request.questions.some((question) => question.id === key))
+      throw new Error("Unknown question.");
+  for (const question of request.questions)
+    answers[question.id] = validateAnswerValues(question, raw[question.id]);
+}
+
+function buildAnswerEvent(
+  request: PendingQuestion,
+  requestId: string,
+  answers: Record<string, string[]>,
+  skip: boolean,
+  note: string | undefined,
+) {
+  const visible = Object.fromEntries(
+    request.questions
+      .filter((question) => answers[question.id])
+      .map((question) => [question.id, question.secret ? ["••••••"] : answers[question.id]]),
+  );
+  return {
+    type: "question_answer",
+    id: requestId,
+    answers: visible,
+    ...(skip ? { skip: true } : {}),
+    ...(note !== undefined
+      ? { note: request.questions.some((question) => question.secret) ? "••••••" : note }
+      : {}),
+    ts: Date.now(),
+  };
+}
+
 // Blocking requests belong to a live process; async messages remain answerable after it exits.
 export class Questions {
   private threads = new Map<string, Map<string, PendingQuestion>>();
@@ -59,30 +115,8 @@ export class Questions {
     if (!skip && note === undefined && (!raw || typeof raw !== "object" || Array.isArray(raw)))
       throw new Error("Invalid answers.");
     const answers: Record<string, string[]> = Object.create(null);
-    if (!skip && note === undefined) {
-      for (const key of Object.keys(raw))
-        if (!request.questions.some((q) => q.id === key)) throw new Error("Unknown question.");
-      for (const q of request.questions) {
-        const values = (raw as Record<string, unknown>)[q.id];
-        if (
-          !Array.isArray(values) ||
-          !values.length ||
-          values.length > 20 ||
-          values.some((a) => typeof a !== "string" || !a.trim() || a.length > 10_000)
-        )
-          throw new Error("Answer each question before continuing.");
-        if (!q.multiSelect && values.length !== 1)
-          throw new Error("Choose one answer for this question.");
-        if (new Set(values).size !== values.length) throw new Error("Duplicate answer.");
-        if (
-          q.options.length &&
-          !q.allowOther &&
-          values.some((a) => !q.options.some((o) => o.label === a))
-        )
-          throw new Error("Choose one of the available answers.");
-        answers[q.id] = values;
-      }
-    }
+    if (!skip && note === undefined)
+      collectAnswers(request, raw as Record<string, unknown>, answers);
     const reply: QuestionReply = {
       answers,
       ...(skip ? { skip: true } : {}),
@@ -97,23 +131,9 @@ export class Questions {
       this.add(thread, request);
       throw error;
     }
-    const visible = Object.fromEntries(
-      request.questions
-        .filter((q) => answers[q.id])
-        .map((q) => [q.id, q.secret ? ["••••••"] : answers[q.id]]),
-    );
     return {
       consumed,
-      event: {
-        type: "question_answer",
-        id,
-        answers: visible,
-        ...(skip ? { skip: true } : {}),
-        ...(note !== undefined
-          ? { note: request.questions.some((q) => q.secret) ? "••••••" : note }
-          : {}),
-        ts: Date.now(),
-      },
+      event: buildAnswerEvent(request, id, answers, skip, note),
     };
   }
 }

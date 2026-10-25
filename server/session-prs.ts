@@ -39,31 +39,39 @@ export function raisedItems(log: string): RaisedPr[] {
   return scan(log, CREATE_ITEM, ITEM_URL);
 }
 
+function parseLogLine(line: string): any {
+  if (!line.includes("tool_use") && !line.includes("tool_result")) return undefined;
+  try {
+    return JSON.parse(line);
+  } catch {
+    return undefined;
+  }
+}
+
+function isCreateCall(block: any, create: RegExp): boolean {
+  return (
+    block?.type === "tool_use" &&
+    typeof block.id === "string" &&
+    typeof block.input?.command === "string" &&
+    create.test(block.input.command)
+  );
+}
+
+function recordBlock(block: any, calls: Set<string>, out: RaisedPr[], create: RegExp, url: RegExp) {
+  if (isCreateCall(block, create)) calls.add(block.id);
+  else if (block?.type === "tool_result" && calls.has(block.tool_use_id))
+    for (const raised of prsFromResult(block.content, url))
+      if (!out.some((known) => known.repo === raised.repo && known.number === raised.number))
+        out.push(raised);
+}
+
 function scan(log: string, create: RegExp, url: RegExp): RaisedPr[] {
   const calls = new Set<string>();
   const out: RaisedPr[] = [];
   for (const line of log.split("\n")) {
-    if (!line.includes("tool_use") && !line.includes("tool_result")) continue;
-    let ev: any;
-    try {
-      ev = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    const content = ev?.message?.content;
-    if (!Array.isArray(content)) continue;
-    for (const block of content) {
-      if (
-        block?.type === "tool_use" &&
-        typeof block.id === "string" &&
-        typeof block.input?.command === "string" &&
-        create.test(block.input.command)
-      )
-        calls.add(block.id);
-      else if (block?.type === "tool_result" && calls.has(block.tool_use_id))
-        for (const pr of prsFromResult(block.content, url))
-          if (!out.some((o) => o.repo === pr.repo && o.number === pr.number)) out.push(pr);
-    }
+    const content = parseLogLine(line)?.message?.content;
+    if (Array.isArray(content))
+      for (const block of content) recordBlock(block, calls, out, create, url);
   }
   return out;
 }
