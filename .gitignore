@@ -10,3 +10,4 @@ __pycache__/
 .impeccable/*
 !.impeccable/config.json
 .design-system-seen.json
+CLAUDE.md
