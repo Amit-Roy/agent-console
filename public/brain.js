@@ -199,6 +199,19 @@ function setView(view) {
 
 // ---------- graph view ----------
 const css = (name) => getComputedStyle(document.body).getPropertyValue(name).trim();
+// Glow is a translucent underlay in the node color; the light palette sets --graph-glow to 0.
+function symbolColor(token) {
+  const color = css(token);
+  const glow = Number(css("--graph-glow")) || 0;
+  if (!glow) return { "background-color": color };
+  return {
+    "background-color": color,
+    "underlay-color": color,
+    "underlay-padding": glow,
+    "underlay-opacity": 0.28,
+    "underlay-shape": "ellipse",
+  };
+}
 function nodeStyles(canvas) {
   const ring = { "border-width": 2, "border-color": canvas };
   return [
@@ -206,7 +219,7 @@ function nodeStyles(canvas) {
       selector: "node",
       style: {
         "font-family": css("--font-ui") || "sans-serif",
-        color: css("--t1"),
+        color: css("--graph-text"),
         "min-zoomed-font-size": 11,
         label: "data(label)",
         width: 24,
@@ -227,21 +240,22 @@ function nodeStyles(canvas) {
     {
       // Page labels wait for closer zoom so tag hubs stay readable in the overview.
       selector: "node[kind='page']",
-      style: { shape: "ellipse", "background-color": css("--viz-1"), "min-zoomed-font-size": 16 },
+      style: { shape: "ellipse", ...symbolColor("--wiki"), "min-zoomed-font-size": 16 },
     },
     {
       selector: "node[kind='page'][layer='ops']",
-      style: { shape: "diamond", "background-color": css("--viz-3") },
+      style: { shape: "diamond", ...symbolColor("--ops") },
     },
     {
       selector: "node[kind='tag']",
-      style: { shape: "round-rectangle", "background-color": css("--viz-2") },
+      style: { shape: "round-rectangle", ...symbolColor("--tag") },
     },
   ];
 }
 function graphStyle() {
-  const canvas = css("--s1");
-  const muted = css("--t3");
+  const canvas = css("--graph-bg");
+  const muted = css("--graph-edge");
+  const edgeOpacity = Number(css("--graph-edge-opacity")) || 0.4;
   return [
     ...nodeStyles(canvas),
     {
@@ -250,7 +264,7 @@ function graphStyle() {
         width: 1,
         "line-color": muted,
         "curve-style": "haystack",
-        opacity: 0.4,
+        opacity: edgeOpacity,
       },
     },
     {
