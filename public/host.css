@@ -678,3 +678,113 @@ div.hrow.du {
   flex: 1;
   min-height: var(--ctl-h);
 }
+
+/* ---------- headroom memory ---------- */
+.hr-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(7.5rem, 1fr));
+  gap: var(--sp-3);
+  margin: 0 0 var(--sp-4);
+}
+.hr-stats div {
+  min-width: 0;
+}
+.hr-stats dt {
+  font: var(--label);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--t3);
+}
+.hr-stats dd {
+  margin: var(--sp-1) 0 0;
+  font: var(--fw-semi) var(--fm-md) / 1.2 var(--font-mono);
+  color: var(--t1);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.hr-fig {
+  margin: 0;
+  min-width: 0;
+}
+.hr-fig figcaption,
+.hr-sub {
+  margin: 0 0 var(--sp-2);
+  font: var(--label);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--t2);
+}
+.hr-sub span {
+  color: var(--t3);
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: var(--fw-reg);
+}
+.hr-cv {
+  height: 13rem;
+}
+.hr-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-4);
+  margin: var(--sp-3) 0 var(--sp-4);
+  padding: 0;
+  list-style: none;
+  color: var(--t2);
+  font: var(--fw-reg) var(--fm-xs);
+}
+.hr-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  white-space: nowrap;
+}
+.hr-legend .sw {
+  font-size: 0.95rem;
+  line-height: 1;
+}
+.hr-tablewrap {
+  overflow-x: auto;
+}
+.hr-sites {
+  width: 100%;
+  border-collapse: collapse;
+  font: var(--fw-reg) var(--fm-xs);
+  font-variant-numeric: tabular-nums;
+}
+.hr-sites th,
+.hr-sites td {
+  padding: var(--sp-1) var(--sp-2);
+  border-top: 1px solid var(--edge);
+  text-align: left;
+  white-space: nowrap;
+}
+.hr-sites th {
+  border-top: 0;
+  color: var(--t3);
+  font-weight: var(--fw-med);
+}
+.hr-sites .num {
+  text-align: right;
+}
+.hr-sites td.loc {
+  max-width: 14rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--t1);
+  font-family: var(--font-mono);
+}
+.hr-sites td.up {
+  color: var(--bad);
+}
+.hr-sites td.down {
+  color: var(--ok, var(--t2));
+}
+@media (max-width: 640px) {
+  .hr-cv {
+    height: 11rem;
+  }
+  .hr-sites td.loc {
+    max-width: 8.5rem;
+  }
+}

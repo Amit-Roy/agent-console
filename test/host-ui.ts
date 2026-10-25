@@ -1,17 +1,158 @@
 // Host dashboard: real browser, desktop + phone, first-party only, no console errors.
+import { spawn } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { chromium } from "playwright";
-import { makeToken } from "../server/auth.ts";
 
-const BASE = process.env.BASE || "http://127.0.0.1:7070";
+// Isolated server on a temp data dir, seeded with a Headroom profile; never the deployed console.
+const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "host-ui-"));
+const data = path.join(scratch, "data");
+fs.mkdirSync(data, { recursive: true });
+process.env.AGENT_CONSOLE_DATA = data;
+const { makeToken } = await import("../server/auth.ts");
+const { HeadroomProfileStore } = await import("../server/headroom-profile.ts");
+const MIB = 1024 * 1024;
+const MINUTE = 60_000;
+const SITE_COUNT = 20;
+
+function seedProfile(file: string) {
+  const store = new HeadroomProfileStore(file);
+  const pid = 4242;
+  const now = Date.now();
+  const stepMinutes = [10, 22, 35, 48];
+  const rssAt = (minute: number) =>
+    500 * MIB + stepMinutes.filter((step) => minute >= step).length * 142.5 * MIB + minute * 0.05 * MIB;
+  for (let minute = 0; minute <= 60; minute++) {
+    const sampledAt = now - (60 - minute) * MINUTE + 1000;
+    const rss = rssAt(minute);
+    store.recordSample(pid, { rssBytes: rss, time: sampledAt }, { anon: rss * 0.72, fileBacked: rss * 0.2 });
+    if (minute % 2 === 0) {
+      store.recordMetrics(
+        pid,
+        [
+          { name: "process.runtime.cpython.memory", attr: "type=rss", value: rss * 0.9 },
+          { name: "headroom.malloc.arena_bytes", attr: null, value: rss * 0.6 },
+          { name: "headroom.malloc.in_use_bytes", attr: null, value: rss * 0.35 },
+          { name: "headroom.malloc.free_held_bytes", attr: null, value: rss * 0.2 + minute * MIB },
+          { name: "process.runtime.cpython.gc_count", attr: "count=0", value: 120 + minute },
+          { name: "process.runtime.cpython.gc_count", attr: "count=1", value: 8 },
+          { name: "process.runtime.cpython.gc_count", attr: "count=2", value: 2 },
+          { name: "process.runtime.cpython.thread_count", attr: null, value: 38 },
+        ],
+        sampledAt,
+      );
+    }
+  }
+  for (const minute of stepMinutes)
+    store.recordSnapshot(pid, "step", rssAt(minute), now - (60 - minute) * MINUTE + 1000);
+  store.recordSnapshot(pid, "breaker", rssAt(58), now - 2 * MINUTE);
+  const sites = (scale: number) =>
+    Array.from({ length: SITE_COUNT }, (_, index) => ({
+      location: `headroom/proxy/module_${index}.py:${100 + index * 7}`,
+      bytes: Math.round((SITE_COUNT - index) * 3.1 * MIB * scale),
+      count: (SITE_COUNT - index) * 1200,
+    }));
+  store.recordSites(pid, sites(0.8), now - 20 * MINUTE);
+  store.recordSites(pid, sites(1), now - 2 * MINUTE);
+}
+seedProfile(path.join(data, "latency.sqlite"));
+
+const PORT = process.env.HOST_UI_PORT || "17851";
+const BASE = `http://127.0.0.1:${PORT}`;
 const OUT = process.env.OUT || "/tmp";
+const server = spawn(process.execPath, ["server/index.ts"], {
+  env: {
+    ...process.env,
+    PORT,
+    AGENT_CONSOLE_DATA: data,
+    AGENT_CONSOLE_RUN: path.join(scratch, "run"),
+    AGENT_CONSOLE_MOCK: "1",
+    AGENT_CONSOLE_HEADROOM: "0",
+    AGENT_CONSOLE_WARM_MAX: "0",
+  },
+  stdio: ["ignore", "ignore", "pipe"],
+});
+let serverErrors = "";
+server.stderr?.on("data", (chunk) => (serverErrors += chunk.toString()));
+const cleanup = () => {
+  server.kill();
+  fs.rmSync(scratch, { recursive: true, force: true });
+};
+process.on("exit", cleanup);
+for (let attempt = 0; ; attempt++) {
+  const ready = await fetch(`${BASE}/api/host/metrics`, {
+    headers: { cookie: `ac_session=${makeToken()}` },
+  }).then(
+    (res) => res.ok,
+    () => false,
+  );
+  if (ready) break;
+  if (attempt > 150) throw new Error(`server did not start: ${serverErrors.slice(0, 300)}`);
+  await new Promise((resolve) => setTimeout(resolve, 200));
+}
 let failed = 0;
 const check = (n: string, ok: boolean, x = "") => {
   console.log(`${ok ? "PASS" : "FAIL"}  ${n} ${x}`);
   if (!ok) failed++;
 };
 const browser = await chromium.launch();
+async function headroomChecks(page: any, name: string) {
+  const card = page.locator("#headroom");
+  await page.waitForSelector("#hr-body:not([hidden]) #hr-sites tbody tr");
+  check(`${name}: headroom card`, await card.isVisible());
+  check(`${name}: headroom chart canvas`, (await page.locator("#ch-hr").count()) === 1);
+  await page.waitForFunction(() => !!(globalThis as any).Chart?.getChart("ch-hr"));
+  check(
+    `${name}: headroom sites rows`,
+    (await page.locator("#hr-sites tbody tr").count()) === SITE_COUNT,
+  );
+  const legend = (await page.locator("#hr-legend li").allInnerTexts()).join("|");
+  check(
+    `${name}: headroom legend names snapshots`,
+    legend.includes("Step snapshot ×4") && legend.includes("Breaker snapshot ×1"),
+    legend,
+  );
+  const stats = (await page.locator("#hr-stats dd").allInnerTexts()).join("|");
+  check(`${name}: headroom stats`, /GB/.test(stats) && /MB\/h/.test(stats), stats);
+  // tall viewport so the whole card sits in one frame, clear of the sticky header
+  const viewport = page.viewportSize();
+  await page.setViewportSize({ width: viewport.width, height: 2600 });
+  await card.screenshot({ path: `${OUT}/host-headroom-${name}.png` });
+  await page.setViewportSize(viewport);
+  await headroomEmptyStates(page, name);
+}
+async function stubProfile(page: any, patch: (json: any) => any) {
+  await page.route("**/api/host/headroom-profile*", async (route: any) => {
+    const res = await route.fetch();
+    await route.fulfill({ response: res, json: patch(await res.json()) });
+  });
+}
+async function headroomEmptyStates(page: any, name: string) {
+  await stubProfile(page, (json) => ({ ...json, sites: { at: null, rows: [] } }));
+  await page.click('#hr-range button[data-range="6h"]');
+  await page.waitForSelector("#hr-sites-empty:not([hidden])");
+  check(
+    `${name}: headroom no-sites empty state`,
+    (await page.locator("#hr-sites-empty").innerText()) ===
+      "Allocation sites need AGENT_CONSOLE_HEADROOM_TRACEMALLOC=1 (adds CPU)",
+  );
+  await page.unroute("**/api/host/headroom-profile*");
+  await stubProfile(page, () => ({ rss: [], snapshots: [], metrics: {}, sites: { at: null, rows: [] } }));
+  await page.click('#hr-range button[data-range="24h"]');
+  await page.waitForSelector("#hr-empty:not([hidden])");
+  check(
+    `${name}: headroom not reporting`,
+    (await page.locator("#hr-empty").innerText()) === "Headroom profiler not reporting",
+  );
+  await page.unroute("**/api/host/headroom-profile*");
+  await page.click('#hr-range button[data-range="1h"]');
+  await page.waitForSelector("#hr-body:not([hidden]) #hr-sites tbody tr");
+}
 for (const [name, viewport, scheme] of [
   ["desktop-light", { width: 1280, height: 900 }, "light"],
+  ["desktop-dark", { width: 1280, height: 900 }, "dark"],
+  ["phone-light", { width: 390, height: 844 }, "light"],
   ["phone-dark", { width: 390, height: 844 }, "dark"],
 ] as const) {
   const ctx = await browser.newContext({ viewport, colorScheme: scheme });
@@ -44,6 +185,7 @@ for (const [name, viewport, scheme] of [
     `${name}: history ranges`,
     (await page.locator("#range button").allInnerTexts()).join("|") === "5m|1h|12h|24h",
   );
+  await headroomChecks(page, name);
   await page.click('#range button[data-range="86400"]');
   check(
     `${name}: range switch`,
@@ -224,6 +366,17 @@ for (const [name, viewport, scheme] of [
     });
     check("api: protected kill refused", r.status === 403, String(r.status));
   }
+}
+{
+  const res = await fetch(`${BASE}/api/host/headroom-profile?range=1h`, {
+    headers: { cookie: `ac_session=${makeToken()}` },
+  });
+  const body = await res.json();
+  check(
+    "api: headroom profile shape",
+    Array.isArray(body.rss) && Array.isArray(body.snapshots) && body.sites?.rows?.length === SITE_COUNT,
+    JSON.stringify(body).slice(0, 120),
+  );
 }
 // unauth refused
 {
