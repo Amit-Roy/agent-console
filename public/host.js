@@ -492,7 +492,9 @@ function drawHrChart(data) {
 }
 function siteRow(site) {
   const row = el("tr");
-  const loc = el("td", "loc", site.location);
+  const loc = el("td", "loc");
+  const slash = site.location.lastIndexOf("/");
+  loc.append(el("span", "dir", site.location.slice(0, slash + 1)), el("b", "file", site.location.slice(slash + 1)));
   loc.title = site.location;
   const delta = site.deltaBytes;
   const change = el("td", `num ${delta > 0 ? "up" : delta < 0 ? "down" : ""}`, delta == null ? "new" : signedBytes(delta));

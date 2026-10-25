@@ -774,6 +774,12 @@ div.hrow.du {
   color: var(--t1);
   font-family: var(--font-mono);
 }
+.hr-sites td.loc .dir {
+  color: var(--t3);
+}
+.hr-sites td.loc .file {
+  font-weight: var(--fw-med);
+}
 .hr-sites td.up {
   color: var(--bad);
 }
@@ -785,6 +791,30 @@ div.hrow.du {
     height: 11rem;
   }
   .hr-sites td.loc {
-    max-width: 8.5rem;
+    max-width: 9.5rem;
+    display: flex;
+    flex-direction: column-reverse;
+  }
+  .hr-sites td.loc > * {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .hr-sites td.loc .dir {
+    font-size: 0.85em;
+  }
+}
+
+/* narrow phones: tighter header so Live + Pause stay inside the viewport */
+@media (max-width: 430px) {
+  body.host .dh {
+    gap: var(--sp-2);
+    padding-inline: var(--sp-3);
+  }
+  body.host .dh .live {
+    margin-left: auto;
+    min-width: 0;
+  }
+  body.host .dh .back span {
+    display: none;
   }
 }
