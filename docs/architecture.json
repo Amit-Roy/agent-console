@@ -1,6 +1,6 @@
 {
-  "title": "Effort quotes on real sessions",
-  "subtitle": "Probe sessions out of training; improve-prompt quotes priced on the draft's shape; Opus 5.5 rewriter",
+  "title": "Agent Console maintenance and integrations",
+  "subtitle": "Existing prompt workflows, CLI maintenance, and authenticated background MCP jobs",
   "items": [
     {
       "group": "Triage worker",
@@ -174,6 +174,98 @@
           "color": "teal"
         }
       ]
+    },
+    {
+      "group": "Transcript interfaces",
+      "sub": "CLI and authenticated Console MCP",
+      "border": "dashed",
+      "color": "purple",
+      "icon": "terminal",
+      "items": [
+        {
+          "id": "red-cli",
+          "label": "transcript-redact",
+          "tech": "bin/transcript-redact",
+          "desc": "Scan, apply, verify; aggregate results",
+          "icon": "terminal",
+          "color": "purple"
+        },
+        {
+          "id": "red-mcp",
+          "label": "session_redact",
+          "tech": "Console MCP",
+          "desc": "Start a job or read bounded status",
+          "icon": "plug",
+          "color": "purple"
+        }
+      ]
+    },
+    {
+      "group": "Transcript maintenance",
+      "sub": "Server ownership",
+      "border": "solid",
+      "color": "blue",
+      "icon": "shield-check",
+      "items": [
+        {
+          "id": "red-job",
+          "label": "Background job owner",
+          "tech": "transcript-redaction.ts",
+          "desc": "Authentication, mode checks, progress and child lifecycle",
+          "icon": "workflow",
+          "color": "blue"
+        },
+        {
+          "id": "red-catalog",
+          "label": "Live catalog owner",
+          "tech": "threads.ts",
+          "desc": "Compare snapshots; persist unchanged title and recent fields",
+          "icon": "list",
+          "color": "teal"
+        }
+      ]
+    },
+    {
+      "group": "Shared redaction engine",
+      "sub": "Python engine and search coordination",
+      "border": "solid",
+      "color": "teal",
+      "icon": "shield-check",
+      "items": [
+        {
+          "id": "red-engine",
+          "label": "Credential matcher and writer",
+          "tech": "transcript_redaction.py",
+          "desc": "Known secrets and provider signatures; preserve UTF-8 byte offsets",
+          "icon": "shield-check",
+          "color": "teal"
+        },
+        {
+          "id": "red-search",
+          "label": "Search maintenance barrier",
+          "tech": "session-search.ts",
+          "desc": "Wait for refresh; block queries during cleanup; rebuild afterward",
+          "icon": "search",
+          "color": "orange"
+        }
+      ]
+    },
+    {
+      "group": "Transcript stores",
+      "sub": "Local session data",
+      "border": "solid",
+      "color": "slate",
+      "icon": "database",
+      "items": [
+        {
+          "id": "red-store",
+          "label": "Transcripts and SQLite",
+          "tech": "Canonical and native histories",
+          "desc": "Guarded range writes; logical FTS updates, checkpoint and audit",
+          "icon": "database",
+          "color": "slate"
+        }
+      ]
     }
   ],
   "edges": [
@@ -246,6 +338,41 @@
       "from": "ac-gate",
       "to": "ac-send",
       "label": "Send once"
+    },
+    {
+      "from": "red-cli",
+      "to": "red-engine",
+      "label": "Explicit local command"
+    },
+    {
+      "from": "red-mcp",
+      "to": "red-job",
+      "label": "Authenticated action"
+    },
+    {
+      "from": "red-job",
+      "to": "red-engine",
+      "label": "Run engine"
+    },
+    {
+      "from": "red-job",
+      "to": "red-catalog",
+      "label": "Update fields"
+    },
+    {
+      "from": "red-job",
+      "to": "red-search",
+      "label": "Exclusive maintenance"
+    },
+    {
+      "from": "red-engine",
+      "to": "red-store",
+      "label": "Scan or preserve-byte masking"
+    },
+    {
+      "from": "red-search",
+      "to": "red-store",
+      "label": "Refresh after cleanup"
     }
   ]
 }

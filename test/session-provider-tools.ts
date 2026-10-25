@@ -74,6 +74,40 @@ try {
       );
     }
   }
+  for (const mode of ["plan", "acceptEdits", "bypassPermissions"]) {
+    const replies: any[] = [];
+    const control = claudeControl(
+      (reply) => replies.push(reply),
+      () => {},
+      mode,
+    );
+    for (const action of [undefined, "scan", "verify", "status", "apply", "invalid"]) {
+      control.handle({
+        type: "control_request",
+        request_id: "redact",
+        request: {
+          subtype: "can_use_tool",
+          tool_name: "mcp__agent_console__session_redact",
+          input: { action },
+        },
+      });
+      const allowed =
+        action === undefined ||
+        ["scan", "verify", "status"].includes(action) ||
+        (action === "apply" && mode === "bypassPermissions");
+      assert.equal(replies.at(-1).response.response.behavior, allowed ? "allow" : "deny");
+    }
+    control.handle({
+      type: "control_request",
+      request_id: "near",
+      request: {
+        subtype: "can_use_tool",
+        tool_name: "mcp__other__session_redact",
+        input: { action: "scan" },
+      },
+    });
+    assert.equal(replies.at(-1).response.response.behavior, "deny");
+  }
   const config = consoleMcpServer()!;
   assert.equal(config.command, process.execPath);
   assert(!JSON.stringify(config).includes("isolated-test-token"));
@@ -125,9 +159,21 @@ try {
   const list = await request("tools/list");
   assert.deepEqual(
     list.result.tools.map((t: any) => t.name),
-    ["session_search", "cli_search", "session_read", "pi_research"],
+    ["session_redact", "session_search", "cli_search", "session_read", "pi_research"],
   );
-  assert(list.result.tools.every((t: any) => t.annotations.readOnlyHint));
+  assert(
+    list.result.tools
+      .filter((t: any) => t.name !== "session_redact")
+      .every((t: any) => t.annotations.readOnlyHint),
+  );
+  assert.equal(
+    list.result.tools.find((t: any) => t.name === "session_redact").annotations.readOnlyHint,
+    false,
+  );
+  assert.equal(
+    list.result.tools.find((t: any) => t.name === "session_redact").annotations.destructiveHint,
+    true,
+  );
   const search = await request("tools/call", {
     name: "session_search",
     arguments: { query: "pr-standards", provider: "codex", limit: 3 },
@@ -161,6 +207,13 @@ try {
   );
   assert(calls.every((c) => c.token === "isolated-test-token" && c.thread === "calling-thread"));
   assert.deepEqual(calls[0].body, { query: "pr-standards", provider: "codex", limit: 3 });
+  const cleanup = await request("tools/call", {
+    name: "session_redact",
+    arguments: { action: "scan", scope: "console" },
+  });
+  assert(!cleanup.result.isError);
+  assert.equal(calls.at(-1).url, "/api/agent-tools/session_redact");
+  assert.deepEqual(calls.at(-1).body, { action: "scan", scope: "console" });
   const denied = await request("tools/call", { name: "schedule_delete", arguments: { id: "x" } });
   assert.equal(denied.error.code, -32602);
   delete process.env.AGENT_CONSOLE_TOOL_TOKEN;

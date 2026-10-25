@@ -1,7 +1,9 @@
 // Offline unit checks for the provider adapters: recorded/documented harness events in, canonical events out. No network, no quota.
 
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { replayPreamble, threadToMarkdown, turnsOf } from "../server/export.ts";
-import { brainContext } from "../server/providers/brain.ts";
 import {
   claudeAdvisorArgs,
   claudeConsoleSettingsArgs,
@@ -597,16 +599,30 @@ check(
 );
 
 // ---- shared brain: context handed to pi/codex at start
-const ctx = await brainContext();
-check(
-  "brain: context has the protocol and index (or brain is absent)",
-  ctx === "" ||
-    (ctx.includes("# Brain index") && ctx.includes("Automatic context loads only this index.")),
-);
-check(
-  "brain: full index retained without arbitrary truncation",
-  ctx === "" || ctx.includes("wiki/agent-console-context.md"),
-);
+const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "providers-brain-"));
+const fixtureCli = path.join(fixtureRoot, "bin", "brain");
+const fixtureIndex = path.join(fixtureRoot, "wiki", "index.md");
+const previousBrain = process.env.AGENT_CONSOLE_BRAIN;
+const previousIndex = process.env.AGENT_CONSOLE_BRAIN_INDEX;
+fs.mkdirSync(path.dirname(fixtureCli), { recursive: true });
+fs.mkdirSync(path.dirname(fixtureIndex), { recursive: true });
+const fixtureText = `# Brain index\n${"x".repeat(65_536)}\nFINAL_SENTINEL\n`;
+fs.writeFileSync(fixtureIndex, fixtureText);
+fs.writeFileSync(fixtureCli, `#!/bin/sh\ncat "${fixtureIndex}"\n`, { mode: 0o755 });
+process.env.AGENT_CONSOLE_BRAIN = fixtureCli;
+process.env.AGENT_CONSOLE_BRAIN_INDEX = fixtureIndex;
+try {
+  const { brainContext } = await import("../server/providers/brain.ts?providers-fixture");
+  const ctx = await brainContext();
+  check("brain: exact configured fixture index is returned", ctx === fixtureText.trim());
+  check("brain: large index final sentinel retained", ctx.endsWith("FINAL_SENTINEL"));
+} finally {
+  if (previousBrain === undefined) delete process.env.AGENT_CONSOLE_BRAIN;
+  else process.env.AGENT_CONSOLE_BRAIN = previousBrain;
+  if (previousIndex === undefined) delete process.env.AGENT_CONSOLE_BRAIN_INDEX;
+  else process.env.AGENT_CONSOLE_BRAIN_INDEX = previousIndex;
+  fs.rmSync(fixtureRoot, { recursive: true, force: true });
+}
 
 console.log(failed ? `\n${failed} FAILED` : "\nall passed");
 process.exit(failed ? 1 : 0);
