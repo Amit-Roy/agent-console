@@ -143,7 +143,18 @@ try {
     "--anthropic-pre-upstream-concurrency",
   ])
     assert.equal(launch.args[launch.args.indexOf(flag) + 1], "1");
-  assert.deepEqual(Object.values(launch.env), ["1", "1", "1", "1", "1", "1", "false", "0", "2", "131072"]);
+  assert.deepEqual(Object.values(launch.env), [
+    "1",
+    "1",
+    "1",
+    "1",
+    "1",
+    "1",
+    "false",
+    "0",
+    "2",
+    "131072",
+  ]);
   const shimDir = path.join(import.meta.dirname, "..", "server", "headroom-profile");
   assert.equal(launch.profile.PYTHONPATH.split(path.delimiter)[0], shimDir);
   assert.equal(launch.profile.AGENT_CONSOLE_HEADROOM_PROFILE, "1");
