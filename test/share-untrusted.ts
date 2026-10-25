@@ -5,8 +5,15 @@ import path from "node:path";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "ac-untrusted-"));
 process.env.AGENT_CONSOLE_DATA = path.join(root, "data");
-const { adoptShareFiles, adoptUpload, markUntrusted, removeUpload, resolveAttachments, withFileList, UPLOAD_DIR } =
-  await import("../server/uploads.ts");
+const {
+  adoptShareFiles,
+  adoptUpload,
+  markUntrusted,
+  removeUpload,
+  resolveAttachments,
+  withFileList,
+  UPLOAD_DIR,
+} = await import("../server/uploads.ts");
 
 const PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
@@ -65,13 +72,21 @@ try {
   );
   const markedIds = (ids: string[]) =>
     ids.filter((uploadId) => fs.existsSync(path.join(UPLOAD_DIR, THREAD, `${uploadId}.untrusted`)));
-  assert.equal(markedIds(sandboxed.map((file) => file.id)).length, 2, "media and caption note marked");
+  assert.equal(
+    markedIds(sandboxed.map((file) => file.id)).length,
+    2,
+    "media and caption note marked",
+  );
   const notePrompt = withFileList("x", resolveAttachments(THREAD, [{ id: sandboxed[1].id }]));
   assert.match(notePrompt, /Untrusted shared content[^\n]*\n- [^\n]*instagram\.txt/);
   const postPath = path.join(root, "post.md");
   fs.writeFileSync(postPath, "# post\n");
   const trusted = adoptShareFiles(THREAD, [{ path: postPath, name: "post.md" }], false, 1 << 20);
-  assert.equal(markedIds(trusted.map((file) => file.id)).length, 0, "non-sandboxed share stays unmarked");
+  assert.equal(
+    markedIds(trusted.map((file) => file.id)).length,
+    0,
+    "non-sandboxed share stays unmarked",
+  );
   console.log("share-untrusted ok");
 } finally {
   fs.rmSync(root, { recursive: true, force: true });
