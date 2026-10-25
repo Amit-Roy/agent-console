@@ -25,21 +25,21 @@
       "items": [
         {
           "id": "history",
-          "label": "threads.history",
+          "label": "history",
           "tech": "server/threads.ts",
           "desc": "Sync full read and parse of the transcript",
           "icon": "history"
         },
         {
           "id": "historyTail",
-          "label": "threads.historyTail",
+          "label": "historyTail",
           "tech": "256 KB async chunks, backwards",
           "desc": "Reads only the log tail",
           "icon": "file-clock"
         },
         {
           "id": "historyAsync",
-          "label": "readLines / historyAsync",
+          "label": "historyAsync",
           "tech": "async line stream",
           "desc": "Streams the log without blocking",
           "icon": "workflow"
@@ -54,7 +54,7 @@
       "items": [
         {
           "id": "turnEnded",
-          "label": "schedules.turnEnded",
+          "label": "turnEnded",
           "tech": "historyTail, ending set",
           "desc": "Run stays running until read; re-entry blocked",
           "icon": "timer"
@@ -68,7 +68,7 @@
         },
         {
           "id": "export",
-          "label": "GET /export/:thread",
+          "label": "/export",
           "tech": "historyAsync",
           "desc": "Async stream, output unchanged",
           "icon": "download"
