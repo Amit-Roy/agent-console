@@ -139,9 +139,9 @@ check(
     .join() === "300",
 );
 check(
-  "title input: 100000 chars by default",
-  titleInput(["x".repeat(60_000), "y".repeat(60_000)]).reduce((n, m) => n + m.length, 0) ===
-    100_000,
+  "title input: 200000 characters estimate 50000 tokens by default",
+  titleInput(["x".repeat(120_000), "y".repeat(120_000)]).reduce((n, m) => n + m.length, 0) ===
+    200_000,
 );
 
 // ---- tool labels
