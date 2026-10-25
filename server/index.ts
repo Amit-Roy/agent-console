@@ -85,6 +85,7 @@ import { ShareError } from "./share/types.ts";
 import { safeId, Threads, turnTiming } from "./threads.ts";
 import { createTelemetryService } from "./token-telemetry.ts";
 import { startToolPriority } from "./tool-priority.ts";
+import { gateToolCall } from "./tool-token.ts";
 import { createToolWatch } from "./tool-watch.ts";
 import {
   EFFORT_STEPS,
@@ -591,21 +592,18 @@ async function piResearch(input: any, thread?: string): Promise<string> {
 
 const cliSearch = new CliSearch();
 app.post("/api/agent-tools/:name", express.json({ limit: "1mb" }), async (req, res) => {
-  const given = Buffer.from(String(req.headers["x-agent-console-tool"] || ""));
-  if (given.length !== TOOL_TOKEN.length || !crypto.timingSafeEqual(given, Buffer.from(TOOL_TOKEN)))
-    return void res.status(401).json({ error: "Not an Agent Console tool call." });
-  const thread =
-    typeof req.headers["x-agent-console-thread"] === "string"
-      ? req.headers["x-agent-console-thread"]
-      : undefined;
+  const header = req.headers["x-agent-console-thread"];
+  const gate = gateToolCall(
+    TOOL_TOKEN,
+    String(req.headers["x-agent-console-tool"] || ""),
+    typeof header === "string" ? header : undefined,
+    req.params.name,
+    (threadId) => !!threads.get(threadId)?.issueRun,
+  );
+  if (gate.status === 401) return void res.status(401).json({ error: gate.error });
+  const thread = gate.threadId;
   try {
-    if (
-      thread &&
-      threads.get(thread)?.issueRun &&
-      !["session_search", "session_read", "cli_search"].includes(req.params.name)
-    ) {
-      throw new Error("Unattended issue runs may only use read-only session tools.");
-    }
+    if (gate.error) throw new Error(gate.error);
     const input = req.body ?? {};
     const result =
       req.params.name === "cli_search"
