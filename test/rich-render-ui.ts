@@ -5,7 +5,7 @@ import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { type Browser, chromium, type Page } from "playwright";
+import { type Browser, type ConsoleMessage, chromium, type Page } from "playwright";
 import sharp from "sharp";
 
 const port = process.env.RICH_RENDER_TEST_PORT || "7075";
@@ -23,6 +23,9 @@ fs.writeFileSync(path.join(fixture, "outside.webm"), "secret");
 fs.writeFileSync(path.join(cwd, "sample.ts"), "export const sample = 1;\n");
 fs.writeFileSync(path.join(cwd, "fake.mp4"), "this is not a video");
 fs.writeFileSync(path.join(cwd, ".env"), "TOKEN=1");
+const archSpec = fs.readFileSync(new URL("fixtures/architecture.json", import.meta.url), "utf8");
+const archEdgeCount = JSON.parse(archSpec).edges.length;
+fs.writeFileSync(path.join(cwd, "diagram.md"), "# Diagram\n\n```arch\n" + archSpec + "\n```\n");
 // A real, decodable clip when ffmpeg can make one (Playwright's Chromium plays VP8 WebM, not H.264).
 const clip = path.join(cwd, "clip.webm");
 const ff = spawnSync("ffmpeg", [
@@ -74,6 +77,7 @@ const message = [
   "Code URL `http://127.0.0.1:8765/x.mp4` and path `" +
     path.join(cwd, "sample.ts") +
     ":1` but not `npm run test` or import `@AGENTS.md`.",
+  "Diagram file `" + path.join(cwd, "diagram.md") + "`.",
   "| Name | Count | Share |\n|---|---:|---|\n| alpha | 1,200 | 12% |\n| beta | 34 | 3.5% |\n| gamma | 5 | 0.1% |",
   "```chart\n" + chart + "\n```",
 ].join("\n\n");
@@ -207,6 +211,15 @@ try {
     csp: string[] = [],
     requests: string[] = [];
   page.on("pageerror", (e) => errors.push(e.message));
+  const consoleErrors: string[] = [];
+  let watchConsole = false;
+  // Unrelated app API calls (mock providers answer 503) are not routing errors; arch/libavoid fetches are.
+  const unrelatedFetch = (m: ConsoleMessage) =>
+    m.text().startsWith("Failed to load resource") && !/arch|libavoid/.test(m.location().url || "");
+  page.on("console", (m) => {
+    if (watchConsole && m.type() === "error" && !unrelatedFetch(m))
+      consoleErrors.push(`${m.text()} ${m.location().url}`);
+  });
   page.on("request", (r) => requests.push(new URL(r.url()).pathname));
   await page.addInitScript(() =>
     document.addEventListener("securitypolicyviolation", (e) =>
@@ -542,6 +555,224 @@ try {
   pass(
     "chart: incomplete JSON stays a code block, streaming reuses the node, instances destroyed, clamped, strict + whitelisted config",
   );
+
+  // ---- arch diagrams
+  const arch = await page.evaluate(async () => {
+    const m = await import("/render.js");
+    m.setFileScope(() => null);
+    const host = document.createElement("div");
+    document.body.append(host);
+    const spec = JSON.stringify({
+      title: "T",
+      items: [
+        { id: "a", label: "A", icon: "bot", step: 1 },
+        { id: "b", label: "B", icon: "d2:x/y", status: "added" },
+      ],
+      edges: [{ from: "a", to: "b" }],
+    });
+    const full = "```arch\n" + spec + "\n```";
+    m.renderMarkdown("```arch\n" + spec.slice(0, 30), host);
+    const partialIsCode = !!host.querySelector(".code") && !host.querySelector(".arch");
+    m.renderMarkdown(full, host);
+    await new Promise((res) => setTimeout(res, 500));
+    const box = host.querySelector(".arch") as any;
+    box.__mark = 1;
+    m.renderMarkdown(full + "\n\nmore", host);
+    const again = host.querySelector(".arch") as any;
+    const out = {
+      partialIsCode,
+      nodes: host.querySelectorAll(".node[data-id]").length,
+      icons: host.querySelectorAll(".node svg.glyph").length,
+      edges: box.__archEdges?.length,
+      sameNode: again.__mark === 1,
+    };
+    host.remove();
+    return out;
+  });
+  assert.deepEqual(arch, { partialIsCode: true, nodes: 2, icons: 2, edges: 1, sameNode: true });
+  pass(
+    "arch: valid spec builds nodes, icons (fallback glyph for d2:), edges kept, streaming reuses the node, partial stays code",
+  );
+
+  // ---- arch routing (libavoid): the 28-edge fixture in chat, in the file viewer, and light/dark screenshots
+  const wasm = await context.request.get(`${base}/vendor/libavoid/libavoid.wasm`);
+  assert.equal(
+    wasm.headers()["content-type"],
+    "application/wasm",
+    "wasm served for instantiateStreaming",
+  );
+  const workerCsp = (await context.request.get(`${base}/arch-route-worker.js`)).headers()[
+    "content-security-policy"
+  ];
+  assert.match(
+    workerCsp,
+    /script-src 'self' 'unsafe-eval' 'wasm-unsafe-eval'/,
+    "worker script has its own CSP",
+  );
+  const pageCsp = (await context.request.get(`${base}/`)).headers()["content-security-policy"];
+  assert.doesNotMatch(pageCsp, /'unsafe-eval'/, "page CSP stays without unsafe-eval");
+  // Run eval from a later task: DevTools lifts the CSP only while its own evaluate call runs.
+  const pageEval = await page.evaluate(
+    () =>
+      new Promise<string>((resolve) =>
+        setTimeout(() => {
+          try {
+            // biome-ignore lint/security/noGlobalEval: proves the page CSP still blocks eval
+            eval("1");
+            resolve("allowed");
+          } catch (err) {
+            resolve((err as Error).name);
+          }
+        }),
+      ),
+  );
+  assert.equal(pageEval, "EvalError", "page still blocks eval");
+  pass("arch: page CSP blocks eval; the route worker gets its own CSP");
+  watchConsole = true;
+  const routed = await page.evaluate(async (src) => {
+    const m = await import("/render.js");
+    m.setFileScope(() => null);
+    const host = document.createElement("div");
+    document.body.append(host);
+    const routeOnce = async (text: string) => {
+      host.replaceChildren();
+      m.renderMarkdown(text, host);
+      const box = host.querySelector(".arch") as HTMLElement;
+      for (let i = 0; i < 200 && !box.dataset.routeMs && !box.dataset.routeError; i++)
+        await new Promise((res) => setTimeout(res, 50));
+      return box;
+    };
+    const cold = await routeOnce("```arch\n" + src + "\n```");
+    const box = await routeOnce("```arch\n" + src + "\n```\n"); // same layout: served from the route cache
+    const out = {
+      coldCache: cold.dataset.routeCache,
+      cache: box.dataset.routeCache,
+      coldMs: Number(cold.dataset.routeMs),
+      routerMs: Number(box.dataset.routerMs),
+      paths: host.querySelectorAll(".arch svg path").length,
+      wires: host.querySelectorAll(".arch svg.wires path.wire").length,
+      ms: Number(box.dataset.routeMs),
+      error: box.dataset.routeError || "",
+    };
+    host.remove();
+    return out;
+  }, archSpec);
+  assert.equal(routed.error, "");
+  assert.ok(
+    routed.paths >= archEdgeCount && routed.wires === archEdgeCount,
+    JSON.stringify(routed),
+  );
+  assert.equal(routed.coldCache, "miss");
+  assert.ok(routed.coldMs < 3000, `first route took ${JSON.stringify(routed)} ms`);
+  assert.equal(routed.cache, "hit", "unchanged layout skips the worker");
+  assert.ok(routed.ms < 20, `cache hit took ${JSON.stringify(routed)} ms`);
+  pass(
+    `arch: libavoid worker routes ${routed.wires} edges in ${routed.coldMs} ms (libavoid ${routed.routerMs} ms); cache hit ${routed.ms} ms`,
+  );
+  await chat.locator("a.code-link[data-file-ref]", { hasText: "diagram.md" }).click();
+  await page.locator("#file-viewer[open]").waitFor();
+  await page.waitForFunction(
+    (count) => document.querySelectorAll("#file-viewer .arch svg.wires path.wire").length >= count,
+    archEdgeCount,
+    { timeout: 15000 },
+  );
+  await page.keyboard.press("Escape");
+  await page.locator("#file-viewer[open]").waitFor({ state: "hidden" });
+  pass("arch: file viewer renders the routed diagram from a .md file");
+  for (const scheme of ["light", "dark"] as const) {
+    const wide = await browser.newContext({
+      viewport: { width: 1600, height: 1000 },
+      colorScheme: scheme,
+      serviceWorkers: "block",
+    });
+    await wide.addCookies([{ name: "ac_session", value: makeToken(), url: base }]);
+    const view = await wide.newPage();
+    let watchView = false; // app boot noise (offline remote fetches) is not part of this check
+    view.on("console", (m) => {
+      if (watchView && m.type() === "error" && !unrelatedFetch(m))
+        consoleErrors.push(`${m.text()} ${m.location().url}`);
+    });
+    view.on("pageerror", (e) => errors.push(e.message));
+    await view.goto(base);
+    await view.locator("#chat .msg.asst").first().waitFor();
+    watchView = true;
+    await view.evaluate(async (src) => {
+      const m = await import("/render.js");
+      const host = document.createElement("div");
+      host.id = "arch-shot";
+      host.style.cssText =
+        "position:fixed;top:0;left:0;z-index:99999;width:max-content;padding:16px;background:Canvas";
+      document.body.append(host);
+      m.renderMarkdown("```arch\n" + src + "\n```", host);
+    }, archSpec);
+    await view.waitForFunction(
+      () => document.querySelector<HTMLElement>("#arch-shot .arch")?.dataset.routeMs,
+    );
+    // Resize: the debounced observer reroutes once, without a loop.
+    const before = await view.evaluate(
+      () => document.querySelector<HTMLElement>("#arch-shot .arch")!.dataset.routeMs,
+    );
+    await view.evaluate(() => {
+      const canvas = document.querySelector<HTMLElement>("#arch-shot .arch .canvas")!;
+      canvas.style.minWidth = `${canvas.offsetWidth + 160}px`;
+    });
+    await view.waitForFunction(
+      (old) => document.querySelector<HTMLElement>("#arch-shot .arch")!.dataset.routeMs !== old,
+      before,
+    );
+    await view.waitForTimeout(400); // a reroute loop would keep redrawing; the overlay count below stays 1
+    const after = await view.evaluate(() => {
+      const box = document.querySelector<HTMLElement>("#arch-shot .arch")!;
+      const chips = [...box.querySelectorAll(".edge-label")].map((chip) =>
+        chip.getBoundingClientRect(),
+      );
+      let chipOverlaps = 0;
+      for (const [index, first] of chips.entries())
+        for (const second of chips.slice(index + 1))
+          if (
+            first.left < second.right &&
+            first.right > second.left &&
+            first.top < second.bottom &&
+            first.bottom > second.top
+          )
+            chipOverlaps++;
+      return {
+        wires: box.querySelectorAll("svg.wires").length,
+        ms: box.dataset.routeMs,
+        cache: box.dataset.routeCache,
+        chipOverlaps,
+      };
+    });
+    assert.equal(after.wires, 1, "one overlay after reroute");
+    assert.ok(before && after.ms && after.ms !== before, "routed before and after resize");
+    assert.ok(Number(before) < 3000, `cold route took ${before} ms`);
+    assert.equal(after.cache, "miss", "a changed layout reroutes in the worker");
+    assert.ok(Number(after.ms) < 1500, `warm reroute took ${after.ms} ms`);
+    assert.equal(after.chipOverlaps, 0, "label chips do not overlap each other");
+    console.log(`arch ${scheme}: cold ${before} ms, warm ${after.ms} ms`);
+    // Grow the viewport to the whole diagram so the screenshot is not clipped.
+    const size = await view.evaluate(() => {
+      const shot = document.getElementById("arch-shot")!;
+      return { width: Math.ceil(shot.scrollWidth), height: Math.ceil(shot.scrollHeight) };
+    });
+    await view.setViewportSize(size);
+    await view
+      .waitForFunction(
+        (old) => document.querySelector<HTMLElement>("#arch-shot .arch")!.dataset.routeMs !== old,
+        after.ms,
+      )
+      .catch(() => {}); // the canvas may keep its size; then there is no reroute to wait for
+    fs.mkdirSync("/tmp/arch-evidence", { recursive: true });
+    await view.locator("#arch-shot .arch").screenshot({ path: `/tmp/arch-evidence/${scheme}.png` });
+    await wide.close();
+  }
+  watchConsole = false;
+  assert.deepEqual(
+    consoleErrors,
+    [],
+    `no console errors while routing: ${JSON.stringify(consoleErrors).slice(0, 1500)}`,
+  );
+  pass("arch: reroutes on resize, light/dark screenshots in /tmp/arch-evidence");
 
   // ---- sanitiser
   const s = await page.evaluate(async () => {
