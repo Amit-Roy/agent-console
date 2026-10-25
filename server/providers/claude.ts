@@ -7,7 +7,7 @@ import { toolEnvFile } from "../tool-priority.ts";
 import { threadDir } from "../uploads.ts";
 import { stylePreamble } from "./brain.ts";
 import { claudeConfigDir, requireClaudeAccount } from "./claude-accounts.ts";
-import { consoleMcpServer, SESSION_INSTRUCTIONS } from "./console-mcp.mjs";
+import { consoleMcpServer } from "./console-mcp.mjs";
 import { parseJson, spawnLines } from "./proc.ts";
 import {
   type Agent,
@@ -276,7 +276,7 @@ function claudeStartArgs(thread: ThreadSpec): string[] {
   if (thread.effort && thread.effort !== "default") args.push("--effort", thread.effort);
   args.push(...claudeConsoleSettingsArgs(thread.advisor));
   args.push(...leanMcpArgs());
-  const style = [stylePreamble(), SESSION_INSTRUCTIONS].filter(Boolean).join("\n\n");
+  const style = stylePreamble();
   if (style) args.push("--append-system-prompt", style); // brain index arrives via the user hook
   fs.mkdirSync(threadDir(thread.id), { recursive: true, mode: 0o700 });
   if (thread.sessionId) args.push("--resume", thread.sessionId);
