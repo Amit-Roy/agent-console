@@ -176,6 +176,58 @@ class BenchTests(unittest.TestCase):
         self.assertEqual(set(prior), set(levels))
         self.assertTrue(all(abs(value) <= bench.fit.OFFSET_LIMIT for value in prior.values()))
 
+    def marked_dataset(self, name):
+        rows = dataset()
+        for index, sample in enumerate(rows["samples"]):
+            sample["origin"] = "sdk-cli" if index % 3 == 0 else "console"
+            sample["request"] = "why does the deploy fail?" if index % 2 else "fix the bug"
+        path = self.dir / name
+        path.write_text(json.dumps(rows))
+        return path
+
+    def test_real_only_lines_and_intent_candidate(self):
+        path = self.marked_dataset("marked.json")
+        out = self.dir / "marked-out"
+        stdout = io.StringIO()
+        argv = ["--dataset", str(path), "--out", str(out), "--candidates", "stable,intent"]
+        with contextlib.redirect_stdout(stdout):
+            self.assertEqual(bench.main(argv), 0)
+        summary = json.loads((out / "summary.json").read_text())
+        self.assertGreater(summary["realHeldout"], 0)
+        self.assertLess(summary["realHeldout"], summary["heldout"])
+        self.assertEqual([item["name"] for item in summary["candidates"]], ["stable", "intent"])
+        for item in summary["candidates"]:
+            self.assertTrue(math.isfinite(item["real"]["pinball"]))
+            self.assertEqual(item["real"]["heldout"], summary["realHeldout"])
+        lines = stdout.getvalue().strip().split("\n")
+        self.assertRegex(lines[2], r"^stable real pinball \d\.\d{3} cov \d\.\d\d/\d\.\d\d n \d+$")
+        self.assertTrue(lines[3].startswith("intent real pinball "))
+        self.assertEqual(bench.fit.QUANTILE_FEATURES[-1], "versions")
+
+    def test_no_marker_means_no_real_lines(self):
+        self.assertNotIn("realHeldout", self.plain)
+        self.assertTrue(all("real" not in item for item in self.plain["candidates"]))
+        self.assertNotIn(" real ", self.pooled_stdout)
+
+    def test_intent_features_are_deterministic_cues(self):
+        cues = bench.intent_features("Why is #123 broken?\n- fix it\n- deploy [Image #1]")
+        self.assertEqual(set(cues), set(bench.INTENT_FEATURES))
+        for name in ("iQuestion", "iShip", "iDebug", "iImage", "iIssue"):
+            self.assertEqual(cues[name], 1.0)
+        self.assertGreater(cues["iEdit"], 0)
+        self.assertGreater(cues["iEnum"], 0)
+        self.assertEqual(cues["iResearch"], 0.0)
+        self.assertEqual(sum(bench.intent_features("").values()), 0.0)
+
+    def test_history_provenance_marks_probe_rows(self):
+        sample = {"sampleId": "a"}
+        console = {"provenance": {"consoleThreads": ["t1"]}}
+        native = {"provenance": {"consoleThreads": []}}
+        self.assertTrue(bench.row_is_real(sample, console))
+        self.assertFalse(bench.row_is_real(sample, native))
+        self.assertIsNone(bench.row_is_real(sample, None))
+        self.assertFalse(bench.row_is_real({"origin": "codex_exec"}, console))
+
     def test_unknown_candidate_is_rejected(self):
         stderr = io.StringIO()
         argv = [
