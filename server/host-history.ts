@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { type ChildProcess, spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -32,38 +32,48 @@ let prev: {
   wr: number;
 } | null = null;
 
-function counters() {
-  let cpuTotal = 0,
-    cpuIdle = 0,
-    rx = 0,
-    tx = 0,
-    rd = 0,
-    wr = 0;
+function cpuCounters() {
   try {
     const line = fs.readFileSync(path.join(PROC, "stat"), "utf8").split("\n")[0];
     const vals = line.trim().split(/\s+/).slice(1).map(Number);
-    cpuTotal = vals.reduce((a, b) => a + b, 0);
-    cpuIdle = (vals[3] || 0) + (vals[4] || 0);
-  } catch {}
+    return { cpuTotal: vals.reduce((a, b) => a + b, 0), cpuIdle: (vals[3] || 0) + (vals[4] || 0) };
+  } catch {
+    return { cpuTotal: 0, cpuIdle: 0 };
+  }
+}
+
+function netCounters() {
+  let rx = 0,
+    tx = 0;
   try {
     for (const line of fs.readFileSync(path.join(PROC, "net/dev"), "utf8").split("\n").slice(2)) {
-      const m = /^\s*([^:]+):\s*(.*)$/.exec(line);
-      if (!m || m[1] === "lo") continue;
-      const f = m[2].trim().split(/\s+/).map(Number);
-      rx += f[0] || 0;
-      tx += f[8] || 0;
+      const match = /^\s*([^:]+):\s*(.*)$/.exec(line);
+      if (!match || match[1] === "lo") continue;
+      const fields = match[2].trim().split(/\s+/).map(Number);
+      rx += fields[0] || 0;
+      tx += fields[8] || 0;
     }
   } catch {}
+  return { rx, tx };
+}
+
+function diskCounters() {
+  let rd = 0,
+    wr = 0;
   try {
     // whole disks only, so partitions are not counted twice
     for (const line of fs.readFileSync(path.join(PROC, "diskstats"), "utf8").split("\n")) {
-      const f = line.trim().split(/\s+/);
-      if (!/^(sd[a-z]+|vd[a-z]+|xvd[a-z]+|nvme\d+n\d+|mmcblk\d+)$/.test(f[2] ?? "")) continue;
-      rd += (Number(f[5]) || 0) * 512;
-      wr += (Number(f[9]) || 0) * 512;
+      const fields = line.trim().split(/\s+/);
+      if (!/^(sd[a-z]+|vd[a-z]+|xvd[a-z]+|nvme\d+n\d+|mmcblk\d+)$/.test(fields[2] ?? "")) continue;
+      rd += (Number(fields[5]) || 0) * 512;
+      wr += (Number(fields[9]) || 0) * 512;
     }
   } catch {}
-  return { ts: Date.now(), cpuTotal, cpuIdle, rx, tx, rd, wr };
+  return { rd, wr };
+}
+
+function counters() {
+  return { ts: Date.now(), ...cpuCounters(), ...netCounters(), ...diskCounters() };
 }
 
 function memory() {
@@ -237,66 +247,91 @@ const duStale = () => !duRunning && (!du || Date.now() - du.scannedAt > DU_MAX_A
 /* One du walk of the root filesystem, five levels deep, entries of 16 MB and up, cached on disk.
    The walk is mostly kernel time (nice cannot cap it on an idle box), so the child is also
    duty-cycled with SIGSTOP/SIGCONT to DU_DUTY of each 200 ms. A walk takes several minutes. */
+function spawnDu(mounts: string[]): ChildProcess {
+  // -x keeps each walk on one filesystem, so real directory mounts such as /home/coder get their own
+  // root. Mounts go first: du skips an argument it already passed while walking an earlier one.
+  const roots = [...mounts, "/"];
+  return spawn(
+    "nice",
+    ["-n", "19", "ionice", "-c3", "du", "-x", "-B1", "-d5", "--threshold=16M", ...roots],
+    { stdio: ["ignore", "pipe", "ignore"] },
+  );
+}
+
+/* Duty-cycle the du child; the returned function ends the cycle once the child has closed. */
+function governDu(child: ChildProcess): () => void {
+  // every 200 ms: continue, then stop again after DU_DUTY of the period
+  const pid = child.pid;
+  let done = false;
+  const signal = (sig: NodeJS.Signals) => {
+    try {
+      if (pid && !done) process.kill(pid, sig);
+    } catch {}
+  };
+  signal("SIGSTOP");
+  const duty = setInterval(() => {
+    signal("SIGCONT");
+    setTimeout(() => signal("SIGSTOP"), 200 * DU_DUTY).unref();
+  }, 200);
+  const reap = () => {
+    signal("SIGKILL");
+  };
+  process.once("exit", reap); // a stopped du must never outlive the server
+  return () => {
+    clearInterval(duty);
+    done = true;
+    process.off("exit", reap);
+  };
+}
+
+/* Consume complete lines from the buffer into sizes; returns the unfinished tail. */
+function feedDu(buffer: string, sizes: Record<string, number>): string {
+  let rest = buffer;
+  let newline: number;
+  while ((newline = rest.indexOf("\n")) >= 0) {
+    const match = /^(\d+)\t(.+)$/.exec(rest.slice(0, newline));
+    rest = rest.slice(newline + 1);
+    if (match) sizes[match[2]] = Number(match[1]);
+  }
+  return rest;
+}
+
+/* fold nested mounts into their ancestors so / and /home add up */
+function foldMounts(sizes: Record<string, number>, mounts: string[]) {
+  for (const mount of mounts) {
+    for (let dir = path.posix.dirname(mount); sizes[mount] != null; dir = path.posix.dirname(dir)) {
+      if (sizes[dir] != null) sizes[dir] += sizes[mount];
+      if (dir === "/") break;
+    }
+  }
+}
+
+function storeScan(sizes: Record<string, number>, startedAt: number) {
+  if (!Object.keys(sizes).length) return;
+  du = { scannedAt: Date.now(), ms: Date.now() - startedAt, root: "/", sizes };
+  try {
+    fs.writeFileSync(DU_FILE, JSON.stringify(du));
+  } catch {}
+}
+
 export function scanDisk(): Promise<void> {
   if (duRunning) return duRunning;
   const t0 = Date.now();
   duRunning = new Promise<void>((resolve) => {
     const sizes: Record<string, number> = {};
     let buf = "";
-    // -x keeps each walk on one filesystem, so real directory mounts such as /home/coder get their own
-    // root. Mounts go first: du skips an argument it already passed while walking an earlier one.
     const mounts = mountRoots();
-    const roots = [...mounts, "/"];
-    const child = spawn(
-      "nice",
-      ["-n", "19", "ionice", "-c3", "du", "-x", "-B1", "-d5", "--threshold=16M", ...roots],
-      { stdio: ["ignore", "pipe", "ignore"] },
-    );
-    // every 200 ms: continue, then stop again after DU_DUTY of the period
-    const pid = child.pid;
-    let done = false;
-    const signal = (sig: NodeJS.Signals) => {
-      try {
-        if (pid && !done) process.kill(pid, sig);
-      } catch {}
-    };
-    signal("SIGSTOP");
-    const duty = setInterval(() => {
-      signal("SIGCONT");
-      setTimeout(() => signal("SIGSTOP"), 200 * DU_DUTY).unref();
-    }, 200);
-    const reap = () => {
-      signal("SIGKILL");
-    };
-    process.once("exit", reap); // a stopped du must never outlive the server
-    child.stdout.setEncoding("utf8");
-    child.stdout.on("data", (chunk: string) => {
-      buf += chunk;
-      let i: number;
-      while ((i = buf.indexOf("\n")) >= 0) {
-        const m = /^(\d+)\t(.+)$/.exec(buf.slice(0, i));
-        buf = buf.slice(i + 1);
-        if (m) sizes[m[2]] = Number(m[1]);
-      }
+    const child = spawnDu(mounts);
+    const release = governDu(child);
+    child.stdout!.setEncoding("utf8");
+    child.stdout!.on("data", (chunk: string) => {
+      buf = feedDu(buf + chunk, sizes);
     });
     child.on("error", () => resolve());
     child.on("close", () => {
-      clearInterval(duty);
-      done = true;
-      process.off("exit", reap);
-      // fold nested mounts into their ancestors so / and /home add up
-      for (const r of mounts) {
-        for (let p = path.posix.dirname(r); sizes[r] != null; p = path.posix.dirname(p)) {
-          if (sizes[p] != null) sizes[p] += sizes[r];
-          if (p === "/") break;
-        }
-      }
-      if (Object.keys(sizes).length) {
-        du = { scannedAt: Date.now(), ms: Date.now() - t0, root: "/", sizes };
-        try {
-          fs.writeFileSync(DU_FILE, JSON.stringify(du));
-        } catch {}
-      }
+      release();
+      foldMounts(sizes, mounts);
+      storeScan(sizes, t0);
       resolve();
     });
   }).finally(() => {
