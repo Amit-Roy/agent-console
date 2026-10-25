@@ -1,3 +1,4 @@
+import "./log-timestamps.ts";
 import {
   acquireModelRequest,
   reportModel429,
