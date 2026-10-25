@@ -7,9 +7,13 @@ assert.match(
 );
 
 const previous = process.env.AGENT_CONSOLE_AUTO_CONTINUE;
+const previousMock = process.env.AGENT_CONSOLE_MOCK;
 try {
   delete process.env.AGENT_CONSOLE_AUTO_CONTINUE;
+  delete process.env.AGENT_CONSOLE_MOCK;
   assert.equal(autoContinueEnabled(), true);
+  process.env.AGENT_CONSOLE_MOCK = "1";
+  assert.equal(autoContinueEnabled(), false, "mock servers keep auto-continue off by default");
   process.env.AGENT_CONSOLE_AUTO_CONTINUE = "1";
   assert.equal(autoContinueEnabled(), true);
   process.env.AGENT_CONSOLE_AUTO_CONTINUE = "0";
@@ -17,4 +21,6 @@ try {
 } finally {
   if (previous === undefined) delete process.env.AGENT_CONSOLE_AUTO_CONTINUE;
   else process.env.AGENT_CONSOLE_AUTO_CONTINUE = previous;
+  if (previousMock === undefined) delete process.env.AGENT_CONSOLE_MOCK;
+  else process.env.AGENT_CONSOLE_MOCK = previousMock;
 }

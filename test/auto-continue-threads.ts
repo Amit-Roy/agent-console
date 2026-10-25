@@ -15,7 +15,7 @@ Object.assign(process.env, {
   AGENT_CONSOLE_MOCK: "1",
   AGENT_CONSOLE_LABELS: "0",
 });
-delete process.env.AGENT_CONSOLE_AUTO_CONTINUE;
+process.env.AGENT_CONSOLE_AUTO_CONTINUE = "1";
 const { Threads } = await import(pathToFileURL(path.join(root, "server/threads.ts")).href);
 const { PROVIDERS } = await import(
   pathToFileURL(path.join(root, "server/providers/index.ts")).href
@@ -175,7 +175,7 @@ try {
 
   process.env.AGENT_CONSOLE_AUTO_CONTINUE = "0";
   expectNone("disabled", () => {});
-  delete process.env.AGENT_CONSOLE_AUTO_CONTINUE;
+  process.env.AGENT_CONSOLE_AUTO_CONTINUE = "1";
   console.log("PASS auto continue sends once per user turn and respects every gate");
 } catch (error) {
   console.error(error);
