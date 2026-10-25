@@ -1,203 +1,79 @@
 {
- "title": "Effort model weekly retrain",
- "subtitle": "Weekly refit, gate, install; agent CLI for status, bench and external data",
- "items": [
-  {
-   "group": "Triage worker",
-   "sub": "scripts/github-triage.ts",
-   "border": "dashed",
-   "color": "blue",
-   "icon": "server",
-   "items": [
+  "title": "Tool card liveness after history replay",
+  "subtitle": "Authoritative runtime snapshot reconciles missing completion events",
+  "items": [
     {
-     "id": "sched",
-     "label": "Weekly calibrate",
-     "tech": "github-triage.ts",
-     "desc": "7-day interval, 6 h crash retry",
-     "icon": "calendar-clock",
-     "color": "blue"
+      "group": "Node server",
+      "sub": "server/threads.ts",
+      "border": "dashed",
+      "icon": "server",
+      "items": [
+        {
+          "id": "runtime",
+          "label": "Runtime tool state",
+          "tech": "Provider lifecycle",
+          "desc": "Snapshot foreground and background tool identities",
+          "icon": "activity"
+        },
+        {
+          "id": "history",
+          "label": "History response",
+          "tech": "WebSocket history",
+          "desc": "Events plus versioned workState snapshot",
+          "icon": "history"
+        }
+      ]
     },
     {
-     "id": "fit",
-     "label": "Quantile fitter",
-     "tech": "triage-effort-fit.py",
-     "desc": "Depth 2, leaf 80; OOF conformal offsets per quantile; paired bootstrap",
-     "icon": "trees",
-     "color": "teal"
-    },
-    {
-     "id": "gate",
-     "label": "Promotion gate",
-     "tech": "triage-promotion.ts",
-     "desc": "Pinball: paired lower90 > 0 or ratio > 1.10. Coverage vs champion within 2 SE; hard bounds",
-     "icon": "shield-check",
-     "color": "orange"
+      "group": "Browser",
+      "sub": "public/app.js",
+      "border": "solid",
+      "icon": "monitor",
+      "items": [
+        {
+          "id": "cards",
+          "label": "Tool cards",
+          "tech": "showHistory / showDelta",
+          "desc": "Reconcile replayed cards with authoritative liveness",
+          "icon": "panels-top-left"
+        },
+        {
+          "id": "lifecycle",
+          "label": "Turn lifecycle",
+          "tech": "result / aborted",
+          "desc": "Settle stale tools while preserving live background work",
+          "icon": "circle-stop"
+        },
+        {
+          "id": "badge",
+          "label": "Header badge",
+          "tech": "updateWorking",
+          "desc": "Count reconciled live agents",
+          "icon": "badge"
+        }
+      ]
     }
-   ]
-  },
-  {
-   "group": "Local state",
-   "sub": "~/.config/agent-console",
-   "border": "solid",
-   "color": "slate",
-   "icon": "hard-drive",
-   "items": [
+  ],
+  "edges": [
     {
-     "id": "champ",
-     "label": "Live model",
-     "tech": "triage-effort-model.json",
-     "desc": "Champion; scored on held-out rows",
-     "icon": "file-check",
-     "color": "indigo"
+      "from": "runtime",
+      "to": "history",
+      "label": "Attach tool liveness"
     },
     {
-     "id": "chal",
-     "label": "Challenger",
-     "tech": "*.challenger.json",
-     "desc": "Kept when rejected",
-     "icon": "file-x",
-     "color": "slate"
+      "from": "history",
+      "to": "cards",
+      "label": "Replay events"
+    },
+    {
+      "from": "lifecycle",
+      "to": "cards",
+      "label": "Reconcile pending work"
+    },
+    {
+      "from": "cards",
+      "to": "badge",
+      "label": "Count live agents"
     }
-   ]
-  },
-  {
-   "group": "GitHub",
-   "border": "solid",
-   "color": "slate",
-   "icon": "globe",
-   "items": [
-    {
-     "id": "gh",
-     "label": "Issue quotes",
-     "tech": "triage comment",
-     "desc": "Repriced after promote",
-     "icon": "message-square",
-     "color": "cyan"
-    }
-   ]
-  },
-  {
-   "group": "Agent CLI",
-   "sub": "bin/effort-model",
-   "border": "dashed",
-   "color": "purple",
-   "icon": "terminal",
-   "items": [
-    {
-     "id": "cli",
-     "label": "effort-model",
-     "tech": "scripts/effort-model.ts",
-     "desc": "status, bench, data fetch",
-     "icon": "terminal",
-     "color": "purple"
-    },
-    {
-     "id": "bench",
-     "label": "Bench",
-     "tech": "triage-effort-bench.py",
-     "desc": "4 candidates; summary.json",
-     "icon": "chart-column",
-     "color": "teal"
-    },
-    {
-     "id": "hf",
-     "label": "SALT-NLP/SWE-chat",
-     "tech": "odc-by parquet",
-     "desc": "Train-only rows, cached per revision",
-     "icon": "database",
-     "color": "orange"
-    }
-   ]
-  },
-  {
-   "group": "Auto-continue",
-   "sub": "server/threads.ts",
-   "border": "solid",
-   "color": "orange",
-   "icon": "repeat",
-   "items": [
-    {
-     "id": "ac-turn",
-     "label": "User turn ends idle",
-     "tech": "server/threads.ts",
-     "desc": "result event; no reply text kept",
-     "icon": "message-square",
-     "color": "blue"
-    },
-    {
-     "id": "ac-gate",
-     "label": "Auto-continue gate",
-     "tech": "threads.ts autoContinue",
-     "desc": "Fires once per idle user turn unless continueBlocked or continueParked",
-     "icon": "shield-check",
-     "color": "orange"
-    },
-    {
-     "id": "ac-send",
-     "label": "Continue prompt",
-     "tech": "auto-continue.ts",
-     "desc": "One follow-up send to the provider",
-     "icon": "send",
-     "color": "teal"
-    }
-   ]
-  }
- ],
- "edges": [
-  {
-   "from": "sched",
-   "to": "fit",
-   "label": "Sessions + features"
-  },
-  {
-   "from": "champ",
-   "to": "fit",
-   "label": "--champion"
-  },
-  {
-   "from": "fit",
-   "to": "gate",
-   "label": "Artifact + validation"
-  },
-  {
-   "from": "gate",
-   "to": "champ",
-   "label": "Promote"
-  },
-  {
-   "from": "gate",
-   "to": "chal",
-   "label": "Reject"
-  },
-  {
-   "from": "champ",
-   "to": "gh",
-   "label": "Reprice"
-  },
-  {
-   "from": "cli",
-   "to": "champ",
-   "label": "status reads"
-  },
-  {
-   "from": "cli",
-   "to": "bench",
-   "label": "bench"
-  },
-  {
-   "from": "hf",
-   "to": "bench",
-   "label": "data fetch"
-  },
-  {
-   "from": "ac-turn",
-   "to": "ac-gate",
-   "label": "Idle turn end"
-  },
-  {
-   "from": "ac-gate",
-   "to": "ac-send",
-   "label": "Send once"
-  }
- ]
+  ]
 }

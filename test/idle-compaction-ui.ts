@@ -32,8 +32,18 @@ const toolCardsHistory = [
     message: {
       role: "assistant",
       content: [
-        { type: "tool_use", id: "tool-bash-1", name: "Bash", input: { command: "echo hello", description: "Say hello" } },
-        { type: "tool_use", id: "tool-agent-1", name: "Agent", input: { description: "Background work", prompt: "Work in background" } },
+        {
+          type: "tool_use",
+          id: "tool-bash-1",
+          name: "Bash",
+          input: { command: "echo hello", description: "Say hello" },
+        },
+        {
+          type: "tool_use",
+          id: "tool-agent-1",
+          name: "Agent",
+          input: { description: "Background work", prompt: "Work in background" },
+        },
       ],
     },
     ts: now + 100,
@@ -49,27 +59,31 @@ const staleBgHistory = [
     message: {
       role: "assistant",
       content: [
-        { type: "tool_use", id: "tool-agent-bg", name: "Agent", input: { description: "Background work", prompt: "Work in background" } },
+        {
+          type: "tool_use",
+          id: "tool-agent-bg",
+          name: "Agent",
+          input: { description: "Background work", prompt: "Work in background" },
+        },
       ],
     },
     ts: now + 100,
   },
-  { type: "system", subtype: "task_started", tool_use_id: "tool-agent-bg", is_backgrounded: true, ts: now + 200 },
+  {
+    type: "system",
+    subtype: "task_started",
+    tool_use_id: "tool-agent-bg",
+    is_backgrounded: true,
+    ts: now + 200,
+  },
   // NO task_notification - agent completed but event was compacted away
 ];
 
 fs.mkdirSync(path.join(data, "logs"));
 fs.writeFileSync(
   path.join(data, "threads.json"),
-  JSON.stringify([
-    fixture("known-cache", "claude"),
-    fixture("unknown-cache", "codex"),
-    fixture("tool-cards-test", "mock"),
-    fixture("bg-agent-stale-test", "mock"),
-  ]),
+  JSON.stringify([fixture("known-cache", "claude"), fixture("unknown-cache", "codex")]),
 );
-fs.writeFileSync(path.join(data, "logs", "tool-cards-test.jsonl"), toolCardsHistory.map(e => JSON.stringify(e)).join("\n") + "\n");
-fs.writeFileSync(path.join(data, "logs", "bg-agent-stale-test.jsonl"), staleBgHistory.map(e => JSON.stringify(e)).join("\n") + "\n");
 
 process.env.AGENT_CONSOLE_DATA = data;
 const { makeToken } = await import("../server/auth.ts");
@@ -80,6 +94,7 @@ const env = {
   AGENT_CONSOLE_RUN: path.join(data, "run"),
   AGENT_CONSOLE_MOCK: "1",
   AGENT_CONSOLE_HEADROOM: "0",
+  AGENT_CONSOLE_WARM_MAX: "0",
   AGENT_CONSOLE_IDLE_COMPACT_CLAUDE_TTL_MS: "3600000",
 };
 delete env.AGENT_CONSOLE_PID_FILE;
@@ -102,7 +117,7 @@ try {
   browser = await chromium.launch();
 
   // --- Existing idle compaction toggle tests ---
-  for (const width of [1280, 390]) {
+  for (const width of process.env.AC_LIFECYCLE_CASE ? [] : [1280, 390]) {
     const context = await browser.newContext({
       viewport: { width, height: 900 },
       colorScheme: "dark",
@@ -134,7 +149,6 @@ try {
       .locator("#run-metrics dd")
       .filter({ hasText: "On for substantial idle contexts" })
       .waitFor();
-    // await page.screenshot({ path: `/tmp/idle-compaction-${width}.png` });
     assert.equal(
       await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
       true,
@@ -157,101 +171,161 @@ try {
     await context.close();
   }
 
-  // --- Tool cards compaction reconciliation tests ---
-  // Scenario 1: History with tool_use events but NO tool_result events (compacted away)
-  // Cards should be settled as interrupted, not stuck pending
-  {
-    const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, colorScheme: "dark" });
+  // Exact counts and completed replay prevent empty history from passing.
+  for (const scenario of process.env.AC_LIFECYCLE_CASE
+    ? [process.env.AC_LIFECYCLE_CASE]
+    : ["idle", "done-launch", "active", "background", "delta", "earlier", "result", "aborted"]) {
+    const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
     await context.addCookies([{ name: "ac_session", value: makeToken(), url: base }]);
-    await context.addInitScript(() => localStorage.setItem("ac_thread", "tool-cards-test"));
+    await context.addInitScript(() => localStorage.setItem("ac_thread", "lifecycle"));
     const page = await context.newPage();
+    page.setDefaultTimeout(5000);
     const errors: string[] = [];
-    page.on("pageerror", e => errors.push(String(e)));
-    page.on("console", m => {
-      if (m.type() === "error") {
-        const text = m.text();
-        // Filter out transient 502 errors for non-critical resources
-        if (!text.includes("502") || text.includes("favicon")) errors.push(text);
-      }
+    page.on("pageerror", (error) => errors.push(String(error)));
+    let send!: (message: object) => void;
+    const active = scenario === "active";
+    const background = scenario === "background";
+    const later = scenario === "delta" || scenario === "earlier";
+    const live = scenario === "result" || scenario === "aborted";
+    const history =
+      scenario === "done-launch"
+        ? [
+            ...staleBgHistory,
+            {
+              type: "user",
+              message: {
+                content: [
+                  { type: "tool_result", tool_use_id: "tool-agent-bg", content: "Launched" },
+                ],
+              },
+              ts: now + 300,
+            },
+          ]
+        : background
+          ? [
+              ...toolCardsHistory,
+              {
+                type: "system",
+                subtype: "task_started",
+                tool_use_id: "tool-agent-1",
+                is_backgrounded: true,
+                ts: now + 200,
+              },
+              ...staleBgHistory.slice(1),
+            ]
+          : toolCardsHistory;
+    await page.routeWebSocket("**/ws", (socket) => {
+      send = (message) => socket.send(JSON.stringify(message));
+      socket.onMessage((raw) => {
+        const request = JSON.parse(String(raw));
+        if (request.t === "ping") send({ t: "pong" });
+        if (request.t === "open")
+          send({
+            t: "history",
+            thread: "lifecycle",
+            request: request.request,
+            events: live || later ? [] : history,
+            start: 0,
+            end: live || later ? 0 : history.length,
+            workState: {
+              version: 1,
+              foreground: active ? ["tool-bash-1", "tool-agent-1"] : [],
+              background: background ? ["tool-agent-1"] : [],
+              backgroundCount: background ? 1 : 0,
+            },
+          });
+      });
+      send({
+        t: "hello",
+        threads: [
+          {
+            ...fixture("lifecycle", "mock"),
+            status: active || live ? "running" : "idle",
+            background: 0,
+          },
+        ],
+        providers: [],
+        dirs: [process.cwd()],
+        tasks: [],
+        questions: {},
+        usage: {},
+        queues: {},
+        commands: {},
+        features: {},
+      });
     });
-
     await page.goto(base);
-    await page.locator("#chat").waitFor({ state: "attached" });
-    // Wait for history to render completely (no more pending cards from historical events)
-    await page.waitForFunction(() => {
-      const pending = document.querySelectorAll(".msg.card.pending:not(.agent .task-chip.running)");
-      return pending.length === 0;
-    }, { timeout: 15000 }).catch(() => {});
+    await page
+      .waitForFunction(
+        () =>
+          Reflect.get(window, "agentConsoleMetrics")?.thread === "lifecycle" &&
+          document.querySelector("#chat")?.getAttribute("aria-busy") === "false",
+      )
+      .catch((error) => {
+        throw new Error(
+          `${scenario}: history did not finish; browser errors: ${errors.join("; ")}`,
+          { cause: error },
+        );
+      });
 
-    // Debug: check what cards exist
-    const allCards = await page.locator(".msg.card").count();
-    const pendingCardsAll = await page.locator(".msg.card.pending").count();
-    const agentCards = await page.locator(".msg.card.agent").count();
-    const bashCards = await page.locator(".msg.card:not(.agent)").count();
-    console.log(`DEBUG: total cards=${allCards}, pending=${pendingCardsAll}, agent=${agentCards}, bash=${bashCards}`);
-    // Also check classes
-    const cardDetails = await page.evaluate(() => {
-      return Array.from(document.querySelectorAll('.msg.card')).map(c => ({
-        classes: Array.from(c.classList),
-        hasStartedTs: c.startedTs != null,
-        hasStartedAt: c.startedAt != null,
-      }));
-    });
-    console.log('DEBUG card details:', JSON.stringify(cardDetails, null, 2));
-
-    // Assert: no pending cards (both Bash and Agent cards should be settled)
-    const pendingCards = await page.locator(".msg.card.pending").count();
-    assert.equal(pendingCards, 0, "Historical tool cards without tool_result should be settled as interrupted");
-
-    // Assert: header badge should not show "Working · N agents" (no live background agents)
-    const headerState = await page.locator("#state-t").textContent();
-    assert.ok(!headerState?.includes("Working ·"), `Header should not show agent count, got: ${headerState}`);
-
+    if (later) {
+      send({
+        t: "history",
+        thread: "lifecycle",
+        events: history,
+        start: 0,
+        end: history.length,
+        ...(scenario === "delta" ? { delta: true } : { before: 1 }),
+        workState: { version: 1, foreground: [], background: [], backgroundCount: 0 },
+      });
+    }
+    if (live) {
+      send({ t: "event", thread: "lifecycle", event: toolCardsHistory[1] });
+      await page.waitForFunction(() => document.querySelectorAll(".msg.card.pending").length === 2);
+      send({ t: "event", thread: "lifecycle", event: { type: scenario, ts: now + 500 } });
+    }
+    const count = scenario === "done-launch" ? 1 : background ? 3 : 2;
+    await page.waitForFunction(
+      ({ count, active, background }) =>
+        document.querySelectorAll(".msg.card").length === count &&
+        document.querySelectorAll(".msg.card.pending").length ===
+          (active ? count : background ? 1 : 0),
+      { count, active, background },
+    );
+    assert.equal(await page.locator(".msg.card").count(), count, `${scenario}: exact cards`);
+    assert.equal(
+      await page.locator(".task-chip.running").count(),
+      background ? 1 : 0,
+      `${scenario}: no orphan chips`,
+    );
+    assert.equal(
+      await page.locator("#state-t").textContent(),
+      active || background ? "Working · 1 agent" : "Working",
+      `${scenario}: header count`,
+    );
+    if (!active && !background && scenario !== "done-launch")
+      assert.equal(
+        await page.locator(".msg.card .st .sr-only").filter({ hasText: "interrupted" }).count(),
+        count,
+        `${scenario}: interrupted status`,
+      );
+    if (background) {
+      send({
+        t: "thread",
+        thread: {
+          ...fixture("lifecycle", "mock"),
+          workState: { version: 1, foreground: [], background: [], backgroundCount: 0 },
+        },
+      });
+      await page.waitForFunction(
+        () =>
+          document.querySelectorAll(".task-chip.running, .msg.card.pending").length === 0 &&
+          document.querySelector("#state-t")?.textContent === "Working",
+      );
+    }
     assert.deepEqual(errors, []);
     await context.close();
-    console.log("PASS tool cards compaction reconciliation (no tool_result events)");
-  }
-
-  // Scenario 2: Background agent with stale task-chip (task_started but no task_notification)
-  // and thread.background = 0 -> chip should be settled, not stuck running
-  {
-    const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, colorScheme: "dark" });
-    await context.addCookies([{ name: "ac_session", value: makeToken(), url: base }]);
-    await context.addInitScript(() => localStorage.setItem("ac_thread", "bg-agent-stale-test"));
-    const page = await context.newPage();
-    const errors: string[] = [];
-    page.on("pageerror", e => errors.push(String(e)));
-    page.on("console", m => {
-      if (m.type() === "error") {
-        const text = m.text();
-        // Filter out transient 502 errors for non-critical resources
-        if (!text.includes("502") || text.includes("favicon")) errors.push(text);
-      }
-    });
-
-    await page.goto(base);
-    await page.locator("#chat").waitFor({ state: "attached" });
-    // Wait for history to render completely
-    await page.waitForFunction(() => {
-      const pending = document.querySelectorAll(".msg.card.pending");
-      return pending.length === 0;
-    }, { timeout: 15000 }).catch(() => {});
-
-    // Assert: agent card should not be pending (stale background chip settled)
-    const pendingAgent = await page.locator(".msg.card.agent.pending").count();
-    assert.equal(pendingAgent, 0, "Stale background agent card should be settled");
-
-    // Assert: no running task-chip
-    const runningChip = await page.locator(".msg.card.agent .task-chip.running").count();
-    assert.equal(runningChip, 0, "Stale task-chip.running should be settled");
-
-    // Assert: header badge should not show "Working · N agents" (background=0)
-    const headerState = await page.locator("#state-t").textContent();
-    assert.ok(!headerState?.includes("Working ·"), `Header should not show agent count, got: ${headerState}`);
-
-    assert.deepEqual(errors, []);
-    await context.close();
-    console.log("PASS stale background agent chip settled");
+    console.log(`PASS tool card lifecycle ${scenario}`);
   }
 
   assert.equal(

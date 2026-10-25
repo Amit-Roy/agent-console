@@ -58,6 +58,109 @@ PROVIDERS.set("stop-fixture", {
 mock.timers.enable({ apis: ["Date"], now: 1_000_000 });
 const threads = new Threads(() => {});
 try {
+  const tracked = threads.create({ provider: "stop-fixture", cwd: data, title: "tracked" });
+  threads.send(tracked.id, "go");
+  const event = (value: any) => contexts.get(tracked.id).event(value);
+  const work = () => threads.page(tracked.id).workState;
+  event({
+    type: "assistant",
+    message: {
+      content: [
+        { type: "tool_use", id: "bash-live", name: "Bash", input: {} },
+        { type: "tool_use", id: "agent-live", name: "Agent", input: {} },
+      ],
+    },
+  });
+  assert.deepEqual(work(), {
+    version: 1,
+    foreground: ["bash-live", "agent-live"],
+    background: [],
+    backgroundCount: 0,
+  });
+  event({
+    type: "assistant",
+    parent_tool_use_id: "agent-live",
+    message: { content: [{ type: "tool_use", id: "nested", name: "Bash", input: {} }] },
+  });
+  assert.deepEqual(
+    work().foreground,
+    ["bash-live", "agent-live"],
+    "nested calls belong to the subagent, not the parent turn",
+  );
+  event({
+    type: "system",
+    subtype: "task_started",
+    tool_use_id: "agent-live",
+    task_id: "task-live",
+    is_backgrounded: true,
+  });
+  event({
+    type: "user",
+    message: { content: [{ type: "tool_result", tool_use_id: "agent-live", content: "launched" }] },
+  });
+  event({ type: "system", subtype: "background_tasks_changed", tasks: [{ task_id: "task-live" }] });
+  event({ type: "result", subtype: "success" });
+  assert.deepEqual(
+    work(),
+    { version: 1, foreground: [], background: ["agent-live"], backgroundCount: 1 },
+    "launch receipt and turn end preserve known live background work",
+  );
+  event({
+    type: "system",
+    subtype: "task_notification",
+    task_id: "task-live",
+    status: "completed",
+  });
+  assert.deepEqual(work(), { version: 1, foreground: [], background: [], backgroundCount: 0 });
+  event({ type: "system", subtype: "background_tasks_changed", tasks: [{ task_id: "unknown" }] });
+  assert.equal(work().backgroundCount, 1, "unknown task identities retain the live count");
+  event({
+    type: "system",
+    subtype: "background_tasks_changed",
+    tasks: [{ task_id: "replacement", tool_use_id: "replacement-tool" }],
+  });
+  assert.deepEqual(
+    threads.get(tracked.id).workState.background,
+    ["replacement-tool"],
+    "equal task counts still update live task identities",
+  );
+  threads.abort(tracked.id);
+  assert.deepEqual(work(), { version: 1, foreground: [], background: [], backgroundCount: 0 });
+  calls.length = 0;
+
+  const resolved = threads.create({ provider: "stop-fixture", cwd: data, title: "resolved" });
+  threads.send(resolved.id, "go");
+  const resolvedEvent = (value: any) => contexts.get(resolved.id).event(value);
+  resolvedEvent({
+    type: "system",
+    subtype: "task_started",
+    task_id: "old-task",
+    tool_use_id: "old-tool",
+  });
+  resolvedEvent({
+    type: "user",
+    message: { content: [{ type: "tool_result", tool_use_id: "old-tool", content: "done" }] },
+  });
+  resolvedEvent({
+    type: "system",
+    subtype: "task_started",
+    task_id: "ended-task",
+    tool_use_id: "ended-tool",
+  });
+  resolvedEvent({ type: "result", subtype: "success" });
+  resolvedEvent({
+    type: "system",
+    subtype: "background_tasks_changed",
+    tasks: [{ task_id: "old-task" }, { task_id: "ended-task" }],
+  });
+  assert.deepEqual(
+    threads.page(resolved.id).workState.background,
+    [],
+    "finished foreground calls cannot become confirmed background work through stale task identities",
+  );
+  threads.abort(resolved.id);
+  calls.length = 0;
+
   const plain = threads.create({ provider: "stop-fixture", cwd: data, title: "plain" });
   threads.send(plain.id, "go");
   threads.abort(plain.id);
@@ -144,6 +247,24 @@ try {
   mock.timers.tick(20_000);
   threads.sweep();
   assert.equal(threads.get(asking.id).status, "idle");
+  const saved = JSON.parse(fs.readFileSync(path.join(data, "threads.json"), "utf8"));
+  assert.ok(
+    saved.every((thread: any) => !thread.workState),
+    "runtime liveness is not persisted",
+  );
+  saved[0].workState = {
+    version: 1,
+    foreground: ["stale"],
+    background: ["stale"],
+    backgroundCount: 1,
+  };
+  fs.writeFileSync(path.join(data, "threads.json"), JSON.stringify(saved));
+  const restored = new Threads(() => {});
+  assert.deepEqual(
+    restored.get(saved[0].id).workState,
+    { version: 1, foreground: [], background: [], backgroundCount: 0 },
+    "restart never revives persisted tool liveness",
+  );
   console.log(
     "PASS stop ends background subagents; plain turns are still interrupted in place; the sweep kills hung background work and hung turns",
   );
