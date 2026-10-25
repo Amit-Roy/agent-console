@@ -1,79 +1,103 @@
 {
-  "title": "Tool card liveness after history replay",
-  "subtitle": "Authoritative runtime snapshot reconciles missing completion events",
+  "title": "Arch blocks in markdown",
+  "subtitle": "Fenced arch JSON renders as a routed diagram in chat and the file viewer",
   "items": [
     {
-      "group": "Node server",
-      "sub": "server/threads.ts",
-      "border": "dashed",
-      "icon": "server",
-      "items": [
-        {
-          "id": "runtime",
-          "label": "Runtime tool state",
-          "tech": "Provider lifecycle",
-          "desc": "Snapshot foreground and background tool identities",
-          "icon": "activity"
-        },
-        {
-          "id": "history",
-          "label": "History response",
-          "tech": "WebSocket history",
-          "desc": "Events plus versioned workState snapshot",
-          "icon": "history"
-        }
-      ]
-    },
-    {
-      "group": "Browser",
-      "sub": "public/app.js",
+      "group": "Browser markdown path",
+      "sub": "public/render.js",
       "border": "solid",
       "icon": "monitor",
       "items": [
         {
-          "id": "cards",
-          "label": "Tool cards",
-          "tech": "showHistory / showDelta",
-          "desc": "Reconcile replayed cards with authoritative liveness",
-          "icon": "panels-top-left"
+          "id": "chat",
+          "label": "Chat",
+          "tech": "public/app.js",
+          "desc": "Renders assistant messages through renderMarkdown",
+          "icon": "message-square"
         },
         {
-          "id": "lifecycle",
-          "label": "Turn lifecycle",
-          "tech": "result / aborted",
-          "desc": "Settle stale tools while preserving live background work",
-          "icon": "circle-stop"
+          "id": "viewer",
+          "label": "File viewer",
+          "tech": "#file-viewer",
+          "desc": "Renders .md files through the same renderer",
+          "icon": "file-text"
         },
         {
-          "id": "badge",
-          "label": "Header badge",
-          "tech": "updateWorking",
-          "desc": "Count reconciled live agents",
-          "icon": "badge"
+          "id": "marked",
+          "label": "Markdown renderer",
+          "tech": "marked code() renderer",
+          "desc": "Picks a block renderer by fence language",
+          "icon": "code"
+        },
+        {
+          "id": "purify",
+          "label": "Sanitiser",
+          "tech": "DOMPurify",
+          "desc": "Cleans rendered HTML before it reaches the page",
+          "icon": "shield-check"
+        },
+        {
+          "id": "chart",
+          "label": "Chart blocks",
+          "tech": "public/chart.js",
+          "desc": "Chart fences render as charts",
+          "icon": "chart-bar"
+        },
+        {
+          "id": "arch",
+          "label": "Arch diagram",
+          "tech": "public/arch.js",
+          "desc": "Builds boxes, groups, Lucide icons, legend, dark mode",
+          "icon": "network"
+        }
+      ]
+    },
+    {
+      "group": "Routing worker",
+      "sub": "dedicated Web Worker",
+      "border": "dashed",
+      "icon": "cpu",
+      "items": [
+        {
+          "id": "worker",
+          "label": "Route worker",
+          "tech": "public/arch-route-worker.js",
+          "desc": "Routes arrows, caches routes by layout, spaces label chips",
+          "icon": "route"
+        },
+        {
+          "id": "wasm",
+          "label": "Libavoid",
+          "tech": "WASM",
+          "desc": "Obstacle-avoiding connector routing",
+          "icon": "package"
+        }
+      ]
+    },
+    {
+      "group": "Node server",
+      "sub": "server/index.ts",
+      "border": "dashed",
+      "icon": "server",
+      "items": [
+        {
+          "id": "csp",
+          "label": "Content security policy",
+          "tech": "server/index.ts",
+          "desc": "Page CSP blocks eval; worker script gets its own CSP",
+          "icon": "lock"
         }
       ]
     }
   ],
   "edges": [
-    {
-      "from": "runtime",
-      "to": "history",
-      "label": "Attach tool liveness"
-    },
-    {
-      "from": "history",
-      "to": "cards",
-      "label": "Replay events"
-    },
-    {
-      "from": "lifecycle",
-      "to": "cards",
-      "label": "Reconcile pending work"
-    },
-    {
-      "from": "cards",
-      "to": "badge",
-      "label": "Count live agents"
-    }
+    { "from": "chat", "to": "marked", "label": "Message text" },
+    { "from": "viewer", "to": "marked", "label": "File text" },
+    { "from": "marked", "to": "chart", "label": "chart fence" },
+    { "from": "marked", "to": "arch", "label": "arch fence" },
+    { "from": "marked", "to": "purify", "label": "Other HTML" },
+    { "from": "arch", "to": "worker", "label": "Layout + edges" },
+    { "from": "worker", "to": "wasm", "label": "Route" },
+    { "from": "csp", "to": "worker", "label": "Worker CSP" }
   ]
 }
