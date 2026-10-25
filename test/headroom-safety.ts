@@ -142,7 +142,7 @@ try {
   clearTimeout(monitor.timer);
   fs.promises.readFile = (async (file: any, ...args: any[]) => {
     if (String(file).startsWith("/proc/") && String(file).endsWith("/status"))
-      return "VmRSS: 1048577 kB\n";
+      return "VmRSS: 8388609 kB\n";
     return (nativeReadFile as any)(file, ...args);
   }) as typeof fs.promises.readFile;
   await monitor.callback();
