@@ -8,6 +8,9 @@ export PATH="$HOME/.local/bin:$PATH"
 PMG_SHIMS="$HOME/.local/share/safedep/pmg/bin"; [ -x "$PMG_SHIMS/npm" ] && export PATH="$PMG_SHIMS:$PATH"
 # A restart issued from a Nefro thread inherits its profile; Sunny must keep the default Claude login.
 [ "${CLAUDE_CONFIG_DIR:-}" = "$HOME/.claude-nefro" ] && unset CLAUDE_CONFIG_DIR
+# Coder exec sessions export the account email as GIT_AUTHOR_*/GIT_COMMITTER_*; it overrides ~/.gitconfig
+# (noreply address) for every agent commit, and GitHub email privacy then rejects the push.
+unset GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL GIT_COMMITTER_NAME GIT_COMMITTER_EMAIL
 # the pid file survives a workspace restart, when its pid may belong to an unrelated process: check it is our server
 running() { [ -f "$RUN/pid" ] && grep -qa "server/index.ts" "/proc/$(cat "$RUN/pid")/cmdline" 2>/dev/null; }
 # the supervisor restarts the server whenever it exits, unless `stop` killed the supervisor first
