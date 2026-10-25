@@ -299,6 +299,47 @@
           "color": "teal"
         }
       ]
+    },
+    {
+      "group": "Role personas at launch",
+      "sub": "server/providers/brain.ts",
+      "border": "solid",
+      "color": "purple",
+      "icon": "users",
+      "items": [
+        {
+          "id": "persona-pick",
+          "label": "Persona selection",
+          "tech": "personaFor (brain.ts)",
+          "desc": "reviewer for Auto review, dream for nightly dream, else orchestrator",
+          "icon": "git-branch",
+          "color": "purple"
+        },
+        {
+          "id": "persona-files",
+          "label": "Persona files",
+          "tech": "~/.claude/agents/*.md",
+          "desc": "orchestrator, reviewer, dream; linked by brain link",
+          "icon": "file-text",
+          "color": "indigo"
+        },
+        {
+          "id": "persona-claude",
+          "label": "Claude launch",
+          "tech": "claude.ts --agent",
+          "desc": "Main thread starts with claude --agent <persona>",
+          "icon": "terminal",
+          "color": "orange"
+        },
+        {
+          "id": "persona-codex",
+          "label": "Codex and Pi launch",
+          "tech": "codex-app-session.ts, pi.ts",
+          "desc": "Persona body as developerInstructions (Codex) or main-only append (Pi)",
+          "icon": "send",
+          "color": "teal"
+        }
+      ]
     }
   ],
   "edges": [
@@ -416,6 +457,21 @@
       "from": "thread-msg-auth",
       "to": "thread-msg-delivery",
       "label": "Consume one exact-payload grant"
+    },
+    {
+      "from": "persona-pick",
+      "to": "persona-files",
+      "label": "Read persona body by name"
+    },
+    {
+      "from": "persona-files",
+      "to": "persona-claude",
+      "label": "Loaded by --agent"
+    },
+    {
+      "from": "persona-files",
+      "to": "persona-codex",
+      "label": "Body without frontmatter"
     }
   ]
 }

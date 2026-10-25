@@ -74,3 +74,34 @@ try {
 } finally {
   fs.rmSync(root, { recursive: true, force: true });
 }
+
+// role personas: frontmatter stripped, cached on mtimeMs:size, refreshed on edit
+{
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ac-persona-"));
+  process.env.AGENT_CONSOLE_PERSONA_DIR = dir;
+  const { personaFor, personaInstructions, personaPath } = await import(
+    "../server/providers/brain.ts"
+  );
+  try {
+    assert.equal(personaPath("orchestrator"), path.join(dir, "orchestrator.md"));
+    assert.equal(personaInstructions("orchestrator"), "", "missing file gives nothing");
+    fs.writeFileSync(
+      personaPath("orchestrator"),
+      "---\nname: orchestrator\n---\n# Body\nrule one\n",
+    );
+    assert.equal(personaInstructions("orchestrator"), "# Body\nrule one");
+    fs.writeFileSync(
+      personaPath("orchestrator"),
+      "---\nname: orchestrator\n---\n# Body\nrule two longer\n",
+    );
+    assert.equal(personaInstructions("orchestrator"), "# Body\nrule two longer");
+    assert.equal(personaFor({ issueRun: { role: "review" } }), "reviewer");
+    assert.equal(personaFor({ issueRun: { role: "work" } }), "orchestrator");
+    assert.equal(personaFor({ schedule: { task: "dream" } }), "dream");
+    assert.equal(personaFor({ schedule: { task: "other" } }), "orchestrator");
+    assert.equal(personaFor({}), "orchestrator");
+    console.log("PASS  brain: persona body stripped, cache refreshes, persona picked per thread");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
