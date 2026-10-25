@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { SessionSearch } from "../server/session-search.ts";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "ac-session-search-"));
@@ -200,6 +201,7 @@ try {
   });
   assert.equal((await search.recent({ since: 0, limit: 1 })).length, 1);
   await assert.rejects(search.recent({ since: Number.NaN }), /since/);
+  await reliabilityChecks();
   console.log("session-search: recent() orders by mtime, honors since and limit");
   console.log(
     "session-search: BM25 ranking, all providers, archived sessions, freshness, bounds, and malformed input passed",
@@ -207,4 +209,236 @@ try {
 } finally {
   search.close();
   fs.rmSync(root, { recursive: true, force: true });
+}
+
+/** Busy timeout, bounded sync wait with stale answers, and the echo filter for history tools. */
+async function reliabilityChecks() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ac-session-search-rel-"));
+  fs.mkdirSync(path.join(dir, "logs"));
+  const list = [
+    { id: "claude-echo", provider: "claude", title: "Claude echo" },
+    { id: "codex-echo", provider: "codex", title: "Codex echo" },
+    { id: "pi-echo", provider: "pi", title: "Pi echo" },
+  ];
+  const save = () => fs.writeFileSync(path.join(dir, "threads.json"), JSON.stringify(list));
+  const logOf = (threadId: string) => path.join(dir, "logs", `${threadId}.jsonl`);
+  const call = (callId: string, name: string, input: object) =>
+    JSON.stringify({
+      type: "assistant",
+      message: { content: [{ type: "tool_use", id: callId, name, input }] },
+    });
+  const reply = (callId: string, content: string) =>
+    JSON.stringify({
+      type: "user",
+      message: { content: [{ type: "tool_result", tool_use_id: callId, content }] },
+    });
+  const searchResult = JSON.stringify({
+    results: [{ citation: "x:L1", snippet: "echoresultneedle" }],
+    indexedSessions: 3,
+  });
+  const readResult = JSON.stringify({
+    thread: "x",
+    archived: false,
+    events: [{ citation: "x:L2", text: "echoreadneedle" }],
+  });
+  const echoLines = (tag: string, searchName: string, readName: string) => [
+    call(`${tag}1`, searchName, { query: "echoquerycall" }),
+    reply(`${tag}1`, searchResult),
+    call(`${tag}2`, readName, { thread: "echothreadcall" }),
+    reply(`${tag}2`, readResult),
+    call(`${tag}3`, "Bash", { command: "echo keptcall" }),
+    reply(`${tag}3`, "keptresult citation only"),
+  ];
+  const lines = {
+    "claude-echo": echoLines(
+      "c",
+      "mcp__agent_console__session_search",
+      "mcp__agent_console__session_read",
+    ),
+    "codex-echo": echoLines("x", "agent_console:session_search", "agent_console:session_read"),
+    "pi-echo": echoLines("p", "session_search", "session_read"),
+  };
+  const writeLogs = (all: Record<string, string[]>) => {
+    for (const [threadId, rows] of Object.entries(all))
+      fs.writeFileSync(logOf(threadId), rows.join("\n") + "\n");
+  };
+  save();
+  writeLogs(lines);
+  const savedWait = process.env.AGENT_CONSOLE_SEARCH_SYNC_MS;
+  try {
+    // Echo filter: history tool calls and their results (even in a later sync) are not indexed.
+    const first = new SessionSearch(dir);
+    for (const word of ["echoquerycall", "echothreadcall", "echoresultneedle", "echoreadneedle"])
+      assert.equal((await first.search({ query: word })).results.length, 0, word);
+    assert.equal((await first.search({ query: "keptcall" })).results.length, 3);
+    assert.equal((await first.search({ query: "keptresult" })).results.length, 3);
+    fs.appendFileSync(logOf("pi-echo"), [call("late", "session_search", {}), ""].join("\n"));
+    fs.appendFileSync(
+      logOf("pi-echo"),
+      [reply("late", "latewordneedle citation indexedSessions"), ""].join("\n"),
+    );
+    assert.equal(
+      (await first.search({ query: "latewordneedle" })).results.length,
+      0,
+      "late result",
+    );
+    first.close();
+
+    // Busy timeout is set on the connection.
+    const probe = new SessionSearch(dir);
+    assert.equal(Number((probe as any).db.prepare("PRAGMA busy_timeout").get().timeout), 5000);
+    probe.close();
+
+    // Migration: version-1 index with echo rows loses only those rows.
+    const old = path.join(dir, "migrate");
+    fs.mkdirSync(path.join(old, "logs"), { recursive: true });
+    fs.writeFileSync(
+      path.join(old, "threads.json"),
+      JSON.stringify([{ id: "mig", provider: "claude", title: "Migrate" }]),
+    );
+    fs.writeFileSync(path.join(old, "logs", "mig.jsonl"), "");
+    const seed = new SessionSearch(old);
+    await seed.warm();
+    const sqlite = (seed as any).db;
+    const rows = [
+      [1, "tool", "mcp__agent_console__session_search\nechoquerycall"],
+      [2, "tool", searchResult + " migechosearch"],
+      [3, "tool", readResult + " migechoread"],
+      [4, "tool", "Bash\nmigkeptcall"],
+      [5, "tool", "plain result with citation migkeptresult"],
+      [6, "assistant", "I read session_search docs migkeptprose"],
+    ] as const;
+    for (const [line, role, text] of rows) {
+      sqlite
+        .prepare("INSERT INTO events(thread,line,role,text) VALUES('mig',?,?,?)")
+        .run(line, role, text);
+      sqlite
+        .prepare(
+          "INSERT INTO session_fts(title,text,thread,line,role) VALUES('Migrate',?,'mig',?,?)",
+        )
+        .run(text, line, role);
+    }
+    sqlite.exec("PRAGMA user_version=1");
+    seed.close();
+    const migrated = new SessionSearch(old);
+    await migrated.whenCleaned();
+    for (const word of ["echoquerycall", "migechosearch", "migechoread"])
+      assert.equal((await migrated.search({ query: word })).results.length, 0, word);
+    for (const word of ["migkeptcall", "migkeptresult", "migkeptprose"])
+      assert.equal((await migrated.search({ query: word })).results.length, 1, word);
+    assert.equal(Number((migrated as any).db.prepare("PRAGMA user_version").get().user_version), 2);
+    migrated.close();
+
+    await cleanupChecks(old);
+
+    // Slow refresh: answer stale within the wait, then include new data once the refresh ends.
+    process.env.AGENT_CONSOLE_SEARCH_SYNC_MS = "50";
+    let release: () => void = () => {};
+    let slow = false;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const lagging = new SessionSearch(dir, {
+      beforeRefresh: () => (slow ? gate : Promise.resolve()),
+    });
+    await lagging.warm();
+    fs.appendFileSync(
+      logOf("claude-echo"),
+      JSON.stringify({ type: "user_input", text: "freshdataneedle" }) + "\n",
+    );
+    slow = true;
+    const began = Date.now();
+    const stale: any = await lagging.search({ query: "keptcall" });
+    assert.ok(Date.now() - began < 1000, "returns within the wait");
+    assert.equal(stale.stale, true);
+    assert.equal(stale.results.length, 3, "stale answer still comes from the index");
+    release();
+    await lagging.warm();
+    const fresh: any = await lagging.search({ query: "freshdataneedle" });
+    assert.equal(fresh.results.length, 1);
+    assert.equal(fresh.stale, undefined);
+    lagging.close();
+    console.log(
+      "session-search: busy timeout, stale answers within the wait, and echo filter passed",
+    );
+  } finally {
+    if (savedWait === undefined) delete process.env.AGENT_CONSOLE_SEARCH_SYNC_MS;
+    else process.env.AGENT_CONSOLE_SEARCH_SYNC_MS = savedWait;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/** Many echo rows: the constructor returns first, searches hide echoes meanwhile, and progress resumes after reopen. */
+async function cleanupChecks(base: string) {
+  const dir = path.join(base, "bulk");
+  fs.mkdirSync(path.join(dir, "logs"), { recursive: true });
+  fs.writeFileSync(
+    path.join(dir, "threads.json"),
+    JSON.stringify([{ id: "bulk", provider: "claude", title: "Bulk" }]),
+  );
+  fs.writeFileSync(path.join(dir, "logs", "bulk.jsonl"), "");
+  const never = { beforeRefresh: () => new Promise<void>(() => {}) };
+  const seed = new SessionSearch(dir, never);
+  seed.close();
+  const sqlite = new DatabaseSync(path.join(dir, "session-search.sqlite"));
+  sqlite.exec(
+    "INSERT OR IGNORE INTO sessions(thread,title,provider) VALUES('bulk','Bulk','claude')",
+  );
+  sqlite.exec("BEGIN");
+  const echoText = '{"citation":"b:L1","indexedSessions":2} bulkechoword';
+  for (let line = 1; line <= 6000; line++) {
+    const isEcho = line % 2 === 0;
+    const text = isEcho ? echoText : `bulkkeptword ${line}`;
+    sqlite
+      .prepare("INSERT INTO events(thread,line,role,text) VALUES('bulk',?,'tool',?)")
+      .run(line, text);
+    sqlite
+      .prepare(
+        "INSERT INTO session_fts(title,text,thread,line,role) VALUES('Bulk',?,'bulk',?,'tool')",
+      )
+      .run(text, line);
+  }
+  sqlite.exec("COMMIT; PRAGMA user_version=1");
+  sqlite.close();
+
+  process.env.AGENT_CONSOLE_SEARCH_SYNC_MS = "20";
+  const first = new SessionSearch(dir, { ...never, cleanupBatchLimit: 1 });
+  assert.equal(first.cleanupStats.batches, 0, "constructor does no cleanup work");
+  assert.equal(
+    (await first.search({ query: "bulkechoword" })).results.length,
+    0,
+    "hidden during cleanup",
+  );
+  assert.equal((await first.search({ query: "bulkkeptword", limit: 50 })).results.length, 50);
+  assert.equal(first.cleanupStats.batches, 1, "paused after one batch");
+  first.close();
+  const half = new DatabaseSync(path.join(dir, "session-search.sqlite"));
+  assert.equal(
+    Number(half.prepare("PRAGMA user_version").get()!.user_version),
+    1,
+    "not finished yet",
+  );
+  assert.ok(Number(half.prepare("SELECT value FROM meta").get()!.value) > 0, "progress saved");
+  half.close();
+
+  const second = new SessionSearch(dir, never);
+  await second.whenCleaned();
+  assert.ok(second.cleanupStats.batches > 0);
+  const done = (second as any).db;
+  assert.equal(Number(done.prepare("PRAGMA user_version").get().user_version), 2);
+  assert.equal(Number(done.prepare("SELECT count(*) AS n FROM events").get().n), 3000);
+  assert.equal(
+    Number(
+      done
+        .prepare("SELECT count(*) AS n FROM session_fts WHERE session_fts MATCH 'bulkechoword'")
+        .get().n,
+    ),
+    0,
+  );
+  assert.equal(
+    Number(done.prepare("SELECT count(*) AS n FROM meta").get().n),
+    0,
+    "progress cleared",
+  );
+  second.close();
 }
