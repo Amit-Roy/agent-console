@@ -990,7 +990,7 @@ app.delete("/uploads/:thread/:id", sameOrigin, (req, res) => {
   removeUpload(req.params.thread, req.params.id);
   res.status(204).end();
 });
-app.get("/export/:thread", (req, res) => {
+app.get("/export/:thread", async (req, res) => {
   const t = threads.get(req.params.thread);
   if (!t) return void res.status(404).end();
   const label = providerInfo().find((p) => p.id === t.provider)?.label ?? t.provider;
@@ -1004,7 +1004,7 @@ app.get("/export/:thread", (req, res) => {
       }.md`,
     )
     .type("text/markdown");
-  res.send(threadToMarkdown(t, label, threads.history(t.id)));
+  res.send(threadToMarkdown(t, label, await threads.historyAsync(t.id)));
 });
 app.get("/api/latency", (_req, res) => {
   res.setHeader("Cache-Control", "no-store");
