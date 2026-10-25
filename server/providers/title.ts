@@ -5,7 +5,10 @@ import metrics from "./title-metrics.json" with { type: "json" };
 // Luna) names it after what is being discussed: all user messages, text only, oldest first within a character budget.
 // One small call: no tools, no MCP, no hooks.
 
-export const MAX_INPUT = 100_000; // chars of user text per call; the oldest messages fall off first
+// Tokens are estimated at 4 UTF-16 characters per token, not counted with the provider tokenizer.
+// The oldest messages are dropped first when user text exceeds this budget.
+export const MAX_INPUT_TOKENS = 50_000;
+export const MAX_INPUT = MAX_INPUT_TOKENS * 4;
 const MAX_WORDS = 5;
 const MAX_CHARS = 30;
 export const MAX_TITLE = 20; // auto-mode issue titles (fitTitle, window-dispatch): Topic:123 desc, narrow row

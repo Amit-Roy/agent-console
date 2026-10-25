@@ -32,7 +32,9 @@ PROVIDERS.set("fixture", {
   },
 } as any);
 const tick = () => new Promise((r) => setTimeout(r, 50));
-const { cleanTitle } = await import("../server/providers/title.ts");
+const { cleanTitle, titleInput, MAX_INPUT, MAX_INPUT_TOKENS } = await import(
+  "../server/providers/title.ts"
+);
 assert.equal(fontLoads, 0, "font parser must stay unloaded until a title needs measuring");
 assert.equal(
   cleanTitle("Auth fix redirect"),
@@ -43,6 +45,17 @@ assert.equal(fontLoads, 0, "naming must not require a newly installed runtime fo
 hooks.deregister();
 execFileSync(process.execPath, ["scripts/title-metrics.mjs", "--check"], { stdio: "pipe" });
 assert.equal(cleanTitle(""), undefined, "empty replies must be rejected");
+assert.equal(MAX_INPUT_TOKENS, 50_000, "title input has a 50k estimated-token budget");
+assert.equal(MAX_INPUT, MAX_INPUT_TOKENS * 4, "token estimate uses four UTF-16 characters");
+const prompts = Array.from({ length: 8 }, (_, index) => `User prompt ${index}`);
+assert.deepEqual(titleInput(prompts), prompts, "all prompts survive beyond the last five");
+const longHistory = ["a".repeat(60_000), "b".repeat(60_000)];
+assert.deepEqual(titleInput(longHistory), longHistory, "history above 100k characters is retained");
+const newest = "Latest security decision: validate every route";
+const overflow = titleInput(["Oldest prompt", "b".repeat(MAX_INPUT), newest]);
+assert.equal(overflow.at(-1), newest, "overflow preserves the newest prompt");
+assert.equal(overflow.length, 2, "overflow drops the oldest prompt first");
+assert.ok(overflow.join("").length <= MAX_INPUT, "overflow stays within the character budget");
 const threads = new Threads(() => {});
 try {
   // an unnamed thread is named by its prompts
