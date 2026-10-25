@@ -113,7 +113,9 @@ function fixture(ordinal = 1) {
       why: "fixture",
     }),
     github: async (_method: string, url: string) => {
-      if (/\/issues\/43\/comments/.test(url)) return comments;
+      if (url === "user") return { login: "rev" };
+      if (/\/issues\/43\/comments/.test(url))
+        return comments.map((row: any) => ({ user: { login: "rev" }, ...row }));
       if (/\/pulls\?/.test(url))
         return [{ number: 43, body: "## Self-review\nChecked the fixture.", head: { sha } }];
       if (/\/pulls\/43\/files/.test(url)) return [{ filename: "src/a.ts" }];
@@ -490,6 +492,7 @@ try {
           ? [
               {
                 id: 110,
+                user: { login: "rev" },
                 body: "Review: CHANGES REQUESTED\nsrc/a.ts:1 — Incorrect. — Fix it.",
                 created_at: new Date(f.now()).toISOString(),
               },
@@ -497,6 +500,7 @@ try {
           : [];
       return Array.from({ length: 100 }, (_, i) => ({
         id: i + 10,
+        user: { login: "rev" },
         body: "Earlier discussion",
         created_at: new Date(f.now()).toISOString(),
       }));

@@ -8,11 +8,10 @@ import {
   once,
   type ReviewContext,
   type ThreadLike,
-  VERDICT,
   type WorkThread,
 } from "./review-context.ts";
 import { nudge, resume } from "./review-recovery.ts";
-import { discussionOf, retryReview } from "./review-verdict.ts";
+import { discussionOf, retryReview, reviewerVerdicts } from "./review-verdict.ts";
 import { addWorktree, type IssueRun, installPrOnlyHook, topicOf } from "./window-dispatch.ts";
 
 type ReviewRoute = NonNullable<RouteResponse["route"]>;
@@ -27,9 +26,9 @@ async function pushedSinceVerdict(
     ctx.github("GET", `repos/${run.repo}/commits/${pull.head?.sha}`),
     discussionOf(ctx, run, pull.number),
   ]);
-  const verdicts = (Array.isArray(comments) ? comments : [])
-    .filter((comment: any) => VERDICT.test(String(comment?.body ?? "")))
-    .map((comment: any) => Date.parse(comment.created_at));
+  const verdicts = (await reviewerVerdicts(ctx, comments)).map((comment: any) =>
+    Date.parse(comment.created_at),
+  );
   const pushed = Date.parse(commit?.commit?.committer?.date ?? "");
   if (!verdicts.length || !Number.isFinite(pushed)) return "none";
   return verdicts.some((stamp) => stamp > pushed) ? "no" : "yes";

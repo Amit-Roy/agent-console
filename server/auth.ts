@@ -102,10 +102,40 @@ function coderHostsFromEnv(): string[] {
 export const CODER_HOSTS = coderHostsFromEnv();
 export const CODER_HOST = CODER_HOSTS[0];
 
-export function viaCoder(host: string | undefined): boolean {
-  return CODER_HOSTS.includes(String(host || "").toLowerCase());
+const PROXY_HEADER = "x-agent-console-proxy";
+const PROXY_HASH_HEX = String(
+  process.env.AGENT_CONSOLE_PROXY_SECRET_SHA256 ||
+    fileEnv().AGENT_CONSOLE_PROXY_SECRET_SHA256 ||
+    "",
+)
+  .trim()
+  .toLowerCase();
+const PROXY_HASH = /^[0-9a-f]{64}$/.test(PROXY_HASH_HEX)
+  ? Buffer.from(PROXY_HASH_HEX, "hex")
+  : null;
+export const PROXY_PROOF_ON = PROXY_HASH !== null;
+if (CODER_HOSTS.length && !PROXY_PROOF_ON) {
+  console.warn(
+    "auth: AGENT_CONSOLE_PROXY_SECRET_SHA256 unset or invalid; Coder SSO trusts the Host header alone",
+  );
 }
 
-export function authed(req: { headers: { cookie?: string; host?: string } }): boolean {
-  return viaCoder(req.headers.host) || tokenValid(cookieFrom(req.headers.cookie));
+function proxyProofValid(header: string | string[] | undefined): boolean {
+  if (!PROXY_HASH) return true; // not configured: host-only behaviour
+  if (typeof header !== "string") return false;
+  const digest = crypto.createHash("sha256").update(header).digest();
+  return crypto.timingSafeEqual(digest, PROXY_HASH);
+}
+
+export function viaCoder(req: {
+  headers: { host?: string; [PROXY_HEADER]?: string | string[] };
+}): boolean {
+  const hostOk = CODER_HOSTS.includes(String(req.headers.host || "").toLowerCase());
+  return hostOk && proxyProofValid(req.headers[PROXY_HEADER]);
+}
+
+export function authed(req: {
+  headers: { cookie?: string; host?: string; [PROXY_HEADER]?: string | string[] };
+}): boolean {
+  return viaCoder(req) || tokenValid(cookieFrom(req.headers.cookie));
 }

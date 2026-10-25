@@ -46,6 +46,7 @@ export type WorkThread = ThreadLike & { issueRun: IssueRun };
 export interface ReviewContext {
   deps: ReviewDeps;
   github: GithubRequest;
+  actor?: Promise<string>; // cached login of the ambient gh identity the reviewer posts as
   dirs: { repos: string; worktrees: string };
   git: Git;
   applied: (repoName: string, sha: string) => boolean | Promise<boolean>;
