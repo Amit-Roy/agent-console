@@ -1,0 +1,4 @@
+#!/bin/sh
+# Resolve this checkout so the command also works from isolated worktrees.
+SCRIPT_DIRECTORY=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+exec python3 "$SCRIPT_DIRECTORY/../scripts/transcript_redaction.py" "$@"

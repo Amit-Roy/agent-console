@@ -34,7 +34,11 @@ async function open(
   scheme: "light" | "dark",
   routes: Record<string, (n: number, url: URL) => unknown>,
 ) {
-  const ctx = await browser.newContext({ viewport, colorScheme: scheme });
+  const ctx = await browser.newContext({
+    viewport,
+    colorScheme: scheme,
+    hasTouch: viewport.width < 600,
+  });
   await ctx.addCookies([{ name: "ac_session", value: makeToken(), url: BASE }]);
   const page = await ctx.newPage();
   const errors: string[] = [],
@@ -74,6 +78,61 @@ const findings = {
     return { started: true, mode: url.searchParams.get("mode") };
   },
 };
+
+// Long alert groups must toggle repeatedly without replacing the focused button.
+{
+  const alerts = Array.from({ length: 100 }, (_, index) => ({
+    ...LATEST.tools.falco.alerts[1],
+    container: `container-${index}`,
+    output: `${LATEST.tools.falco.alerts[1].output} ${"Sensitive file detail. ".repeat(20)}`,
+  }));
+  const result = {
+    ...LATEST,
+    tools: {
+      ...LATEST.tools,
+      falco: { ...LATEST.tools.falco, alerts: [...alerts, LATEST.tools.falco.alerts[0]] },
+    },
+  };
+  const { ctx, page } = await open({ width: 390, height: 844 }, "dark", {
+    ...findings,
+    latest: () => ({ result }),
+  });
+  await page.goto(`${BASE}/security`);
+  const button = page.locator("#falco-rows .hrow.tgt", { hasText: "Terminal shell" });
+  await button.waitFor();
+  const panel = page.locator(`#${await button.getAttribute("aria-controls")}`);
+  const other = page.locator("#falco-rows .hrow.tgt", { hasText: "Write below etc" });
+  check("falco: closed group renders lazily", (await panel.locator(".vuln").count()) === 0);
+  for (const expanded of [true, false, true]) {
+    await button.tap();
+    check(
+      `falco: touch toggles long group ${expanded}`,
+      (await panel.isVisible()) === expanded &&
+        (await button.getAttribute("aria-expanded")) === String(expanded) &&
+        (await button.locator(".hchev").innerText()) === (expanded ? "−" : "+"),
+    );
+  }
+  await other.tap();
+  await button.tap();
+  check(
+    "falco: groups toggle independently",
+    (await panel.isHidden()) &&
+      (await other.getAttribute("aria-expanded")) === "true" &&
+      (await panel.locator(".vuln").count()) === 100,
+  );
+  for (const key of ["Enter", "Space"]) {
+    await button.focus();
+    for (const expanded of [true, false]) {
+      await page.keyboard.press(key);
+      check(
+        `falco: ${key} toggles ${expanded} and retains focus`,
+        (await panel.isVisible()) === expanded &&
+          (await button.evaluate((node) => node === document.activeElement)),
+      );
+    }
+  }
+  await ctx.close();
+}
 
 for (const [name, viewport, scheme] of [
   ["desktop-light", { width: 1280, height: 900 }, "light"],
@@ -122,7 +181,10 @@ for (const [name, viewport, scheme] of [
     (await page.locator("#falco-rows .hrow.tgt").count()) === 2,
   );
   await page.locator("#falco-rows .hrow.tgt", { hasText: "Terminal shell" }).click();
-  check(`${name}: falco group expands`, (await page.locator("#falco-rows .vuln").count()) === 2);
+  check(
+    `${name}: falco group expands`,
+    (await page.locator("#falco-rows .vuln:visible").count()) === 2,
+  );
   check(`${name}: open ports`, (await page.locator("#port-rows .port").count()) === 3);
   check(
     `${name}: only exposed ports counted`,

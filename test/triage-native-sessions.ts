@@ -224,6 +224,35 @@ try {
     buildNativeSessions({ piDir, maxFileBytes: 1, detectRunningProcesses: false }).tasks.length,
     0,
   );
+  const originDir = path.join(temporary, "origin");
+  const originRows = (sessionId: string, entrypoint: string, cwd: string) => [
+    { type: "attachment", sessionId, entrypoint, cwd },
+    claudeUser(sessionId, "Do the thing"),
+    claudeAssistant(sessionId, `m-${sessionId}`),
+  ];
+  write(
+    path.join(originDir, "p", "probe.jsonl"),
+    originRows("probe", "sdk-cli", "/home/coder/repos/x"),
+  );
+  write(path.join(originDir, "p", "tmp.jsonl"), originRows("tmp", "cli", "/tmp/x"));
+  write(
+    path.join(originDir, "p", "scratch.jsonl"),
+    originRows("scratch", "cli", path.join(os.homedir(), "scratch2", "a")),
+  );
+  write(path.join(originDir, "p", "real.jsonl"), originRows("real", "cli", "/home/coder/repos/x"));
+  const origin = buildNativeSessions({
+    claudeDir: originDir,
+    detectRunningProcesses: false,
+  });
+  const verdicts = Object.fromEntries(
+    origin.tasks.map((item) => [item.provenance.rootNativeSessionId, item.provenance.userOrigin]),
+  );
+  assert.deepEqual(verdicts, {
+    probe: false,
+    tmp: false,
+    scratch: false,
+    real: true,
+  });
   console.log(
     "Native session parsing passed: ownership, dedupe, child rollup, cache accounting, inactive failures, missing telemetry, and bounded reads.",
   );

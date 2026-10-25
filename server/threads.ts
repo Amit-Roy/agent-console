@@ -872,6 +872,41 @@ export class Threads {
   get(id: string) {
     return this.threads.get(id);
   }
+  /** Snapshot only transcript-derived catalog text for the private cleanup pipe. */
+  redactionCatalog() {
+    return [...this.threads.values()].map(({ id: identifier, title, recent }) => ({
+      id: identifier,
+      title,
+      ...(recent === undefined ? {} : { recent: [...recent] }),
+    }));
+  }
+
+  /** Apply only fields that have not changed since the cleanup snapshot. */
+  applyRedactionCatalog(
+    before: { id: string; title: string; recent?: string[] }[],
+    after: { id: string; title: string; recent?: string[] }[],
+  ) {
+    const changes = before.map((entry, index) => ({
+      entry,
+      cleaned: after[index],
+      live: this.threads.get(entry.id),
+    }));
+    const stable = changes.every(
+      ({ entry, live }) =>
+        live &&
+        live.title === entry.title &&
+        JSON.stringify(live.recent) === JSON.stringify(entry.recent),
+    );
+    if (!stable || before.length !== this.threads.size) return false;
+    for (const { live, cleaned } of changes) {
+      live!.title = cleaned.title;
+      live!.recent = cleaned.recent;
+    }
+    this.persist();
+    for (const { live } of changes) this.emit({ t: "thread", thread: live! });
+    return true;
+  }
+
   getQuestions(): Record<string, PendingQuestion[]>;
   getQuestions(id: string): PendingQuestion[];
   getQuestions(id?: string) {
