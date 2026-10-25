@@ -339,14 +339,14 @@ async function drawGraph(pages, tags) {
   const layout = net.layout({
     name: "cose",
     animate: false,
-    fit: true,
-    padding: narrow ? 12 : 24,
+    fit: false,
     randomize: true,
     nodeRepulsion: () => (narrow ? 6000 : 40000),
     idealEdgeLength: () => (narrow ? 40 : 110),
     numIter: 800,
   });
   layout.run();
+  fitGraph();
   $("cy").dataset.nodes = String(net.nodes().length);
   $("cy").dataset.edges = String(net.edges().length);
   highlightNode();
@@ -533,7 +533,30 @@ function zoomGraph(factor) {
 }
 $("zoomIn").onclick = () => zoomGraph(1.25);
 $("zoomOut").onclick = () => zoomGraph(0.8);
-$("fitGraph").onclick = () => net?.fit(undefined, 24);
+// Fit into the canvas area left clear by the floating toolbar and a collapsed legend.
+function fitGraph() {
+  if (!net || net.elements().empty()) return;
+  const pad = net.width() < 600 ? 12 : 24;
+  const canvas = $("cy").getBoundingClientRect();
+  const top = Math.max(
+    pad,
+    document.querySelector(".graph-toolbar").getBoundingClientRect().bottom - canvas.top + 8,
+  );
+  const legend = document.querySelector(".graph-legend-card").getBoundingClientRect();
+  const bottom = $("legendBody").hidden ? Math.max(pad, canvas.bottom - legend.top + 8) : pad;
+  const box = net.elements().boundingBox();
+  const width = net.width() - 2 * pad;
+  const height = net.height() - top - bottom;
+  const level = Math.max(net.minZoom(), Math.min(net.maxZoom(), width / box.w, height / box.h));
+  net.viewport({
+    zoom: level,
+    pan: {
+      x: pad + (width - box.w * level) / 2 - box.x1 * level,
+      y: top + (height - box.h * level) / 2 - box.y1 * level,
+    },
+  });
+}
+$("fitGraph").onclick = fitGraph;
 $("sheetClose").onclick = closeSheet;
 $("scrim").onclick = closeSheet;
 addEventListener("keydown", (e) => e.key === "Escape" && !$("sheet").hidden && closeSheet());

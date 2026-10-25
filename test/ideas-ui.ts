@@ -454,6 +454,16 @@ for (const [name, viewport, scheme] of [
       ),
     ) === JSON.stringify(graphBefore.positions),
   );
+  check(
+    `brain ${name}: fit keeps nodes clear of the floating toolbar`,
+    await page.evaluate(() => {
+      const graph = (document.getElementById("cy") as any).__cy;
+      const canvas = document.getElementById("cy")?.getBoundingClientRect();
+      const tools = document.querySelector(".graph-toolbar")?.getBoundingClientRect();
+      if (!canvas || !tools) return false;
+      return graph.nodes().renderedBoundingBox().y1 + canvas.top >= tools.bottom;
+    }),
+  );
   await page.click("#linksToggle");
   await page.waitForFunction(() => document.getElementById("cy")!.dataset.edges === "5");
   check(`brain ${name}: Links toggle adds the page-page edge`, (await counts()).e === "5");
