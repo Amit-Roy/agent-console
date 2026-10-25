@@ -82,7 +82,11 @@ const staleBgHistory = [
 fs.mkdirSync(path.join(data, "logs"));
 fs.writeFileSync(
   path.join(data, "threads.json"),
-  JSON.stringify([fixture("known-cache", "claude"), fixture("unknown-cache", "codex")]),
+  JSON.stringify([
+    fixture("known-cache-1280", "claude"),
+    fixture("known-cache-390", "claude"),
+    fixture("unknown-cache", "codex"),
+  ]),
 );
 
 process.env.AGENT_CONSOLE_DATA = data;
@@ -120,13 +124,16 @@ try {
   browser = await chromium.launch();
 
   // --- Existing idle compaction toggle tests ---
-  for (const width of process.env.AC_LIFECYCLE_CASE ? [] : [1280, 390]) {
+  const runToggle = async (width: number) => {
     const context = await browser.newContext({
       viewport: { width, height: 900 },
       colorScheme: "dark",
     });
     await context.addCookies([{ name: "ac_session", value: makeToken(), url: base }]);
-    await context.addInitScript(() => localStorage.setItem("ac_thread", "known-cache"));
+    await context.addInitScript(
+      (threadId) => localStorage.setItem("ac_thread", threadId),
+      `known-cache-${width}`,
+    );
     const page = await context.newPage();
     const errors: string[] = [];
     page.on("pageerror", (error) => errors.push(String(error)));
@@ -172,15 +179,13 @@ try {
     );
     assert.deepEqual(errors, []);
     await context.close();
-  }
+  };
 
   // Exact counts and completed replay prevent empty history from passing.
   const lifecycleContext = await browser.newContext({ viewport: { width: 1280, height: 900 } });
   await lifecycleContext.addCookies([{ name: "ac_session", value: makeToken(), url: base }]);
   await lifecycleContext.addInitScript(() => localStorage.setItem("ac_thread", "lifecycle"));
-  for (const scenario of process.env.AC_LIFECYCLE_CASE
-    ? [process.env.AC_LIFECYCLE_CASE]
-    : ["idle", "done-launch", "active", "background", "delta", "earlier", "result", "aborted"]) {
+  const runScenario = async (scenario: string) => {
     const page = await lifecycleContext.newPage();
     page.setDefaultTimeout(5000);
     const errors: string[] = [];
@@ -341,7 +346,18 @@ try {
     assert.deepEqual(errors, []);
     await page.close();
     console.log(`PASS tool card lifecycle ${scenario}`);
-  }
+  };
+  // Toggle widths (own threads) and the scenario lane use separate pages: run concurrently.
+  const scenarios = process.env.AC_LIFECYCLE_CASE
+    ? [process.env.AC_LIFECYCLE_CASE]
+    : ["idle", "done-launch", "active", "background", "delta", "earlier", "result", "aborted"];
+  await Promise.all([
+    ...(process.env.AC_LIFECYCLE_CASE ? [] : [1280, 390]).map(runToggle),
+    // Scenarios stay in one sequential lane so page loads do not starve on small CI runners.
+    (async () => {
+      for (const scenario of scenarios) await runScenario(scenario);
+    })(),
+  ]);
   await lifecycleContext.close();
 
   assert.equal(
