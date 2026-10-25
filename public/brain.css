@@ -275,9 +275,23 @@ body.brain {
   color: var(--t3);
   font: var(--fw-reg) var(--f-sm);
 }
+.legend-chev {
+  display: none;
+}
 @media (max-width: 599px) {
   .legend-toggle {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
     cursor: pointer;
+  }
+  .legend-chev {
+    display: block;
+    transform: rotate(180deg);
+    transition: transform var(--dur-1) var(--ease);
+  }
+  .legend-toggle[aria-expanded="true"] .legend-chev {
+    transform: none;
   }
 }
 @media (min-width: 600px) {
@@ -339,9 +353,17 @@ body.brain {
   min-height: 44px;
   border-radius: var(--r-full);
 }
-.graph-toolbar .tog[aria-pressed="true"] {
+.graph-toolbar .btn.tog[aria-pressed="true"],
+.graph-toolbar .btn.tog[aria-pressed="true"]:hover:not(:disabled) {
   background: var(--accent-tint);
   color: var(--accent);
+}
+/* Touch browsers keep :hover after a tap, which made an off toggle look on. */
+@media (hover: none) {
+  .graph-toolbar .btn.ghost:hover:not(:disabled):not([aria-pressed="true"]) {
+    background: transparent;
+    color: var(--t2);
+  }
 }
 
 .brain .menu [role="option"] {
