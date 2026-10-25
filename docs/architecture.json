@@ -1,134 +1,79 @@
 {
-  "title": "Headroom memory: after",
-  "subtitle": "OTel memory metrics + RSS snapshots in latency.sqlite, shown on /host",
+  "title": "Tool card liveness after history replay",
+  "subtitle": "Authoritative runtime snapshot reconciles missing completion events",
   "items": [
     {
-      "group": "Headroom proxy",
-      "sub": "Python, headroom-ai 0.41.0, nice 15",
+      "group": "Node server",
+      "sub": "server/threads.ts",
       "border": "dashed",
-      "color": "blue",
       "icon": "server",
       "items": [
         {
-          "id": "proxy",
-          "label": "Compression proxy",
-          "tech": "headroom proxy :8790",
-          "desc": "Compresses Claude/Codex requests",
-          "icon": "zap",
-          "color": "blue"
+          "id": "runtime",
+          "label": "Runtime tool state",
+          "tech": "Provider lifecycle",
+          "desc": "Snapshot foreground and background tool identities",
+          "icon": "activity"
         },
         {
-          "id": "shim",
-          "label": "Profiling shim",
-          "tech": "sitecustomize.py via PYTHONPATH",
-          "desc": "OTel memory, GC, malloc; opt-in tracemalloc",
-          "icon": "activity",
-          "color": "cyan"
+          "id": "history",
+          "label": "History response",
+          "tech": "WebSocket history",
+          "desc": "Events plus versioned workState snapshot",
+          "icon": "history"
         }
       ]
     },
     {
-      "group": "agent-console",
-      "sub": "Node server",
+      "group": "Browser",
+      "sub": "public/app.js",
       "border": "solid",
-      "color": "slate",
       "icon": "monitor",
       "items": [
         {
-          "id": "guard",
-          "label": "Resource guard",
-          "tech": "headroom.ts check()",
-          "desc": "5 s /proc RSS+CPU sample; breaker at 8 GiB / CPU",
-          "icon": "shield-alert",
-          "color": "orange"
+          "id": "cards",
+          "label": "Tool cards",
+          "tech": "showHistory / showDelta",
+          "desc": "Reconcile replayed cards with authoritative liveness",
+          "icon": "panels-top-left"
         },
         {
-          "id": "otlp",
-          "label": "OTLP receiver",
-          "tech": "POST /v1/metrics",
-          "desc": "Loopback only; protobufjs decode; name allowlist",
-          "icon": "inbox",
-          "color": "cyan"
+          "id": "lifecycle",
+          "label": "Turn lifecycle",
+          "tech": "result / aborted",
+          "desc": "Settle stale tools while preserving live background work",
+          "icon": "circle-stop"
         },
         {
-          "id": "api",
-          "label": "Profile API",
-          "tech": "GET /api/host/headroom-profile",
-          "desc": "RSS series, snapshots, metrics, sites",
-          "icon": "plug",
-          "color": "cyan"
-        },
-        {
-          "id": "hostui",
-          "label": "/host dashboard",
-          "tech": "host.js",
-          "desc": "+ Headroom memory card",
-          "icon": "layout-dashboard",
-          "color": "indigo"
-        }
-      ]
-    },
-    {
-      "group": "Local state",
-      "sub": "~/.config/agent-console, ~/.cache",
-      "border": "solid",
-      "color": "slate",
-      "icon": "hard-drive",
-      "items": [
-        {
-          "id": "diag",
-          "label": "Diagnostics log",
-          "tech": "headroom-diagnostics.jsonl",
-          "desc": "256 KB rotating; numbers only",
-          "icon": "file-text",
-          "color": "slate"
-        },
-        {
-          "id": "db",
-          "label": "latency.sqlite",
-          "tech": "node:sqlite",
-          "desc": "+ headroom_* tables, 7 d",
-          "icon": "database",
-          "color": "teal"
+          "id": "badge",
+          "label": "Header badge",
+          "tech": "updateWorking",
+          "desc": "Count reconciled live agents",
+          "icon": "badge"
         }
       ]
     }
   ],
   "edges": [
     {
-      "from": "guard",
-      "to": "proxy",
-      "label": "sample /proc, SIGTERM"
+      "from": "runtime",
+      "to": "history",
+      "label": "Attach tool liveness"
     },
     {
-      "from": "guard",
-      "to": "diag",
-      "label": "append"
+      "from": "history",
+      "to": "cards",
+      "label": "Replay events"
     },
     {
-      "from": "shim",
-      "to": "otlp",
-      "label": "OTLP/HTTP every 30 s"
+      "from": "lifecycle",
+      "to": "cards",
+      "label": "Reconcile pending work"
     },
     {
-      "from": "otlp",
-      "to": "db",
-      "label": "insert"
-    },
-    {
-      "from": "guard",
-      "to": "db",
-      "label": "RSS + smaps, step/breaker snapshots"
-    },
-    {
-      "from": "api",
-      "to": "db",
-      "label": "query"
-    },
-    {
-      "from": "hostui",
-      "to": "api",
-      "label": "fetch"
+      "from": "cards",
+      "to": "badge",
+      "label": "Count live agents"
     }
   ]
 }

@@ -38,7 +38,11 @@ export class SubagentTracker {
       subtype: "background_tasks_changed",
       tasks: [...this.children]
         .filter(([, child]) => !child.done)
-        .map(([threadId, child]) => ({ task_id: threadId, description: child.path })),
+        .map(([threadId, child]) => ({
+          task_id: threadId,
+          tool_use_id: child.call,
+          description: child.path,
+        })),
     });
   }
 
