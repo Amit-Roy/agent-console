@@ -3007,19 +3007,73 @@ function settleCompact(outcome = "stopped") {
 }
 
 /** After history replay (compaction, session resume, turn end), mark pending tool cards
- * as done/interrupted unless they have a live background process (task-chip.running). */
+ * as done/interrupted unless they are confirmed live work. A card created from a live
+ * event has startedAt; one replayed from history has startedTs. Historical cards whose
+ * result was compacted away are settled as interrupted. Background agent chips are
+ * checked against cur().background (authoritative live count): if the server reports
+ * zero background agents, every .task-chip.running is stale and gets settled. */
 function reconcileCards() {
+  const thread = cur();
+  const liveBackground = thread?.background || 0;
+
   for (const card of state.cards.values()) {
     if (!card.classList.contains("pending")) continue;
     const isAgent = card.classList.contains("agent");
     const runningChip = card.querySelector(".task-chip.running");
-    if (isAgent && runningChip) continue; // live background process: keep spinner
-    card.classList.remove("pending");
-    card.classList.add("done");
-    const status = card.querySelector(".st");
-    if (status) status.replaceChildren(icon("alert"), el("span", "sr-only", "interrupted"));
+    const isHistorical = card.startedTs != null;
+    const isLive = card.startedAt != null;
+
+    if (isAgent) {
+      if (runningChip) {
+        // Background agent with running chip: keep only while server says background agents are alive
+        if (liveBackground > 0) continue;
+        settleStaleBackgroundAgent(card);
+        continue;
+      }
+      // Agent card without a running chip (foreground or completed background)
+      if (isHistorical) {
+        settleStaleAgentCard(card);
+        continue;
+      }
+      // Live foreground agent: keep running
+      continue;
+    }
+    // Non-agent tool card (Bash, Read, ...)
+    if (isHistorical) {
+      // Historical tool call whose result was compacted away
+      settleStaleToolCard(card);
+      continue;
+    }
+    // Live foreground tool call still running: keep spinner
+    continue;
   }
   updateWorking();
+}
+
+function settleStaleBackgroundAgent(card) {
+  card.classList.remove("pending");
+  card.classList.add("done");
+  const chip = card.querySelector(".task-chip.running");
+  if (chip) {
+    chip.className = "task-chip done";
+    chip.replaceChildren(icon("check"), el("span", "", "finished"));
+  }
+  const status = card.querySelector(".st");
+  if (status) status.replaceChildren(icon("alert"), el("span", "sr-only", "interrupted"));
+}
+
+function settleStaleAgentCard(card) {
+  card.classList.remove("pending");
+  card.classList.add("done");
+  const status = card.querySelector(".st");
+  if (status) status.replaceChildren(icon("alert"), el("span", "sr-only", "interrupted"));
+}
+
+function settleStaleToolCard(card) {
+  card.classList.remove("pending");
+  card.classList.add("done");
+  const status = card.querySelector(".st");
+  if (status) status.replaceChildren(icon("alert"), el("span", "sr-only", "interrupted"));
 }
 
 function addNote(text, cls = "note") {
@@ -3611,6 +3665,8 @@ function onAssistantToolUse(block, event, ctx) {
   dropLive("thinking");
   if (isAgent(block.name)) {
     const agentEl = agentCard(block);
+    if (live) agentEl.startedAt = performance.now();
+    else if (typeof event.ts === "number") agentEl.startedTs = event.ts;
     state.cards.set(block.id, agentEl);
     push(agentEl, live);
     updateWorking();
