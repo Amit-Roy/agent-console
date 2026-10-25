@@ -314,7 +314,11 @@ async function makeGraph() {
   });
   $("cy").__cy = net; // handle for the browser test, which taps nodes at their rendered positions
   net.on("tap", "node", (e) => openNode(e.target));
-  net.on("tap", (e) => e.target === net && closeSheet());
+  net.on("tap", (e) => {
+    if (e.target !== net) return;
+    closeSheet();
+    collapseLegend();
+  });
   matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () =>
     net?.style(graphStyle()),
   );
@@ -521,6 +525,14 @@ function setLegend(open) {
 }
 setLegend(!LEGEND_PHONE.matches);
 LEGEND_PHONE.addEventListener("change", () => setLegend(!LEGEND_PHONE.matches));
+// On phones the open legend covers the graph, so Escape and taps outside it close it.
+function collapseLegend() {
+  if (LEGEND_PHONE.matches) setLegend(false);
+}
+addEventListener("keydown", (e) => e.key === "Escape" && collapseLegend());
+document.addEventListener("pointerdown", (e) => {
+  if (!e.target.closest(".graph-legend-card")) collapseLegend();
+});
 $("legendToggle").onclick = () => {
   if (LEGEND_PHONE.matches) setLegend($("legendToggle").getAttribute("aria-expanded") !== "true");
 };

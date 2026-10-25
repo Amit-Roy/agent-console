@@ -405,7 +405,17 @@ for (const [name, viewport, scheme] of [
       (await page.locator("#legendToggle").getAttribute("aria-expanded")) === "true" &&
         (await page.locator("#legendBody").isVisible()),
     );
+    await page.keyboard.press("Escape");
+    check(
+      `brain ${name}: Escape closes the legend`,
+      (await page.locator("#legendToggle").getAttribute("aria-expanded")) === "false",
+    );
     await page.click("#legendToggle");
+    await page.click("#q");
+    check(
+      `brain ${name}: tapping outside closes the legend`,
+      (await page.locator("#legendToggle").getAttribute("aria-expanded")) === "false",
+    );
   }
   check(
     `brain ${name}: graph controls float over the canvas and stay 44px`,
@@ -469,6 +479,24 @@ for (const [name, viewport, scheme] of [
   check(`brain ${name}: Links toggle adds the page-page edge`, (await counts()).e === "5");
   await page.click("#linksToggle");
   await page.waitForFunction(() => document.getElementById("cy")!.dataset.edges === "4");
+  check(
+    `brain ${name}: Page links off looks different from on`,
+    await page.evaluate(() => {
+      document.head.append(
+        Object.assign(document.createElement("style"), {
+          textContent: "#linksToggle{transition:none!important}",
+        }),
+      );
+      const toggle = document.getElementById("linksToggle");
+      if (!toggle) return false;
+      const look = () => getComputedStyle(toggle).backgroundColor + getComputedStyle(toggle).color;
+      const offLook = look();
+      toggle.setAttribute("aria-pressed", "true");
+      const onLook = look();
+      toggle.setAttribute("aria-pressed", "false");
+      return offLook !== onLook;
+    }),
+  );
   const tap = await page.evaluate(() => {
     const cyEl = document.getElementById("cy") as any;
     const node = cyEl.__cy.getElementById("tag:pwa");
