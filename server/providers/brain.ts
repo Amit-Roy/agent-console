@@ -72,6 +72,44 @@ export function stylePreamble(): string {
   }
 }
 
+// Role personas (~/.claude/agents/<name>.md, linked by `brain link`). Claude Code loads them with --agent; Codex and Pi get the body.
+export const personaPath = (name: string) =>
+  path.join(
+    process.env.AGENT_CONSOLE_PERSONA_DIR || path.join(os.homedir(), ".claude", "agents"),
+    `${name}.md`,
+  );
+
+/** The persona for a main thread: reviewer for an Auto review run, dream for the nightly dream, else orchestrator. */
+export function personaFor(spec: {
+  issueRun?: { role: string };
+  schedule?: { task: string };
+}): string {
+  if (spec.issueRun?.role === "review") return "reviewer";
+  if (spec.schedule?.task === "dream") return "dream";
+  return "orchestrator";
+}
+
+const personaCache = new Map<string, { stamp: string; body: string }>();
+
+/** The persona body without its frontmatter, cached on mtimeMs:size; empty when the file is missing. */
+export function personaInstructions(name: string): string {
+  const file = personaPath(name);
+  try {
+    const stat = fs.statSync(file);
+    const stamp = `${stat.mtimeMs}:${stat.size}`;
+    const hit = personaCache.get(file);
+    if (hit?.stamp === stamp) return hit.body;
+    const body = fs
+      .readFileSync(file, "utf8")
+      .replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, "")
+      .trim();
+    personaCache.set(file, { stamp, body });
+    return body;
+  } catch {
+    return "";
+  }
+}
+
 /** Keep the write contract discoverable without loading the schema or full memory pages. */
 export function brainInstructions(): string {
   if (!brainAvailable()) return "";

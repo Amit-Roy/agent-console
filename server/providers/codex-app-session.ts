@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { launch as sandboxLaunch } from "../automation/sandbox.ts";
 import { retryEvent } from "../turn-timing.ts";
-import { harnessInstructions } from "./brain.ts";
+import { harnessInstructions, personaFor, personaInstructions } from "./brain.ts";
 import { adaptItem } from "./codex-app-items.ts";
 import { codexQuestion } from "./codex-app-questions.ts";
 import { CodexRpc } from "./codex-app-rpc.ts";
@@ -206,7 +206,10 @@ export class CodexAppSession {
       capabilities: { experimentalApi },
     });
     this.proc.write(JSON.stringify({ method: "initialized", params: {} }));
-    const brain = await harnessInstructions();
+    // Codex custom agents are spawn-only, so the main thread (never a subagent) gets the persona body as developer instructions.
+    const brain = [personaInstructions(personaFor(this.spec)), await harnessInstructions()]
+      .filter(Boolean)
+      .join("\n\n");
     const result = await this.rpc.request(
       this.threadId ? "thread/resume" : "thread/start",
       threadParams(this.spec, this.threadId, brain),

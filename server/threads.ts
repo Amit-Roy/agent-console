@@ -612,6 +612,7 @@ function startSpec(thread: Thread): ThreadSpec {
     sessionId: thread.sessionId,
     forkFrom: thread.sessionId ? undefined : thread.forkFrom,
     issueRun: thread.issueRun,
+    schedule: thread.schedule,
   };
 }
 
