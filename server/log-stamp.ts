@@ -23,7 +23,8 @@ export function stampLines(stream: Stream, now: () => string = isoNow): () => vo
   const decoder = new StringDecoder("utf8");
   let atLineStart = true;
   stream.write = function (this: unknown, chunk: any, encoding?: any, callback?: any) {
-    if (typeof chunk !== "string" && !(chunk instanceof Uint8Array)) return original.call(this, chunk, encoding, callback);
+    if (typeof chunk !== "string" && !(chunk instanceof Uint8Array))
+      return original.call(this, chunk, encoding, callback);
     const text = typeof chunk === "string" ? chunk : decoder.write(Buffer.from(chunk));
     let out = "";
     for (const part of text.split(/(?<=\n)/)) {

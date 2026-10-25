@@ -26,7 +26,11 @@ stream.chunks.length = 0;
 stream.write(Buffer.from('{"event":"telemetry_sync","n":1}\n'));
 const line = out().trimEnd();
 assert.ok(line.startsWith(`${STAMP} `));
-assert.deepEqual(JSON.parse(line.slice(STAMP.length + 1)), { event: "telemetry_sync", n: 1 }, "JSON parseable after strip");
+assert.deepEqual(
+  JSON.parse(line.slice(STAMP.length + 1)),
+  { event: "telemetry_sync", n: 1 },
+  "JSON parseable after strip",
+);
 
 assert.match(isoNow(), /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}[+-]\d\d:\d\d$/);
 console.log("log-stamp ok");
