@@ -1933,6 +1933,7 @@ async function showHistory(m) {
   $("chat").setAttribute("aria-busy", "false");
   state.lastScrollTop = $("chat").scrollTop;
   drainPendingLive();
+  reconcileCards();
   historyDone(m, refreshing, cachedMetrics);
 }
 // A refresh that asked for only what was logged after the cached view: append it in place instead of redrawing the conversation.
@@ -1954,6 +1955,7 @@ function showDelta(m) {
   if (cur()?.operation !== "compact") settleCompact("interrupted");
   earlierIdle();
   state.lastScrollTop = chat.scrollTop;
+  reconcileCards();
   historyDone(m, true, cachedMetrics);
 }
 function historyDone(m, refreshing, cachedMetrics) {
@@ -3003,6 +3005,23 @@ function settleCompact(outcome = "stopped") {
   }
   state.compact = null;
 }
+
+/** After history replay (compaction, session resume, turn end), mark pending tool cards
+ * as done/interrupted unless they have a live background process (task-chip.running). */
+function reconcileCards() {
+  for (const card of state.cards.values()) {
+    if (!card.classList.contains("pending")) continue;
+    const isAgent = card.classList.contains("agent");
+    const runningChip = card.querySelector(".task-chip.running");
+    if (isAgent && runningChip) continue; // live background process: keep spinner
+    card.classList.remove("pending");
+    card.classList.add("done");
+    const status = card.querySelector(".st");
+    if (status) status.replaceChildren(icon("alert"), el("span", "sr-only", "interrupted"));
+  }
+  updateWorking();
+}
+
 function addNote(text, cls = "note") {
   if (cls === "errtxt") return push(errBlock(text));
   push(el("div", `msg ${cls}`, text));
@@ -3679,6 +3698,7 @@ function onResult(event, ctx) {
   dropLive("text");
   dropLive("thinking");
   state.live = null;
+  reconcileCards();
   const bits = resultStats(event);
   const last = (state.into || $("chat")).lastElementChild;
   const row = last?.matches(".msg.asst") ? last.querySelector(".actions") : null;
@@ -3736,6 +3756,7 @@ function onToolLabel(event) {
 function onAborted(_evt, ctx) {
   state.live = null;
   settleCompact("stopped");
+  reconcileCards();
   push(el("div", "msg note", "Stopped."), ctx.live);
 }
 
