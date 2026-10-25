@@ -11,7 +11,7 @@ import {
 import { repairAccounting } from "./accounting-repair.ts";
 import { backfill, readTurns, recordTurn, restoreAccounting, type Turn } from "./analytics.ts";
 import { DATA_DIR } from "./auth.ts";
-import { AUTO_CONTINUE_PROMPT, announcesNextStep, autoContinueEnabled } from "./auto-continue.ts";
+import { AUTO_CONTINUE_PROMPT, autoContinueEnabled } from "./auto-continue.ts";
 import { redact } from "./automation/events.ts";
 import { assertAutomationSandbox } from "./automation/sandbox.ts";
 import { CONSOLE_COMMANDS, commandList, parseCommand } from "./commands.ts";
@@ -500,7 +500,6 @@ interface TurnState {
   clock?: TurnClock;
   failureCode?: string; // codexErrorInfo kind of that console_error
   failure?: string; // newest console_error text; Codex and Pi report a failed turn there, not on the result
-  lastText?: string; // the newest assistant text with no tool call after it: what the turn ended on
   bgTools?: Set<string>; // run_in_background tool calls that have not returned yet
 }
 
@@ -1615,7 +1614,7 @@ export class Threads {
     this.emit({ t: "thread", thread });
   }
 
-  // Tool counts and what the turn ends on, for the usage dashboard and auto-continue
+  // Tool counts for the usage dashboard; background Bash calls for auto-continue
   private noteTurnContent(thread: Thread, event: any) {
     const turn = this.turns.get(thread.id);
     if (event.type === "assistant" && turn) {
@@ -1633,7 +1632,6 @@ export class Threads {
     if (this.awaitCompaction(thread, flow.event)) return true;
     const failedTurn = this.turns.get(thread.id);
     const failure = failedTurn?.failure;
-    const endedText = failedTurn?.lastText;
     const unfinished = questionOpen || !!failedTurn?.bgTools?.size;
     if (flow.event.is_error) flow.issueError = resultError(flow.event, failure);
     this.finishTurn(thread, flow.event);
@@ -1652,7 +1650,7 @@ export class Threads {
     this.touch(thread);
     this.recycleRouting(thread.id);
     brainCommit(); // agents may have written wiki pages this turn; keep the shared brain's git history current
-    this.continueAfterResult(thread, flow.event, endedText, unfinished);
+    this.continueAfterResult(thread, flow.event, unfinished);
     return false;
   }
 
@@ -1760,12 +1758,7 @@ export class Threads {
   }
 
   // An idle thread moves on: queued messages, waiting subagent results, then auto-continue. Each step may start a turn.
-  private continueAfterResult(
-    thread: Thread,
-    event: any,
-    endedText: string | undefined,
-    unfinished: boolean,
-  ) {
+  private continueAfterResult(thread: Thread, event: any, unfinished: boolean) {
     if (
       thread.status === "idle" &&
       (!event.is_error ||
@@ -1773,7 +1766,7 @@ export class Threads {
     )
       this.drain(thread.id);
     if (thread.status === "idle" && !event.is_error) this.wake(thread);
-    if (thread.status === "idle") this.autoContinue(thread, event, endedText, unfinished);
+    if (thread.status === "idle") this.autoContinue(thread, event, unfinished);
   }
 
   // Schedule, turn-done and issue-run hooks see an idle thread's finished turn last; a hook failure never breaks the turn
@@ -1812,12 +1805,10 @@ export class Threads {
     }
   }
 
-  // Remember what a turn ends on: text replaces the last text, a tool call clears it. Background Bash calls count until they return.
+  // Background Bash calls count until they return.
   private trackBlocks(turn: TurnState, blocks: any[]) {
     for (const block of blocks) {
-      if (block?.type === "text" && typeof block.text === "string") turn.lastText = block.text;
       if (block?.type !== "tool_use") continue;
-      delete turn.lastText;
       if (block.name === "Bash" && block.input?.run_in_background === true && block.id)
         (turn.bgTools ??= new Set()).add(String(block.id));
     }
@@ -1853,12 +1844,12 @@ export class Threads {
     );
   }
 
-  // A turn that ended by announcing its next step gets one "Continue" nudge; the nudge's own turn never gets another.
-  private autoContinue(thread: Thread, event: any, text: string | undefined, unfinished: boolean) {
+  // Every user turn gets one "Continue" nudge when it ends idle; the nudge's own turn never re-arms.
+  private autoContinue(thread: Thread, event: any, unfinished: boolean) {
     if (!this.continueArmed.has(thread.id)) return;
     if (Number(event.queued_turn_count) > 0) return;
     this.continueArmed.delete(thread.id);
-    if (!autoContinueEnabled() || !text || !announcesNextStep(text)) return;
+    if (!autoContinueEnabled()) return;
     if (this.continueBlocked(thread, event, unfinished) || this.continueParked(thread)) return;
     const live = this.live.get(thread.id);
     setTimeout(() => {

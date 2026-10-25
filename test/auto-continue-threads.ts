@@ -1,4 +1,4 @@
-// A turn that ends by announcing its next step gets exactly one auto "continue" send, and only when nothing else is going on.
+// A user turn that ends idle gets exactly one auto "continue" send, and only when nothing else is going on.
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -86,10 +86,10 @@ try {
   endTurn(first.id);
   assert.equal(nudges(), 2, "a new user message re-arms");
 
-  const noAnnounce = start("no announcement");
-  say(noAnnounce.id, "All done.");
-  endTurn(noAnnounce.id);
-  assert.equal(nudges(), 2, "a finished turn gets no continue");
+  const plain = start("plain done");
+  say(plain.id, "Done.");
+  endTurn(plain.id);
+  assert.equal(nudges(), 3, "a plain Done. turn continues once");
 
   const toolLast = start("tool last");
   say(toolLast.id, ANNOUNCE);
@@ -98,7 +98,28 @@ try {
     message: { content: [{ type: "tool_use", id: "tu1", name: "Read", input: {} }] },
   });
   endTurn(toolLast.id);
-  assert.equal(nudges(), 2, "text followed by a tool call is not what the turn ended on");
+  assert.equal(nudges(), 4, "a turn ending on a tool call also continues once");
+
+  const doneBusy = start("done while background task runs");
+  const beforeBusy = nudges();
+  emit(doneBusy.id, {
+    type: "system",
+    subtype: "background_tasks_changed",
+    tasks: [{ task_id: "sub" }],
+  });
+  say(doneBusy.id, "Done.");
+  endTurn(doneBusy.id);
+  assert.equal(
+    nudges(),
+    beforeBusy,
+    "a Done. turn with a background task running does not continue",
+  );
+
+  const doneIdle = start("done idle");
+  const beforeIdle = nudges();
+  say(doneIdle.id, "Done.");
+  endTurn(doneIdle.id);
+  assert.equal(nudges(), beforeIdle + 1, "a Done. turn with nothing running continues once");
 
   expectNone("background task", (threadId) =>
     emit(threadId, {
