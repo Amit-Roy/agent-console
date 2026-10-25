@@ -1,5 +1,17 @@
 import { type ChildProcess, spawn } from "node:child_process";
+import type { IncomingMessage, ServerResponse } from "node:http";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { diagnostic, ResourceGuard, resource } from "./headroom-diagnostics.ts";
+import {
+  type HeadroomProfileStore,
+  ingestOtlp,
+  MAX_OTLP_BYTES,
+  OtlpDecodeError,
+  ProfileTrigger,
+  readSmapsRollup,
+  type SnapshotTrigger,
+} from "./headroom-profile.ts";
 import { privacyEnv } from "./privacy.ts";
 import { fileEnv } from "./providers/env.ts";
 
@@ -21,6 +33,15 @@ const terminations = new WeakMap<ChildProcess, Promise<void>>();
 let guard = new ResourceGuard();
 let stdoutBytes = 0;
 let stderrBytes = 0;
+const PROFILE_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "headroom-profile");
+const SNAPSHOT_CODES: Record<SnapshotTrigger, number> = {
+  step: 1,
+  periodic: 2,
+  breaker: 3,
+};
+let profileStore: HeadroomProfileStore | undefined;
+let profilePort = 0;
+const trigger = new ProfileTrigger();
 const current = (epoch: number) => active && enabled() && !latched && generation === epoch;
 
 async function live(): Promise<boolean> {
@@ -52,6 +73,85 @@ function terminate(p: ChildProcess) {
   return pending;
 }
 
+// Memory profiling is on by default; "0" in agent-console's env disables it. It needs the server port to report back.
+function profileEnv(settings: Record<string, string | undefined>): Record<string, string> {
+  const pick = (key: string) => process.env[key] ?? settings[key];
+  const enabledByEnv = (pick("AGENT_CONSOLE_HEADROOM_PROFILE") ?? "1") !== "0";
+  if (!enabledByEnv || !profilePort) return { AGENT_CONSOLE_HEADROOM_PROFILE: "0" };
+  const existing = process.env.PYTHONPATH;
+  const out: Record<string, string> = {
+    AGENT_CONSOLE_HEADROOM_PROFILE: "1",
+    PYTHONPATH: existing ? `${PROFILE_DIR}${path.delimiter}${existing}` : PROFILE_DIR,
+    OTEL_EXPORTER_OTLP_METRICS_ENDPOINT: `http://127.0.0.1:${profilePort}/v1/metrics`,
+    OTEL_METRIC_EXPORT_INTERVAL: "30000",
+    OTEL_SERVICE_NAME: "headroom-proxy",
+    OTEL_TRACES_EXPORTER: "none",
+    OTEL_LOGS_EXPORTER: "none",
+  };
+  if (pick("AGENT_CONSOLE_HEADROOM_TRACEMALLOC") === "1")
+    out.AGENT_CONSOLE_HEADROOM_TRACEMALLOC = "1";
+  return out;
+}
+
+function recordSnapshot(pid: number, reason: SnapshotTrigger, rssBytes: number) {
+  try {
+    profileStore?.recordSnapshot(pid, reason, rssBytes, Date.now());
+    diagnostic("snapshot", { pid, reason: SNAPSHOT_CODES[reason] });
+  } catch {
+    diagnostic("snapshot", { pid, reason: 0 });
+  }
+}
+
+// Profile storage must never break the proxy guard.
+function recordProfile(pid: number, sample: { rssBytes: number; time: number }) {
+  if (!profileStore) return;
+  try {
+    profileStore.recordSample(pid, sample, readSmapsRollup(pid));
+    const due = trigger.tick(pid, sample.rssBytes, Date.now());
+    if (due) recordSnapshot(pid, due, sample.rssBytes);
+  } catch {
+    diagnostic("snapshot", { pid, reason: 0 });
+  }
+}
+
+const LOOPBACK = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
+
+function readCapped(req: IncomingMessage): Promise<Buffer | null> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    req.on("data", (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > MAX_OTLP_BYTES)
+        resolve(null); // keep draining so the 413 reaches the sender
+      else chunks.push(chunk);
+    });
+    req.on("end", () => resolve(Buffer.concat(chunks)));
+    req.on("error", reject);
+  });
+}
+
+/** POST /v1/metrics: OTLP/HTTP protobuf from the local Headroom proxy only. Mount before any auth middleware. */
+export function metricsIngest(getStore: () => HeadroomProfileStore | undefined) {
+  return async (req: IncomingMessage, res: ServerResponse) => {
+    const finish = (status: number) => void res.writeHead(status, { Connection: "close" }).end();
+    const proxied = req.headers["x-forwarded-for"] || req.headers.forwarded;
+    if (!LOOPBACK.has(req.socket.remoteAddress ?? "") || proxied) return finish(403);
+    if (!String(req.headers["content-type"] || "").startsWith("application/x-protobuf"))
+      return finish(415);
+    const store = getStore();
+    if (!store) return finish(503);
+    try {
+      const body = await readCapped(req);
+      if (!body) return finish(413);
+      ingestOtlp(store, body);
+      finish(200);
+    } catch (error) {
+      finish(error instanceof OtlpDecodeError ? 400 : 500);
+    }
+  };
+}
+
 function spawnProxy() {
   attempts++;
   guard = new ResourceGuard();
@@ -69,6 +169,7 @@ function spawnProxy() {
     NUMEXPR_NUM_THREADS: "1",
     TOKENIZERS_PARALLELISM: "false",
   };
+  Object.assign(env, profileEnv(settings));
   if (env.ANTHROPIC_BASE_URL?.replace(/\/+$/, "") === URL_) delete env.ANTHROPIC_BASE_URL;
   // Provider clients cannot call Headroom's injected retrieval tool. Keep compression,
   // but never replace tool output with CCR markers that the agent cannot resolve.
@@ -145,6 +246,7 @@ async function check(epoch: number) {
       const { cpuPercent, reason } = guard.sample(sample);
       diagnostic("resource", { pid: p.pid, rssBytes: sample.rssBytes, cpuPercent });
       diagnostic("output", { stdoutBytes, stderrBytes });
+      recordProfile(p.pid, sample);
       if (reason) {
         latched = true;
         healthy = false;
@@ -153,6 +255,7 @@ async function check(epoch: number) {
             ? "Headroom disabled: RSS exceeded 8192 MiB"
             : "Headroom disabled: CPU exceeded 80% for 30 seconds";
         diagnostic("breaker", { reason });
+        recordSnapshot(p.pid, "breaker", sample.rssBytes);
         terminate(p);
         return;
       }
@@ -200,6 +303,11 @@ async function launchSequence(epoch: number) {
 }
 
 export const headroom = {
+  /** Wires profiling: the store receiving samples and the port the proxy reports metrics to. */
+  attachProfile(store: HeadroomProfileStore | undefined, port: number) {
+    profileStore = store;
+    profilePort = port;
+  },
   async start() {
     if (!enabled()) {
       if (process.env.ANTHROPIC_BASE_URL?.replace(/\/+$/, "") === URL_)

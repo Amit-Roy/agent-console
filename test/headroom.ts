@@ -6,6 +6,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { diagnostic, ResourceGuard } from "../server/headroom-diagnostics.ts";
+import { HeadroomProfileStore } from "../server/headroom-profile.ts";
 
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "ac-headroom-"));
 const inheritedHeadroomCommand = process.env.AGENT_CONSOLE_HEADROOM_COMMAND;
@@ -16,6 +17,7 @@ delete process.env.AGENT_CONSOLE_HEADROOM_KOMPRESS;
 const fixtureEnvFile = path.join(scratch, "agent-console.env");
 fs.writeFileSync(fixtureEnvFile, "");
 process.env.AGENT_CONSOLE_ENV_FILES = fixtureEnvFile;
+const profilePort = 7391;
 const socket = net.createServer();
 await new Promise<void>((resolve) => socket.listen(0, "127.0.0.1", resolve));
 const port = (socket.address() as net.AddressInfo).port;
@@ -25,7 +27,7 @@ fs.writeFileSync(
   `#!${process.execPath}
 const http = require('node:http');
 const fs = require('node:fs');
-fs.appendFileSync(process.env.CAPTURE, JSON.stringify({args: process.argv.slice(2), env: Object.fromEntries(['HEADROOM_WORKERS','HEADROOM_COMPRESS_WORKERS','OMP_NUM_THREADS','MKL_NUM_THREADS','OPENBLAS_NUM_THREADS','NUMEXPR_NUM_THREADS','TOKENIZERS_PARALLELISM','HEADROOM_LOG_MESSAGES'].map(k => [k, process.env[k]])), nice: require('node:os').getPriority()}) + '\\n');
+fs.appendFileSync(process.env.CAPTURE, JSON.stringify({args: process.argv.slice(2), env: Object.fromEntries(['HEADROOM_WORKERS','HEADROOM_COMPRESS_WORKERS','OMP_NUM_THREADS','MKL_NUM_THREADS','OPENBLAS_NUM_THREADS','NUMEXPR_NUM_THREADS','TOKENIZERS_PARALLELISM','HEADROOM_LOG_MESSAGES'].map(k => [k, process.env[k]])), profile: Object.fromEntries(['PYTHONPATH','AGENT_CONSOLE_HEADROOM_PROFILE','AGENT_CONSOLE_HEADROOM_TRACEMALLOC','OTEL_EXPORTER_OTLP_METRICS_ENDPOINT','OTEL_METRIC_EXPORT_INTERVAL','OTEL_SERVICE_NAME','OTEL_TRACES_EXPORTER','OTEL_LOGS_EXPORTER'].map(k => [k, process.env[k]])), nice: require('node:os').getPriority()}) + '\\n');
 process.stdout.write('PROMPT_SECRET auth=AUTH_SECRET');
 process.stderr.write('ERROR AUTH_SECRET');
 setTimeout(() => http.createServer((req, res) => res.end('ok')).listen(Number(process.argv[process.argv.indexOf('--port') + 1]), '127.0.0.1'), 300);
@@ -46,7 +48,7 @@ process.env.AGENT_CONSOLE_RUN = path.join(scratch, "run");
 process.env.HEADROOM_LOG_MESSAGES = "1";
 process.env.AGENT_CONSOLE_HEADROOM = "0";
 process.env.AGENT_CONSOLE_HEADROOM_PORT = String(port);
-const { headroom } = await import("../server/headroom.ts");
+const { headroom, metricsIngest } = await import("../server/headroom.ts");
 try {
   const external = net.createServer((socket) =>
     socket.end("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"),
@@ -73,6 +75,7 @@ try {
   headroom.stop();
   await new Promise<void>((resolve) => external.close(() => resolve()));
   delete process.env.AGENT_CONSOLE_HEADROOM;
+  headroom.attachProfile(undefined, profilePort);
   assert.equal(headroom.state().enabled, true, "Headroom defaults on without an override");
   assert.equal(headroom.url(), undefined);
   const starting = headroom.start();
@@ -141,6 +144,18 @@ try {
   ])
     assert.equal(launch.args[launch.args.indexOf(flag) + 1], "1");
   assert.deepEqual(Object.values(launch.env), ["1", "1", "1", "1", "1", "1", "false", "0"]);
+  const shimDir = path.join(import.meta.dirname, "..", "server", "headroom-profile");
+  assert.equal(launch.profile.PYTHONPATH.split(path.delimiter)[0], shimDir);
+  assert.equal(launch.profile.AGENT_CONSOLE_HEADROOM_PROFILE, "1");
+  assert.equal(launch.profile.AGENT_CONSOLE_HEADROOM_TRACEMALLOC, undefined);
+  assert.equal(
+    launch.profile.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT,
+    `http://127.0.0.1:${profilePort}/v1/metrics`,
+  );
+  assert.equal(launch.profile.OTEL_METRIC_EXPORT_INTERVAL, "30000");
+  assert.equal(launch.profile.OTEL_SERVICE_NAME, "headroom-proxy");
+  assert.equal(launch.profile.OTEL_TRACES_EXPORTER, "none");
+  assert.equal(launch.profile.OTEL_LOGS_EXPORTER, "none");
   await headroom.stop();
   fs.writeFileSync(
     fixtureEnvFile,
@@ -192,6 +207,27 @@ try {
   diagnostic("stop");
   for (const file of fs.readdirSync(process.env.AGENT_CONSOLE_RUN))
     assert.ok(fs.statSync(path.join(process.env.AGENT_CONSOLE_RUN, file)).size <= 256 * 1024);
+  const profileStore = new HeadroomProfileStore(path.join(scratch, "profile.sqlite"));
+  const ingest = metricsIngest(() => profileStore);
+  const sink = http.createServer((req, res) => void ingest(req, res));
+  await new Promise<void>((resolve) => sink.listen(0, "127.0.0.1", resolve));
+  const sinkPort = (sink.address() as net.AddressInfo).port;
+  const fixture = fs.readFileSync(
+    path.join(import.meta.dirname, "fixtures", "headroom-otlp-metrics.bin"),
+  );
+  const post = (body: Buffer, headers: Record<string, string> = {}) =>
+    fetch(`http://127.0.0.1:${sinkPort}/v1/metrics`, {
+      method: "POST",
+      headers: { "content-type": "application/x-protobuf", ...headers },
+      body,
+    });
+  assert.equal((await post(fixture)).status, 200);
+  assert.ok(Object.keys(profileStore.query(60_000).metrics).length > 0);
+  assert.equal((await post(Buffer.from([0xff, 0xff, 0xff]))).status, 400);
+  assert.equal((await post(fixture, { "x-forwarded-for": "203.0.113.9" })).status, 403);
+  assert.equal((await post(fixture, { "content-type": "text/plain" })).status, 415);
+  assert.equal((await post(Buffer.alloc(1024 * 1024 + 1))).status, 413);
+  await new Promise<void>((resolve) => sink.close(() => resolve()));
   console.log(
     "PASS Headroom default-on, explicit opt-out, delayed startup, bounded private diagnostics, priority/worker caps, and resource guard",
   );

@@ -8,6 +8,8 @@ let timer = null,
   seq = 0,
   range = 300,
   historyAt = 0,
+  headroomAt = 0,
+  hrRange = "1h",
   portsAt = 0,
   showAll = false;
 let procSort = "cpu",
@@ -348,6 +350,241 @@ $("range").addEventListener("click", (e) => {
   range = Number(b.dataset.range);
   for (const x of $("range").children) x.setAttribute("aria-pressed", String(x === b));
   void loadHistory().catch(() => {});
+});
+
+// ---------- headroom memory ----------
+
+const HR_RANGE_MS = { "1h": 3_600_000, "6h": 21_600_000, "24h": 86_400_000, "7d": 604_800_000 };
+const HR_GAP_MS = 5 * 60_000;
+const HR_TRIGGERS = {
+  step: { label: "Step snapshot", glyph: "●", style: "circle", color: "--viz-5" },
+  periodic: { label: "Periodic snapshot", glyph: "◆", style: "rectRot", color: "--t2" },
+  breaker: { label: "Breaker snapshot", glyph: "▲", style: "triangle", color: "--bad" },
+};
+const signedBytes = (v) => (v === 0 ? "0" : `${v > 0 ? "+" : "−"}${bytes(Math.abs(v))}`);
+const hrTick = (v) => {
+  const when = new Date(v);
+  const time = when.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return HR_RANGE_MS[hrRange] > 86_400_000
+    ? `${when.toLocaleDateString([], { weekday: "short" })} ${time}`
+    : time;
+};
+const lastValue = (rows, match = () => true) => {
+  for (let idx = (rows?.length ?? 0) - 1; idx >= 0; idx--)
+    if (match(rows[idx])) return rows[idx].value;
+  return null;
+};
+// Points as {x,y}; a null y between samples more than HR_GAP_MS apart breaks the line.
+function gapped(points) {
+  const out = [];
+  for (const point of points) {
+    const prev = out[out.length - 1];
+    if (prev && point.x - prev.x > HR_GAP_MS) out.push({ x: prev.x + 1, y: null });
+    out.push(point);
+  }
+  return out;
+}
+function rssSegments(rss) {
+  const byPid = new Map();
+  for (const row of rss) {
+    if (!byPid.has(row.pid)) byPid.set(row.pid, []);
+    byPid.get(row.pid).push(row);
+  }
+  return [...byPid.values()];
+}
+const metricPoints = (rows) => gapped((rows ?? []).map((r) => ({ x: r.at, y: r.value })));
+function growthPerHour(rss) {
+  const segs = rssSegments(rss);
+  const seg = segs[segs.length - 1] ?? [];
+  if (seg.length < 2) return null;
+  const hours = (seg[seg.length - 1].at - seg[0].at) / 3_600_000;
+  return hours > 0 ? (seg[seg.length - 1].rss - seg[0].rss) / 1048576 / hours : null;
+}
+function hrStats(data) {
+  const metrics = data.metrics;
+  const rssNow = data.rss[data.rss.length - 1]?.rss ?? null;
+  const growth = growthPerHour(data.rss);
+  const freeHeld = lastValue(metrics["headroom.malloc.free_held_bytes"]);
+  const gcRows = metrics["process.runtime.cpython.gc_count"] ?? [];
+  const attrs = [...new Set(gcRows.map((r) => r.attr))].sort();
+  const gcParts = attrs.map(
+    (a) => `g${String(a ?? "").replace(/^\w+=/, "")} ${lastValue(gcRows, (r) => r.attr === a)}`,
+  );
+  const threads = lastValue(metrics["process.runtime.cpython.thread_count"]);
+  return [
+    ["RSS now", rssNow == null ? "—" : bytes(rssNow)],
+    [
+      "Growth",
+      growth == null ? "—" : `${growth >= 0 ? "+" : "−"}${Math.abs(growth).toFixed(0)} MB/h`,
+    ],
+    ["Malloc free-held", freeHeld == null ? "—" : bytes(freeHeld)],
+    ["GC counts", gcParts.length ? gcParts.join(" · ") : "—"],
+    ["Threads", threads == null ? "—" : String(threads)],
+  ];
+}
+function renderHrStats(data) {
+  $("hr-stats").replaceChildren(
+    ...hrStats(data).map(([label, value]) => {
+      const box = el("div");
+      box.append(el("dt", "", label), el("dd", "", value));
+      return box;
+    }),
+  );
+}
+function hrDatasets(data) {
+  const colors = {
+    rss: css("--viz-1"),
+    anon: css("--viz-2"),
+    free: css("--viz-3"),
+    traced: css("--viz-4"),
+  };
+  const sets = [];
+  const line = (label, color, points) => ({
+    ...series(label, color, points, false),
+    pointRadius: 0,
+  });
+  for (const segment of rssSegments(data.rss)) {
+    sets.push(
+      line(
+        "RSS",
+        colors.rss,
+        segment.map((sample) => ({ x: sample.at, y: sample.rss })),
+      ),
+    );
+  }
+  const anon = data.rss.filter((r) => r.anon != null);
+  if (anon.length)
+    sets.push(line("Anon", colors.anon, gapped(anon.map((r) => ({ x: r.at, y: r.anon })))));
+  const free = data.metrics["headroom.malloc.free_held_bytes"];
+  if (free?.length) sets.push(line("Malloc free-held", colors.free, metricPoints(free)));
+  const traced = data.metrics["headroom.tracemalloc.traced_bytes"];
+  if (traced?.length) sets.push(line("Tracemalloc traced", colors.traced, metricPoints(traced)));
+  for (const [trigger, spec] of Object.entries(HR_TRIGGERS)) {
+    const points = data.snapshots
+      .filter((s) => s.trigger === trigger)
+      .map((s) => ({ x: s.at, y: s.rss }));
+    if (!points.length) continue;
+    const color = css(spec.color);
+    sets.push({
+      label: spec.label,
+      data: points,
+      showLine: false,
+      pointStyle: spec.style,
+      pointRadius: 6,
+      pointHoverRadius: 8,
+      pointBackgroundColor: color,
+      pointBorderColor: css("--card"),
+      pointBorderWidth: 1.5,
+      borderColor: color,
+    });
+  }
+  return sets;
+}
+function renderHrLegend(data, sets) {
+  const items = [];
+  const seen = new Set();
+  for (const set of sets) {
+    if (seen.has(set.label)) continue;
+    seen.add(set.label);
+    const spec = Object.values(HR_TRIGGERS).find((t) => t.label === set.label);
+    const count = spec
+      ? ` ×${data.snapshots.filter((s) => HR_TRIGGERS[s.trigger] === spec).length}`
+      : "";
+    const item = el("li");
+    const swatch = el("span", "sw", spec ? spec.glyph : "━");
+    swatch.style.color = spec ? css(spec.color) : set.borderColor;
+    swatch.setAttribute("aria-hidden", "true");
+    item.append(swatch, el("span", "", set.label + count));
+    items.push(item);
+  }
+  $("hr-legend").replaceChildren(...items);
+}
+function drawHrChart(data) {
+  if (!Chart) return;
+  const sets = hrDatasets(data);
+  renderHrLegend(data, sets);
+  const opts = chartOptions(bytes);
+  const now = Date.now();
+  opts.scales.x.min = now - HR_RANGE_MS[hrRange];
+  opts.scales.x.max = now;
+  opts.scales.x.ticks.callback = hrTick;
+  opts.scales.y.beginAtZero = false;
+  opts.scales.y.ticks.maxTicksLimit = 5;
+  opts.interaction = { mode: "nearest", intersect: true };
+  if (charts["ch-hr"]) {
+    charts["ch-hr"].data.datasets = sets;
+    charts["ch-hr"].options = opts;
+    charts["ch-hr"].update("none");
+  } else
+    charts["ch-hr"] = new Chart($("ch-hr"), {
+      type: "line",
+      data: { datasets: sets },
+      options: opts,
+    });
+}
+function siteRow(site) {
+  const row = el("tr");
+  const loc = el("td", "loc");
+  const slash = site.location.lastIndexOf("/");
+  loc.append(
+    el("span", "dir", site.location.slice(0, slash + 1)),
+    el("b", "file", site.location.slice(slash + 1)),
+  );
+  loc.title = site.location;
+  const delta = site.deltaBytes;
+  const change = el(
+    "td",
+    `num ${delta > 0 ? "up" : delta < 0 ? "down" : ""}`,
+    delta == null ? "new" : signedBytes(delta),
+  );
+  row.append(
+    loc,
+    el("td", "num", bytes(site.bytes)),
+    change,
+    el("td", "num", Math.round(site.count).toLocaleString()),
+  );
+  return row;
+}
+function renderHrSites(sites) {
+  const empty = sites.at == null;
+  $("hr-sites-empty").hidden = !empty;
+  $("hr-sites-wrap").hidden = empty;
+  $("hr-sites-at").textContent = empty ? "" : `as of ${new Date(sites.at).toLocaleTimeString()}`;
+  const top = [...sites.rows].sort((a, b) => b.bytes - a.bytes).slice(0, 20);
+  $("hr-sites").tBodies[0].replaceChildren(...top.map(siteRow));
+}
+function renderHeadroom(data) {
+  const reporting =
+    data.rss.length > 0 || data.snapshots.length > 0 || Object.keys(data.metrics).length > 0;
+  $("hr-empty").hidden = reporting;
+  $("hr-body").hidden = !reporting;
+  if (!reporting) {
+    $("hr-empty").textContent = "Headroom profiler not reporting";
+    return;
+  }
+  renderHrStats(data);
+  renderHrSites(data.sites);
+  drawHrChart(data);
+}
+async function loadHeadroom() {
+  headroomAt = Date.now();
+  try {
+    renderHeadroom(await getJSON(`/api/host/headroom-profile?range=${hrRange}`));
+  } catch (err) {
+    $("hr-body").hidden = true;
+    $("hr-empty").hidden = false;
+    $("hr-empty").textContent = /404/.test(err.message)
+      ? "Headroom profile available after the server restarts"
+      : "Headroom profile unavailable";
+  }
+}
+$("hr-range").addEventListener("click", (event) => {
+  const button = event.target.closest("button[data-range]");
+  if (!button) return;
+  hrRange = button.dataset.range;
+  for (const other of $("hr-range").children)
+    other.setAttribute("aria-pressed", String(other === button));
+  void loadHeadroom();
 });
 
 // ---------- kill ----------
@@ -729,6 +966,7 @@ async function tick() {
     // 5 s samples move every tick on the 5 minute view; longer views refresh twice a minute
     if (Date.now() - historyAt > (range <= 300 ? REFRESH : 30000))
       void loadHistory().catch(() => {});
+    if (Date.now() - headroomAt > 30_000) void loadHeadroom();
     $("hm").setAttribute("aria-busy", "false");
   } catch (e) {
     if (mine === seq) toast(`Could not load host metrics: ${e.message}`, "bad");

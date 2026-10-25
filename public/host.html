@@ -31,6 +31,23 @@
       <figure><figcaption>Disk I/O <span id="cap-io"></span></figcaption><div class="cv"><canvas id="ch-io" role="img" aria-label="Disk read and write throughput over time"></canvas></div></figure>
     </div>
   </section>
+  <section class="panel" id="headroom" aria-label="Headroom memory">
+    <div class="head"><h2>Headroom memory</h2>
+      <!-- biome-ignore lint/a11y/useSemanticElements: role=group on a div styled by .range; fieldset would change the layout -->
+      <div class="range" id="hr-range" role="group" aria-label="Headroom time range">
+        <button type="button" data-range="1h" aria-pressed="true">1h</button><button type="button" data-range="6h" aria-pressed="false">6h</button><button type="button" data-range="24h" aria-pressed="false">24h</button><button type="button" data-range="7d" aria-pressed="false">7d</button>
+      </div>
+    </div>
+    <p class="note" id="hr-empty" hidden></p>
+    <div id="hr-body" hidden>
+      <dl class="hr-stats" id="hr-stats"></dl>
+      <figure class="hr-fig"><figcaption id="hr-cap">Resident memory over time</figcaption><div class="cv hr-cv"><canvas id="ch-hr" role="img" aria-label="Headroom memory over time"></canvas></div></figure>
+      <ul class="hr-legend" id="hr-legend" aria-label="Chart legend"></ul>
+      <h3 class="hr-sub">Top allocation sites <span id="hr-sites-at"></span></h3>
+      <p class="note" id="hr-sites-empty" hidden>Allocation sites need AGENT_CONSOLE_HEADROOM_TRACEMALLOC=1 (adds CPU)</p>
+      <div class="hr-tablewrap" id="hr-sites-wrap"><table class="hr-sites" id="hr-sites"><thead><tr><th scope="col">Location</th><th scope="col" class="num">Size</th><th scope="col" class="num">Change</th><th scope="col" class="num">Count</th></tr></thead><tbody></tbody></table></div>
+    </div>
+  </section>
   <section class="panel" id="procs" aria-label="Processes">
     <div class="head"><h2>Processes <span class="hcount" id="proc-count"></span></h2>
       <div class="htools">

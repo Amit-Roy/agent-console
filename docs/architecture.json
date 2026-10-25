@@ -1,342 +1,94 @@
 {
-  "title": "Effort model: randomized held-out split",
-  "subtitle": "Hash-random 10% thread groups held out; grouped 5-fold; no time ordering",
+  "title": "Headroom memory: after",
+  "subtitle": "OTel memory metrics + RSS snapshots in latency.sqlite, shown on /host",
   "items": [
     {
-      "group": "Triage worker",
-      "sub": "scripts/github-triage.ts",
+      "group": "Headroom proxy",
+      "sub": "Python, headroom-ai 0.41.0, nice 15",
       "border": "dashed",
       "color": "blue",
       "icon": "server",
       "items": [
         {
-          "id": "sched",
-          "label": "Weekly calibrate",
-          "tech": "github-triage.ts",
-          "desc": "7-day interval, 6 h crash retry",
-          "icon": "calendar-clock",
+          "id": "proxy",
+          "label": "Compression proxy",
+          "tech": "headroom proxy :8790",
+          "desc": "Compresses Claude/Codex requests",
+          "icon": "zap",
           "color": "blue"
         },
         {
-          "id": "fit",
-          "label": "Quantile fitter",
-          "tech": "triage-effort-fit.py",
-          "desc": "Depth 2, leaf 80; random 10% held-out by thread hash; grouped 5-fold",
-          "icon": "trees",
-          "color": "teal"
-        },
-        {
-          "id": "gate",
-          "label": "Promotion gate",
-          "tech": "triage-promotion.ts",
-          "desc": "Pinball: paired lower90 > 0 or ratio > 1.10. Coverage vs champion within 2 SE; hard bounds",
-          "icon": "shield-check",
-          "color": "orange"
-        },
-        {
-          "id": "sessions",
-          "label": "Session builder",
-          "tech": "triage-session-build.ts",
-          "desc": "Keeps console-linked or interactive sessions; drops probes, scratch cwd, window openers",
-          "icon": "filter",
-          "color": "teal"
-        }
-      ]
-    },
-    {
-      "group": "Local state",
-      "sub": "~/.config/agent-console",
-      "border": "solid",
-      "color": "slate",
-      "icon": "hard-drive",
-      "items": [
-        {
-          "id": "champ",
-          "label": "Live model",
-          "tech": "triage-effort-model.json",
-          "desc": "Champion; scored on held-out rows",
-          "icon": "file-check",
-          "color": "indigo"
-        },
-        {
-          "id": "chal",
-          "label": "Challenger",
-          "tech": "*.challenger.json",
-          "desc": "Kept when rejected",
-          "icon": "file-x",
-          "color": "slate"
-        }
-      ]
-    },
-    {
-      "group": "GitHub",
-      "border": "solid",
-      "color": "slate",
-      "icon": "globe",
-      "items": [
-        {
-          "id": "gh",
-          "label": "Issue quotes",
-          "tech": "triage comment",
-          "desc": "Repriced after promote",
-          "icon": "message-square",
+          "id": "shim",
+          "label": "Profiling shim",
+          "tech": "sitecustomize.py via PYTHONPATH",
+          "desc": "OTel memory, GC, malloc; opt-in tracemalloc",
+          "icon": "activity",
           "color": "cyan"
         }
       ]
     },
     {
-      "group": "Improve prompt",
-      "sub": "server/prompt-improve.ts",
-      "border": "dashed",
-      "color": "indigo",
-      "icon": "wand-sparkles",
-      "items": [
-        {
-          "id": "rewrite",
-          "label": "Rewriter",
-          "tech": "claude-opus-5-5",
-          "desc": "Pinned id, 60 s timeout",
-          "icon": "pen-line",
-          "color": "indigo"
-        },
-        {
-          "id": "quote",
-          "label": "Before/after quote",
-          "tech": "requestFeatures shapeFrom",
-          "desc": "Draft length and layout; added asks as unpriced hints",
-          "icon": "scale",
-          "color": "teal"
-        }
-      ]
-    },
-    {
-      "group": "Agent CLI",
-      "sub": "bin/effort-model",
-      "border": "dashed",
-      "color": "purple",
-      "icon": "terminal",
-      "items": [
-        {
-          "id": "cli",
-          "label": "effort-model",
-          "tech": "scripts/effort-model.ts",
-          "desc": "status, bench, data fetch",
-          "icon": "terminal",
-          "color": "purple"
-        },
-        {
-          "id": "bench",
-          "label": "Bench",
-          "tech": "triage-effort-bench.py",
-          "desc": "4 candidates + intent; real-row pinball and coverage",
-          "icon": "chart-column",
-          "color": "teal"
-        },
-        {
-          "id": "hf",
-          "label": "SALT-NLP/SWE-chat",
-          "tech": "odc-by parquet",
-          "desc": "Train-only rows, cached per revision",
-          "icon": "database",
-          "color": "orange"
-        }
-      ]
-    },
-    {
-      "group": "Auto-continue",
-      "sub": "server/threads.ts",
-      "border": "solid",
-      "color": "orange",
-      "icon": "repeat",
-      "items": [
-        {
-          "id": "ac-turn",
-          "label": "User turn ends idle",
-          "tech": "server/threads.ts",
-          "desc": "result event; no reply text kept",
-          "icon": "message-square",
-          "color": "blue"
-        },
-        {
-          "id": "ac-gate",
-          "label": "Auto-continue gate",
-          "tech": "threads.ts autoContinue",
-          "desc": "Fires once per idle user turn unless continueBlocked or continueParked",
-          "icon": "shield-check",
-          "color": "orange"
-        },
-        {
-          "id": "ac-send",
-          "label": "Continue prompt",
-          "tech": "auto-continue.ts",
-          "desc": "One follow-up send to the provider",
-          "icon": "send",
-          "color": "teal"
-        }
-      ]
-    },
-    {
-      "group": "Transcript interfaces",
-      "sub": "CLI and authenticated Console MCP",
-      "border": "dashed",
-      "color": "purple",
-      "icon": "terminal",
-      "items": [
-        {
-          "id": "red-cli",
-          "label": "transcript-redact",
-          "tech": "bin/transcript-redact",
-          "desc": "Scan, apply, verify; aggregate results",
-          "icon": "terminal",
-          "color": "purple"
-        },
-        {
-          "id": "red-mcp",
-          "label": "session_redact",
-          "tech": "Console MCP",
-          "desc": "Start a job or read bounded status",
-          "icon": "plug",
-          "color": "purple"
-        }
-      ]
-    },
-    {
-      "group": "Transcript maintenance",
-      "sub": "Server ownership",
-      "border": "solid",
-      "color": "blue",
-      "icon": "shield-check",
-      "items": [
-        {
-          "id": "red-job",
-          "label": "Background job owner",
-          "tech": "transcript-redaction.ts",
-          "desc": "Authentication, mode checks, progress and child lifecycle",
-          "icon": "workflow",
-          "color": "blue"
-        },
-        {
-          "id": "red-catalog",
-          "label": "Live catalog owner",
-          "tech": "threads.ts",
-          "desc": "Compare snapshots; persist unchanged title and recent fields",
-          "icon": "list",
-          "color": "teal"
-        }
-      ]
-    },
-    {
-      "group": "Shared redaction engine",
-      "sub": "Python engine and search coordination",
-      "border": "solid",
-      "color": "teal",
-      "icon": "shield-check",
-      "items": [
-        {
-          "id": "red-engine",
-          "label": "Credential matcher and writer",
-          "tech": "transcript_redaction.py",
-          "desc": "Known secrets and provider signatures; preserve UTF-8 byte offsets",
-          "icon": "shield-check",
-          "color": "teal"
-        },
-        {
-          "id": "red-search",
-          "label": "Search maintenance barrier",
-          "tech": "session-search.ts",
-          "desc": "Wait for refresh; block queries during cleanup; rebuild afterward",
-          "icon": "search",
-          "color": "orange"
-        }
-      ]
-    },
-    {
-      "group": "Transcript stores",
-      "sub": "Local session data",
+      "group": "agent-console",
+      "sub": "Node server",
       "border": "solid",
       "color": "slate",
-      "icon": "database",
+      "icon": "monitor",
       "items": [
         {
-          "id": "red-store",
-          "label": "Transcripts and SQLite",
-          "tech": "Canonical and native histories",
-          "desc": "Guarded range writes; logical FTS updates, checkpoint and audit",
-          "icon": "database",
-          "color": "slate"
-        }
-      ]
-    },
-    {
-      "group": "Cross-thread messaging",
-      "sub": "Top-level agent calls only",
-      "border": "dashed",
-      "color": "indigo",
-      "icon": "messages-square",
-      "items": [
-        {
-          "id": "thread-msg-tools",
-          "label": "Thread discovery and send",
-          "tech": "Agent Console MCP and Pi tools",
-          "desc": "List active threads and request an attributed peer message.",
-          "icon": "messages-square",
-          "color": "indigo"
-        },
-        {
-          "id": "thread-msg-auth",
-          "label": "Root-call authorization",
-          "tech": "thread-tool-auth.ts",
-          "desc": "Live root events authorize one exact payload; child calls and replay fail closed.",
-          "icon": "shield-check",
+          "id": "guard",
+          "label": "Resource guard",
+          "tech": "headroom.ts check()",
+          "desc": "5 s /proc RSS+CPU sample; breaker at 8 GiB / CPU",
+          "icon": "shield-alert",
           "color": "orange"
         },
         {
-          "id": "thread-msg-delivery",
-          "label": "Attributed delivery",
-          "tech": "Threads.send",
-          "desc": "Start idle recipients or steer and queue busy recipients with sender provenance.",
-          "icon": "send",
-          "color": "teal"
+          "id": "otlp",
+          "label": "OTLP receiver",
+          "tech": "POST /v1/metrics",
+          "desc": "Loopback only; protobufjs decode; name allowlist",
+          "icon": "inbox",
+          "color": "cyan"
+        },
+        {
+          "id": "api",
+          "label": "Profile API",
+          "tech": "GET /api/host/headroom-profile",
+          "desc": "RSS series, snapshots, metrics, sites",
+          "icon": "plug",
+          "color": "cyan"
+        },
+        {
+          "id": "hostui",
+          "label": "/host dashboard",
+          "tech": "host.js",
+          "desc": "+ Headroom memory card",
+          "icon": "layout-dashboard",
+          "color": "indigo"
         }
       ]
     },
     {
-      "group": "Role personas at launch",
-      "sub": "server/providers/brain.ts",
+      "group": "Local state",
+      "sub": "~/.config/agent-console, ~/.cache",
       "border": "solid",
-      "color": "purple",
-      "icon": "users",
+      "color": "slate",
+      "icon": "hard-drive",
       "items": [
         {
-          "id": "persona-pick",
-          "label": "Persona selection",
-          "tech": "personaFor (brain.ts)",
-          "desc": "reviewer for Auto review, dream for nightly dream, else orchestrator",
-          "icon": "git-branch",
-          "color": "purple"
-        },
-        {
-          "id": "persona-files",
-          "label": "Persona files",
-          "tech": "~/.claude/agents/*.md",
-          "desc": "orchestrator, reviewer, dream; linked by brain link",
+          "id": "diag",
+          "label": "Diagnostics log",
+          "tech": "headroom-diagnostics.jsonl",
+          "desc": "256 KB rotating; numbers only",
           "icon": "file-text",
-          "color": "indigo"
+          "color": "slate"
         },
         {
-          "id": "persona-claude",
-          "label": "Claude launch",
-          "tech": "claude.ts --agent",
-          "desc": "Main thread starts with claude --agent <persona>",
-          "icon": "terminal",
-          "color": "orange"
-        },
-        {
-          "id": "persona-codex",
-          "label": "Codex and Pi launch",
-          "tech": "codex-app-session.ts, pi.ts",
-          "desc": "Persona body as developerInstructions (Codex) or main-only append (Pi)",
-          "icon": "send",
+          "id": "db",
+          "label": "latency.sqlite",
+          "tech": "node:sqlite",
+          "desc": "+ headroom_* tables, 7 d",
+          "icon": "database",
           "color": "teal"
         }
       ]
@@ -344,134 +96,39 @@
   ],
   "edges": [
     {
-      "from": "sched",
-      "to": "fit",
-      "label": "Sessions + features"
+      "from": "guard",
+      "to": "proxy",
+      "label": "sample /proc, SIGTERM"
     },
     {
-      "from": "sessions",
-      "to": "sched",
-      "label": "Real rows"
+      "from": "guard",
+      "to": "diag",
+      "label": "append"
     },
     {
-      "from": "rewrite",
-      "to": "quote",
-      "label": "Improved text"
+      "from": "shim",
+      "to": "otlp",
+      "label": "OTLP/HTTP every 30 s"
     },
     {
-      "from": "champ",
-      "to": "quote",
-      "label": "Quantile trees"
+      "from": "otlp",
+      "to": "db",
+      "label": "insert"
     },
     {
-      "from": "champ",
-      "to": "fit",
-      "label": "--champion"
+      "from": "guard",
+      "to": "db",
+      "label": "RSS + smaps, step/breaker snapshots"
     },
     {
-      "from": "fit",
-      "to": "gate",
-      "label": "Artifact + validation"
+      "from": "api",
+      "to": "db",
+      "label": "query"
     },
     {
-      "from": "gate",
-      "to": "champ",
-      "label": "Promote"
-    },
-    {
-      "from": "gate",
-      "to": "chal",
-      "label": "Reject"
-    },
-    {
-      "from": "champ",
-      "to": "gh",
-      "label": "Reprice"
-    },
-    {
-      "from": "cli",
-      "to": "champ",
-      "label": "status reads"
-    },
-    {
-      "from": "cli",
-      "to": "bench",
-      "label": "bench"
-    },
-    {
-      "from": "hf",
-      "to": "bench",
-      "label": "data fetch"
-    },
-    {
-      "from": "ac-turn",
-      "to": "ac-gate",
-      "label": "Idle turn end"
-    },
-    {
-      "from": "ac-gate",
-      "to": "ac-send",
-      "label": "Send once"
-    },
-    {
-      "from": "red-cli",
-      "to": "red-engine",
-      "label": "Explicit local command"
-    },
-    {
-      "from": "red-mcp",
-      "to": "red-job",
-      "label": "Authenticated action"
-    },
-    {
-      "from": "red-job",
-      "to": "red-engine",
-      "label": "Run engine"
-    },
-    {
-      "from": "red-job",
-      "to": "red-catalog",
-      "label": "Update fields"
-    },
-    {
-      "from": "red-job",
-      "to": "red-search",
-      "label": "Exclusive maintenance"
-    },
-    {
-      "from": "red-engine",
-      "to": "red-store",
-      "label": "Scan or preserve-byte masking"
-    },
-    {
-      "from": "red-search",
-      "to": "red-store",
-      "label": "Refresh after cleanup"
-    },
-    {
-      "from": "thread-msg-tools",
-      "to": "thread-msg-auth",
-      "label": "Match the live root tool call"
-    },
-    {
-      "from": "thread-msg-auth",
-      "to": "thread-msg-delivery",
-      "label": "Consume one exact-payload grant"
-    },
-    {
-      "from": "persona-pick",
-      "to": "persona-files",
-      "label": "Read persona body by name"
-    },
-    {
-      "from": "persona-files",
-      "to": "persona-claude",
-      "label": "Loaded by --agent"
-    },
-    {
-      "from": "persona-files",
-      "to": "persona-codex",
-      "label": "Body without frontmatter"
+      "from": "hostui",
+      "to": "api",
+      "label": "fetch"
     }
   ]
 }

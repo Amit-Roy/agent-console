@@ -38,7 +38,7 @@
     "test:efficiency-ui": "node test/efficiency-ui.ts",
     "test:context": "node test/context-forecast.ts && node test/context-allocation.ts && node test/idle-compaction.ts && node test/idle-compaction-threads.ts && node test/thread-id-safety.ts && node test/api-pricing.ts",
     "test:context-ui": "node test/context-economics-ui.ts",
-    "test:efficiency": "node test/accounting.ts && node test/api-pricing.ts && node test/accounting-repair.ts && node test/accounting-threads.ts && node test/idle-compaction.ts && node test/idle-compaction-threads.ts && node test/handoff.ts && node test/handoff-integration.ts && node test/headroom.ts && node test/headroom-safety.ts && node test/codex-headroom.ts && node test/providers.ts",
+    "test:efficiency": "node test/accounting.ts && node test/api-pricing.ts && node test/accounting-repair.ts && node test/accounting-threads.ts && node test/idle-compaction.ts && node test/idle-compaction-threads.ts && node test/handoff.ts && node test/handoff-integration.ts && node test/headroom.ts && node test/headroom-profile.ts && node test/headroom-safety.ts && node test/codex-headroom.ts && node test/providers.ts",
     "test:idle-compaction-ui": "node test/idle-compaction-ui.ts",
     "test:dashboard-cost": "node test/dashboard-cost-ui.ts",
     "test:startup": "node test/startup-ui.ts",
@@ -86,6 +86,7 @@
     "linkedom": "^0.18.13",
     "marked": "^18.1.1",
     "p-queue": "10.0.0",
+    "protobufjs": "^8.8.1",
     "undici": "^8.12.2",
     "web-push": "^3.6.7",
     "ws": "^8.22.0"
