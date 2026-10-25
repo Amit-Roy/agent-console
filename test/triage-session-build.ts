@@ -104,3 +104,28 @@ assert.equal(
 console.log(
   "Session canonicalization: mirrors, resumptions, native gaps, active exclusion, and fork grouping passed.",
 );
+
+const origin = (userOrigin: boolean) => ({
+  provenance: { nativeSessionIds: [] as string[], userOrigin },
+});
+const probe = (sessionId: string, userOrigin: boolean) => ({
+  ...task(`native:${sessionId}`, [sessionId], 10),
+  ...origin(userOrigin),
+  provenance: { nativeSessionIds: [sessionId], userOrigin },
+});
+const filtered = canonicalSessionSamples(
+  {
+    tasks: [task("console:c", ["linked"], 50)],
+    sessionLinks: [link("c", ["linked"])],
+  },
+  {
+    tasks: [
+      probe("sdk-cli-probe", false),
+      probe("tmp-cwd", false),
+      probe("linked", false),
+      probe("interactive", true),
+    ],
+  },
+);
+assert.deepEqual(filtered.tasks.map((item) => item.id).sort(), ["console:c", "native:interactive"]);
+assert.equal(filtered.audit.nonUserOrigin, 2);

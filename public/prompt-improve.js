@@ -1,7 +1,7 @@
 // Improve-prompt dialog: the server rewrites the draft, the user edits the result, compares rough effort
 // estimates (session-total tokens, before vs after) and applies it. Nothing touches the composer until Use.
 const PLACEHOLDER = /\[(?!\s*[xX]?\s*\])[^[\]\n]{2,60}\](?!\()/g; // mirrors server/prompt-improve.ts
-const CLIENT_TIMEOUT_MS = 50_000;
+const CLIENT_TIMEOUT_MS = 65_000;
 const UNAVAILABLE = "estimate unavailable";
 
 export function findPlaceholders(text) {
@@ -60,6 +60,7 @@ function quoteCard(card, label, quote) {
 
 function differenceText(before, after) {
   if (before?.status !== "ready" || after?.status !== "ready") return "";
+  if (after.p50 === before.p50 && after.p80 === before.p80) return "Same work, clearer wording";
   return `Change: P50 ${signedTokens(after.p50 - before.p50)}, P80 ${signedTokens(after.p80 - before.p80)} tokens`;
 }
 
@@ -68,7 +69,20 @@ const byId = (id) => document.getElementById(id);
 function drawQuotes(quotes) {
   quoteCard(byId("pi-before"), "Before", quotes.before);
   quoteCard(byId("pi-after"), "After", quotes.after);
-  byId("pi-diff").textContent = differenceText(quotes.before, quotes.after);
+  const diff = byId("pi-diff");
+  diff.textContent = differenceText(quotes.before, quotes.after);
+  for (const hint of quotes.hints ?? []) {
+    const chip = node("span", "pi-hint", hint);
+    Object.assign(chip.style, {
+      marginLeft: "6px",
+      padding: "0 6px",
+      borderRadius: "8px",
+      border: "1px solid currentColor",
+      fontSize: "0.85em",
+      whiteSpace: "nowrap",
+    });
+    diff.append(chip);
+  }
   const level = [quotes.before, quotes.after].find((q) => q?.status === "ready")?.confidence;
   byId("pi-note").textContent =
     `Session-total tokens${level ? `, ${level}` : ""}. A guide, not a promise.`;
@@ -151,7 +165,11 @@ export function createPromptImprove(deps) {
     try {
       const result = await runImprove(deps.getText(), controller.signal, onQuote);
       if (mine !== seq) return;
-      Object.assign(quotes, { before: result.quoteOld, after: result.quoteNew });
+      Object.assign(quotes, {
+        before: result.quoteOld,
+        after: result.quoteNew,
+        hints: result.hints,
+      });
       area.value = result.improved;
       showPhase("result");
       drawQuotes(quotes);
@@ -169,7 +187,7 @@ export function createPromptImprove(deps) {
   function open() {
     const draft = deps.getText();
     if (!draft.trim() || dlg.open) return;
-    Object.assign(quotes, { before: null, after: null });
+    Object.assign(quotes, { before: null, after: null, hints: [] });
     byId("pi-old").textContent = draft;
     showError("");
     showPhase("wait");

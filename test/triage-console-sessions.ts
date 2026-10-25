@@ -156,6 +156,15 @@ try {
   ]);
   add("fixture-synthetic", "pi", [{ type: "user_input", ts: 100, text: "Go" }]);
   add(
+    "opener",
+    "claude",
+    [{ type: "user_input", ts: 100, text: "Reply with the single word: ok" }],
+    [],
+    {
+      title: "Window opener · claude",
+    },
+  );
+  add(
     "conflict",
     "pi",
     [{ type: "user_input", ts: 100, text: "Go" }],
@@ -288,9 +297,10 @@ try {
   assert.equal(zero.outputTokens, 0);
   assert.equal(zero.toolCalls, 0);
   assert.equal(result.tasks.find((row) => row.id === "console:reconstructed")?.inputTokens, 13);
-  assert.equal(result.audit.totalSessions, 18);
+  assert.equal(result.audit.totalSessions, 19);
   assert.equal(result.audit.selectedSessions, 9);
-  assert.equal(result.audit.excludedSessions, 9);
+  assert.equal(result.audit.excludedSessions, 10);
+  assert.equal(result.audit.exclusions.quotaWindowOpener, 1);
   assert.equal(result.audit.accountingExhaustive, true);
   assert.equal(result.audit.ledgerDuplicateRows, 2);
   assert.equal(result.audit.ledgerExplicitDuplicateRows, 1);

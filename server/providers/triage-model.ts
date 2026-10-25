@@ -424,10 +424,11 @@ export async function askPi(
   }
 }
 
-export async function askHaiku(
+export async function askClaude(
   prompt: string,
   system: string,
   timeoutMs?: number,
+  model = "haiku",
 ): Promise<string> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ac-triage-haiku-"));
   try {
@@ -447,7 +448,7 @@ export async function askHaiku(
       [
         "--print",
         "--model",
-        "haiku",
+        model,
         "--output-format",
         "json",
         "--safe-mode",
@@ -470,10 +471,10 @@ export async function askHaiku(
     try {
       result = JSON.parse(raw);
     } catch {
-      throw Error("Haiku returned invalid output");
+      throw Error(`${model} returned invalid output`);
     }
     if (result.is_error || result.subtype !== "success" || typeof result.result !== "string")
-      throw Error("Haiku subscription failed");
+      throw Error(`${model} subscription failed`);
     return result.result;
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -506,7 +507,7 @@ export function defaultTriageEngines(): LabelEngine[] {
             ".credentials.json",
           ),
         )?.claudeAiOauth,
-      call: askHaiku,
+      call: (prompt, system, timeoutMs) => askClaude(prompt, system, timeoutMs),
     },
     {
       id: `pi/openai-codex/${luna || "unavailable"}`,

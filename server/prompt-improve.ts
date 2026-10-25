@@ -9,13 +9,15 @@ import {
   quoteEffort,
   requestShape,
 } from "./providers/triage-effort.ts";
-import { askHaiku } from "./providers/triage-model.ts";
+import { askClaude } from "./providers/triage-model.ts";
 
-// "Improve prompt": Haiku rewrites a vague draft, and the effort model quotes old vs new.
-// Quotes are deterministic (request text only, no model call); Haiku spend is capped below.
+// "Improve prompt": Opus rewrites a vague draft, and the effort model quotes old vs new.
+// Quotes are deterministic (request text only, no model call); rewrite spend is capped below.
 export const QUOTE_MAX_CHARS = 100_000;
 export const IMPROVE_MAX_CHARS = 12_000;
-export const HAIKU_TIMEOUT_MS = 45_000;
+/** Pinned id, not the "opus" alias, so an older Opus is never picked. */
+export const IMPROVE_MODEL = "claude-opus-5-5";
+export const IMPROVE_TIMEOUT_MS = 60_000;
 export const HOURLY_LIMIT = 30;
 const HOUR_MS = 3_600_000;
 const MIN_OUTPUT_CHARS = 4000;
@@ -88,7 +90,7 @@ const defaultDeps = (): PromptImproveDeps => ({
   haiku: (prompt, system, timeoutMs) =>
     process.env.AGENT_CONSOLE_MOCK === "1"
       ? mockRewrite(prompt)
-      : askHaiku(prompt, system, timeoutMs),
+      : askClaude(prompt, system, timeoutMs, IMPROVE_MODEL),
   now: Date.now,
   hourlyLimit: HOURLY_LIMIT,
 });
@@ -111,8 +113,12 @@ export function cachedEffortModel(): LoadedEffortModel {
   return loaded;
 }
 
+const stripPlaceholders = (text: string): string => text.replace(PLACEHOLDER_PATTERN, "");
+
 const NO_FEATURE = { value: null } as const;
-export function quotePrompt(text: string): PromptQuote {
+/** With `shapeFrom`, length and layout come from that text and placeholders are not counted. */
+export function quotePrompt(text: string, shapeFrom?: string): PromptQuote {
+  if (shapeFrom !== undefined) text = stripPlaceholders(text);
   if (!text.trim()) return { status: "unavailable", reason: "Write a prompt first." };
   const loaded = cachedEffortModel();
   if (loaded.status !== "ready") return { status: "unavailable", reason: loaded.reason };
@@ -123,7 +129,12 @@ export function quotePrompt(text: string): PromptQuote {
     risk: NO_FEATURE,
     ...requestShape(text),
   };
-  const quote = quoteEffort(metrics, loaded, text);
+  const quote = quoteEffort(
+    metrics,
+    loaded,
+    text,
+    shapeFrom === undefined ? undefined : { shapeFrom },
+  );
   if (quote.status !== "ready") return { status: "unavailable", reason: quote.reason };
   return fromTreeQuote(quote);
 }
@@ -143,13 +154,26 @@ function fromTreeQuote(quote: EffortQuote): PromptQuote {
   };
 }
 
-const safeQuote = (text: string): PromptQuote => {
+const safeQuote = (text: string, shapeFrom?: string): PromptQuote => {
   try {
-    return quotePrompt(text);
+    return quotePrompt(text, shapeFrom);
   } catch {
     return { status: "unavailable", reason: "The effort quote failed." };
   }
 };
+
+const LIST_LINE = /^\s*(?:[-*] |\d+[.)] )/gm;
+const ASKS_FIRST =
+  /\b(?:ask me|ask (?:the user|questions)|before (?:answering|you answer|starting)[^.?!]{0,40}\bask)\b/i;
+
+/** Unpriced added work: the quote ignores wording, so growth in scope is named here. */
+export function workHints(draft: string, improved: string): string[] {
+  const hints: string[] = [];
+  const added = (improved.match(LIST_LINE)?.length ?? 0) - (draft.match(LIST_LINE)?.length ?? 0);
+  if (added > 0) hints.push(`+${added} deliverables`);
+  if (ASKS_FIRST.test(improved) && !ASKS_FIRST.test(draft)) hints.push("+clarifying round");
+  return hints;
+}
 
 class ImproveError extends Error {
   status: number;
@@ -173,7 +197,7 @@ export function createImprover(deps: PromptImproveDeps) {
   const rewrite = async (text: string): Promise<string> => {
     let reply: string;
     try {
-      reply = await deps.haiku(draftPrompt(text), IMPROVE_SYSTEM, HAIKU_TIMEOUT_MS);
+      reply = await deps.haiku(draftPrompt(text), IMPROVE_SYSTEM, IMPROVE_TIMEOUT_MS);
     } catch {
       throw new ImproveError(502, "Improve failed.");
     }
@@ -191,7 +215,8 @@ export function createImprover(deps: PromptImproveDeps) {
         improved,
         placeholders: findPlaceholders(improved),
         quoteOld: safeQuote(text),
-        quoteNew: safeQuote(improved),
+        quoteNew: safeQuote(improved, text),
+        hints: workHints(text, improved),
         ms: Math.max(0, deps.now() - began),
       };
     } finally {

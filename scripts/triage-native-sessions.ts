@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 type Provider = "claude" | "codex" | "pi";
@@ -37,6 +38,8 @@ export interface NativeSessionTask {
     terminalStatus: string;
     usageRecords: number;
     childUsageIncluded: boolean;
+    origin: { entrypoint?: string; cwd?: string };
+    userOrigin: boolean;
   };
 }
 interface Parsed {
@@ -61,6 +64,9 @@ interface Parsed {
   duplicateUsageRecords: number;
   missingUsage: boolean;
   error?: string;
+  /** Claude `entrypoint` or Codex `originator`; Pi has none. */
+  entrypoint?: string;
+  cwd?: string;
 }
 const finite = (value: unknown): value is number =>
   typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1e15;
@@ -289,6 +295,10 @@ function handleClaudeAssistant(state: ClaudeState, row: Row, message: any) {
 }
 function handleClaudeRow(state: ClaudeState, row: Row) {
   const { result } = state;
+  if (!result.entrypoint && idText(row.entrypoint)) {
+    result.entrypoint = row.entrypoint;
+    if (idText(row.cwd)) result.cwd = row.cwd;
+  }
   const message = row.message;
   if (row.type === "user" && !row.isMeta && row.promptSource !== "system" && !result.request)
     result.request = genuineNativeRequest(message?.content);
@@ -298,6 +308,28 @@ function handleClaudeRow(state: ClaudeState, row: Row) {
     result.terminalStatus = "observed-error";
   if (row.type === "user" && !row.isMeta && genuineNativeRequest(message?.content))
     result.terminalStatus = "inactive-after-user";
+}
+const INTERACTIVE_ORIGINS: Record<string, string> = {
+  claude: "cli",
+  codex: "codex-tui",
+};
+function underDirectory(cwd: string, directory: string) {
+  const relative = path.relative(directory, path.resolve(cwd));
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+/** Probe, test and scratch directories never hold real user requests. */
+function probeCwd(cwd: string) {
+  const home = os.homedir();
+  if (underDirectory(cwd, "/tmp") || underDirectory(cwd, path.join(home, "worktrees"))) return true;
+  const rel = path.relative(home, path.resolve(cwd));
+  return !rel.startsWith("..") && !path.isAbsolute(rel) && /^scratch[^/]*(\/|$)/.test(rel);
+}
+/** Origin only, never outcome: zero-tool-call sessions stay. */
+function isUserOrigin(root: Parsed) {
+  if (root.provider !== "pi" && root.entrypoint !== INTERACTIVE_ORIGINS[root.provider])
+    return false;
+  if (!root.cwd) return root.provider === "pi";
+  return !probeCwd(root.cwd);
 }
 function parseClaude(file: string, rows: Row[]): Parsed {
   const sessionIds = rows.map((row) => row.sessionId).filter(idText);
@@ -424,6 +456,8 @@ function parseCodex(file: string, rows: Row[]): Parsed {
   if (!idText(id)) throw Error("missing-session-id");
   const result = base("codex", id, rows);
   const source = meta.payload.source;
+  if (idText(meta.payload.originator)) result.entrypoint = meta.payload.originator;
+  if (idText(meta.payload.cwd)) result.cwd = meta.payload.cwd;
   result.child = !!source && typeof source === "object";
   const parent = source?.subagent?.thread_spawn?.parent_thread_id ?? meta.payload.parent_thread_id;
   if (idText(parent)) result.parent = parent;
@@ -492,6 +526,7 @@ function handlePiAssistant(
 function parsePi(file: string, rows: Row[]): Parsed {
   const session = rows.find((row) => row.type === "session");
   const result = base("pi", idText(session?.id) ? session.id : path.basename(file, ".jsonl"), rows);
+  if (idText(session?.cwd)) result.cwd = session.cwd;
   const usages = new Map<string, Usage>();
   const rounds = new Set<string>();
   for (const row of rows) {
@@ -709,6 +744,8 @@ function buildFamilyTask(
       terminalStatus: root.terminalStatus,
       usageRecords: usages.size,
       childUsageIncluded: true,
+      origin: { entrypoint: root.entrypoint, cwd: root.cwd },
+      userOrigin: isUserOrigin(root),
     },
   } as NativeSessionTask;
 }

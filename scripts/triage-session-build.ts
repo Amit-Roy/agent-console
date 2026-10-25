@@ -67,6 +67,12 @@ function selectSources(value: Component): Selection {
   return { selected: nativeComplete ? value.native : value.console, linkedIds, nativeComplete };
 }
 
+/** Native-only probe/test sessions teach the model nothing about user requests. */
+function isNonUserOrigin(value: Component) {
+  if (value.links.length || value.console.length) return false;
+  return !value.native.some((task) => task.provenance?.userOrigin === true);
+}
+
 function sumField(selected: Json[], field: string) {
   const valid = selected.every(
     (task) => typeof task[field] === "number" && Number.isFinite(task[field]) && task[field] >= 0,
@@ -145,6 +151,7 @@ function newCanonicalAudit(componentCount: number) {
     selectedSessions: 0,
     activeComponents: 0,
     unavailableComponents: 0,
+    nonUserOrigin: 0,
     nativeCanonicalSessions: 0,
     consoleFallbackSessions: 0,
     duplicateConsoleMirrors: 0,
@@ -181,6 +188,10 @@ export function canonicalSessionSamples(consoleSource: Json, nativeSource: Json)
   for (const value of components.values()) {
     if (value.links.some((link) => link.active)) {
       audit.activeComponents++;
+      continue;
+    }
+    if (isNonUserOrigin(value)) {
+      audit.nonUserOrigin++;
       continue;
     }
     const selection = selectSources(value);
@@ -229,6 +240,7 @@ export function buildSessionHistory(opts: {
       console: consoleSource.audit,
       native: nativeAudit,
       canonical: canonical.audit,
+      exclusions: { nonUserOrigin: canonical.audit.nonUserOrigin },
       selectedSessions: canonical.tasks.length,
       independentGroups: new Set(canonical.tasks.map((task) => task.group)).size,
       limitation:

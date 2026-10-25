@@ -4,6 +4,7 @@ import path from "node:path";
 import {
   predictQuantiles,
   type QuantileTreeModel,
+  type RequestFeatureOptions,
   requestFeatures,
   validateQuantileModel,
 } from "./triage-quantile.ts";
@@ -750,6 +751,7 @@ export function quoteEffort(
   metrics: ComplexityInput,
   loaded: LoadedEffortModel = loadEffortModel(),
   requestText?: string,
+  featureOptions?: RequestFeatureOptions,
 ): EffortQuote | EffortUnavailable {
   if (loaded.status !== "ready") return loaded;
   const validated = validateEffortModel(loaded.model);
@@ -771,7 +773,7 @@ export function quoteEffort(
   if (!values) return unavailable(RANGE_ERROR);
   const tree =
     model.quantileModel && typeof requestText === "string" && requestText.trim()
-      ? predictQuantiles(model.quantileModel, requestFeatures(requestText))
+      ? predictQuantiles(model.quantileModel, requestFeatures(requestText, featureOptions))
       : null;
   const channels = tree ? treeChannels(model, tree) : scenarioChannels(model, values);
   return assembleQuote(model, settings, tally, channels, values, !!tree);

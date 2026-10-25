@@ -72,27 +72,40 @@ const capped = (value: number): number => {
   return Math.min(FEATURE_LIMIT, Math.max(-FEATURE_LIMIT, value));
 };
 
-/** Features are known before any model call, so inference never depends on session outcomes. */
-export function requestFeatures(text: string): Record<QuantileFeature, number> {
+/** Layout features describe how big the request looks; content features describe what it names. */
+export interface RequestFeatureOptions {
+  shapeFrom?: string;
+}
+
+const layoutFeatures = (text: string) => {
   const shape = requestShape(text);
-  const references = count(text, REFERENCES);
-  const verbs = count(text, ACTION_VERBS);
   const lines = text.split("\n").filter((line) => line.trim()).length;
   return {
     size: capped(shape.requestSize.value),
     lines: capped(shape.requestLines.value),
-    refs: capped(shape.requestReferences.value),
     verbs: capped(shape.requestActions.value),
     logChars: capped(Math.log1p(text.length)),
     logLines: capped(Math.log1p(lines)),
-    logRefs: capped(Math.log1p(references)),
-    logVerbs: capped(Math.log1p(verbs)),
+    logVerbs: capped(Math.log1p(count(text, ACTION_VERBS))),
     fence: capped(text.includes("```") ? 1 : 0),
-    logPaths: capped(Math.log1p(count(text, PATHS))),
-    tests: capped(TESTS.test(text) ? 1 : 0),
     checklist: capped(Math.log1p(count(text, CHECKLIST))),
     bullets: capped(Math.log1p(count(text, BULLETS))),
     questions: capped(Math.log1p((text.match(/\?/g) ?? []).length)),
+  };
+};
+
+/** Features are known before any model call, so inference never depends on session outcomes. */
+export function requestFeatures(
+  text: string,
+  options: RequestFeatureOptions = {},
+): Record<QuantileFeature, number> {
+  const shape = requestShape(text);
+  return {
+    ...layoutFeatures(options.shapeFrom ?? text),
+    refs: capped(shape.requestReferences.value),
+    logRefs: capped(Math.log1p(count(text, REFERENCES))),
+    logPaths: capped(Math.log1p(count(text, PATHS))),
+    tests: capped(TESTS.test(text) ? 1 : 0),
     versions: capped(VERSIONS.test(text) ? 1 : 0),
   };
 }

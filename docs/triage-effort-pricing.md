@@ -10,6 +10,8 @@ The collector inventories Console threads and retained native Claude, Codex, and
 
 Complete native records take precedence when they cover the linked session. Complete Console accounting is a fallback when native coverage is missing. Unknown token usage remains unknown, never zero. Active sessions are excluded from training. Historical errors and zero-tool conversations remain valid when their actual usage is recorded.
 
+Only user sessions train the model. A native transcript with no Console thread is kept only when its origin is interactive (Claude `entrypoint` `cli`, Codex `originator` `codex-tui`; Pi has no origin field) and its working directory is not under `/tmp`, `~/scratch*` or `~/worktrees`. Console quota window openers (title `Window opener`, one-word probe) are excluded and unlinked, so their native transcripts fall to the same origin rule. The filter reads origin only, never outcome. The audit counts `exclusions.nonUserOrigin` and `quotaWindowOpener`. On 2026-10-25 this removed 306 probe rows (SDK smoke tests, A/B trials, `Reply with the single word: ok`) and left 307 sessions. Probes had taught the trees that a short request means a tiny session, so length dominated the quote.
+
 The private audit records discovered files, roots, children, duplicate identities, accounting coverage, excluded sessions, privacy refusals, feature failures, temporal purges, and final train/test counts. A session is an observed snapshot: resuming it can change its eventual total. Child usage without a reliable identity or counter is not invented.
 
 ## Learned equation
@@ -162,3 +164,9 @@ bin/effort-model data fetch
 - `data fetch [--dir DIR] [--raw-dir DIR] [--keep-raw]` runs `scripts/effort-data.py` and passes its line through, for example `swe-chat up to date rev 1a2b3c4d rows 13830`. Only the fetch needs pyarrow; `bench` reads jsonl.
 
 `AGENT_CONSOLE_TRIAGE_PYTHON` selects the Python. Tests: `npm run test:effort-model` and `npm run test:effort-bench`.
+
+## Improve-prompt quotes (2026-10-25)
+
+The Improve prompt dialog quotes the draft and the rewrite with the same trees. The rewrite is priced with the draft's length and layout features (`size`, `lines`, `verbs`, `logChars`, `logLines`, `logVerbs`, `fence`, `checklist`, `bullets`, `questions`) through `requestFeatures(text, { shapeFrom: draft })`; content features (`refs`, `logRefs`, `logPaths`, `tests`, `versions`) come from the rewrite with placeholders removed. Clearer wording therefore never changes the quote. Added asks are shown as unpriced hints (`+N deliverables`, `+clarifying round`) because no calibrated label exists for them. The rewriter is pinned to `claude-opus-5-5`.
+
+Refit on the 307 real sessions (scratch, 59 held-out rows): mean pinball 0.496 against the installed champion's 0.619 on the same rows, paired delta -0.164 (90% interval -0.281 to -0.078); P80 coverage 0.86 against 0.67. The example draft "Need a better way to label threads..." moved from P50 311k to 3.10M: question-style requests in real sessions are investigations, not short answers. Deterministic intent features (question, edit, ship, research, debug, issue reference, numbered asks) did not beat the stable set on real rows (0.469 against 0.458) and stay a bench-only `intent` candidate. The legacy model-extracted features cover only 25 of 356 real rows and are not revived.
