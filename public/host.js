@@ -393,9 +393,12 @@ function rssSegments(rss) {
   return [...byPid.values()];
 }
 const metricPoints = (rows) => gapped((rows ?? []).map((r) => ({ x: r.at, y: r.value })));
+// Startup loads models and buffers; measure growth only after this warm-up.
+const WARMUP_MS = 10 * 60_000;
 function growthPerHour(rss) {
   const segs = rssSegments(rss);
-  const seg = segs[segs.length - 1] ?? [];
+  const latest = segs[segs.length - 1] ?? [];
+  const seg = latest.filter((row) => row.at >= (latest[0]?.at ?? 0) + WARMUP_MS);
   if (seg.length < 2) return null;
   const hours = (seg[seg.length - 1].at - seg[0].at) / 3_600_000;
   return hours > 0 ? (seg[seg.length - 1].rss - seg[0].rss) / 1048576 / hours : null;

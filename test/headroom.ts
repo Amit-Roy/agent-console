@@ -27,7 +27,7 @@ fs.writeFileSync(
   `#!${process.execPath}
 const http = require('node:http');
 const fs = require('node:fs');
-fs.appendFileSync(process.env.CAPTURE, JSON.stringify({args: process.argv.slice(2), env: Object.fromEntries(['HEADROOM_WORKERS','HEADROOM_COMPRESS_WORKERS','OMP_NUM_THREADS','MKL_NUM_THREADS','OPENBLAS_NUM_THREADS','NUMEXPR_NUM_THREADS','TOKENIZERS_PARALLELISM','HEADROOM_LOG_MESSAGES'].map(k => [k, process.env[k]])), profile: Object.fromEntries(['PYTHONPATH','AGENT_CONSOLE_HEADROOM_PROFILE','AGENT_CONSOLE_HEADROOM_TRACEMALLOC','OTEL_EXPORTER_OTLP_METRICS_ENDPOINT','OTEL_METRIC_EXPORT_INTERVAL','OTEL_SERVICE_NAME','OTEL_TRACES_EXPORTER','OTEL_LOGS_EXPORTER'].map(k => [k, process.env[k]])), nice: require('node:os').getPriority()}) + '\\n');
+fs.appendFileSync(process.env.CAPTURE, JSON.stringify({args: process.argv.slice(2), env: Object.fromEntries(['HEADROOM_WORKERS','HEADROOM_COMPRESS_WORKERS','OMP_NUM_THREADS','MKL_NUM_THREADS','OPENBLAS_NUM_THREADS','NUMEXPR_NUM_THREADS','TOKENIZERS_PARALLELISM','HEADROOM_LOG_MESSAGES','MALLOC_ARENA_MAX','MALLOC_TRIM_THRESHOLD_'].map(k => [k, process.env[k]])), profile: Object.fromEntries(['PYTHONPATH','AGENT_CONSOLE_HEADROOM_PROFILE','AGENT_CONSOLE_HEADROOM_TRACEMALLOC','OTEL_EXPORTER_OTLP_METRICS_ENDPOINT','OTEL_METRIC_EXPORT_INTERVAL','OTEL_SERVICE_NAME','OTEL_TRACES_EXPORTER','OTEL_LOGS_EXPORTER'].map(k => [k, process.env[k]])), nice: require('node:os').getPriority()}) + '\\n');
 process.stdout.write('PROMPT_SECRET auth=AUTH_SECRET');
 process.stderr.write('ERROR AUTH_SECRET');
 setTimeout(() => http.createServer((req, res) => res.end('ok')).listen(Number(process.argv[process.argv.indexOf('--port') + 1]), '127.0.0.1'), 300);
@@ -143,11 +143,13 @@ try {
     "--anthropic-pre-upstream-concurrency",
   ])
     assert.equal(launch.args[launch.args.indexOf(flag) + 1], "1");
-  assert.deepEqual(Object.values(launch.env), ["1", "1", "1", "1", "1", "1", "false", "0"]);
+  assert.deepEqual(Object.values(launch.env), ["1", "1", "1", "1", "1", "1", "false", "0", "2", "131072"]);
   const shimDir = path.join(import.meta.dirname, "..", "server", "headroom-profile");
   assert.equal(launch.profile.PYTHONPATH.split(path.delimiter)[0], shimDir);
   assert.equal(launch.profile.AGENT_CONSOLE_HEADROOM_PROFILE, "1");
   assert.equal(launch.profile.AGENT_CONSOLE_HEADROOM_TRACEMALLOC, undefined);
+  assert.equal(launch.env.MALLOC_ARENA_MAX, "2");
+  assert.equal(launch.env.MALLOC_TRIM_THRESHOLD_, "131072");
   assert.equal(
     launch.profile.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT,
     `http://127.0.0.1:${profilePort}/v1/metrics`,
