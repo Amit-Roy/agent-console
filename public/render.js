@@ -1,8 +1,9 @@
 // Rendering helpers shared by the app (and importable on their own): DOM helpers, icons, copy-to-clipboard,
 // markdown -> sanitised HTML -> enhanced DOM (code block headers, table wrappers). DOMPurify sanitises ALL markdown output;
 // highlight.js only ever produces escaped <span class="hljs-*"> markup and the sanitiser runs over it anyway.
-// Media (images, video, ```chart blocks) is built from the sanitised DOM: local files go through the authenticated, path-scoped
-// /api/file-image and /api/file-media routes, Chart.js is imported lazily on the first chart.
+// Media (images, video, ```chart and ```arch blocks) is built from the sanitised DOM: local files go through the authenticated,
+// path-scoped /api/file-image and /api/file-media routes, Chart.js is imported lazily on the first chart and /arch.js on the first
+// valid ```arch JSON spec (invalid or still-streaming specs stay plain code blocks).
 
 import hljs from "/vendor/hljs/core.js";
 import bash from "/vendor/hljs/languages/bash.js";
@@ -291,6 +292,10 @@ const md = new Marked({
         const key = chartKey(text);
         if (key) return `<div class="chart" data-chart="${key}"></div>\n`;
       }
+      if (l === "arch") {
+        const key = archKey(text);
+        if (key) return `<div class="arch" data-arch="${key}"></div>\n`;
+      }
       return `<pre><code class="hljs${l ? ` language-${l}` : ""}">${highlight(text, l)}</code></pre>\n`;
     },
   },
@@ -563,6 +568,52 @@ function chartKey(src) {
   return chartConfigs.get(key) ? key : null;
 }
 
+// -- architecture diagrams (```arch JSON, built by /arch.js) --
+const archConfigs = new Map(); // key -> parsed spec (or null) for the data-arch holder
+function archKey(src) {
+  let h = 5381;
+  for (let i = 0; i < src.length; i++) h = ((h << 5) + h + src.charCodeAt(i)) | 0;
+  const key = `${(h >>> 0).toString(36)}.${src.length}`;
+  if (!archConfigs.has(key)) {
+    if (archConfigs.size > 60) archConfigs.delete(archConfigs.keys().next().value);
+    archConfigs.set(key, parseArch(src));
+  }
+  return archConfigs.get(key) ? key : null;
+}
+function parseArch(src) {
+  try {
+    const spec = JSON.parse(src);
+    return spec && typeof spec === "object" && Array.isArray(spec.items) ? spec : null;
+  } catch {
+    return null;
+  }
+}
+let archLib;
+function archFigure(key) {
+  const box = el("div", "arch");
+  (archLib ||= import("/arch.js").catch((err) => {
+    archLib = null;
+    throw err;
+  }))
+    .then((lib) => {
+      const spec = archConfigs.get(key);
+      const errors = lib.validateArch(spec);
+      if (errors.length) throw new Error(errors[0]);
+      return lib.buildArch(spec, box);
+    })
+    .catch(() => {
+      // Invalid spec or /arch.js unavailable: show it as an ordinary code block.
+      const pre = el("pre");
+      const code = el("code");
+      highlightInto(code, JSON.stringify(archConfigs.get(key), null, 2), "json");
+      pre.append(code);
+      box.replaceChildren(pre);
+      box.className = "";
+      codeBlock(pre);
+    });
+  return box;
+}
+
 let chartLib;
 const loadChart = () =>
   (chartLib ||= import("/vendor/chart.umd.min.js")
@@ -812,7 +863,7 @@ function codeTarget(t) {
   return ref ? { local: t, ref } : null;
 }
 const HASH_REF = /(^|[\s(\[])#(\d{1,6})(?!\w)/g;
-const HASH_SKIP = "pre, code, a, .md-media, .chart";
+const HASH_SKIP = "pre, code, a, .md-media, .chart, .arch";
 function hashRefNodes(text) {
   const frag = document.createDocumentFragment();
   let last = 0;
@@ -871,7 +922,7 @@ function videoSpec(link) {
 function addVideoPlayers(root) {
   let players = 0;
   for (const link of root.querySelectorAll("a")) {
-    if (players >= 8 || link.closest("pre, .md-media, .md-fail, .chart")) continue;
+    if (players >= 8 || link.closest("pre, .md-media, .md-fail, .chart, .arch")) continue;
     const spec = videoSpec(link);
     if (!spec) continue;
     const block = link.closest("p, li, td, th, blockquote, h1, h2, h3, h4") || link.parentElement;
@@ -931,10 +982,19 @@ function mountChartHolder(holder, mounts) {
   });
   holder.replaceWith(figure);
 }
+function mountArchHolder(holder) {
+  const key = holder.dataset.arch;
+  if (!archConfigs.get(key)) {
+    holder.remove();
+    return;
+  }
+  holder.replaceWith(keep(`arch:${key}`, () => archFigure(key)));
+}
 function mountMedia(root, mounts) {
   for (const node of root.querySelectorAll("img, video")) mountMediaNode(node);
   for (const holder of root.querySelectorAll(".chart[data-chart]"))
     mountChartHolder(holder, mounts);
+  for (const holder of root.querySelectorAll(".arch[data-arch]")) mountArchHolder(holder);
 }
 /** Post-sanitise structure: code headers, scrollable tables, media, linked paths. Operates on already-sanitised DOM (or a fragment of it). */
 export function enhance(root, mounts = []) {

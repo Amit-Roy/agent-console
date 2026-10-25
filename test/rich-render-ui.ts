@@ -543,6 +543,42 @@ try {
     "chart: incomplete JSON stays a code block, streaming reuses the node, instances destroyed, clamped, strict + whitelisted config",
   );
 
+  // ---- arch diagrams
+  const arch = await page.evaluate(async () => {
+    const m = await import("/render.js");
+    m.setFileScope(() => null);
+    const host = document.createElement("div");
+    document.body.append(host);
+    const spec = JSON.stringify({
+      title: "T",
+      items: [
+        { id: "a", label: "A", icon: "bot", step: 1 },
+        { id: "b", label: "B", icon: "d2:x/y", status: "added" },
+      ],
+      edges: [{ from: "a", to: "b" }],
+    });
+    const full = "```arch\n" + spec + "\n```";
+    m.renderMarkdown("```arch\n" + spec.slice(0, 30), host);
+    const partialIsCode = !!host.querySelector(".code") && !host.querySelector(".arch");
+    m.renderMarkdown(full, host);
+    await new Promise((res) => setTimeout(res, 500));
+    const box = host.querySelector(".arch") as any;
+    box.__mark = 1;
+    m.renderMarkdown(full + "\n\nmore", host);
+    const again = host.querySelector(".arch") as any;
+    const out = {
+      partialIsCode,
+      nodes: host.querySelectorAll(".node[data-id]").length,
+      icons: host.querySelectorAll(".node svg.glyph").length,
+      edges: box.__archEdges?.length,
+      sameNode: again.__mark === 1,
+    };
+    host.remove();
+    return out;
+  });
+  assert.deepEqual(arch, { partialIsCode: true, nodes: 2, icons: 2, edges: 1, sameNode: true });
+  pass("arch: valid spec builds nodes, icons (fallback glyph for d2:), edges kept, streaming reuses the node, partial stays code");
+
   // ---- sanitiser
   const s = await page.evaluate(async () => {
     const m = await import("/render.js");
