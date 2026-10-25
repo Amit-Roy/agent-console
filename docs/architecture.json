@@ -21,7 +21,7 @@
           "id": "shim",
           "label": "Profiling shim",
           "tech": "sitecustomize.py via PYTHONPATH",
-          "desc": "OTel SDK: cpython memory/GC, malloc free-held, opt-in tracemalloc top 20",
+          "desc": "OTel memory, GC, malloc; opt-in tracemalloc",
           "icon": "activity",
           "color": "cyan"
         }
@@ -62,7 +62,7 @@
           "id": "hostui",
           "label": "/host dashboard",
           "tech": "host.js",
-          "desc": "CPU, memory, disk, load + Headroom memory card",
+          "desc": "+ Headroom memory card",
           "icon": "layout-dashboard",
           "color": "indigo"
         }
@@ -87,7 +87,7 @@
           "id": "db",
           "label": "latency.sqlite",
           "tech": "node:sqlite",
-          "desc": "Latency + turn timings + headroom_rss/metric/site/snapshot (7 d)",
+          "desc": "+ headroom_* tables, 7 d",
           "icon": "database",
           "color": "teal"
         }
