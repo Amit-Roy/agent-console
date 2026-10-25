@@ -108,6 +108,39 @@
      "color": "orange"
     }
    ]
+  },
+  {
+   "group": "Auto-continue",
+   "sub": "server/threads.ts",
+   "border": "solid",
+   "color": "orange",
+   "icon": "repeat",
+   "items": [
+    {
+     "id": "ac-turn",
+     "label": "User turn ends idle",
+     "tech": "server/threads.ts",
+     "desc": "result event; no reply text kept",
+     "icon": "message-square",
+     "color": "blue"
+    },
+    {
+     "id": "ac-gate",
+     "label": "Auto-continue gate",
+     "tech": "threads.ts autoContinue",
+     "desc": "Fires once per idle user turn unless continueBlocked or continueParked",
+     "icon": "shield-check",
+     "color": "orange"
+    },
+    {
+     "id": "ac-send",
+     "label": "Continue prompt",
+     "tech": "auto-continue.ts",
+     "desc": "One follow-up send to the provider",
+     "icon": "send",
+     "color": "teal"
+    }
+   ]
   }
  ],
  "edges": [
@@ -155,6 +188,16 @@
    "from": "hf",
    "to": "bench",
    "label": "data fetch"
+  },
+  {
+   "from": "ac-turn",
+   "to": "ac-gate",
+   "label": "Idle turn end"
+  },
+  {
+   "from": "ac-gate",
+   "to": "ac-send",
+   "label": "Send once"
   }
  ]
 }
