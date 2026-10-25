@@ -326,7 +326,16 @@ async function reliabilityChecks() {
       assert.equal((await migrated.search({ query: word })).results.length, 0, word);
     for (const word of ["migkeptcall", "migkeptresult", "migkeptprose"])
       assert.equal((await migrated.search({ query: word })).results.length, 1, word);
-    assert.equal(Number((migrated as any).db.prepare("PRAGMA user_version").get().user_version), 2);
+    assert.equal(Number((migrated as any).db.prepare("PRAGMA user_version").get().user_version), 3);
+    // fts_map was backfilled: deletes go by rowid and leave no FTS or map rows behind.
+    const mdb = (migrated as any).db;
+    const count = (sql: string) => Number(mdb.prepare(sql).get().n);
+    assert.equal(count("SELECT count(*) AS n FROM fts_map WHERE thread='mig'"), 4);
+    (migrated as any).deleteFts("mig", 4);
+    assert.equal(count("SELECT count(*) AS n FROM session_fts WHERE thread='mig'"), 2);
+    (migrated as any).deleteFts("mig");
+    assert.equal(count("SELECT count(*) AS n FROM session_fts WHERE thread='mig'"), 0);
+    assert.equal(count("SELECT count(*) AS n FROM fts_map WHERE thread='mig'"), 0);
     migrated.close();
 
     await cleanupChecks(old);
@@ -425,7 +434,7 @@ async function cleanupChecks(base: string) {
   await second.whenCleaned();
   assert.ok(second.cleanupStats.batches > 0);
   const done = (second as any).db;
-  assert.equal(Number(done.prepare("PRAGMA user_version").get().user_version), 2);
+  assert.equal(Number(done.prepare("PRAGMA user_version").get().user_version), 3);
   assert.equal(Number(done.prepare("SELECT count(*) AS n FROM events").get().n), 3000);
   assert.equal(
     Number(
