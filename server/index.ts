@@ -1491,6 +1491,17 @@ app.use((req, res, next) => {
     );
   next();
 });
+// esbuild frontend bundle (scripts/bundle-web.mjs) holds only build output; anything it lacks falls through to public/.
+const webBundleDir =
+  process.env.AGENT_CONSOLE_WEB_BUNDLE ??
+  (fs.existsSync(path.join(ROOT, "RELEASE.json")) ? path.join(ROOT, ".bundle", "public") : "");
+if (webBundleDir && fs.existsSync(path.join(webBundleDir, "app.js"))) {
+  app.use(
+    "/chunks",
+    express.static(path.join(webBundleDir, "chunks"), { maxAge: "365d", immutable: true }),
+  );
+  app.use(express.static(webBundleDir, { index: false }));
+}
 app.use(express.static(path.join(ROOT, "public"), { index: "index.html", extensions: ["html"] }));
 
 boot.mark("routes");
