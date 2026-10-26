@@ -61,10 +61,14 @@ json.dump(result, sys.stdout)
 `,
   { mode: 0o700 },
 );
-const server = http.createServer();
-await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-const port = (server.address() as { port: number }).port;
-await new Promise<void>((resolve) => server.close(() => resolve()));
+const freePort = async () => {
+  const server = http.createServer();
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address() as { port: number };
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+  return port;
+};
+const port = await freePort();
 fs.writeFileSync(
   configuration,
   JSON.stringify({
@@ -276,7 +280,8 @@ try {
   fs.writeFileSync(retained, "Existing private calibration must survive a failed refresh.", {
     mode: 0o600,
   });
-  await assert.rejects(
+  // Independent scenarios start now and run alongside the worker-lifecycle flow below.
+  const retainedFailure = assert.rejects(
     new Promise<void>((resolve, reject) => {
       execFile(
         process.execPath,
@@ -297,6 +302,102 @@ try {
       );
     }),
   );
+  const specs: Record<string, CalibrationCase> = {
+    bootstrap: { name: "bootstrap", artifact: fixtureArtifact(0.82, false) },
+    reject: { name: "reject", preseed: true, artifact: fixtureArtifact(0.5) },
+    crash: { name: "crash", preseed: true, exit: "3" },
+    shadow: { name: "shadow", preseed: true, steps: { promote: false } },
+    reused: {
+      name: "features-off",
+      steps: { features: false },
+      dataset: '{"reused":"dataset"}',
+    },
+  };
+  const runs: Record<string, Promise<CalibrationResult>> = Object.fromEntries(
+    Object.entries(specs).map(([key, spec]) => [key, calibrationRun(spec)]),
+  );
+  const scheduleScenario = async () => {
+    // Watchdog schedule: a scratch HOME makes the default-path guard hold without touching real data.
+    const home = path.join(scratch, "home");
+    const homeRun = path.join(home, ".cache/agent-console/github-triage");
+    const homeData = path.join(home, ".config/agent-console");
+    fs.mkdirSync(homeData, { recursive: true, mode: 0o700 });
+    fs.mkdirSync(homeRun, { recursive: true, mode: 0o700 });
+    // Own port and GitHub state keep this worker independent of the main flow.
+    const homeGithub = path.join(scratch, "github-home.json");
+    fs.copyFileSync(githubState, homeGithub);
+    fs.writeFileSync(
+      path.join(homeData, "github-triage.json"),
+      JSON.stringify({ ...readConfig(), port: await freePort() }),
+      { mode: 0o600 },
+    );
+    const watchEnv = {
+      ...env,
+      HOME: home,
+      TRIAGE_TEST_GITHUB: homeGithub,
+      AGENT_CONSOLE_TRIAGE_PYTHON: "/bin/false",
+    };
+    for (const key of [
+      "AGENT_CONSOLE_TRIAGE_CONFIG",
+      "AGENT_CONSOLE_TRIAGE_RUN",
+      "AGENT_CONSOLE_TRIAGE_EFFORT_MODEL",
+      "AGENT_CONSOLE_TRIAGE_HISTORY",
+      "AGENT_CONSOLE_DATA",
+    ])
+      delete watchEnv[key];
+    const watchdog = () =>
+      new Promise<void>((resolve, reject) => {
+        execFile(
+          process.execPath,
+          [path.join(root, "scripts/github-triage.ts"), "watchdog"],
+          { cwd: root, env: watchEnv, timeout: 25_000 },
+          (error) => (error ? reject(error) : resolve()),
+        );
+      });
+    const attemptFile = path.join(homeRun, "calibration-attempt");
+    const stateFile = path.join(homeRun, "calibration-state.json");
+    const setState = (ageDays: number, outcome: string) =>
+      fs.writeFileSync(
+        stateFile,
+        JSON.stringify({
+          lastCompletedAt: Date.now() - ageDays * 86_400_000,
+          lastOutcome: outcome,
+          reasons: [],
+        }),
+      );
+    setState(1, "rejected");
+    await watchdog();
+    assert.equal(fs.existsSync(attemptFile), false, "A rejected run waits the full seven days");
+    setState(8, "promoted");
+    fs.writeFileSync(path.join(homeData, "effort-model.json"), JSON.stringify({ enabled: false }));
+    await watchdog();
+    assert.equal(fs.existsSync(attemptFile), false, "enabled=false must skip automatic starts");
+    fs.writeFileSync(path.join(homeData, "effort-model.json"), JSON.stringify({ enabled: true }));
+    await watchdog();
+    assert.equal(fs.existsSync(attemptFile), true, "A run older than seven days starts");
+    const failedState = () => {
+      try {
+        return JSON.parse(fs.readFileSync(stateFile, "utf8")).lastOutcome === "failed";
+      } catch {
+        return false;
+      }
+    };
+    for (const deadline = Date.now() + 30_000; !failedState(); ) {
+      assert.ok(Date.now() < deadline, "Background calibration must finish");
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    const scheduled = eventsOf(path.join(homeData, "triage-effort-model.json"));
+    assert.ok(
+      scheduled.some((event) => event.step === "effort_schedule" && /^due/.test(event.msg)),
+      "The watchdog records why it started a run",
+    );
+    assert.match(
+      fs.readFileSync(path.join(homeRun, "calibration.log"), "utf8"),
+      /stage=effort-fit/,
+    );
+  };
+  const scheduleRun = scheduleScenario();
+  await retainedFailure;
   assert.equal(
     fs.readFileSync(retained, "utf8"),
     "Existing private calibration must survive a failed refresh.",
@@ -316,7 +417,7 @@ try {
   for (
     const deadline = Date.now() + 5_000;
     ;
-    await new Promise((resolve) => setTimeout(resolve, 20))
+    await new Promise((resolve) => setTimeout(resolve, 5))
   ) {
     try {
       process.kill(originalPid, 0);
@@ -462,6 +563,7 @@ try {
   );
   assert.equal(workerPid(), beforeWatchdog, "Repository discovery must not restart the worker");
   // --- Weekly effort calibration: champion/challenger gate, toggles, events, schedule ---
+  // Repricing calls the live worker, so this one waits until the lifecycle flow is done.
   const promoted = await calibrationRun({
     name: "promote",
     preseed: true,
@@ -500,10 +602,7 @@ try {
     0o600,
   );
 
-  const bootstrap = await calibrationRun({
-    name: "bootstrap",
-    artifact: fixtureArtifact(0.82, false),
-  });
+  const bootstrap = await runs.bootstrap;
   assert.equal(bootstrap.failed, false, bootstrap.stderr);
   assert.match(fs.readFileSync(bootstrap.log, "utf8"), /^champion=\n/, "No champion argument");
   const bootstrapEvents = eventsOf(bootstrap.model);
@@ -514,11 +613,7 @@ try {
   assert.equal(bootstrapEvents.find((event) => event.step === "effort_reprice").msg, "disabled");
   assert.equal(stateOf(bootstrap.run).lastOutcome, "promoted");
 
-  const rejected = await calibrationRun({
-    name: "reject",
-    preseed: true,
-    artifact: fixtureArtifact(0.5),
-  });
+  const rejected = await runs.reject;
   assert.equal(rejected.failed, false, "A rejected challenger is not a crash");
   assert.equal(fs.readFileSync(rejected.model, "utf8"), "old-model");
   const rejectedDir = path.dirname(rejected.model);
@@ -535,7 +630,7 @@ try {
   assert.deepEqual(stepKinds(rejectedEvents, "effort_gate"), ["fail"]);
   assert.deepEqual(stepKinds(rejectedEvents, "effort_promote"), []);
 
-  const crashed = await calibrationRun({ name: "crash", preseed: true, exit: "3" });
+  const crashed = await runs.crash;
   assert.equal(crashed.failed, true);
   assert.match(
     crashed.stderr,
@@ -549,7 +644,7 @@ try {
   assert.equal(crashedState.lastCompletedAt, null);
   assert.deepEqual(stepKinds(eventsOf(crashed.model), "effort_fit"), ["start", "fail"]);
 
-  const shadow = await calibrationRun({ name: "shadow", preseed: true, steps: { promote: false } });
+  const shadow = await runs.shadow;
   assert.equal(shadow.failed, false, shadow.stderr);
   assert.equal(fs.readFileSync(shadow.model, "utf8"), "old-model");
   assert.ok(
@@ -558,11 +653,7 @@ try {
   assert.deepEqual(stepKinds(eventsOf(shadow.model), "effort_promote"), ["info"]);
   assert.equal(stateOf(shadow.run).lastOutcome, "rejected");
 
-  const reused = await calibrationRun({
-    name: "features-off",
-    steps: { features: false },
-    dataset: '{"reused":"dataset"}',
-  });
+  const reused = await runs.reused;
   assert.equal(reused.failed, false, reused.stderr);
   assert.match(fs.readFileSync(reused.log, "utf8"), /\{"reused":"dataset"\}/);
   assert.deepEqual(stepKinds(eventsOf(reused.model), "effort_features"), ["info"]);
@@ -572,69 +663,7 @@ try {
     "Disabled features step must not run",
   );
 
-  // Watchdog schedule: a scratch HOME makes the default-path guard hold without touching real data.
-  const home = path.join(scratch, "home");
-  const homeRun = path.join(home, ".cache/agent-console/github-triage");
-  const homeData = path.join(home, ".config/agent-console");
-  fs.mkdirSync(homeData, { recursive: true, mode: 0o700 });
-  fs.mkdirSync(homeRun, { recursive: true, mode: 0o700 });
-  fs.copyFileSync(configuration, path.join(homeData, "github-triage.json"));
-  const watchEnv = { ...env, HOME: home, AGENT_CONSOLE_TRIAGE_PYTHON: "/bin/false" };
-  for (const key of [
-    "AGENT_CONSOLE_TRIAGE_CONFIG",
-    "AGENT_CONSOLE_TRIAGE_RUN",
-    "AGENT_CONSOLE_TRIAGE_EFFORT_MODEL",
-    "AGENT_CONSOLE_TRIAGE_HISTORY",
-    "AGENT_CONSOLE_DATA",
-  ])
-    delete watchEnv[key];
-  const watchdog = () =>
-    new Promise<void>((resolve, reject) => {
-      execFile(
-        process.execPath,
-        [path.join(root, "scripts/github-triage.ts"), "watchdog"],
-        { cwd: root, env: watchEnv, timeout: 25_000 },
-        (error) => (error ? reject(error) : resolve()),
-      );
-    });
-  const attemptFile = path.join(homeRun, "calibration-attempt");
-  const stateFile = path.join(homeRun, "calibration-state.json");
-  const setState = (ageDays: number, outcome: string) =>
-    fs.writeFileSync(
-      stateFile,
-      JSON.stringify({
-        lastCompletedAt: Date.now() - ageDays * 86_400_000,
-        lastOutcome: outcome,
-        reasons: [],
-      }),
-    );
-  setState(1, "rejected");
-  await watchdog();
-  assert.equal(fs.existsSync(attemptFile), false, "A rejected run waits the full seven days");
-  setState(8, "promoted");
-  fs.writeFileSync(path.join(homeData, "effort-model.json"), JSON.stringify({ enabled: false }));
-  await watchdog();
-  assert.equal(fs.existsSync(attemptFile), false, "enabled=false must skip automatic starts");
-  fs.writeFileSync(path.join(homeData, "effort-model.json"), JSON.stringify({ enabled: true }));
-  await watchdog();
-  assert.equal(fs.existsSync(attemptFile), true, "A run older than seven days starts");
-  const failedState = () => {
-    try {
-      return JSON.parse(fs.readFileSync(stateFile, "utf8")).lastOutcome === "failed";
-    } catch {
-      return false;
-    }
-  };
-  for (const deadline = Date.now() + 30_000; !failedState(); ) {
-    assert.ok(Date.now() < deadline, "Background calibration must finish");
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-  const scheduled = eventsOf(path.join(homeData, "triage-effort-model.json"));
-  assert.ok(
-    scheduled.some((event) => event.step === "effort_schedule" && /^due/.test(event.msg)),
-    "The watchdog records why it started a run",
-  );
-  assert.match(fs.readFileSync(path.join(homeRun, "calibration.log"), "utf8"), /stage=effort-fit/);
+  await scheduleRun;
   console.log(
     "GitHub triage CLI: watchdog recovery, owner discovery, safe configuration, webhook registration, and weekly effort calibration passed.",
   );
