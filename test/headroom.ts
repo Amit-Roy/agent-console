@@ -50,6 +50,62 @@ process.env.AGENT_CONSOLE_HEADROOM = "0";
 process.env.AGENT_CONSOLE_HEADROOM_PORT = String(port);
 const { headroom, metricsIngest } = await import("../server/headroom.ts");
 try {
+  const originalFetch = globalThis.fetch;
+  const originalTimeout = AbortSignal.timeout;
+  const routingBeforeStats = headroom.state();
+  try {
+    let requests = 0;
+    AbortSignal.timeout = (milliseconds) => {
+      assert.ok(milliseconds >= 4000, "History budget permits the observed 3.51-second response");
+      return originalTimeout(milliseconds);
+    };
+    const measuredEmpty = { series: { daily: [] }, lifetime: { tokens_saved: 1234 } };
+    globalThis.fetch = (async (input, options) => {
+      requests++;
+      assert.equal(String(input), `http://127.0.0.1:${port}/stats-history`);
+      assert.ok(options?.signal);
+      await Promise.resolve();
+      assert.equal(options.signal.aborted, false, "History receives a live timeout signal");
+      return Response.json(measuredEmpty);
+    }) as typeof fetch;
+    const [first, second] = await Promise.all([headroom.stats(), headroom.stats()]);
+    assert.deepEqual(
+      first,
+      measuredEmpty,
+      "Disabled and unhealthy routing still exposes measured history",
+    );
+    assert.deepEqual(second, measuredEmpty);
+    assert.equal(requests, 1, "Concurrent dashboard ranges share one history request");
+    assert.deepEqual(
+      headroom.state(),
+      routingBeforeStats,
+      "History reads never change routing state",
+    );
+    assert.equal(fs.existsSync(process.env.CAPTURE), false, "History reads never start the proxy");
+    for (const invalid of [{}, { series: { daily: null } }]) {
+      globalThis.fetch = (async () => {
+        requests++;
+        return Response.json(invalid);
+      }) as typeof fetch;
+      assert.equal(await headroom.stats(), null, "Malformed history is unavailable");
+    }
+    assert.equal(requests, 3, "Completed history requests are not cached");
+    globalThis.fetch = (async () => {
+      throw new Error("Fixture unavailable");
+    }) as typeof fetch;
+    assert.equal(await headroom.stats(), null);
+    globalThis.fetch = (async () => new Response(null, { status: 503 })) as typeof fetch;
+    assert.equal(await headroom.stats(), null);
+    globalThis.fetch = (async () => Response.json(measuredEmpty)) as typeof fetch;
+    assert.deepEqual(
+      await headroom.stats(),
+      measuredEmpty,
+      "A failed collection can immediately retry",
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+    AbortSignal.timeout = originalTimeout;
+  }
   const external = net.createServer((socket) =>
     socket.end("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"),
   );
