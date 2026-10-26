@@ -97,7 +97,7 @@
         {
           "id": "deps",
           "label": "Dependency store",
-          "tech": "deps/<lockhash>/node_modules",
+          "tech": "deps/<lockhash>",
           "desc": "One npm ci per lockfile, hardlinked into releases",
           "icon": "archive",
           "color": "teal"
