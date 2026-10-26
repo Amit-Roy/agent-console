@@ -6,7 +6,7 @@ import { makeToken } from "../server/auth.ts";
 // Run against an isolated server with AGENT_CONSOLE_MOCK=1 and matching AGENT_CONSOLE_DATA.
 const base = process.env.BASE || "http://127.0.0.1:7074";
 const socket = new WebSocket(base.replace(/^http/, "ws") + "/ws", {
-  headers: { origin: base, cookie: `ac_session=${makeToken()}` },
+  headers: { origin: base, cookie: `__Host-ac_session=${makeToken()}` },
 });
 const inbox: any[] = [];
 const waiters = new Set<() => void>();
@@ -50,7 +50,15 @@ try {
       hasTouch: width === 390,
     });
     await context.grantPermissions(["notifications"], { origin: base });
-    await context.addCookies([{ name: "ac_session", value: makeToken(), url: base }]);
+    await context.addCookies([
+      {
+        name: "__Host-ac_session",
+        value: makeToken(),
+        domain: new URL(base).hostname,
+        path: "/",
+        secure: true,
+      },
+    ]);
     const page = await context.newPage();
     const errors: string[] = [];
     page.on("pageerror", (error) => errors.push(error.message));

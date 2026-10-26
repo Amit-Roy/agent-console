@@ -15,7 +15,7 @@ const check = (n: string, ok: boolean, x = "") => {
   console.log(`${ok ? "PASS" : "FAIL"}  ${n} ${x}`);
   if (!ok) failed++;
 };
-const cookie = `ac_session=${makeToken()}`;
+const cookie = `__Host-ac_session=${makeToken()}`;
 const { dir } = await (await fetch(`${BASE}/api/ideas`, { headers: { cookie } })).json();
 if (!String(dir).startsWith(os.tmpdir())) {
   console.log(`refusing: ideas repo ${dir} is not under ${os.tmpdir()}`);
@@ -33,7 +33,15 @@ for (const [name, viewport, scheme] of [
     colorScheme: scheme,
     hasTouch: name.startsWith("phone"),
   });
-  await ctx.addCookies([{ name: "ac_session", value: makeToken(), url: BASE }]);
+  await ctx.addCookies([
+    {
+      name: "__Host-ac_session",
+      value: makeToken(),
+      domain: new URL(BASE).hostname,
+      path: "/",
+      secure: true,
+    },
+  ]);
   const page = await ctx.newPage();
   const errors: string[] = [],
     external: string[] = [];
@@ -266,7 +274,15 @@ for (const [name, viewport, scheme] of [
     colorScheme: scheme,
     hasTouch: name === "phone",
   });
-  await ctx.addCookies([{ name: "ac_session", value: makeToken(), url: BASE }]);
+  await ctx.addCookies([
+    {
+      name: "__Host-ac_session",
+      value: makeToken(),
+      domain: new URL(BASE).hostname,
+      path: "/",
+      secure: true,
+    },
+  ]);
   const page = await ctx.newPage();
   const errors: string[] = [],
     requests: string[] = [],
@@ -540,7 +556,15 @@ for (const [name, viewport, scheme] of [
 }
 {
   const ctx = await browser.newContext({ viewport: { width: 390, height: 844 } });
-  await ctx.addCookies([{ name: "ac_session", value: makeToken(), url: BASE }]);
+  await ctx.addCookies([
+    {
+      name: "__Host-ac_session",
+      value: makeToken(),
+      domain: new URL(BASE).hostname,
+      path: "/",
+      secure: true,
+    },
+  ]);
   const page = await ctx.newPage();
   await stubBrain(page, [], true);
   await page.goto(`${BASE}/brain`);

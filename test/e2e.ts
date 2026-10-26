@@ -6,7 +6,7 @@ import { makeToken } from "../server/auth.ts";
 
 const BASE = process.env.BASE || "http://127.0.0.1:7070";
 const PROXY_SECRET = process.env.PROXY_SECRET; // raw secret whose sha256 is AGENT_CONSOLE_PROXY_SECRET_SHA256 on the server
-const cookie = `ac_session=${makeToken()}`;
+const cookie = `__Host-ac_session=${makeToken()}`;
 let failed = 0;
 const check = (name: string, ok: boolean, extra = "") => {
   console.log(`${ok ? "PASS" : "FAIL"}  ${name} ${extra}`);
@@ -44,7 +44,7 @@ const [ssoCodes, evil, apiBlocked, pageRedirect, badLogin, indexAuthed, vendorAu
     ),
     fetch(BASE + "/login", {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { Origin: BASE, "content-type": "application/json" },
       body: loginBody,
     }).then((r) => r.status),
     fetch(BASE + "/", { headers: { cookie } }).then((r) => r.status),

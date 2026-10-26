@@ -69,7 +69,15 @@ try {
     serviceWorkers: "block",
   });
   context.setDefaultTimeout(8000);
-  await context.addCookies([{ name: "ac_session", value: makeToken(), url: base }]);
+  await context.addCookies([
+    {
+      name: "__Host-ac_session",
+      value: makeToken(),
+      domain: new URL(base).hostname,
+      path: "/",
+      secure: true,
+    },
+  ]);
   const link = encodeURIComponent("https://www.instagram.com/reel/ABCDE12345/");
   const open = async () => {
     const page = await context.newPage();

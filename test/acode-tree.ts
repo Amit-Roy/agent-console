@@ -186,8 +186,10 @@ try {
   } finally {
     await rm(outside, { recursive: true, force: true });
   }
-  now += 100 * 365 * 24 * 60 * 60_000;
+  now += 11 * 60 * 60_000;
   assert.equal((await request("/tree", "GET", undefined, token)).status, 200);
+  now += 2 * 60 * 60_000;
+  assert.notEqual((await request("/tree", "GET", undefined, token)).status, 200);
   const fresh = await exchange();
   await rename(dir, dir + "-old");
   await mkdir(dir);

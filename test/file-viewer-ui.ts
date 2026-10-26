@@ -218,7 +218,15 @@ try {
     colorScheme: "dark",
     serviceWorkers: "block",
   });
-  await context.addCookies([{ name: "ac_session", value: makeToken(), url: base }]);
+  await context.addCookies([
+    {
+      name: "__Host-ac_session",
+      value: makeToken(),
+      domain: new URL(base).hostname,
+      path: "/",
+      secure: true,
+    },
+  ]);
   await context.addInitScript(() => {
     (window as any).__heldIdle = [];
     (window as any).__csp = [];
@@ -814,7 +822,15 @@ try {
     viewport: { width: 1280, height: 900 },
     serviceWorkers: "block",
   });
-  await emptyContext.addCookies([{ name: "ac_session", value: makeToken(), url: base }]);
+  await emptyContext.addCookies([
+    {
+      name: "__Host-ac_session",
+      value: makeToken(),
+      domain: new URL(base).hostname,
+      path: "/",
+      secure: true,
+    },
+  ]);
   await emptyContext.addInitScript(() => {
     window.requestIdleCallback = (() => 1) as any;
   });

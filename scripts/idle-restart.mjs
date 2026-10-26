@@ -15,6 +15,12 @@ import { fileURLToPath } from "node:url";
 import { WebSocket } from "ws";
 import { makeToken } from "../server/auth.ts";
 
+// Servers before #350 read ac_session and newer ones read __Host-ac_session; a deploy talks to both.
+const bothCookies = () => {
+  const token = makeToken();
+  return `ac_session=${token}; __Host-ac_session=${token}`;
+};
+
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const RUN = process.env.AGENT_CONSOLE_RUN || path.join(os.homedir(), ".cache", "agent-console");
 const APP =
@@ -33,7 +39,7 @@ const GO_WAIT_MS = 8000; // the old server gets 3 s before SIGKILL
 const HELLO_WAIT_MS = 10_000;
 const IDLE_MS = 1500; // a queued message may start the next turn right after one ends
 const MAX_ATTEMPTS = 3;
-const AUTH = { origin: `http://127.0.0.1:${PORT}`, cookie: `ac_session=${makeToken()}` };
+const AUTH = { origin: `http://127.0.0.1:${PORT}`, cookie: bothCookies() };
 const WS_URL = `ws://127.0.0.1:${PORT}/ws`;
 const began = performance.now();
 

@@ -107,7 +107,15 @@ try {
       isMobile: name === "phone",
       hasTouch: name === "phone",
     });
-    await context.addCookies([{ name: "ac_session", value: makeToken(), url: base }]);
+    await context.addCookies([
+      {
+        name: "__Host-ac_session",
+        value: makeToken(),
+        domain: new URL(base).hostname,
+        path: "/",
+        secure: true,
+      },
+    ]);
     const page = await context.newPage();
     const pageErrors: string[] = [];
     page.on("pageerror", (error) => pageErrors.push(error.message));
@@ -255,7 +263,15 @@ try {
     JSON.stringify({ oauthAccount: { emailAddress: "nefro.amit.roy@gmail.com" } }),
   );
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
-  await context.addCookies([{ name: "ac_session", value: makeToken(), url: base }]);
+  await context.addCookies([
+    {
+      name: "__Host-ac_session",
+      value: makeToken(),
+      domain: new URL(base).hostname,
+      path: "/",
+      secure: true,
+    },
+  ]);
   const page = await context.newPage();
   await page.goto(base);
   await page.waitForFunction(() => document.getElementById("ttl")?.textContent === "Legacy Sunny");
@@ -286,7 +302,15 @@ try {
     isMobile: true,
     hasTouch: true,
   });
-  await phone.addCookies([{ name: "ac_session", value: makeToken(), url: base }]);
+  await phone.addCookies([
+    {
+      name: "__Host-ac_session",
+      value: makeToken(),
+      domain: new URL(base).hostname,
+      path: "/",
+      secure: true,
+    },
+  ]);
   const phonePage = await phone.newPage();
   await phonePage.goto(base);
   await phonePage.waitForFunction(

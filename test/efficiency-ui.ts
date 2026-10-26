@@ -8,7 +8,7 @@ const base = process.env.BASE || "http://127.0.0.1:7074";
 const cookie = makeToken();
 const messages: any[] = [];
 const ws = new WebSocket(base.replace("http", "ws") + "/ws", {
-  headers: { origin: base, cookie: `ac_session=${cookie}` },
+  headers: { origin: base, cookie: `__Host-ac_session=${cookie}` },
 });
 ws.on("message", (data) => messages.push(JSON.parse(String(data))));
 const wait = async (predicate: (m: any) => boolean) => {
@@ -37,7 +37,15 @@ try {
     viewport: { width: 390, height: 844 },
     timezoneId: "America/Los_Angeles",
   });
-  await context.addCookies([{ name: "ac_session", value: cookie, url: base }]);
+  await context.addCookies([
+    {
+      name: "__Host-ac_session",
+      value: cookie,
+      domain: new URL(base).hostname,
+      path: "/",
+      secure: true,
+    },
+  ]);
   await context.addInitScript((id) => localStorage.setItem("ac_thread", id), original.id);
   const page = await context.newPage();
   const errors: string[] = [];

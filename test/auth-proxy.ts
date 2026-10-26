@@ -1,4 +1,4 @@
-// Coder SSO needs the proxy secret header when AGENT_CONSOLE_PROXY_SECRET_SHA256 is set; host-only otherwise.
+// Coder SSO needs the proxy secret header; with AGENT_CONSOLE_PROXY_SECRET_SHA256 unset it fails closed.
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -47,7 +47,7 @@ try {
   delete process.env.AGENT_CONSOLE_PROXY_SECRET_SHA256;
   const proofOff = await import("../server/auth.ts?proof=proofOff");
   assert.equal(proofOff.PROXY_PROOF_ON, false);
-  assert.equal(proofOff.authed({ headers: { host: HOST } }), true, "unset hash keeps host-only");
+  assert.equal(proofOff.authed({ headers: { host: HOST } }), false, "unset hash fails closed");
   console.log("auth-proxy ok");
 } finally {
   fs.rmSync(temporaryRoot, { recursive: true, force: true });

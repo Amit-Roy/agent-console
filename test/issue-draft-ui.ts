@@ -70,7 +70,15 @@ try {
     }
   }
   const ctx = await browser.newContext({ viewport: { width: 412, height: 915 } });
-  await ctx.addCookies([{ name: "ac_session", value: makeToken(), url: base }]);
+  await ctx.addCookies([
+    {
+      name: "__Host-ac_session",
+      value: makeToken(),
+      domain: new URL(base).hostname,
+      path: "/",
+      secure: true,
+    },
+  ]);
   const page = await ctx.newPage();
   await page.goto(base);
   await page.evaluate(async (cwd) => {

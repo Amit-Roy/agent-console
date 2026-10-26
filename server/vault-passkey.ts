@@ -92,7 +92,7 @@ const cookies = (req: express.Request) =>
 const sessionOf = (req: express.Request) =>
   crypto
     .createHash("sha256")
-    .update(cookies(req).ac_session || "")
+    .update(cookies(req)["__Host-ac_session"] || "")
     .digest("hex");
 const originsOf = (ctx: Context, req: express.Request) => [
   ...new Set([String(req.headers.origin || ""), ...ctx.deps.origins()].filter(Boolean)),

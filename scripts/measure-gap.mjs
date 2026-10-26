@@ -9,6 +9,12 @@ import { setTimeout as delay } from "node:timers/promises";
 import { WebSocket } from "ws";
 import { makeToken } from "../server/auth.ts";
 
+// Servers before #350 read ac_session and newer ones read __Host-ac_session; a deploy talks to both.
+const bothCookies = () => {
+  const token = makeToken();
+  return `ac_session=${token}; __Host-ac_session=${token}`;
+};
+
 const POLL_MS = 50;
 const HTTP_TIMEOUT_MS = 2000;
 
@@ -57,7 +63,7 @@ async function pollHttp() {
 function connectOnce(onHello) {
   return new Promise((resolve) => {
     const socket = new WebSocket(`ws://127.0.0.1:${port}/ws`, {
-      headers: { origin: `http://127.0.0.1:${port}`, cookie: `ac_session=${makeToken()}` },
+      headers: { origin: `http://127.0.0.1:${port}`, cookie: bothCookies() },
     });
     const timer = setTimeout(() => socket.terminate(), HTTP_TIMEOUT_MS * 4);
     socket.on("error", () => {});

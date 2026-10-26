@@ -80,7 +80,7 @@ async function eventually(check: () => boolean | Promise<boolean>, what: string,
 function helloBuild(): Promise<string> {
   return new Promise((resolve) => {
     const socket = new WebSocket(`ws://127.0.0.1:${port}/ws`, {
-      headers: { origin: `http://127.0.0.1:${port}`, cookie: `ac_session=${makeToken()}` },
+      headers: { origin: `http://127.0.0.1:${port}`, cookie: `__Host-ac_session=${makeToken()}` },
     });
     const timer = setTimeout(() => socket.terminate(), 1500);
     socket.on("error", () => {});

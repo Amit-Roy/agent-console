@@ -459,7 +459,7 @@ const server: ChildProcess = spawn(process.execPath, ["server/index.ts"], {
   stdio: "ignore",
 });
 const base = `http://127.0.0.1:${port}`;
-const cookie = `ac_session=${makeToken()}`;
+const cookie = `__Host-ac_session=${makeToken()}`;
 const post = (origin: string, body: unknown) => postTo("/api/share/instagram", origin, body);
 const postTo = (route: string, origin: string, body: unknown) =>
   fetch(`${base}${route}`, {

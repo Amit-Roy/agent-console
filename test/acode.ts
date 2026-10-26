@@ -250,9 +250,12 @@ try {
   const expiring = await ticket();
   now += 60_001;
   assert.equal((await request("/exchange", "POST", { ticket: expiring.body.ticket })).status, 401);
-  const longLived = await grant();
-  now += 100 * 365 * 24 * 60 * 60_000;
-  assert.equal((await request("/file", "GET", undefined, longLived.auth)).status, 200);
+  const withinTtl = await grant();
+  now += 11 * 60 * 60_000;
+  assert.equal((await request("/file", "GET", undefined, withinTtl.auth)).status, 200);
+  const pastTtl = await grant();
+  now += 12 * 60 * 60_000 + 1;
+  assert.equal((await request("/file", "GET", undefined, pastTtl.auth)).status, 401);
   const swapped = await grant();
   await rename(path.join(dir, "note.txt"), path.join(dir, "old.txt"));
   await symlink(path.join(dir, "old.txt"), path.join(dir, "note.txt"));

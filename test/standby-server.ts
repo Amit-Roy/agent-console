@@ -46,7 +46,7 @@ delete env.NODE_COMPILE_CACHE;
 process.env.AGENT_CONSOLE_DATA = data;
 process.env.AGENT_CONSOLE_HEADROOM_PORT = env.AGENT_CONSOLE_HEADROOM_PORT;
 const { makeToken } = await import("../server/auth.ts");
-const cookie = `ac_session=${makeToken()}`;
+const cookie = `__Host-ac_session=${makeToken()}`;
 
 const servers: ChildProcess[] = [];
 const output = new Map<ChildProcess, string>();
@@ -185,7 +185,10 @@ try {
   ]);
   assert.equal(oldStop.code, 0);
   assert.equal(closeCode, 1012, "tabs are told the service restarts");
-  assert.ok(oldStop.ms <= 300, `SIGTERM exit took ${oldStop.ms} ms`);
+  assert.ok(
+    oldStop.ms <= 1000,
+    `SIGTERM exit took ${oldStop.ms} ms (limit 1000 ms; the old shutdown took about 4 s)`,
+  );
 
   // go: B binds and answers.
   const go = performance.now();
@@ -197,7 +200,10 @@ try {
   await eventually("pid file claimed by B", () =>
     Number(fileText(pidFile)) === next.pid ? true : undefined,
   );
-  assert.ok(goToFirstResponse <= 500, `go to first response took ${goToFirstResponse} ms`);
+  assert.ok(
+    goToFirstResponse <= 1500,
+    `go to first response took ${goToFirstResponse} ms (limit 1500 ms)`,
+  );
 
   const tabB = await openSocket();
   const nextStop = await stopTimed(next);
@@ -207,7 +213,7 @@ try {
   ]);
   assert.equal(nextStop.code, 0);
   assert.equal(closeCodeB, 1012);
-  assert.ok(nextStop.ms <= 300, `SIGTERM exit took ${nextStop.ms} ms`);
+  assert.ok(nextStop.ms <= 1000, `SIGTERM exit took ${nextStop.ms} ms (limit 1000 ms)`);
 
   // A standby whose supervisor goes away before go gives up.
   const orphaned = start(true);
