@@ -10,7 +10,8 @@ const pub = path.join(root, "public");
 const outDir = path.resolve(process.argv[2] || path.join(root, ".bundle", "public"));
 const NOT_BUNDLED = new Set(["/sw.js", "/arch-route-worker.js", "/vendor/chart.umd.min.js"]);
 const isExternal = (p) => NOT_BUNDLED.has(p) || p.startsWith("/vendor/libavoid/");
-const isModule = (file) => /^\s*(import|export)\b/m.test(fs.readFileSync(path.join(pub, file), "utf8"));
+const isModule = (file) =>
+  /^\s*(import|export)\b/m.test(fs.readFileSync(path.join(pub, file), "utf8"));
 
 const entries = fs
   .readdirSync(pub)
@@ -48,5 +49,10 @@ const result = await build({
 const outputs = Object.keys(result.metafile.outputs).filter((f) => f.endsWith(".js"));
 const chunks = outputs.filter((f) => f.includes("/chunks/")).length;
 console.log(
-  JSON.stringify({ outDir, entries: entries.length, chunks, esbuildMs: Math.round(performance.now() - started) }),
+  JSON.stringify({
+    outDir,
+    entries: entries.length,
+    chunks,
+    esbuildMs: Math.round(performance.now() - started),
+  }),
 );
