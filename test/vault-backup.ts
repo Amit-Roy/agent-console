@@ -14,7 +14,8 @@ const { scheduleBackup, retryBackup, backupStatus } = await import("../server/va
 const runs = () =>
   fs.existsSync(counter) ? fs.readFileSync(counter, "utf8").split("\n").length - 1 : 0;
 const until = async (check: () => boolean) => {
-  for (let tick = 0; tick < 100 && !check(); tick++) await new Promise((resolve) => setTimeout(resolve, 50));
+  for (let tick = 0; tick < 100 && !check(); tick++)
+    await new Promise((resolve) => setTimeout(resolve, 50));
   assert.ok(check(), "condition reached");
 };
 
