@@ -59,6 +59,34 @@
         "transcript-redact verify --scope all --json"
       ],
       "tags": ["credentials", "redact", "transcripts", "sessions", "cleanup"]
+    },
+    {
+      "name": "app-ideas",
+      "path": "bin/app-ideas",
+      "description": "Fetch the app ideas index or one idea with its full markdown. JSON output inside Agent Console sessions.",
+      "usage": ["app-ideas list", "app-ideas read <slug>"],
+      "tags": ["app", "ideas", "fetch", "features", "read", "brainstorm"]
+    },
+    {
+      "name": "scheduled-tasks",
+      "path": "bin/scheduled-tasks",
+      "description": "Fetch scheduled task config, runs, saved reports and paginated transcripts; update one task configuration. JSON output inside Agent Console sessions.",
+      "usage": [
+        "scheduled-tasks list | get|runs <id-or-title>",
+        "scheduled-tasks report|transcript <id-or-title> [run-id]",
+        "scheduled-tasks update <id-or-title> --json '{\"enabled\":false}'"
+      ],
+      "tags": [
+        "scheduled",
+        "tasks",
+        "schedule",
+        "reports",
+        "transcripts",
+        "config",
+        "edit",
+        "fetch",
+        "automation"
+      ]
     }
   ],
   "internal": []

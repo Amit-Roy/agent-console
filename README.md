@@ -40,6 +40,22 @@ Open the URL, sign in, create a thread. You're running.
 **Scheduled tasks.** Sidebar → **Scheduled**. Saved prompts that run on a timer: Manual, Hourly, Daily, Weekdays, or Weekly. Pi is default; Claude and Codex work too. Each run is an ordinary thread. Reports commit to `~/repos/agent-outputs/<task>/<date>-<time>.md`. A run never overlaps the previous one. After downtime, one catch-up run covers the latest missed window within 7 days.
 **App ideas.** Sidebar → ⋯ → **App ideas**. A list of app ideas kept in a private git repo (`~/repos/app-ideas`, override with `AGENT_CONSOLE_IDEAS`) as `index.md` plus one `<app>.md` of features each. Adding an idea commits both files, and pushes when the branch tracks a remote. See [docs/app-ideas.md](docs/app-ideas.md).
 
+**Agent CLIs.** Discover both commands with MCP `cli_search({terms:["ideas","scheduled","reports"]})`. Run them inside an Agent Console agent session; they use its authenticated tool URL/token and never read browser credentials. Every successful command prints JSON, and errors exit nonzero.
+
+```sh
+bin/app-ideas list
+bin/app-ideas read habit-garden
+bin/scheduled-tasks list
+bin/scheduled-tasks get "AI news digest"
+bin/scheduled-tasks runs "AI news digest"
+bin/scheduled-tasks report "AI news digest" [run-id]
+bin/scheduled-tasks transcript "AI news digest" [run-id] --start 1 --limit 30
+bin/scheduled-tasks update "AI news digest" --json '{"time":"10:00","tz":"UTC"}'
+bin/scheduled-tasks update <task-id> --file patch.json
+```
+
+Task selectors accept an id or an exact case-insensitive title; duplicate titles require an id. Without a run id, `report` reads the latest saved report and `transcript` reads the latest run with a thread. Reports use their saved git commit when available. Transcripts return `next` for the next `--start`, with at most 100 events per request. `update` accepts a partial config (`title`, `prompt`, `provider`, `model`, `effort`, `mode`, `cwd`, `repeat`, `time`, `day`, `tz`, `enabled`, `saveOutput`, `limitMin`); unrelated fields and run history are preserved. Use `--file -` for JSON from stdin. Unattended Auto credentials may fetch data but cannot update tasks.
+
 **Thread actions (⋯ menu).** Rename, Fork, Download (Markdown), Share, Delete. Fork continues from this session: Claude forks its real session, Pi copies its directory, Codex uses the transcript as context. Refused while a turn is running.
 
 **Notifications.** Sidebar → **Notifications** → Enable. Push alerts when a thread finishes, fails, or needs input — even when the app is closed. Requires HTTPS or localhost. On iOS, use the installed Home Screen app.

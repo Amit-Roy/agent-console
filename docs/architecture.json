@@ -1,129 +1,88 @@
 {
-  "title": "Token telemetry transcript path",
-  "subtitle": "Incremental async reads replace whole-log sync scans",
+  "title": "Idea and scheduled-task CLI access",
+  "subtitle": "Authenticated command discovery and server-owned state",
   "items": [
     {
-      "group": "Agent Console data",
-      "sub": "~/.config/agent-console",
-      "border": "solid",
-      "icon": "database",
+      "group": "Agent workspace",
+      "icon": "terminal",
       "items": [
         {
-          "id": "logs",
-          "label": "Thread JSONL logs",
-          "tech": "logs/<thread>.jsonl",
-          "desc": "Transcripts up to 59 MB",
-          "icon": "file-json"
+          "id": "search",
+          "label": "CLI discovery",
+          "tech": "MCP cli_search",
+          "desc": "Searches tool descriptions and tags",
+          "icon": "search"
         },
         {
-          "id": "turns",
-          "label": "turns.jsonl",
-          "tech": "Turn ledger",
-          "desc": "Per-turn usage rows",
+          "id": "manifest",
+          "label": "CLI manifest",
+          "tech": "tools.json",
+          "desc": "Adds app-ideas and scheduled-tasks commands",
           "icon": "list"
         },
         {
-          "id": "threads",
-          "label": "threads.json",
-          "tech": "Thread registry",
-          "desc": "Provider, model, PR links",
-          "icon": "folder-kanban"
+          "id": "commands",
+          "label": "Ideas and tasks CLIs",
+          "tech": "app-ideas / scheduled-tasks",
+          "desc": "Read ideas, reports and transcripts; update task config",
+          "icon": "terminal"
         }
       ]
     },
     {
-      "group": "Node server",
-      "sub": "server/",
-      "border": "dashed",
+      "group": "Console server",
       "icon": "server",
+      "border": "dashed",
       "items": [
         {
-          "id": "svc",
-          "label": "Telemetry service",
-          "tech": "scanLog / debounced syncItem",
-          "desc": "Reads appended bytes only via async fs; async 128 KB chunk rescans",
-          "icon": "activity"
+          "id": "gateway",
+          "label": "Tool gateway",
+          "tech": "POST /api/agent-tools/:name",
+          "desc": "Authorizes CLI reads and task config updates",
+          "icon": "shield-check"
         },
         {
-          "id": "cache",
-          "label": "Offset cache",
-          "tech": "Per-thread tail state",
-          "desc": "Byte offset, unterminated tail, 64-byte check, parsed results; idle evicted after 1 h",
-          "icon": "hard-drive"
+          "id": "state",
+          "label": "Ideas and schedules",
+          "tech": "Ideas / Schedules",
+          "desc": "Server owns idea files and task state",
+          "icon": "database"
         },
         {
-          "id": "acct",
-          "label": "Accounting replayer",
-          "tech": "server/accounting-log.ts",
-          "desc": "Resumable accountingReplayer; accountingSamples is a wrapper",
-          "icon": "calculator"
-        },
-        {
-          "id": "raised",
-          "label": "Raised replayer",
-          "tech": "server/session-prs.ts",
-          "desc": "Resumable raisedReplayer; raisedItems is a wrapper",
-          "icon": "git-pull-request"
-        }
-      ]
-    },
-    {
-      "group": "GitHub",
-      "sub": "api.github.com",
-      "border": "solid",
-      "color": "slate",
-      "icon": "d2:dev/github",
-      "items": [
-        {
-          "id": "comments",
-          "label": "Telemetry comments",
-          "tech": "Issue and PR comments",
-          "desc": "Rendered usage summary",
-          "icon": "message-square"
+          "id": "history",
+          "label": "Run history",
+          "tech": "Reports / session transcripts",
+          "desc": "Stored task outputs and conversation events",
+          "icon": "file-text"
         }
       ]
     }
   ],
   "edges": [
     {
-      "from": "logs",
-      "to": "svc",
-      "label": "transcript bytes"
+      "from": "manifest",
+      "to": "search",
+      "label": "BM25 index"
     },
     {
-      "from": "turns",
-      "to": "svc",
-      "label": "turn rows"
+      "from": "gateway",
+      "to": "state",
+      "label": "CLI reads and updates"
     },
     {
-      "from": "threads",
-      "to": "svc",
-      "label": "parsed on stat change"
+      "from": "state",
+      "to": "history",
+      "label": "Task run references"
     },
     {
-      "from": "svc",
-      "to": "cache",
-      "label": "offset and tail"
+      "from": "search",
+      "to": "commands",
+      "label": "Path and usage"
     },
     {
-      "from": "cache",
-      "to": "acct",
-      "label": "resume"
-    },
-    {
-      "from": "cache",
-      "to": "raised",
-      "label": "resume"
-    },
-    {
-      "from": "acct",
-      "to": "comments",
-      "label": "usage samples"
-    },
-    {
-      "from": "raised",
-      "to": "comments",
-      "label": "raised items"
+      "from": "commands",
+      "to": "gateway",
+      "label": "Authenticated HTTP JSON"
     }
   ]
 }

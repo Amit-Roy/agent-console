@@ -40,7 +40,17 @@ const gate = (token: string, header: string | undefined, tool: string) =>
 assert.equal(gate(derived, undefined, "session_search").status, 401);
 assert.equal(gate(derived, "auto-2", "session_search").status, 401);
 assert.equal(gate(derived, "auto-1", "session_search").status, 200);
-for (const tool of ["schedule_create", "schedule_run_now", "pi_research"])
+for (const tool of [
+  "idea_list",
+  "idea_read",
+  "schedule_config_list",
+  "schedule_get",
+  "schedule_runs",
+  "schedule_report",
+  "schedule_transcript",
+])
+  assert.equal(gate(derived, "auto-1", tool).status, 200, tool);
+for (const tool of ["schedule_create", "schedule_run_now", "schedule_config_update", "pi_research"])
   assert.equal(gate(derived, "auto-1", tool).status, 400, tool);
 // a derived token for a thread the Console does not know as an issue run is still restricted
 const other = derivedToolToken(master, "unknown");
