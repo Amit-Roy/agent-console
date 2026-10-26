@@ -205,7 +205,7 @@
           "tech": "test/weights.json, scripts/test-weights.mjs",
           "desc": "Median seconds per file from recent CI runs",
           "icon": "scale",
-          "color": "amber"
+          "color": "orange"
         },
         {
           "id": "planner",
@@ -213,7 +213,7 @@
           "tech": "test/shard-plan.mjs",
           "desc": "Heaviest file goes to the least-loaded shard",
           "icon": "split",
-          "color": "amber"
+          "color": "orange"
         },
         {
           "id": "suites",
@@ -221,7 +221,7 @@
           "tech": "drafts-ui, idle-compaction-ui, attachment-drafts-ui",
           "desc": "2 lanes each; attachment capped by AC_ATTACH_LANES",
           "icon": "app-window",
-          "color": "amber"
+          "color": "orange"
         },
         {
           "id": "shards",
@@ -229,7 +229,7 @@
           "tech": "ubuntu-latest, 4 vCPU, 8 files at once",
           "desc": "About 75 s summed per shard",
           "icon": "cpu",
-          "color": "amber"
+          "color": "orange"
         },
         {
           "id": "budget",
@@ -237,7 +237,7 @@
           "tech": "test/shard-budget.mjs, SHARD_COUNT",
           "desc": "15 s per file, 25 s whole run",
           "icon": "gauge",
-          "color": "amber"
+          "color": "orange"
         }
       ]
     }
