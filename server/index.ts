@@ -522,7 +522,14 @@ app.use((_req, res, next) => {
 app.get("/login", (req, res) =>
   authed(req) ? res.redirect("/") : res.sendFile(path.join(ROOT, "public", "login.html")),
 );
-app.post("/login", express.json({ limit: "1kb" }), (req, res) => {
+// ---- attachments: upload (raw bytes), download, discard. State-changing, so cookie auth alone is not enough: same-origin only.
+const sameOrigin: express.RequestHandler = (req, res, next) => {
+  try {
+    if (new URL(String(req.headers.origin)).host === req.headers.host) return next();
+  } catch {}
+  res.status(403).json({ error: "Cross-site request refused." });
+};
+app.post("/login", sameOrigin, express.json({ limit: "1kb" }), (req, res) => {
   if (limited()) return void res.status(429).json({ error: "Too many attempts. Try again later." });
   if (!passwordOk(req.body?.password)) {
     recordFail();
@@ -714,13 +721,6 @@ app.get("/vendor/purify.js", (_req, res) =>
   res.sendFile(path.join(ROOT, "node_modules/dompurify/dist/purify.es.mjs")),
 );
 
-// ---- attachments: upload (raw bytes), download, discard. State-changing, so cookie auth alone is not enough: same-origin only.
-const sameOrigin: express.RequestHandler = (req, res, next) => {
-  try {
-    if (new URL(String(req.headers.origin)).host === req.headers.host) return next();
-  } catch {}
-  res.status(403).json({ error: "Cross-site request refused." });
-};
 const benchmarks = createBenchmarks({
   dataDir: DATA_DIR,
   keyFile: path.join(DATA_DIR, "artificial-analysis.key"),

@@ -44,7 +44,7 @@ const [ssoCodes, evil, apiBlocked, pageRedirect, badLogin, indexAuthed, vendorAu
     ),
     fetch(BASE + "/login", {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { Origin: BASE, "content-type": "application/json" },
       body: loginBody,
     }).then((r) => r.status),
     fetch(BASE + "/", { headers: { cookie } }).then((r) => r.status),

@@ -92,7 +92,7 @@ try {
   );
   const login = await fetch(`${base}/login`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { Origin: base, "content-type": "application/json" },
     body: JSON.stringify({ password }),
   });
   assert.equal(login.status, 200);
