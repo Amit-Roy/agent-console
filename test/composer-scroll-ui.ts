@@ -107,7 +107,7 @@ try {
     });
   });
   browser = await chromium.launch();
-  for (const mobile of [true, false]) {
+  const runViewport = async (mobile: boolean) => {
     const label = mobile ? "mobile" : "desktop";
     const context = await browser.newContext({
       viewport: mobile ? { width: 390, height: 844 } : { width: 1280, height: 900 },
@@ -257,8 +257,13 @@ try {
       `PASS ${label}: wrapped typing, newlines, keyboard resize, middle editing, exact draft${mobile ? ", touch Enter" : ""}`,
     );
     await context.close();
-  }
-  await checkEarlierWaitsForTouchend(browser, longId);
+  };
+  // Each lane has its own context and thread, so the three scenarios run concurrently.
+  await Promise.all([
+    runViewport(true),
+    runViewport(false),
+    checkEarlierWaitsForTouchend(browser, longId),
+  ]);
 } finally {
   await browser?.close();
   if (server.exitCode === null) {
