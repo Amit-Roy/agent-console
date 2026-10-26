@@ -149,7 +149,8 @@ async function probeServer(dest, port) {
   if (!exists(path.join(dest, "public", "vendor", "marked.js"))) return;
   const login = await fetch(`${base}/login`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    // POST /login needs a same-origin Origin header since #350.
+    headers: { "content-type": "application/json", origin: base },
     body: JSON.stringify({ password: SMOKE_PASSWORD }),
   });
   const cookie = (login.headers.get("set-cookie") ?? "").split(";")[0];
