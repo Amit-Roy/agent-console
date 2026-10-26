@@ -145,14 +145,29 @@ try {
   threads.shutdown();
   mock.timers.tick(1000);
   assert.equal(calls, 4);
-  threads = new Threads(() => {});
-  assert.ok(threads.get(future.id)!.idleCompactionDueAt, "future deadline restored at startup");
+  const restoredEvents: any[] = [];
+  threads = new Threads((event) => restoredEvents.push(event));
+  assert.equal(
+    threads.get(future.id)!.idleCompactionDueAt,
+    undefined,
+    "the constructor leaves deadlines to restoreIdleCompaction",
+  );
+  threads.restoreIdleCompaction();
+  assert.ok(threads.get(future.id)!.idleCompactionDueAt, "future deadline restored after listen");
+  assert.ok(
+    restoredEvents.some((event) => event.t === "thread" && event.thread.id === future.id),
+    "a changed deadline is announced to open tabs",
+  );
+  const announced = restoredEvents.length;
+  threads.restoreIdleCompaction();
+  assert.equal(restoredEvents.length, announced, "an unchanged deadline emits nothing");
   mock.timers.tick(69000);
   assert.equal(calls, 5);
   const overdue = ready();
   threads.shutdown();
   mock.timers.tick(100000);
   threads = new Threads(() => {});
+  threads.restoreIdleCompaction();
   assert.equal(
     threads.get(overdue.id)!.idleCompactionDueAt,
     undefined,

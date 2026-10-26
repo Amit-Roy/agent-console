@@ -12,6 +12,7 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
+import type { Duplex } from "node:stream";
 import { fileURLToPath } from "node:url";
 import express from "express";
 import { type WebSocket, WebSocketServer } from "ws";
@@ -141,6 +142,37 @@ const boot = createBootTiming({
   },
 });
 boot.mark("modules");
+// Runtime folder shared with bin/agent-console: pid file, logs and the restart handoff files.
+const RUN_DIR = process.env.AGENT_CONSOLE_RUN || path.join(os.homedir(), ".cache", "agent-console");
+// Set by bin/agent-console for the server it starts. Removed from our env so agents and the scratch servers their tests start
+// (which inherit everything else) can never overwrite the live server's pid file.
+const PID_FILE = process.env.AGENT_CONSOLE_PID_FILE;
+delete process.env.AGENT_CONSOLE_PID_FILE;
+// Release handoff (#348): a standby server loads its modules while the old one still serves, then waits for `go` on stdin.
+// Nothing before `go` writes state or binds the port. Removed from our env so scratch servers agents start never wait.
+const STANDBY = process.env.AGENT_CONSOLE_STANDBY === "1";
+delete process.env.AGENT_CONSOLE_STANDBY;
+if (STANDBY) {
+  await waitForGo(RUN_DIR);
+  boot.mark("standby-go");
+}
+
+// Bind first and hold requests and upgrades until the state below exists: clients queue instead of being refused.
+let serving = false;
+let markReady!: () => void;
+const ready = new Promise<void>((resolve) => {
+  markReady = resolve;
+});
+const server = http.createServer((req, res) => {
+  if (serving) return app(req, res);
+  void ready.then(() => app(req, res));
+});
+server.on("upgrade", (req, socket, head) => {
+  if (serving) return upgrade(req, socket, head);
+  void ready.then(() => upgrade(req, socket, head));
+});
+await new Promise<void>((resolve) => server.listen(PORT, HOST, resolve));
+boot.mark("bound");
 
 const clients = new Set<WebSocket>();
 const subscriptions = new WeakMap<WebSocket, string>();
@@ -168,7 +200,9 @@ const threads = new Threads(broadcast, (notice) => {
     ?.notify(notice)
     .catch(() => console.warn("Browser notification delivery failed."));
 });
+boot.mark("threads");
 const schedules = new Schedules(threads, broadcast);
+boot.mark("schedules");
 const ideas = new Ideas();
 const brainGraph = new BrainGraph();
 const sessionSearch = new SessionSearch(DATA_DIR);
@@ -177,6 +211,7 @@ const transcriptRedaction = new TranscriptRedaction({
   threads,
   search: sessionSearch,
 });
+boot.mark("search");
 // Agent tools (Pi extension providers/console-tools.mjs) call back over loopback with a per-process secret, never the session cookie
 const TOOL_TOKEN = crypto.randomBytes(24).toString("base64url");
 process.env.AGENT_CONSOLE_TOOL_URL = `http://${HOST}:${PORT}/api/agent-tools`;
@@ -196,11 +231,13 @@ try {
   console.warn("Headroom profile storage is unavailable.");
 }
 headroom.attachProfile(headroomProfile, PORT);
+boot.mark("sqlite-stores");
 setInterval(() => threads.sweep(), 60_000).unref();
 startToolPriority(); // tool commands below agents and this server: busy tests never delay a turn
 // Every automation stage writes here; the dashboard reads it. A previous process's unfinished runs are closed as abandoned.
 const automationLog = createEventLog({ file: path.join(DATA_DIR, "automation-events.jsonl") });
 automationLog.recoverOpenRuns();
+boot.mark("event-log");
 // Nightly brain consolidation: the server gathers its signal file before the run and verifies what the agent changed after it
 const dream = createDream({
   brainRoot: path.dirname(path.dirname(BRAIN_BIN)),
@@ -219,7 +256,7 @@ try {
 } catch (err: any) {
   console.warn(`The dream task could not be created: ${err?.message || err}`);
 }
-boot.mark("threads-and-log");
+boot.mark("dream");
 workspaceMonitor = createWorkspaceMonitor({
   dataDir: DATA_DIR,
   port: PORT,
@@ -836,12 +873,6 @@ app.delete(
     }
   },
 );
-// Restart button: the same detached watcher as `bin/agent-console restart-when-idle` (waits for running turns, then replaces this process).
-const RUN_DIR = process.env.AGENT_CONSOLE_RUN || path.join(os.homedir(), ".cache", "agent-console");
-// Set by bin/agent-console for the server it starts. Removed from our env so agents and the scratch servers their tests start
-// (which inherit everything else) can never overwrite the live server's pid file.
-const PID_FILE = process.env.AGENT_CONSOLE_PID_FILE;
-delete process.env.AGENT_CONSOLE_PID_FILE;
 delete process.env.NODE_COMPILE_CACHE; // the launcher caches compiled server code; agents this server spawns must not share it
 // In-app Claude sign-in: start returns Anthropic's link, finish takes the code its page shows.
 app.post(
@@ -863,14 +894,17 @@ app.post(
     }
   },
 );
+// Restart button: runs `bin/agent-console restart-when-idle` (waits for running turns, then replaces this process);
+// its idle-restart lock keeps two restarts from overlapping.
 app.post("/restart", sameOrigin, (_req, res) => {
-  fs.mkdirSync(RUN_DIR, { recursive: true });
-  const out = fs.openSync(path.join(RUN_DIR, "idle-restart.log"), "a");
-  spawn(process.execPath, [path.join(ROOT, "scripts", "idle-restart.mjs")], {
+  spawn(path.join(ROOT, "bin", "agent-console"), ["restart-when-idle"], {
     cwd: ROOT,
     detached: true,
-    stdio: ["ignore", out, out],
-  }).unref();
+    stdio: "ignore",
+    env: { ...process.env, AGENT_CONSOLE_RUN: RUN_DIR },
+  })
+    .on("error", () => console.warn("The restart could not be scheduled."))
+    .unref();
   res.json({ ok: true });
 });
 const MAX_SHARE_BYTES = 100 << 20;
@@ -1460,7 +1494,6 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(ROOT, "public"), { index: "index.html", extensions: ["html"] }));
 
 boot.mark("routes");
-const server = http.createServer(app);
 const wss = new WebSocketServer({
   noServer: true,
   maxPayload: 1 << 20,
@@ -1475,7 +1508,7 @@ const wss = new WebSocketServer({
   },
 });
 
-server.on("upgrade", (req, socket, head) => {
+function upgrade(req: http.IncomingMessage, socket: Duplex, head: Buffer) {
   const okAuth = authed(req);
   // block cross-site websocket hijacking: Origin host must match the Host header
   let okOrigin = false;
@@ -1487,7 +1520,7 @@ server.on("upgrade", (req, socket, head) => {
     return void socket.destroy();
   }
   wss.handleUpgrade(req, socket, head, (ws) => wss.emit("connection", ws));
-});
+}
 
 function safeCwd(p: unknown): string {
   if (typeof p !== "string") throw new Error("Invalid directory.");
@@ -1777,12 +1810,15 @@ if (acodeSettings) {
   );
 }
 
-server.listen(PORT, HOST, () => {
+// Runs once the state and routes exist; the port is already bound, so this is the old listen callback.
+function startServing() {
   const defaultDataDir = path.join(os.homedir(), ".config", "agent-console");
   repairUsageHistory({
     pidFile: PID_FILE || (DATA_DIR === defaultDataDir ? path.join(RUN_DIR, "pid") : undefined),
   });
   if (PID_FILE) fs.writeFileSync(PID_FILE, String(process.pid)); // only the process that holds the port may claim it
+  serving = true;
+  markReady(); // queued requests and upgrades run once this synchronous block yields
   startModelRateBroker(PORT); // same rule: a scratch server that lost the port must not repoint the live broker
   startHostSampler(); // 5 s host samples for the Host page's history charts
   workspaceMonitor?.start(); // reads those samples; alerts and escalation (docs/monitoring.md)
@@ -1802,10 +1838,16 @@ server.listen(PORT, HOST, () => {
   // Boot work nothing waits on runs once the first page has had its turn on the event loop.
   setTimeout(() => {
     // Never wait for the proxy: a cold Headroom launch takes up to 10 s, and turns go direct until it is healthy.
-    void headroom.start().catch(() => console.warn("Headroom proxy failed to start."));
+    // A proxy the previous server left exiting must be gone first, or it would look like an external one.
+    void headroom
+      .reapOrphan(ORPHAN_FILE)
+      .then(() => headroom.start())
+      .catch(() => console.warn("Headroom proxy failed to start."));
     boot.mark("headroom-launched");
     threads.restoreTelemetry();
     boot.mark("telemetry-restored");
+    threads.restoreIdleCompaction();
+    boot.mark("idle-compaction-restored");
     threads.warmAccounting();
     boot.mark("accounting-warm");
     void sessionSearch
@@ -1813,7 +1855,7 @@ server.listen(PORT, HOST, () => {
       .catch(() => console.warn("Session search index will retry on the next query."));
     boot.flush("deferred");
   }, 1000).unref();
-});
+}
 
 // A hash of the code this process loaded. Open tabs compare it on reconnect and reload themselves when the server was replaced
 // (`bin/agent-console restart-when-idle` -> scripts/idle-restart.mjs).
@@ -1851,30 +1893,89 @@ function buildId() {
 }
 const BUILD = buildId();
 
-let shuttingDown = false;
-for (const sig of ["SIGINT", "SIGTERM"] as const) {
-  process.on(sig, async () => {
-    if (shuttingDown) return;
-    shuttingDown = true;
-    // Node cannot tell who sent the signal; the sender is usually among the newest processes, so log those
-    let newest = "";
-    try {
-      newest = execFileSync("ps", ["-eo", "pid,ppid,etime,args", "--sort=-start_time"], {
-        encoding: "utf8",
-      })
-        .split("\n")
-        .slice(0, 16)
-        .map((l) => l.slice(0, 240))
-        .join("\n");
-    } catch {}
-    console.log(`[${new Date().toISOString()}] stopping on ${sig}; newest processes:\n${newest}`);
-    await transcriptRedaction.close();
-    schedules.shutdown();
-    benchmarks.close();
-    threads.shutdown();
-    workspaceMonitor?.stop();
-    await headroom.stop();
-    latency?.close();
-    process.exit(0);
+// Standby (#348): announce readiness with our pid, then block until the supervisor writes `go` (stdin EOF first: give up).
+function waitForGo(runDir: string): Promise<void> {
+  fs.mkdirSync(runDir, { recursive: true });
+  const readyFile = path.join(runDir, "standby-ready");
+  fs.writeFileSync(`${readyFile}.tmp`, String(process.pid));
+  fs.renameSync(`${readyFile}.tmp`, readyFile); // the supervisor never reads a half-written pid
+  return new Promise((resolve) => {
+    let pending = "";
+    let started = false;
+    const onData = (chunk: string) => {
+      pending += chunk;
+      const lines = pending.split("\n");
+      pending = lines.pop() ?? "";
+      if (started || !lines.some((line) => line.trim() === "go")) return;
+      started = true;
+      process.stdin.off("data", onData).pause();
+      resolve();
+    };
+    const onEnd = () => {
+      if (started) return;
+      console.error("standby: stdin closed before go; exiting");
+      process.exit(1);
+    };
+    process.stdin.setEncoding("utf8").on("data", onData).on("end", onEnd).on("error", onEnd);
   });
 }
+
+const ORPHAN_FILE = path.join(RUN_DIR, "headroom-orphan.pid");
+const RESTART_CLOSE_CODE = 1012; // WebSocket "service restart": tabs reconnect to the replacement server
+const settled = (work: Promise<unknown>, ms: number) =>
+  Promise.race([work.catch(() => {}), new Promise((resolve) => setTimeout(resolve, ms))]);
+
+// Node cannot tell who sent the signal; the sender is usually among the newest processes, so log those
+function newestProcesses(): string {
+  try {
+    return execFileSync("ps", ["-eo", "pid,ppid,etime,args", "--sort=-start_time"], {
+      encoding: "utf8",
+    })
+      .split("\n")
+      .slice(0, 16)
+      .map((line) => line.slice(0, 240))
+      .join("\n");
+  } catch {
+    return "";
+  }
+}
+
+// Stop accepting first, then tell every tab to reconnect; resolves when the tabs answered the close.
+function closeClients(): Promise<unknown> {
+  server.close();
+  const closed = [...clients].map(
+    (socket) =>
+      new Promise((resolve) => {
+        socket.once("close", resolve);
+        socket.close(RESTART_CLOSE_CODE, "server restart");
+      }),
+  );
+  server.closeAllConnections();
+  return Promise.all(closed);
+}
+
+// Fast exit for a restart handoff: persist, release the port and children, never wait on Headroom's slow exit.
+async function shutdown(sig: string) {
+  const answered = closeClients();
+  const handoff = fs.existsSync(path.join(RUN_DIR, "handoff"));
+  const newest = handoff ? "(restart handoff)" : newestProcesses();
+  console.log(`[${new Date().toISOString()}] stopping on ${sig}; newest processes:\n${newest}`);
+  schedules.shutdown();
+  threads.shutdown();
+  headroom.release(ORPHAN_FILE); // the next server waits for it, or kills it 5 s after this file was written
+  benchmarks.close();
+  workspaceMonitor?.stop();
+  await Promise.all([settled(transcriptRedaction.close(), 200), settled(answered, 100)]);
+  latency?.close();
+  process.exit(0);
+}
+
+let shuttingDown = false;
+for (const sig of ["SIGINT", "SIGTERM"] as const) {
+  process.on(sig, () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    void shutdown(sig);
+  });
+}
+startServing();
