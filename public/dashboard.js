@@ -222,10 +222,15 @@ const sumTurns = (turns) => ({
   cost: turns.reduce((s, t) => s + (t.accounting === 2 ? t.cost || 0 : 0), 0),
   ms: turns.reduce((s, t) => s + (t.ms || 0), 0),
 });
-const savedOf = (d) => {
-  const rtk = (d?.rtk?.daily || []).reduce((s, x) => s + (x.saved_tokens || 0), 0);
-  const hr = (d?.headroom?.daily || []).reduce((s, x) => s + (x.tokens_saved || 0), 0);
-  return { rtk, hr };
+const savingsValue = (value) => (value == null ? "—" : fmt(value));
+const savingsUnavailable = "Savings unavailable. Reload to retry.";
+const savedOf = (data) => {
+  const sum = (daily, field) =>
+    Array.isArray(daily) ? daily.reduce((total, entry) => total + (entry[field] || 0), 0) : null;
+  return {
+    rtk: sum(data?.rtk?.daily, "saved_tokens"),
+    hr: sum(data?.headroom?.daily, "tokens_saved"),
+  };
 };
 const PLAN_KEY = "ac_subscription_monthly_usd_v1";
 const DEFAULT_MONTHLY_FEES = { claude: 40, codex: 20 };
@@ -719,11 +724,16 @@ function buildKpis(current, previous, saved) {
       `${current.knownCost}/${current.turns} turns priced${current.knownCost < current.turns ? " · partial coverage" : ""} · public list prices`,
       false,
     ),
-    kpi("RTK output reduction", fmt(saved.rtk), "Command output; all local CLI activity", true),
+    kpi(
+      "RTK output reduction",
+      savingsValue(saved.rtk),
+      saved.rtk == null ? savingsUnavailable : "Command output; all local CLI activity",
+      true,
+    ),
     kpi(
       "Headroom input reduction",
-      fmt(saved.hr),
-      "Claude + Codex proxy activity; separate scope",
+      savingsValue(saved.hr),
+      saved.hr == null ? savingsUnavailable : "Claude + Codex proxy activity; separate scope",
       true,
     ),
   );
@@ -790,7 +800,13 @@ function buildUsagePanel(cur, days, idx) {
 }
 
 function buildSavingsRows(cur, days, idx) {
-  const rows = days.map((day) => ({ ...day, values: [0, 0] }));
+  const rows = days.map((day) => ({
+    ...day,
+    values: [
+      Array.isArray(cur.rtk?.daily) ? 0 : null,
+      Array.isArray(cur.headroom?.daily) ? 0 : null,
+    ],
+  }));
   for (const entry of cur.rtk?.daily || []) {
     const dayIndex = idx.get(entry.date);
     if (dayIndex != null) rows[dayIndex].values[0] += entry.saved_tokens || 0;
@@ -810,12 +826,26 @@ function buildSavingsPanel(saved, savingsRows) {
     { name: "RTK (command output)", color: css("--c-rtk") },
     { name: "Headroom (compression)", color: css("--c-headroom") },
   ];
+  const available = [saved.rtk, saved.hr].flatMap((value, index) => (value == null ? [] : [index]));
+  const measuredSeries = available.map((index) => savingsSeries[index]);
+  const measuredRows = savingsRows.map((row) => ({
+    ...row,
+    values: available.map((index) => row.values[index]),
+  }));
   savePanel.append(
     saved.rtk || saved.hr
-      ? barChart(savingsRows, savingsSeries, fmt)
-      : el("div", "empty-c", "No savings recorded in this range."),
-    legend(savingsSeries.map((entry) => [entry.name, entry.color])),
+      ? barChart(measuredRows, measuredSeries, fmt)
+      : el(
+          "div",
+          "empty-c",
+          available.length ? "No savings recorded in this range." : savingsUnavailable,
+        ),
+    legend(measuredSeries.map((entry) => [entry.name, entry.color])),
   );
+  if (available.length === 1) {
+    const missing = saved.rtk == null ? "RTK" : "Headroom";
+    savePanel.append(el("p", "note", `${missing} savings unavailable. Reload to retry.`));
+  }
   return savePanel;
 }
 
@@ -912,6 +942,7 @@ function buildDefinitionList(pairs) {
 }
 function buildRtkSource(cur, saved) {
   const rtk = cur.rtk;
+  const available = Array.isArray(rtk?.daily);
   const rtkIn = (rtk?.daily || []).reduce((sum, day) => sum + (day.input_tokens || 0), 0),
     rtkCmd = (rtk?.daily || []).reduce((sum, day) => sum + (day.commands || 0), 0);
   const rtkPanel = el("section", "panel src");
@@ -921,19 +952,24 @@ function buildRtkSource(cur, saved) {
     el("h2", "", "RTK"),
     el("p", "sub", "Filters noisy command output before the agent reads it"),
   );
-  head.append(titleBox, el("span", `chip-s ${rtk ? "ok" : "off"}`, rtk ? "Active" : "Not found"));
+  head.append(
+    titleBox,
+    el("span", `chip-s ${available ? "ok" : "off"}`, available ? "Available" : "Unavailable"),
+  );
   rtkPanel.append(head);
   rtkPanel.append(
     buildDefinitionList([
-      ["Commands tracked", fmt(rtkCmd)],
-      ["Captured output before filtering", fmt(rtkIn)],
-      ["Tokens saved", fmt(saved.rtk)],
-      ["Reduction", rtkIn ? pct((saved.rtk / rtkIn) * 100) : "–"],
+      ["Commands tracked", available ? fmt(rtkCmd) : "—"],
+      ["Captured output before filtering", available ? fmt(rtkIn) : "—"],
+      ["Tokens saved", savingsValue(saved.rtk)],
+      ["Reduction", !available ? "—" : rtkIn ? pct((saved.rtk / rtkIn) * 100) : "–"],
     ]),
     el(
       "p",
       "note",
-      "All local RTK activity. Filtering commands compress output; proxy/bypass only track it.",
+      available
+        ? "All local RTK activity. Filtering commands compress output; proxy/bypass only track it."
+        : savingsUnavailable,
     ),
   );
   return rtkPanel;
@@ -956,22 +992,26 @@ function buildHeadroomSource(cur, saved) {
     ),
   );
   headroomPanel.append(head);
-  const daily = headroom?.daily || [];
-  const sum = (field) => daily.reduce((total, day) => total + (day[field] || 0), 0);
+  const daily = headroom?.daily;
+  const available = Array.isArray(daily);
+  const sum = (field) =>
+    available ? daily.reduce((total, day) => total + (day[field] || 0), 0) : null;
   headroomPanel.append(
     buildDefinitionList([
-      ["Compressed tokens saved", fmt(saved.hr)],
-      ["Input tokens sent", fmt(sum("total_input_tokens_delta"))],
-      ["Prompt-cache reads", fmt(sum("cache_read_tokens_delta"))],
-      ["Compression value (est.)", usd(sum("compression_savings_usd_delta"))],
-      ["Tool-schema deferral (est.)", fmt(sum("tool_tokens_saved_delta"))],
+      ["Compressed tokens saved", savingsValue(saved.hr)],
+      ["Input tokens sent", savingsValue(sum("total_input_tokens_delta"))],
+      ["Prompt-cache reads", savingsValue(sum("cache_read_tokens_delta"))],
+      ["Compression value (est.)", available ? usd(sum("compression_savings_usd_delta")) : "—"],
+      ["Tool-schema deferral (est.)", savingsValue(sum("tool_tokens_saved_delta"))],
     ]),
     el(
       "p",
       "note",
-      headroom?.error
-        ? headroom.error
-        : "Claude threads only: Codex (ChatGPT sign-in) and Pi (OpenRouter) use hosts the proxy cannot serve. Tool-schema deferral is an estimate and is not counted in Tokens saved.",
+      !available
+        ? savingsUnavailable
+        : headroom?.error
+          ? headroom.error
+          : "Headroom proxy activity, including activity outside Console. Tool-schema deferral is an estimate and is not counted in Tokens saved.",
     ),
   );
   return headroomPanel;
@@ -1008,8 +1048,8 @@ function buildDataTable(cur, days, idx, savingsRows) {
       totals.turns,
       totals.knownTokens ? fmt(totals.tokens) : "Unknown",
       totals.knownCost ? usd(totals.cost) : "Unknown",
-      fmt(savingsRows[dayIndex].values[0]),
-      fmt(savingsRows[dayIndex].values[1]),
+      savingsValue(savingsRows[dayIndex].values[0]),
+      savingsValue(savingsRows[dayIndex].values[1]),
     ])
       row.append(el("td", "", String(cell)));
     tbody.append(row);

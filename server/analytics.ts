@@ -128,9 +128,11 @@ export function backfill(
 }
 
 let rtkCache: { at: number; value: any } | undefined;
+let rtkPending: Promise<any | null> | undefined;
 function rtkGain(): Promise<any | null> {
   if (rtkCache && Date.now() - rtkCache.at < 60_000) return Promise.resolve(rtkCache.value);
-  return new Promise((resolve) => {
+  if (rtkPending) return rtkPending;
+  rtkPending = new Promise((resolve) => {
     execFile(
       "rtk",
       ["gain", "-f", "json", "--daily"],
@@ -139,13 +141,17 @@ function rtkGain(): Promise<any | null> {
         let value = null;
         if (!err)
           try {
-            value = JSON.parse(stdout);
+            const parsed = JSON.parse(stdout);
+            if (Array.isArray(parsed?.daily)) value = parsed;
           } catch {}
-        rtkCache = { at: Date.now(), value };
+        if (value) rtkCache = { at: Date.now(), value };
         resolve(value);
       },
     );
+  }).finally(() => {
+    rtkPending = undefined;
   });
+  return rtkPending;
 }
 
 export async function dashboard(from: number, to: number) {
@@ -169,9 +175,11 @@ export async function dashboard(from: number, to: number) {
       : null,
     headroom: {
       ...headroom.state(),
-      daily: (hr?.series?.daily ?? []).filter(
-        (d: any) => day(d.timestamp) + 86_400_000 > from && day(d.timestamp) <= to,
-      ),
+      daily: hr
+        ? hr.series.daily.filter(
+            (d: any) => day(d.timestamp) + 86_400_000 > from && day(d.timestamp) <= to,
+          )
+        : null,
       lifetime: hr?.lifetime ?? null,
     },
   };
