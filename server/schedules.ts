@@ -584,7 +584,9 @@ export class Schedules {
         .then((text) => {
           this.ending.delete(run.id);
           if (run.status === "running") this.finishTurn(t, task, run, ev, text);
-        });
+        })
+        // A finalize failure must never break the turn or crash the server.
+        .catch((error) => console.error(`schedule run ${run.id} finalize failed:`, error));
       return;
     }
     this.finishTurn(t, task, run, ev, "");
