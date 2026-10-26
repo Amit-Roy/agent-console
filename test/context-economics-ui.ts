@@ -66,7 +66,15 @@ try {
       viewport: { width, height: 900 },
       colorScheme: "dark",
     });
-    await context.addCookies([{ name: "__Host-ac_session", value: makeToken(), domain: new URL(base).hostname, path: "/", secure: true }]);
+    await context.addCookies([
+      {
+        name: "__Host-ac_session",
+        value: makeToken(),
+        domain: new URL(base).hostname,
+        path: "/",
+        secure: true,
+      },
+    ]);
     await context.addInitScript(() => localStorage.setItem("ac_thread", "forecast-codex"));
     const page = await context.newPage(),
       errors: string[] = [],

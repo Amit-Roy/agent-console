@@ -13,7 +13,15 @@ try {
     ["phone", { width: 390, height: 844 }, "dark"],
   ] as const) {
     const context = await browser.newContext({ viewport, colorScheme });
-    await context.addCookies([{ name: "__Host-ac_session", value: makeToken(), domain: new URL(BASE).hostname, path: "/", secure: true }]);
+    await context.addCookies([
+      {
+        name: "__Host-ac_session",
+        value: makeToken(),
+        domain: new URL(BASE).hostname,
+        path: "/",
+        secure: true,
+      },
+    ]);
     const page = await context.newPage(),
       errors: string[] = [],
       external: string[] = [];

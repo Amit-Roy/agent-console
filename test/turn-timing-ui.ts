@@ -122,7 +122,15 @@ try {
     colorScheme: "dark",
     hasTouch: true,
   });
-  await context.addCookies([{ name: "__Host-ac_session", value: makeToken(), domain: new URL(base).hostname, path: "/", secure: true }]);
+  await context.addCookies([
+    {
+      name: "__Host-ac_session",
+      value: makeToken(),
+      domain: new URL(base).hostname,
+      path: "/",
+      secure: true,
+    },
+  ]);
   await context.addInitScript(() => localStorage.setItem("ac_thread", "mock-timing"));
   const page = await context.newPage();
   const errors: string[] = [];
@@ -421,7 +429,15 @@ try {
       viewport,
       colorScheme: name === "phone" ? "dark" : "light",
     });
-    await dash.context().addCookies([{ name: "__Host-ac_session", value: makeToken(), domain: new URL(base).hostname, path: "/", secure: true }]);
+    await dash.context().addCookies([
+      {
+        name: "__Host-ac_session",
+        value: makeToken(),
+        domain: new URL(base).hostname,
+        path: "/",
+        secure: true,
+      },
+    ]);
     dash.on("pageerror", (e) => errors.push(String(e)));
     await dash.goto(`${base}/dashboard#7`);
     await dash.locator(".panel h2", { hasText: "Turn latency" }).waitFor();

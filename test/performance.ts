@@ -49,7 +49,15 @@ try {
       isMobile: true,
       hasTouch: true,
     });
-    await ctx.addCookies([{ name: "__Host-ac_session", value: token, domain: new URL(base).hostname, path: "/", secure: true }]);
+    await ctx.addCookies([
+      {
+        name: "__Host-ac_session",
+        value: token,
+        domain: new URL(base).hostname,
+        path: "/",
+        secure: true,
+      },
+    ]);
     const page = await ctx.newPage();
     await page.goto(base);
     await page.waitForFunction(() =>
@@ -102,7 +110,15 @@ try {
     await ctx.close();
   }
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
-  await ctx.addCookies([{ name: "__Host-ac_session", value: token, domain: new URL(base).hostname, path: "/", secure: true }]);
+  await ctx.addCookies([
+    {
+      name: "__Host-ac_session",
+      value: token,
+      domain: new URL(base).hostname,
+      path: "/",
+      secure: true,
+    },
+  ]);
   const page = await ctx.newPage();
   await page.goto(base);
   await page.waitForFunction(() => !!(window as any).agentConsoleMetrics);

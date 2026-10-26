@@ -93,7 +93,15 @@ try {
       isMobile: width === 390,
       hasTouch: width === 390,
     });
-    await context.addCookies([{ name: "__Host-ac_session", value: makeToken(), domain: new URL(base).hostname, path: "/", secure: true }]);
+    await context.addCookies([
+      {
+        name: "__Host-ac_session",
+        value: makeToken(),
+        domain: new URL(base).hostname,
+        path: "/",
+        secure: true,
+      },
+    ]);
     await context.addInitScript((id) => localStorage.setItem("ac_thread", id), a);
     const page = await context.newPage(),
       errors: string[] = [];

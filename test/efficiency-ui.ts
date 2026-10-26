@@ -37,7 +37,15 @@ try {
     viewport: { width: 390, height: 844 },
     timezoneId: "America/Los_Angeles",
   });
-  await context.addCookies([{ name: "__Host-ac_session", value: cookie, domain: new URL(base).hostname, path: "/", secure: true }]);
+  await context.addCookies([
+    {
+      name: "__Host-ac_session",
+      value: cookie,
+      domain: new URL(base).hostname,
+      path: "/",
+      secure: true,
+    },
+  ]);
   await context.addInitScript((id) => localStorage.setItem("ac_thread", id), original.id);
   const page = await context.newPage();
   const errors: string[] = [];

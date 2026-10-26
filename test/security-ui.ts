@@ -39,7 +39,15 @@ async function open(
     colorScheme: scheme,
     hasTouch: viewport.width < 600,
   });
-  await ctx.addCookies([{ name: "__Host-ac_session", value: makeToken(), domain: new URL(BASE).hostname, path: "/", secure: true }]);
+  await ctx.addCookies([
+    {
+      name: "__Host-ac_session",
+      value: makeToken(),
+      domain: new URL(BASE).hostname,
+      path: "/",
+      secure: true,
+    },
+  ]);
   const page = await ctx.newPage();
   const errors: string[] = [],
     external: string[] = [],

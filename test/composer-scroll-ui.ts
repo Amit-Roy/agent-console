@@ -114,7 +114,15 @@ try {
       isMobile: mobile,
       hasTouch: mobile,
     });
-    await context.addCookies([{ name: "__Host-ac_session", value: makeToken(), domain: new URL(base).hostname, path: "/", secure: true }]);
+    await context.addCookies([
+      {
+        name: "__Host-ac_session",
+        value: makeToken(),
+        domain: new URL(base).hostname,
+        path: "/",
+        secure: true,
+      },
+    ]);
     await context.addInitScript((id) => localStorage.setItem("ac_thread", id), id);
     if (process.env.COMPOSER_SCROLL_APP_JS) {
       const source = fs.readFileSync(process.env.COMPOSER_SCROLL_APP_JS, "utf8");
@@ -281,7 +289,15 @@ async function checkEarlierWaitsForTouchend(browser: Browser, threadId: string) 
     isMobile: true,
     hasTouch: true,
   });
-  await context.addCookies([{ name: "__Host-ac_session", value: makeToken(), domain: new URL(base).hostname, path: "/", secure: true }]);
+  await context.addCookies([
+    {
+      name: "__Host-ac_session",
+      value: makeToken(),
+      domain: new URL(base).hostname,
+      path: "/",
+      secure: true,
+    },
+  ]);
   await context.addInitScript((thread) => localStorage.setItem("ac_thread", thread), threadId);
   const page = await context.newPage();
   // The page reply is held until the finger is down, then released.

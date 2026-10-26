@@ -37,7 +37,15 @@ try {
       isMobile: width === 390,
       hasTouch: width === 390,
     });
-    await ctx.addCookies([{ name: "__Host-ac_session", value: makeToken(), domain: new URL(base).hostname, path: "/", secure: true }]);
+    await ctx.addCookies([
+      {
+        name: "__Host-ac_session",
+        value: makeToken(),
+        domain: new URL(base).hostname,
+        path: "/",
+        secure: true,
+      },
+    ]);
     await ctx.addInitScript((id) => localStorage.setItem("ac_thread", id), id);
     const page = await ctx.newPage();
     const errors: string[] = [];

@@ -106,7 +106,15 @@ try {
     }));
     opened.setDefaultTimeout(15000);
     await gateSocket(opened, { hold: false });
-    await opened.addCookies([{ name: "__Host-ac_session", value: makeToken(), domain: new URL(base).hostname, path: "/", secure: true }]);
+    await opened.addCookies([
+      {
+        name: "__Host-ac_session",
+        value: makeToken(),
+        domain: new URL(base).hostname,
+        path: "/",
+        secure: true,
+      },
+    ]);
     return opened;
   };
   const restartOpening = openPersistent();
@@ -134,7 +142,15 @@ try {
     const sent: any[] = [];
     await gateSocket(current, gate);
     if (!storageState)
-      await current.addCookies([{ name: "__Host-ac_session", value: makeToken(), domain: new URL(base).hostname, path: "/", secure: true }]);
+      await current.addCookies([
+        {
+          name: "__Host-ac_session",
+          value: makeToken(),
+          domain: new URL(base).hostname,
+          path: "/",
+          secure: true,
+        },
+      ]);
     const opened = await current.newPage();
     track(opened, sent);
     return { context: current, page: opened, gate, sent };

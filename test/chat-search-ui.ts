@@ -173,7 +173,15 @@ try {
     colorScheme: "dark",
     serviceWorkers: "block",
   });
-  await context.addCookies([{ name: "__Host-ac_session", value: makeToken(), domain: new URL(base).hostname, path: "/", secure: true }]);
+  await context.addCookies([
+    {
+      name: "__Host-ac_session",
+      value: makeToken(),
+      domain: new URL(base).hostname,
+      path: "/",
+      secure: true,
+    },
+  ]);
   const page = await context.newPage();
   page.on("pageerror", (error) => errors.push(error.message));
   await page.goto(base);
@@ -360,7 +368,15 @@ try {
         isMobile: mobile,
         hasTouch: mobile,
       });
-      await visual.addCookies([{ name: "__Host-ac_session", value: makeToken(), domain: new URL(base).hostname, path: "/", secure: true }]);
+      await visual.addCookies([
+        {
+          name: "__Host-ac_session",
+          value: makeToken(),
+          domain: new URL(base).hostname,
+          path: "/",
+          secure: true,
+        },
+      ]);
       const shot = await visual.newPage();
       shot.on("pageerror", (error) => errors.push(error.message));
       await shot.goto(base);

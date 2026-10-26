@@ -55,7 +55,15 @@ try {
     isMobile: true,
     hasTouch: true,
   });
-  await context.addCookies([{ name: "__Host-ac_session", value: makeToken(), domain: new URL(base).hostname, path: "/", secure: true }]);
+  await context.addCookies([
+    {
+      name: "__Host-ac_session",
+      value: makeToken(),
+      domain: new URL(base).hostname,
+      path: "/",
+      secure: true,
+    },
+  ]);
   // record every empty-state / "No thread" title that is ever painted, from the first frame on
   await context.addInitScript(() => {
     (window as any).__flash = [];

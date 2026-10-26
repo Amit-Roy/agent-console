@@ -202,7 +202,15 @@ try {
     isMobile: true,
     hasTouch: true,
   });
-  await context.addCookies([{ name: "__Host-ac_session", value: makeToken(), domain: new URL(base).hostname, path: "/", secure: true }]);
+  await context.addCookies([
+    {
+      name: "__Host-ac_session",
+      value: makeToken(),
+      domain: new URL(base).hostname,
+      path: "/",
+      secure: true,
+    },
+  ]);
   await context.route("https://img.test/**", (route) =>
     route.fulfill({ status: 200, contentType: "image/png", body: png }),
   );
@@ -685,7 +693,15 @@ try {
       colorScheme: scheme,
       serviceWorkers: "block",
     });
-    await wide.addCookies([{ name: "__Host-ac_session", value: makeToken(), domain: new URL(base).hostname, path: "/", secure: true }]);
+    await wide.addCookies([
+      {
+        name: "__Host-ac_session",
+        value: makeToken(),
+        domain: new URL(base).hostname,
+        path: "/",
+        secure: true,
+      },
+    ]);
     const view = await wide.newPage();
     let watchView = false; // app boot noise (offline remote fetches) is not part of this check
     view.on("console", (m) => {

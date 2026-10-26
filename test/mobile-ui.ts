@@ -113,7 +113,15 @@ try {
       isMobile: width === 412,
       hasTouch: width === 412,
     });
-    await context.addCookies([{ name: "__Host-ac_session", value: makeToken(), domain: new URL(base).hostname, path: "/", secure: true }]);
+    await context.addCookies([
+      {
+        name: "__Host-ac_session",
+        value: makeToken(),
+        domain: new URL(base).hostname,
+        path: "/",
+        secure: true,
+      },
+    ]);
     const titles = [
       "Auth:fix redirect",
       "WWW:WWWWWWWWWWWWWWWW",
@@ -204,7 +212,15 @@ try {
         hasTouch: true,
         colorScheme,
       });
-      await context.addCookies([{ name: "__Host-ac_session", value: makeToken(), domain: new URL(base).hostname, path: "/", secure: true }]);
+      await context.addCookies([
+        {
+          name: "__Host-ac_session",
+          value: makeToken(),
+          domain: new URL(base).hostname,
+          path: "/",
+          secure: true,
+        },
+      ]);
       await context.addInitScript((id) => localStorage.setItem("ac_thread", id), id);
       let client: any;
       let thread = { ...initial };

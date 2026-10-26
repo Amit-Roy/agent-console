@@ -113,7 +113,15 @@ try {
     viewport: { width: 1000, height: 800 },
     serviceWorkers: "block",
   });
-  await context.addCookies([{ name: "__Host-ac_session", value: makeToken(), domain: new URL(base).hostname, path: "/", secure: true }]);
+  await context.addCookies([
+    {
+      name: "__Host-ac_session",
+      value: makeToken(),
+      domain: new URL(base).hostname,
+      path: "/",
+      secure: true,
+    },
+  ]);
   await context.addInitScript((t) => localStorage.setItem("ac_thread", t), id);
   const page = await context.newPage();
   await page.goto(base);

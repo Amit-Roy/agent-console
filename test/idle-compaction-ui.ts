@@ -129,7 +129,15 @@ try {
       viewport: { width, height: 900 },
       colorScheme: "dark",
     });
-    await context.addCookies([{ name: "__Host-ac_session", value: makeToken(), domain: new URL(base).hostname, path: "/", secure: true }]);
+    await context.addCookies([
+      {
+        name: "__Host-ac_session",
+        value: makeToken(),
+        domain: new URL(base).hostname,
+        path: "/",
+        secure: true,
+      },
+    ]);
     await context.addInitScript(
       (threadId) => localStorage.setItem("ac_thread", threadId),
       `known-cache-${width}`,
@@ -183,7 +191,15 @@ try {
 
   // Exact counts and completed replay prevent empty history from passing.
   const lifecycleContext = await browser.newContext({ viewport: { width: 1280, height: 900 } });
-  await lifecycleContext.addCookies([{ name: "__Host-ac_session", value: makeToken(), domain: new URL(base).hostname, path: "/", secure: true }]);
+  await lifecycleContext.addCookies([
+    {
+      name: "__Host-ac_session",
+      value: makeToken(),
+      domain: new URL(base).hostname,
+      path: "/",
+      secure: true,
+    },
+  ]);
   await lifecycleContext.addInitScript(() => localStorage.setItem("ac_thread", "lifecycle"));
   const runScenario = async (scenario: string) => {
     const page = await lifecycleContext.newPage();

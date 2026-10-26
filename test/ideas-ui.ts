@@ -33,7 +33,15 @@ for (const [name, viewport, scheme] of [
     colorScheme: scheme,
     hasTouch: name.startsWith("phone"),
   });
-  await ctx.addCookies([{ name: "__Host-ac_session", value: makeToken(), domain: new URL(BASE).hostname, path: "/", secure: true }]);
+  await ctx.addCookies([
+    {
+      name: "__Host-ac_session",
+      value: makeToken(),
+      domain: new URL(BASE).hostname,
+      path: "/",
+      secure: true,
+    },
+  ]);
   const page = await ctx.newPage();
   const errors: string[] = [],
     external: string[] = [];
@@ -266,7 +274,15 @@ for (const [name, viewport, scheme] of [
     colorScheme: scheme,
     hasTouch: name === "phone",
   });
-  await ctx.addCookies([{ name: "__Host-ac_session", value: makeToken(), domain: new URL(BASE).hostname, path: "/", secure: true }]);
+  await ctx.addCookies([
+    {
+      name: "__Host-ac_session",
+      value: makeToken(),
+      domain: new URL(BASE).hostname,
+      path: "/",
+      secure: true,
+    },
+  ]);
   const page = await ctx.newPage();
   const errors: string[] = [],
     requests: string[] = [],
@@ -540,7 +556,15 @@ for (const [name, viewport, scheme] of [
 }
 {
   const ctx = await browser.newContext({ viewport: { width: 390, height: 844 } });
-  await ctx.addCookies([{ name: "__Host-ac_session", value: makeToken(), domain: new URL(BASE).hostname, path: "/", secure: true }]);
+  await ctx.addCookies([
+    {
+      name: "__Host-ac_session",
+      value: makeToken(),
+      domain: new URL(BASE).hostname,
+      path: "/",
+      secure: true,
+    },
+  ]);
   const page = await ctx.newPage();
   await stubBrain(page, [], true);
   await page.goto(`${BASE}/brain`);

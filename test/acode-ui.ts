@@ -95,7 +95,15 @@ try {
   });
   browser = await chromium.launch();
   const context = await browser.newContext({ serviceWorkers: "block" });
-  await context.addCookies([{ name: "__Host-ac_session", value: session, domain: new URL(base).hostname, path: "/", secure: true }]);
+  await context.addCookies([
+    {
+      name: "__Host-ac_session",
+      value: session,
+      domain: new URL(base).hostname,
+      path: "/",
+      secure: true,
+    },
+  ]);
   const page = await context.newPage();
   page.setDefaultTimeout(8000);
   const requests: string[] = [];

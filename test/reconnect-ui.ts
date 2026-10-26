@@ -78,7 +78,15 @@ try {
 
   browser = await chromium.launch();
   const context = await browser.newContext();
-  await context.addCookies([{ name: "__Host-ac_session", value: makeToken(), domain: new URL(base).hostname, path: "/", secure: true }]);
+  await context.addCookies([
+    {
+      name: "__Host-ac_session",
+      value: makeToken(),
+      domain: new URL(base).hostname,
+      path: "/",
+      secure: true,
+    },
+  ]);
   // every page socket goes through here; `mode` decides what the NEXT-opened connections do (the current one is changed in place)
   const conns: { up: any; toServer: boolean; toPage: boolean }[] = [];
   await context.routeWebSocket("**/ws", (socket) => {
