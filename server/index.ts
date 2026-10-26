@@ -702,17 +702,6 @@ app.get("/api/sessions/:thread", async (req, res) => {
   }
 });
 app.get("/sessions", (_req, res) => res.sendFile(path.join(ROOT, "public", "sessions.html")));
-app.get("/vendor/marked.js", (_req, res) =>
-  res.sendFile(path.join(ROOT, "node_modules/marked/lib/marked.esm.js")),
-);
-app.get("/vendor/simplewebauthn-browser.js", (_req, res) =>
-  res.sendFile(
-    path.join(ROOT, "node_modules/@simplewebauthn/browser/dist/bundle/index.umd.min.js"),
-  ),
-);
-app.get("/vendor/purify.js", (_req, res) =>
-  res.sendFile(path.join(ROOT, "node_modules/dompurify/dist/purify.es.mjs")),
-);
 
 // ---- attachments: upload (raw bytes), download, discard. State-changing, so cookie auth alone is not enough: same-origin only.
 const sameOrigin: express.RequestHandler = (req, res, next) => {
@@ -1838,7 +1827,18 @@ const sources = (dir: string): string[] =>
           ? sources(path.join(dir, e.name))
           : [path.join(dir, e.name)],
     );
+// The release sha from RELEASE.json, when a release wrote one. Missing or unreadable file: null.
+function releaseSha(): string | null {
+  try {
+    const sha = JSON.parse(fs.readFileSync(path.join(ROOT, "RELEASE.json"), "utf8"))?.sha;
+    return typeof sha === "string" && sha.length > 0 ? sha : null;
+  } catch {
+    return null;
+  }
+}
 function buildId() {
+  const sha = releaseSha();
+  if (sha) return sha.slice(0, 12);
   const h = crypto.createHash("sha1");
   for (const f of [
     ...sources(path.join(ROOT, "server")),
