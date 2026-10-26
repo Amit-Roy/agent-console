@@ -36,7 +36,7 @@ const READY_FILE = path.join(RUN, "standby-ready");
 const HANDOFF_MARKER = path.join(RUN, "handoff");
 const STANDBY_WAIT_MS = 5000;
 const GO_WAIT_MS = 8000; // the old server gets 3 s before SIGKILL
-const HELLO_WAIT_MS = 10_000;
+const HELLO_WAIT_MS = 20_000; // hello is slow under load; the full wait is only spent on a genuine failure
 const IDLE_MS = 1500; // a queued message may start the next turn right after one ends
 const MAX_ATTEMPTS = 3;
 const AUTH = { origin: `http://127.0.0.1:${PORT}`, cookie: bothCookies() };
@@ -266,33 +266,39 @@ function killOldSupervisor(standbyPid) {
   log(`old supervisor ${pid} stopped`);
 }
 
+// Reconnects only while the server is not up yet (connect error, close, unexpected response). An open socket waits for hello
+// until the deadline: hello is slow when the host is loaded, and cutting the wait short rolled a healthy server back.
 async function probeHello(wantBuild, timeoutMs) {
   const end = Date.now() + timeoutMs;
-  let seen = null;
   while (Date.now() < end) {
-    seen = await helloBuild(1500);
-    if (seen === wantBuild) return { ok: true, build: seen };
+    const attempt = await helloBuild(end - Date.now());
+    if (attempt.build !== null) return { ok: attempt.build === wantBuild, build: attempt.build };
+    if (!attempt.retry) break;
     await delay(50);
   }
-  return { ok: false, build: seen };
+  return { ok: false, build: null };
 }
 
+// Resolves { build } once hello arrives; { build: null, retry: true } when the server is not up yet; { build: null, retry: false }
+// when the socket opened but no hello came within timeoutMs.
 function helloBuild(timeoutMs) {
   return new Promise((resolve) => {
     const probe = new WebSocket(WS_URL, { headers: AUTH });
-    const finish = (build) => {
+    const finish = (result) => {
       clearTimeout(timer);
       probe.removeAllListeners();
       probe.on("error", () => {});
       probe.terminate();
-      resolve(build);
+      resolve(result);
     };
-    const timer = setTimeout(() => finish(null), timeoutMs);
-    probe.on("error", () => finish(null));
-    probe.on("close", () => finish(null));
+    const notUp = () => finish({ build: null, retry: true });
+    const timer = setTimeout(() => finish({ build: null, retry: false }), timeoutMs);
+    probe.on("error", notUp);
+    probe.on("close", notUp);
+    probe.on("unexpected-response", notUp);
     probe.on("message", (raw) => {
       const message = JSON.parse(String(raw));
-      if (message.t === "hello") finish(message.build ?? "");
+      if (message.t === "hello") finish({ build: message.build ?? "" });
     });
   });
 }
@@ -400,4 +406,7 @@ async function main() {
   return attemptLoop(target, wantBuild, watcher, original);
 }
 
-main().catch((failure) => give(`Deploy failed: ${failure?.stack ?? failure}`, 1));
+export { probeHello };
+
+if (process.argv[1] === fileURLToPath(import.meta.url))
+  main().catch((failure) => give(`Deploy failed: ${failure?.stack ?? failure}`, 1));
