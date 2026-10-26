@@ -345,6 +345,18 @@ async function launchSequence(epoch: number) {
   schedule(epoch);
 }
 
+let statsPending: Promise<any | null> | undefined;
+async function readStats(): Promise<any | null> {
+  try {
+    const response = await fetch(`${URL_}/stats-history`, { signal: AbortSignal.timeout(8000) });
+    if (!response.ok) return null;
+    const value = await response.json();
+    return Array.isArray(value?.series?.daily) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
 export const headroom = {
   /** Wires profiling: the store receiving samples and the port the proxy reports metrics to. */
   attachProfile(store: HeadroomProfileStore | undefined, port: number) {
@@ -411,13 +423,11 @@ export const headroom = {
     owned: !!child,
     error: healthy ? undefined : lastError,
   }),
-  async stats(): Promise<any | null> {
-    if (!headroom.url()) return null;
-    try {
-      const r = await fetch(`${URL_}/stats-history`, { signal: AbortSignal.timeout(3000) });
-      return r.ok ? await r.json() : null;
-    } catch {
-      return null;
-    }
+  stats(): Promise<any | null> {
+    if (statsPending) return statsPending;
+    statsPending = readStats().finally(() => {
+      statsPending = undefined;
+    });
+    return statsPending;
   },
 };
