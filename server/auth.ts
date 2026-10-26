@@ -116,12 +116,12 @@ const PROXY_HASH = /^[0-9a-f]{64}$/.test(PROXY_HASH_HEX)
 export const PROXY_PROOF_ON = PROXY_HASH !== null;
 if (CODER_HOSTS.length && !PROXY_PROOF_ON) {
   console.warn(
-    "auth: AGENT_CONSOLE_PROXY_SECRET_SHA256 unset or invalid; Coder SSO trusts the Host header alone",
+    "auth: AGENT_CONSOLE_PROXY_SECRET_SHA256 unset or invalid; Coder SSO disabled (fail closed); password cookie only",
   );
 }
 
 function proxyProofValid(header: string | string[] | undefined): boolean {
-  if (!PROXY_HASH) return true; // not configured: host-only behaviour
+  if (!PROXY_HASH) return false; // not configured: fail closed
   if (typeof header !== "string") return false;
   const digest = crypto.createHash("sha256").update(header).digest();
   return crypto.timingSafeEqual(digest, PROXY_HASH);

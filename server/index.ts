@@ -1802,7 +1802,7 @@ server.listen(PORT, HOST, () => {
   console.log(`agent-console listening on http://${HOST}:${PORT}`);
   console.log(
     CODER_HOSTS.length
-      ? `auth: Coder SSO for ${CODER_HOSTS.join(", ")} (password cookie still works elsewhere); proxy proof ${PROXY_PROOF_ON ? "on" : "OFF (host-only)"}`
+      ? `auth: Coder SSO for ${CODER_HOSTS.join(", ")} (password cookie still works elsewhere); proxy proof ${PROXY_PROOF_ON ? "on" : "OFF (SSO disabled, fail closed)"}`
       : "auth: password only",
   );
   if (process.env.AGENT_CONSOLE_SHOW_PASSWORD) console.log(`password: ${PASSWORD}`);
