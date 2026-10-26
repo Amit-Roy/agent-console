@@ -7,13 +7,15 @@ import { build } from "esbuild";
 
 // Node's CLI sorts file names. Start the longest suites first so they overlap
 // short suites instead of extending the end of the pool (CI baseline, 2026-10-23).
+// Shards take every Nth file, so alternate browser suites across the two shards
+// instead of stacking three Chromium suites on shard 1.
 const slow = [
   "test/attachment-drafts-ui.ts",
-  "test/github-triage-cli.ts",
   "test/drafts-ui.ts",
-  "test/issue-review.ts",
   "test/composer-scroll-ui.ts",
   "test/pi-e2e-ui.ts",
+  "test/github-triage-cli.ts",
+  "test/issue-review.ts",
 ];
 let files = process.argv.slice(2);
 const priority = (file) => {
