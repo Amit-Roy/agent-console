@@ -103,7 +103,7 @@ try {
     }));
     opened.setDefaultTimeout(7000);
     await configureSocket(opened);
-    await opened.addCookies([{ name: "ac_session", value: makeToken(), url: base }]);
+    await opened.addCookies([{ name: "__Host-ac_session", value: makeToken(), domain: new URL(base).hostname, path: "/", secure: true }]);
     return opened;
   };
   const restartOpening = openPersistent();
@@ -113,7 +113,7 @@ try {
   context = await browser.newContext(options);
   context.setDefaultTimeout(7000);
   await configureSocket(context);
-  await context.addCookies([{ name: "ac_session", value: makeToken(), url: base }]);
+  await context.addCookies([{ name: "__Host-ac_session", value: makeToken(), domain: new URL(base).hostname, path: "/", secure: true }]);
   let page: Page;
   const track = (next: Page) => {
     next.on("pageerror", (error) => errors.push(error.message));

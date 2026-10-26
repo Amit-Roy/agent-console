@@ -50,7 +50,7 @@ for (const [name, viewport, scheme] of [
   ["phone-dark", { width: 390, height: 844 }, "dark"],
 ] as const) {
   const ctx = await browser.newContext({ viewport, colorScheme: scheme });
-  await ctx.addCookies([{ name: "ac_session", value: makeToken(), url: BASE }]);
+  await ctx.addCookies([{ name: "__Host-ac_session", value: makeToken(), domain: new URL(BASE).hostname, path: "/", secure: true }]);
   const page = await ctx.newPage();
   const errors: string[] = [];
   page.on("console", (m) => m.type() === "error" && errors.push(m.text()));

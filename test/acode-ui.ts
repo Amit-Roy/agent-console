@@ -95,7 +95,7 @@ try {
   });
   browser = await chromium.launch();
   const context = await browser.newContext({ serviceWorkers: "block" });
-  await context.addCookies([{ name: "ac_session", value: session, url: base }]);
+  await context.addCookies([{ name: "__Host-ac_session", value: session, domain: new URL(base).hostname, path: "/", secure: true }]);
   const page = await context.newPage();
   page.setDefaultTimeout(8000);
   const requests: string[] = [];
@@ -137,7 +137,7 @@ try {
   const treeTicket = await (
     await fetch(`${base}/api/acode/edit?thread=${thread.id}&path=first.ts`, {
       method: "POST",
-      headers: { Cookie: `ac_session=${session}`, Origin: base },
+      headers: { Cookie: `__Host-ac_session=${session}`, Origin: base },
     })
   ).json();
   const exchanged = await fetch(`${bridge}/api/acode/exchange`, {
@@ -225,7 +225,7 @@ try {
     (
       await fetch(create, {
         method: "POST",
-        headers: { Cookie: `ac_session=${session}`, Origin: "https://evil.example" },
+        headers: { Cookie: `__Host-ac_session=${session}`, Origin: "https://evil.example" },
       })
     ).status,
     403,

@@ -120,7 +120,7 @@ const sockets: WebSocket[] = [];
 function connect() {
   const inbox: any[] = [];
   const ws = new WebSocket(base.replace("http", "ws") + "/ws", {
-    headers: { origin: base, cookie: `ac_session=${makeToken()}` },
+    headers: { origin: base, cookie: `__Host-ac_session=${makeToken()}` },
   });
   sockets.push(ws);
   ws.on("message", (d) => inbox.push(JSON.parse(String(d))));
@@ -205,7 +205,7 @@ try {
       isMobile: width === 390,
       hasTouch: width === 390,
     });
-    await ctx.addCookies([{ name: "ac_session", value: makeToken(), url: base }]);
+    await ctx.addCookies([{ name: "__Host-ac_session", value: makeToken(), domain: new URL(base).hostname, path: "/", secure: true }]);
     await ctx.addInitScript((id) => localStorage.setItem("ac_thread", id), id);
     const page = await ctx.newPage(),
       errors: string[] = [];

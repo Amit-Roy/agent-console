@@ -13,7 +13,7 @@ try {
     ["phone", { width: 390, height: 844 }, "dark"],
   ] as const) {
     const context = await browser.newContext({ viewport, colorScheme });
-    await context.addCookies([{ name: "ac_session", value: makeToken(), url: BASE }]);
+    await context.addCookies([{ name: "__Host-ac_session", value: makeToken(), domain: new URL(BASE).hostname, path: "/", secure: true }]);
     const page = await context.newPage(),
       errors: string[] = [],
       external: string[] = [];
@@ -189,7 +189,7 @@ try {
     (
       await fetch(`${BASE}/api/benchmarks/refresh`, {
         method: "POST",
-        headers: { Cookie: `ac_session=${makeToken()}`, Origin: "https://other.example" },
+        headers: { Cookie: `__Host-ac_session=${makeToken()}`, Origin: "https://other.example" },
       })
     ).status,
     403,
@@ -200,7 +200,7 @@ try {
       await fetch(`${BASE}/api/benchmarks/subscriptions`, {
         method: "POST",
         headers: {
-          Cookie: `ac_session=${makeToken()}`,
+          Cookie: `__Host-ac_session=${makeToken()}`,
           Origin: "https://other.example",
           "Content-Type": "application/json",
         },

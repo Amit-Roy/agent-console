@@ -7,7 +7,7 @@ import { makeToken } from "../server/auth.ts";
 const base = process.env.BASE || "http://127.0.0.1:7071";
 const token = makeToken();
 const ws = new WebSocket(base.replace("http", "ws") + "/ws", {
-  headers: { origin: base, cookie: `ac_session=${token}` },
+  headers: { origin: base, cookie: `__Host-ac_session=${token}` },
 });
 const inbox: any[] = [];
 ws.on("message", (d) => inbox.push(JSON.parse(String(d))));
@@ -49,7 +49,7 @@ try {
       isMobile: true,
       hasTouch: true,
     });
-    await ctx.addCookies([{ name: "ac_session", value: token, url: base }]);
+    await ctx.addCookies([{ name: "__Host-ac_session", value: token, domain: new URL(base).hostname, path: "/", secure: true }]);
     const page = await ctx.newPage();
     await page.goto(base);
     await page.waitForFunction(() =>
@@ -102,7 +102,7 @@ try {
     await ctx.close();
   }
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
-  await ctx.addCookies([{ name: "ac_session", value: token, url: base }]);
+  await ctx.addCookies([{ name: "__Host-ac_session", value: token, domain: new URL(base).hostname, path: "/", secure: true }]);
   const page = await ctx.newPage();
   await page.goto(base);
   await page.waitForFunction(() => !!(window as any).agentConsoleMetrics);

@@ -6,7 +6,7 @@ import { makeToken } from "../server/auth.ts";
 
 const BASE = process.env.BASE || "http://127.0.0.1:7070";
 const PROXY_SECRET = process.env.PROXY_SECRET; // raw secret whose sha256 is AGENT_CONSOLE_PROXY_SECRET_SHA256 on the server
-const cookie = `ac_session=${makeToken()}`;
+const cookie = `__Host-ac_session=${makeToken()}`;
 let failed = 0;
 const check = (name: string, ok: boolean, extra = "") => {
   console.log(`${ok ? "PASS" : "FAIL"}  ${name} ${extra}`);

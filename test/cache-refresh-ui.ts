@@ -58,7 +58,7 @@ try {
   }
   browser = await chromium.launch();
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
-  await ctx.addCookies([{ name: "ac_session", value: makeToken(), url: base }]);
+  await ctx.addCookies([{ name: "__Host-ac_session", value: makeToken(), domain: new URL(base).hostname, path: "/", secure: true }]);
   await ctx.addInitScript((id) => localStorage.setItem("ac_thread", id), a);
   const page = await ctx.newPage(),
     errors: string[] = [];

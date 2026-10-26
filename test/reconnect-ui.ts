@@ -62,7 +62,7 @@ try {
     await new Promise((r) => setTimeout(r, 100));
   }
   // server: a client that never answers pings is terminated; a normal one stays
-  const cookie = `ac_session=${makeToken()}`;
+  const cookie = `__Host-ac_session=${makeToken()}`;
   const deaf = new WebSocket(`ws://127.0.0.1:${port}/ws`, {
       headers: { cookie, origin: base },
       autoPong: false,
@@ -78,7 +78,7 @@ try {
 
   browser = await chromium.launch();
   const context = await browser.newContext();
-  await context.addCookies([{ name: "ac_session", value: makeToken(), url: base }]);
+  await context.addCookies([{ name: "__Host-ac_session", value: makeToken(), domain: new URL(base).hostname, path: "/", secure: true }]);
   // every page socket goes through here; `mode` decides what the NEXT-opened connections do (the current one is changed in place)
   const conns: { up: any; toServer: boolean; toPage: boolean }[] = [];
   await context.routeWebSocket("**/ws", (socket) => {

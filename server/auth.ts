@@ -24,7 +24,7 @@ export const PASSWORD =
   process.env.AGENT_CONSOLE_PASSWORD || loadOrCreate("password", () => rand(15));
 const SECRET = loadOrCreate("secret", () => rand(32));
 
-const COOKIE = "ac_session";
+const COOKIE = "__Host-ac_session";
 const TTL_MS = 30 * 24 * 3600 * 1000;
 
 const sign = (payload: string) =>

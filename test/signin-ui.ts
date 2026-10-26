@@ -60,7 +60,7 @@ try {
     isMobile: true,
     hasTouch: true,
   });
-  await context.addCookies([{ name: "ac_session", value: makeToken(), url: base }]);
+  await context.addCookies([{ name: "__Host-ac_session", value: makeToken(), domain: new URL(base).hostname, path: "/", secure: true }]);
   // proxy the websocket so the test can drop it and refuse reconnects, like a failed upgrade after sign-in expiry
   let refuse = false;
   const sockets: any[] = [];

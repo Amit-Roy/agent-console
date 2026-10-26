@@ -89,7 +89,7 @@ try {
     viewport: { width: 1280, height: 900 },
     reducedMotion: "reduce",
   });
-  await context.addCookies([{ name: "ac_session", value: makeToken(), url: base }]);
+  await context.addCookies([{ name: "__Host-ac_session", value: makeToken(), domain: new URL(base).hostname, path: "/", secure: true }]);
   let hello: string | undefined, replay: ((raw: string) => void) | undefined;
   await context.routeWebSocket("**/ws", (socket) => {
     const up = socket.connectToServer();

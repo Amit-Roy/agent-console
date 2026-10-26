@@ -61,7 +61,7 @@ const check = (n: string, ok: boolean, x = "") => {
   console.log(`${ok ? "PASS" : "FAIL"}  ${n} ${x}`);
   if (!ok) failed++;
 };
-const cookie = { name: "ac_session", value: makeToken(), url: base };
+const cookie = { name: "__Host-ac_session", value: makeToken(), domain: new URL(base).hostname, path: "/", secure: true };
 
 // The crash log dialog on the runtime workflow, on its own page so page.clock can drive the 10 s auto-refresh.
 async function crashLog(
