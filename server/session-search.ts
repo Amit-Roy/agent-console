@@ -116,6 +116,7 @@ export class SessionSearch {
   private hooks: SessionSearchHooks;
   private loggedError = "";
   private echoPending = false;
+  private mapPending = false;
   private cleanupTimer: NodeJS.Timeout | undefined;
   private cleanupWindow = 1000;
   private settleCleaned: () => void = () => {};
@@ -153,6 +154,9 @@ export class SessionSearch {
         PRIMARY KEY(thread,repo,number)
       );
       CREATE INDEX IF NOT EXISTS prs_number ON prs(number);
+      CREATE TABLE IF NOT EXISTS fts_map (
+        thread TEXT NOT NULL, line INTEGER NOT NULL, fts INTEGER NOT NULL, PRIMARY KEY(thread,line,fts)
+      ) WITHOUT ROWID;
       CREATE VIRTUAL TABLE IF NOT EXISTS session_fts USING fts5(title,text,thread UNINDEXED,line UNINDEXED,role UNINDEXED, tokenize='unicode61 remove_diacritics 2');`);
     // Logs indexed before PR tracking have no prs rows: drop them once so the next sync rebuilds from the logs.
     this.db.function("is_echo", { deterministic: true }, (text) =>
@@ -161,11 +165,13 @@ export class SessionSearch {
     const version = Number(this.db.prepare("PRAGMA user_version").get()!.user_version);
     if (version < 1) {
       this.db.exec(
-        "DELETE FROM session_fts; DELETE FROM events; DELETE FROM sessions; PRAGMA user_version=2;",
+        "DELETE FROM session_fts; DELETE FROM events; DELETE FROM sessions; DELETE FROM fts_map; PRAGMA user_version=3;",
       );
-    } else if (version < 2) {
-      this.echoPending = true;
-      this.scheduleCleanup();
+    } else {
+      // user_version 3 adds fts_map (thread,line -> FTS rowid); older indexes backfill it in the background.
+      this.echoPending = version < 2;
+      this.mapPending = version < 3;
+      if (this.echoPending || this.mapPending) this.scheduleCleanup();
     }
     this.scheduleBackground();
   }
@@ -191,9 +197,13 @@ export class SessionSearch {
     if (this.closed || this.maintenance || this.cleanupPaused()) return;
     try {
       const began = performance.now();
-      const phase = ECHO_PHASES.find((entry) => this.phaseLast(entry) < this.phaseMax(entry));
-      if (!phase) return this.finishCleanup();
-      this.cleanBatch(phase);
+      // Version-2 indexes finished the echo cleanup already; only the fts_map backfill remains.
+      const phase = this.echoPending
+        ? ECHO_PHASES.find((entry) => this.phaseLast(entry) < this.phaseMax(entry))
+        : undefined;
+      if (!phase && !this.mapPending) return this.finishCleanup();
+      if (phase) this.cleanBatch(phase);
+      else this.mapBatch();
       this.cleanupStats.longestBatchMs = Math.max(
         this.cleanupStats.longestBatchMs,
         performance.now() - began,
@@ -249,9 +259,52 @@ export class SessionSearch {
     }
   }
 
+  /** Backfill one rowid window of fts_map from the FTS content table; searches stay correct meanwhile. */
+  private mapBatch() {
+    const from = this.metaValue("map_last");
+    const top = Number(
+      this.db.prepare("SELECT coalesce(max(id),0) AS top FROM session_fts_content").get()!.top,
+    );
+    const upto = Math.min(from + this.cleanupWindow, top);
+    this.db.exec("BEGIN");
+    try {
+      this.db
+        .prepare(
+          "INSERT OR IGNORE INTO fts_map(thread,line,fts) SELECT c2,c3,id FROM session_fts_content WHERE id>? AND id<=?",
+        )
+        .run(from, upto);
+      this.db.prepare("INSERT OR REPLACE INTO meta(key,value) VALUES('map_last',?)").run(upto);
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+    if (upto < top) return;
+    // Drop entries whose FTS row was removed meanwhile (echo cleanup), so a reused rowid is never mis-deleted.
+    this.db.exec("DELETE FROM fts_map WHERE fts NOT IN (SELECT id FROM session_fts_content)");
+    this.mapPending = false;
+  }
+
+  /** FTS rowids of a thread (lines above `after`) by rowid through fts_map; full FTS scan only while the backfill is incomplete. */
+  private deleteFts(thread: string, after = -1) {
+    if (this.mapPending) {
+      this.db.prepare("DELETE FROM session_fts WHERE thread=? AND line>?").run(thread, after);
+    } else {
+      this.db
+        .prepare(
+          "DELETE FROM session_fts WHERE rowid IN (SELECT fts FROM fts_map WHERE thread=? AND line>?)",
+        )
+        .run(thread, after);
+    }
+    this.db.prepare("DELETE FROM fts_map WHERE thread=? AND line>?").run(thread, after);
+  }
+
   private finishCleanup() {
-    this.db.exec("DELETE FROM meta WHERE key LIKE 'echo_%'; PRAGMA user_version=2;");
+    this.db.exec(
+      "DELETE FROM meta WHERE key LIKE 'echo_%' OR key='map_last'; PRAGMA user_version=3;",
+    );
     this.echoPending = false;
+    this.mapPending = false;
     this.settleCleaned();
   }
 
@@ -316,7 +369,7 @@ export class SessionSearch {
   }
 
   private remove(thread: string) {
-    this.db.prepare("DELETE FROM session_fts WHERE thread=?").run(thread);
+    this.deleteFts(thread);
     this.db.prepare("DELETE FROM events WHERE thread=?").run(thread);
     this.db.prepare("DELETE FROM sessions WHERE thread=?").run(thread);
     this.db.prepare("DELETE FROM pr_calls WHERE thread=?").run(thread);
@@ -443,9 +496,12 @@ export class SessionSearch {
       this.db
         .prepare("INSERT INTO sessions(thread,title,provider) VALUES(?,?,?)")
         .run(id, title, provider);
-      this.db
+      const inserted = this.db
         .prepare("INSERT INTO session_fts(title,text,thread,line,role) VALUES(?,'',?,0,'title')")
         .run(title, id);
+      this.db
+        .prepare("INSERT INTO fts_map(thread,line,fts) VALUES(?,0,?)")
+        .run(id, inserted.lastInsertRowid);
     } else if (old.title !== title || old.provider !== provider) {
       this.db
         .prepare("UPDATE sessions SET title=?,provider=? WHERE thread=?")
@@ -517,9 +573,11 @@ export class SessionSearch {
       const fts = this.db.prepare(
         "INSERT INTO session_fts(title,text,thread,line,role) VALUES(?,?,?,?,?)",
       );
+      const map = this.db.prepare("INSERT INTO fts_map(thread,line,fts) VALUES(?,?,?)");
       for (const row of batch) {
         event.run(target.id, row.line, row.role, row.text);
-        fts.run(target.title, row.text, target.id, row.line, row.role);
+        const inserted = fts.run(target.title, row.text, target.id, row.line, row.role);
+        map.run(target.id, row.line, inserted.lastInsertRowid);
       }
       this.db.exec("COMMIT");
     } catch (error) {
@@ -541,7 +599,7 @@ export class SessionSearch {
     };
     // Recover a process exit between a batch commit and the file checkpoint.
     this.db.prepare("DELETE FROM events WHERE thread=? AND line>?").run(target.id, scan.lines);
-    this.db.prepare("DELETE FROM session_fts WHERE thread=? AND line>?").run(target.id, scan.lines);
+    this.deleteFts(target.id, scan.lines);
     if (stat.size === 0) {
       this.db
         .prepare("UPDATE sessions SET size=0,mtime=?,inode=? WHERE thread=?")
@@ -580,7 +638,7 @@ export class SessionSearch {
       await this.pending;
     } catch (error) {
       this.maintenance = false;
-      if (this.echoPending && !this.cleanupPaused()) this.scheduleCleanup();
+      if ((this.echoPending || this.mapPending) && !this.cleanupPaused()) this.scheduleCleanup();
       throw error;
     }
   }
@@ -596,7 +654,7 @@ export class SessionSearch {
       if (!rebuild || this.closed) return;
       this.db.exec("PRAGMA secure_delete=ON;");
       this.db.exec(
-        "DELETE FROM session_fts; DELETE FROM events; DELETE FROM sessions; DELETE FROM pr_calls; DELETE FROM prs; DELETE FROM echo_calls;",
+        "DELETE FROM session_fts; DELETE FROM events; DELETE FROM sessions; DELETE FROM fts_map; DELETE FROM pr_calls; DELETE FROM prs; DELETE FROM echo_calls;",
       );
       this.finishCleanup();
       this.db.exec("VACUUM;");
@@ -605,7 +663,8 @@ export class SessionSearch {
       this.checkpoint();
     } finally {
       this.maintenance = false;
-      if (this.echoPending && !this.closed && !this.cleanupPaused()) this.scheduleCleanup();
+      if ((this.echoPending || this.mapPending) && !this.closed && !this.cleanupPaused())
+        this.scheduleCleanup();
     }
   }
 

@@ -1,189 +1,110 @@
 {
-  "title": "Share prompt path",
-  "subtitle": "Composer draft shrinks to 1-2 lines; the untrusted-asset procedure moves into the share-intake skill",
-  "items": [
+ "title": "Session-search deletes",
+ "subtitle": "Deleting FTS rows without scanning the index",
+ "items": [
+  {
+   "group": "Session logs",
+   "border": "solid",
+   "icon": "folder",
+   "items": [
     {
-      "group": "Browser",
-      "sub": "public/app.js",
-      "border": "solid",
-      "color": "blue",
-      "icon": "monitor",
-      "items": [
-        {
-          "id": "sui",
-          "label": "Share sheet",
-          "tech": "?share_text, New thread dialog",
-          "desc": "Picks the thread provider and posts the link",
-          "icon": "share-2",
-          "color": "blue"
-        },
-        {
-          "id": "scomposer",
-          "label": "Composer draft",
-          "tech": "#input",
-          "desc": "Prompt and uploads wait for Send",
-          "icon": "pen-line",
-          "color": "blue"
-        }
-      ]
-    },
-    {
-      "group": "Node server",
-      "sub": "server/index.ts, server/share/",
-      "border": "solid",
-      "color": "slate",
-      "icon": "server",
-      "items": [
-        {
-          "id": "shandler",
-          "label": "handleShare",
-          "tech": "POST /api/share",
-          "desc": "Fetches media, calls sharePrompt with the thread provider only",
-          "icon": "route",
-          "color": "slate"
-        },
-        {
-          "id": "sprompt",
-          "label": "Share prompt",
-          "tech": "server/share/prompt.ts",
-          "desc": "1-2 line prompt that names the share-intake skill",
-          "icon": "message-square-text",
-          "color": "slate"
-        }
-      ]
-    },
-    {
-      "group": "Claude thread",
-      "sub": "sandboxed shares from Instagram, X, Reddit, YouTube",
-      "border": "solid",
-      "color": "indigo",
-      "icon": "message-square",
-      "items": [
-        {
-          "id": "sagent",
-          "label": "Main agent",
-          "tech": "Claude thread",
-          "desc": "Sees counts and the verdict, not the report",
-          "icon": "bot",
-          "color": "indigo"
-        },
-        {
-          "id": "sskill",
-          "label": "share-intake skill",
-          "tech": "brain skills/share-intake",
-          "desc": "Five-step untrusted-asset procedure, loaded on demand",
-          "icon": "book-open-text",
-          "color": "purple"
-        }
-      ]
-    },
-    {
-      "group": "Share tooling",
-      "sub": "scripts/share-trace.ts",
-      "border": "solid",
-      "color": "teal",
-      "icon": "wrench",
-      "direction": "row",
-      "items": [
-        {
-          "id": "strace",
-          "label": "share-trace --out",
-          "tech": "scripts/share-trace.ts",
-          "desc": "Capped chunked trace file, vetted copies, counts only",
-          "icon": "file-json",
-          "color": "teal"
-        },
-        {
-          "id": "svetted",
-          "label": "Vetted share dir",
-          "tech": ".share/ per agent",
-          "desc": "Trace file plus vetted out/ files, scratch deleted",
-          "icon": "folder-check",
-          "color": "teal"
-        }
-      ]
-    },
-    {
-      "group": "Sandboxed subagents",
-      "sub": "personas and share-jail live in the brain repo",
-      "border": "dashed",
-      "color": "pink",
-      "icon": "shield-check",
-      "items": [
-        {
-          "id": "sanalyzer",
-          "label": "share-analyzer",
-          "tech": "jailed, writes /out/report.md",
-          "desc": "Report is withheld from the main agent",
-          "icon": "scan-search",
-          "color": "pink"
-        },
-        {
-          "id": "sclassifier",
-          "label": "share-safety-classifier",
-          "tech": "tools: Read",
-          "desc": "Reads only the trace file",
-          "icon": "shield-alert",
-          "color": "pink"
-        }
-      ]
+     "id": "logs",
+     "label": "Session logs",
+     "tech": "JSONL per thread",
+     "desc": "Appended by providers",
+     "icon": "file-text"
     }
-  ],
-  "edges": [
+   ]
+  },
+  {
+   "group": "Node server",
+   "sub": "background pass every 60 s",
+   "border": "dashed",
+   "icon": "server",
+   "items": [
     {
-      "from": "sui",
-      "to": "shandler",
-      "label": "POST link"
-    },
-    {
-      "from": "shandler",
-      "to": "sprompt",
-      "label": "builds the draft"
-    },
-    {
-      "from": "sprompt",
-      "to": "scomposer",
-      "label": "prompt text"
-    },
-    {
-      "from": "scomposer",
-      "to": "sagent",
-      "label": "user taps Send"
-    },
-    {
-      "from": "sagent",
-      "to": "sanalyzer",
-      "label": "spawns, foreground"
-    },
-    {
-      "from": "sagent",
-      "to": "strace",
-      "label": "exports the trace"
-    },
-    {
-      "from": "strace",
-      "to": "svetted",
-      "label": "writes"
-    },
-    {
-      "from": "sagent",
-      "to": "sclassifier",
-      "label": "trace path only"
-    },
-    {
-      "from": "sclassifier",
-      "to": "svetted",
-      "label": "reads trace"
-    },
-    {
-      "from": "svetted",
-      "to": "sagent",
-      "label": "opens if SAFE"
-    },
-    {
-      "from": "sagent",
-      "to": "sskill",
-      "label": "loads the procedure"
+     "id": "pass",
+     "label": "Index pass",
+     "tech": "server/session-search.ts",
+     "desc": "Deletes FTS rows by rowid via deleteFts",
+     "icon": "refresh-cw"
     }
-  ]
+   ]
+  },
+  {
+   "group": "session-search.sqlite",
+   "sub": "432 MB",
+   "border": "solid",
+   "icon": "database",
+   "items": [
+    {
+     "id": "fts",
+     "label": "session_fts",
+     "tech": "FTS5, UNINDEXED thread/line",
+     "desc": "Full-text index of session text",
+     "icon": "search"
+    },
+    {
+     "id": "events",
+     "label": "events",
+     "tech": "SQLite table",
+     "desc": "Event rows by thread and line",
+     "icon": "table"
+    },
+    {
+     "id": "map",
+     "label": "fts_map",
+     "tech": "WITHOUT ROWID, user_version 3",
+     "desc": "thread, line to FTS rowid; backfilled by mapBatch",
+     "icon": "key-round"
+    }
+   ]
+  },
+  {
+   "group": "Search API",
+   "border": "solid",
+   "icon": "search-code",
+   "items": [
+    {
+     "id": "api",
+     "label": "Search API",
+     "tech": "session_search",
+     "desc": "Queries index and events",
+     "icon": "search-code"
+    }
+   ]
+  }
+ ],
+ "edges": [
+  {
+   "from": "logs",
+   "to": "pass",
+   "label": "new lines"
+  },
+  {
+   "from": "pass",
+   "to": "fts",
+   "label": "insert and delete"
+  },
+  {
+   "from": "pass",
+   "to": "events",
+   "label": "upsert and delete"
+  },
+  {
+   "from": "pass",
+   "to": "map",
+   "label": "rowid lookup"
+  },
+  {
+   "from": "fts",
+   "to": "api",
+   "label": "MATCH queries"
+  },
+  {
+   "from": "events",
+   "to": "api",
+   "label": "read context"
+  }
+ ]
 }
