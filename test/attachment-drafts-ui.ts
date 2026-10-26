@@ -7,9 +7,10 @@ import os from "node:os";
 import path from "node:path";
 import zlib from "node:zlib";
 import type { Browser, BrowserContext, Page, Route } from "playwright";
+import { freePort } from "./free-port.ts";
 
 const data = fs.mkdtempSync(path.join(os.tmpdir(), "ac-attachment-drafts-"));
-const port = Number(process.env.ATTACHMENT_DRAFTS_UI_PORT || 7074),
+const port = Number(process.env.ATTACHMENT_DRAFTS_UI_PORT) || (await freePort()),
   base = `http://127.0.0.1:${port}`;
 const ids = [
   "a10c801e-893e-4d42-b1df-f57eced19ad1",

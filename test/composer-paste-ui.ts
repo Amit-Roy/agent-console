@@ -8,9 +8,10 @@ import os from "node:os";
 import path from "node:path";
 import { type Browser, chromium, type Page } from "playwright";
 import { fixtureEffortModel } from "./fixtures/triage-effort.ts";
+import { freePort } from "./free-port.ts";
 
 const data = fs.mkdtempSync(path.join(os.tmpdir(), "ac-paste-ui-"));
-const port = Number(process.env.PASTE_UI_PORT || 7076),
+const port = Number(process.env.PASTE_UI_PORT) || (await freePort()),
   base = `http://127.0.0.1:${port}`;
 fs.mkdirSync(path.join(data, "uploads"));
 fs.mkdirSync(path.join(data, "logs"));

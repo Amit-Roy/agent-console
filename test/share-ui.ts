@@ -5,6 +5,7 @@ import { once } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { freePort } from "./free-port.ts";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "ac-share-ui-"));
 const data = path.join(root, "data");
@@ -26,7 +27,7 @@ printf '{"description":"hello caption","uploader":"someone"}' > "$dir/1.info.jso
 `,
   { mode: 0o755 },
 );
-const port = Number(process.env.SHARE_UI_PORT || 7071);
+const port = Number(process.env.SHARE_UI_PORT) || (await freePort());
 const base = `http://127.0.0.1:${port}`;
 const shot = process.env.SHOT_DIR;
 if (shot) fs.mkdirSync(shot, { recursive: true });

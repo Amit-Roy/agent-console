@@ -6,9 +6,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { type Browser, chromium } from "playwright";
+import { freePort } from "./free-port.ts";
 
 const data = fs.mkdtempSync(path.join(os.tmpdir(), "ac-drafts-ui-"));
-const port = Number(process.env.DRAFTS_UI_PORT || 7075),
+const port = Number(process.env.DRAFTS_UI_PORT) || (await freePort()),
   base = `http://127.0.0.1:${port}`;
 const ids = ["draft-a", "draft-b", "draft-c"];
 fs.mkdirSync(path.join(data, "uploads"));
