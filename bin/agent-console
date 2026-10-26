@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
-# agent-console start|stop|restart|restart-when-idle|status|password|url|release [ref] [--repo PATH]  (supervise: internal, run by start)
+# agent-console start|stop|restart|deploy [ref]|rollback|restart-when-idle|status|password|url|release [ref] [--repo PATH]  (supervise: internal, run by start)
 # release: build an immutable release under $AGENT_CONSOLE_HOME/releases/<sha12> (default ~/.local/share/agent-console), print its path
+# deploy: build a release, wait until every thread is idle, then hand the port to a standby server of the new release (restart-when-idle is an alias)
+# rollback: hand the port back to $AGENT_CONSOLE_HOME/previous. supervise --handoff: internal, run by deploy/rollback.
 set -u
 DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+APP="${AGENT_CONSOLE_HOME:-$HOME/.local/share/agent-console}"
+LIVE=0; [ -z "${AGENT_CONSOLE_RUN:-}" ] && LIVE=1 # no RUN override: this is the live server, not a scratch one
 RUN="${AGENT_CONSOLE_RUN:-$HOME/.cache/agent-console}"; mkdir -p "$RUN"; export AGENT_CONSOLE_RUN="$RUN"; PORT="${PORT:-7070}"
 export PATH="$HOME/.local/bin:$PATH"
 # PMG (SafeDep) shims go first so every agent's npm/pip/uv/bun install is checked for known malware before it runs.
@@ -13,11 +17,83 @@ PMG_SHIMS="$HOME/.local/share/safedep/pmg/bin"; [ -x "$PMG_SHIMS/npm" ] && expor
 # (noreply address) for every agent commit, and GitHub email privacy then rejects the push.
 unset GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL GIT_COMMITTER_NAME GIT_COMMITTER_EMAIL
 # the pid file survives a workspace restart, when its pid may belong to an unrelated process: check it is our server
-running() { [ -f "$RUN/pid" ] && grep -qa "server/index.ts" "/proc/$(cat "$RUN/pid")/cmdline" 2>/dev/null; }
+running() { [ -f "$RUN/pid" ] && grep -qa "server/index.ts" "/proc/$(<"$RUN/pid")/cmdline" 2>/dev/null; }
 # the supervisor restarts the server whenever it exits, unless `stop` killed the supervisor first
 supervised() { [ -f "$RUN/supervisor" ] && tr '\0' ' ' <"/proc/$(cat "$RUN/supervisor")/cmdline" 2>/dev/null | grep -q "bin/agent-console supervise"; }
+# log lines carry millisecond timestamps (stamp sets NOW without forking)
+stamp() { local t=$EPOCHREALTIME s z ms; printf -v s '%(%Y-%m-%dT%H:%M:%S)T' "${t%.*}"; printf -v z '%(%z)T' "${t%.*}"; ms=${t#*.}; NOW="$s.${ms:0:3}${z:0:3}:${z:3}"; }
+slog() { stamp; echo "[$NOW] $*" >>"$RUN/log"; }
+# a process that has exited but is not reaped yet still answers kill -0
+alive() { local stat; kill -0 "$1" 2>/dev/null || return 1; { stat=$(<"/proc/$1/stat"); } 2>/dev/null || return 1; stat=${stat##*) }; [ "${stat:0:1}" != Z ]; }
+# a release dir carries RELEASE.json: its bundle was built and smoke-booted by release.mjs and is never rebuilt at runtime
+choose_entry() {
+  BUNDLE=.bundle/server/index.ts.mjs; entry=server/index.ts; cache="$RUN/compile-cache"
+  if [ -f "$DIR/RELEASE.json" ]; then
+    cache="$APP/compile-cache"
+    [ "$delay" -le 1 ] && [ -f "$DIR/$BUNDLE" ] && entry=$BUNDLE
+    return
+  fi
+  # one bundled module loads in a fraction of the time of ~150 source modules; rebuild it when any source is newer.
+  # While the server keeps crashing on boot (delay > 1), run the sources directly in case the bundle is at fault.
+  if [ "$delay" -le 1 ] && [ -f "$DIR/scripts/bundle-server.mjs" ]; then
+    if [ ! -f "$DIR/$BUNDLE" ] || [ -n "$(cd "$DIR" && find server scripts/bundle-server.mjs package-lock.json -newer "$BUNDLE" -print -quit)" ]; then
+      (cd "$DIR" && node scripts/bundle-server.mjs) >>"$RUN/log" 2>&1 || slog "supervisor $$: bundle failed; running sources"
+    fi
+    [ -f "$DIR/$BUNDLE" ] && [ -z "$(cd "$DIR" && find server scripts/bundle-server.mjs package-lock.json -newer "$BUNDLE" -print -quit)" ] && entry=$BUNDLE
+  fi
+}
+# deploy/rollback: start the standby server of this release. It loads its modules, writes $RUN/standby-ready and waits for `go` on
+# its stdin (the FIFO). The FIFO write end stays with this supervisor, so a dead supervisor closes it and the standby exits.
+handoff_abort() { slog "supervisor $$: handoff aborted"; [ -n "${npid:-}" ] && kill "$npid" 2>/dev/null; [ -n "${lockjob:-}" ] && kill "$lockjob" 2>/dev/null; rm -f "$RUN/handoff" "$RUN/standby-ready" "$RUN/standby.fifo"; exit 1; }
+handoff_start_standby() {
+  local fifo="$RUN/standby.fifo"
+  trap handoff_abort TERM INT
+  rm -f "$RUN/standby-ready" "$fifo"; mkfifo "$fifo"; : >"$RUN/handoff"
+  choose_entry; slog "supervisor $$: handoff: starting standby server ($entry)"
+  (cd "$DIR" && PORT=$PORT AGENT_CONSOLE_STANDBY=1 AGENT_CONSOLE_PID_FILE="$RUN/pid" NODE_COMPILE_CACHE="$cache" exec node "$entry" 8>&-) <"$fifo" >>"$RUN/log" 2>&1 &
+  npid=$!
+  exec 7>"$fifo"
+}
+# block on the lock the old supervisor holds (idle-restart kills it); give up if the standby dies first
+handoff_wait_lock() {
+  local fin
+  flock 8 & lockjob=$!
+  wait -n -p fin "$npid" "$lockjob"
+  [ "$fin" = "$lockjob" ] || { slog "supervisor $$: handoff: standby server died before the old supervisor released the lock"; handoff_abort; }
+  echo $$ >"$RUN/supervisor"; lockjob=""
+}
+handoff_wait_ready() {
+  local tries=0
+  while [ ! -f "$RUN/standby-ready" ]; do
+    alive "$npid" && [ $((tries += 1)) -lt 500 ] || { slog "supervisor $$: handoff: standby never became ready"; handoff_abort; }
+    sleep 0.01
+  done
+}
+handoff_stop_old() {
+  local old="" tries=0
+  [ -f "$RUN/pid" ] && old=$(<"$RUN/pid")
+  [ -n "$old" ] && [ "$old" != "$npid" ] && grep -qa "server/index.ts" "/proc/$old/cmdline" 2>/dev/null || return 0
+  kill -TERM "$old" 2>/dev/null
+  while alive "$old"; do
+    [ $((tries += 1)) -eq 300 ] && { slog "supervisor $$: old server $old ignored SIGTERM for 3s; killing"; kill -KILL "$old" 2>/dev/null; }
+    sleep 0.01
+  done
+  slog "supervisor $$: handoff: old server $old gone after ${tries} polls"
+}
+handoff_take_over() {
+  handoff_wait_lock; handoff_wait_ready; handoff_stop_old
+  echo go >&7; rm -f "$RUN/handoff"; trap - TERM INT
+  slog "supervisor $$: handoff: go sent to standby server $npid"
+}
 case "${1:-status}" in
-  start) if [ "$RUN" = "$HOME/.cache/agent-console" ] && [ "${AGENT_CONSOLE_MOCK:-0}" != "1" ]; then
+  start) # the live server runs from the current release; a scratch server (AGENT_CONSOLE_RUN set) runs from this tree
+         if [ "$LIVE" = 1 ] && [ ! -f "$DIR/RELEASE.json" ]; then
+           if [ ! -x "$APP/current/bin/agent-console" ]; then
+             rel=$(node "$DIR/scripts/release.mjs" 2>>"$RUN/log") && mkdir -p "$APP" && ln -sfn "$rel" "$APP/current.tmp" && mv -T "$APP/current.tmp" "$APP/current" || echo "release build failed; running from $DIR (see $RUN/log)"
+           fi
+           [ -x "$APP/current/bin/agent-console" ] && exec "$APP/current/bin/agent-console" start
+         fi
+         if [ "$RUN" = "$HOME/.cache/agent-console" ] && [ "${AGENT_CONSOLE_MOCK:-0}" != "1" ]; then
            # its own Node boot takes seconds even when it is already up; the server only polls its database, so never wait for it
            ( "$DIR/bin/github-triage" start || echo "[$(date +%Y-%m-%dT%H:%M:%S.%3N%:z)] GitHub triage could not start; see its private log." ) </dev/null >>"$RUN/log" 2>&1 &
          fi
@@ -27,39 +103,42 @@ case "${1:-status}" in
          pid=$(ss -ltnpH "sport = :$PORT" 2>/dev/null | grep -o 'pid=[0-9]*' | head -1 | cut -d= -f2)
          [ -n "$pid" ] && grep -qa "server/index.ts" "/proc/$pid/cmdline" 2>/dev/null && { echo "$pid" >"$RUN/pid"; echo "already running (pid $pid)"; exit 0; }
          PORT=$PORT setsid nohup "$DIR/bin/agent-console" supervise </dev/null >/dev/null 2>&1 &
-         for _ in $(seq 100); do running && break; sleep 0.2; done; "$0" status; "$0" url ;;
+         for _ in $(seq 400); do running && break; sleep 0.05; done; "$0" status; "$0" url ;;
   supervise) # A PID file alone cannot serialize concurrent start or restart requests.
          exec 8>"$RUN/supervisor.lock"
-         flock -n 8 || exit 0
-         echo $$ >"$RUN/supervisor"; delay=1
+         adopted=""; delay=1; began=$SECONDS
+         if [ "${2:-}" = "--handoff" ]; then
+           handoff_start_standby; handoff_take_over; adopted=$npid
+         else
+           flock -n 8 || exit 0
+           echo $$ >"$RUN/supervisor"
+         fi
          while :; do
            # append, so the reason the last server died survives the restart; rotate at 5 MB
            [ "$(stat -c %s "$RUN/log" 2>/dev/null || echo 0)" -gt 5000000 ] && mv "$RUN/log" "$RUN/log.1"
-           # one bundled module loads in a fraction of the time of ~150 source modules; rebuild it when any source is newer.
-           # While the server keeps crashing on boot (delay > 1), run the sources directly in case the bundle is at fault.
-           entry=server/index.ts bundle=.bundle/server/index.ts.mjs
-           if [ "$delay" -le 1 ] && [ -f "$DIR/scripts/bundle-server.mjs" ]; then
-             if [ ! -f "$DIR/$bundle" ] || [ -n "$(cd "$DIR" && find server scripts/bundle-server.mjs package-lock.json -newer "$bundle" -print -quit)" ]; then
-               (cd "$DIR" && node scripts/bundle-server.mjs) >>"$RUN/log" 2>&1 || echo "[$(date +%Y-%m-%dT%H:%M:%S.%3N%:z)] supervisor $$: bundle failed; running sources" >>"$RUN/log"
-             fi
-             [ -f "$DIR/$bundle" ] && [ -z "$(cd "$DIR" && find server scripts/bundle-server.mjs package-lock.json -newer "$bundle" -print -quit)" ] && entry=$bundle
+           if [ -n "$adopted" ]; then
+             wait "$adopted"; code=$?; adopted=""
+           else
+             choose_entry
+             # the compile cache keeps Node from re-stripping TypeScript and recompiling every module on each boot
+             slog "supervisor $$: starting server ($entry)"; began=$SECONDS
+             (cd "$DIR" && PORT=$PORT AGENT_CONSOLE_PID_FILE="$RUN/pid" NODE_COMPILE_CACHE="$cache" exec node "$entry" 7>&- 8>&-) >>"$RUN/log" 2>&1; code=$?
            fi
-           # the compile cache keeps Node from re-stripping TypeScript and recompiling every module on each boot
-           echo "[$(date +%Y-%m-%dT%H:%M:%S.%3N%:z)] supervisor $$: starting server ($entry)" >>"$RUN/log"; began=$(date +%s)
-           (cd "$DIR" && PORT=$PORT AGENT_CONSOLE_PID_FILE="$RUN/pid" NODE_COMPILE_CACHE="$RUN/compile-cache" exec node "$entry" 8>&-) >>"$RUN/log" 2>&1; code=$?
-           [ $(($(date +%s) - began)) -ge 60 ] && delay=1 # back off only while it keeps crashing on boot
-           echo "[$(date +%Y-%m-%dT%H:%M:%S.%3N%:z)] supervisor $$: server exited with code $code; restarting in ${delay}s" >>"$RUN/log"
-           sleep "$delay"; delay=$((delay < 30 ? delay * 2 : 30))
+           [ $((SECONDS - began)) -ge 60 ] && delay=1 # back off only while it keeps crashing on boot
+           slog "supervisor $$: server exited with code $code; restarting in ${delay}s"
+           sleep "$delay" 8>&- 7>&-; delay=$((delay < 30 ? delay * 2 : 30))
          done ;;
   stop)  supervised && kill "$(cat "$RUN/supervisor")"; rm -f "$RUN/supervisor"
          running && kill "$(cat "$RUN/pid")" && echo stopped || echo "not running" ;;
   restart) old=$(cat "$RUN/pid" 2>/dev/null); "$0" stop
            # the old server holds the port until it exits; wait for exactly that instead of a fixed second
            [ -n "$old" ] && timeout 10 tail --pid="$old" -f /dev/null 2>/dev/null; "$0" start ;;
-  # for agents: run as the last step of a turn that changed the server. Returns at once; a detached watcher waits for every running
-  # thread (including the caller's) to finish, then restarts the server. Open browsers reload themselves.
+  # for agents: run as the last step of a turn that changed the server. Returns at once; a detached watcher builds a release of the
+  # repo, waits for every running thread (including the caller's) to finish, then hands the port to a standby server of that release
+  # (gap well under a second). Open browsers reload themselves. rollback does the same with $APP/previous and no build.
   # redirect the whole subshell: a forked list left holding the caller's stdout makes `... | tail` wait for the restart
-  restart-when-idle) (cd "$DIR" && exec setsid nohup flock --close -n "$RUN/idle-restart.lock" node scripts/idle-restart.mjs) </dev/null >>"$RUN/idle-restart.log" 2>&1 & echo "restart scheduled: it happens when no thread is running (log: $RUN/idle-restart.log)" ;;
+  deploy|restart-when-idle|rollback) verb=$1; [ "$verb" = rollback ] || verb=deploy; [ $# -gt 0 ] && shift
+         (cd "$DIR" && exec setsid nohup flock --close -n "$RUN/idle-restart.lock" node scripts/idle-restart.mjs "$verb" "$@") </dev/null >>"$RUN/idle-restart.log" 2>&1 & echo "$verb scheduled: it happens when no thread is running (log: $RUN/idle-restart.log)" ;;
   status) running && echo "up (pid $(cat "$RUN/pid"))" || echo down ;;
   password) cat "$HOME/.config/agent-console/password" 2>/dev/null || echo "(created on first start)" ;;
   url) PORT=$PORT node "$DIR/scripts/console-url.ts" ;;

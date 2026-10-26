@@ -4,7 +4,7 @@
 // committed content only (git archive), production node_modules hardlinked from a lockfile-keyed store, server bundle built in place
 // (the bundle embeds absolute source paths, so it cannot be built elsewhere and moved), smoke-booted read-only, then marked `.ready`.
 // stdout: the release path (last line). stderr: progress and timings. Exit non-zero on any failure, leaving no `.ready`.
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import net from "node:net";
@@ -150,7 +150,7 @@ async function stopScratch(child) {
 }
 
 // Boot the release exactly as the supervisor would, but on a scratch port with scratch data, in mock mode.
-async function smokeBoot(dest, entry) {
+async function smokeBoot(dest, entry, compileCache) {
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "ac-release-smoke-"));
   const logFile = path.join(scratch, "server.log");
   const port = await freePort();
@@ -164,7 +164,7 @@ async function smokeBoot(dest, entry) {
     AGENT_CONSOLE_BRAIN: path.join(scratch, "no-brain"),
     AGENT_CONSOLE_MOCK: "1",
     AGENT_CONSOLE_PASSWORD: SMOKE_PASSWORD,
-    NODE_COMPILE_CACHE: path.join(scratch, "compile-cache"),
+    NODE_COMPILE_CACHE: compileCache, // the live server uses this dir too, so its first boot of this bundle is warm
   };
   fs.mkdirSync(env.AGENT_CONSOLE_RUN, { recursive: true });
   const logFd = fs.openSync(logFile, "w");
@@ -193,10 +193,11 @@ async function buildRelease(app, repo, ref, sha, dest) {
   const entry = hasBundler ? BUNDLE_ENTRY : path.join("server", "index.ts");
   lap("bundle");
   checkSyntax(dest, entry);
-  const info = { sha, ref, lockhash: hashes[0], depsHashes: hashes, builtAt: new Date().toISOString() };
+  const info = { sha, ref, repo, lockhash: hashes[0], depsHashes: hashes, builtAt: new Date().toISOString() };
   fs.writeFileSync(path.join(dest, "RELEASE.json"), `${JSON.stringify(info, null, 2)}\n`);
   run("chmod", ["-R", "a-w", dest]); // the smoke boot proves the server needs no writes inside its own tree
-  await smokeBoot(dest, entry);
+  fs.mkdirSync(path.join(app, "compile-cache"), { recursive: true });
+  await smokeBoot(dest, entry, path.join(app, "compile-cache"));
   lap("smoke");
   fs.chmodSync(dest, 0o755);
   fs.writeFileSync(path.join(dest, ".ready"), "");
@@ -253,6 +254,15 @@ function prune(app) {
   lap(`prune (kept ${kept.length})`);
 }
 
+// Re-run this script under flock(1), which holds the lock for the lifetime of the child; stdout stays the release path.
+function relockUnderFlock(lockFile) {
+  const child = spawnSync("flock", [lockFile, process.execPath, ...process.argv.slice(1)], {
+    stdio: "inherit",
+    env: { ...process.env, AGENT_CONSOLE_RELEASE_LOCKED: "1" },
+  });
+  if (child.status !== 0) process.exit(child.status ?? 1);
+}
+
 async function main() {
   const { repo, ref } = parseArgs(process.argv.slice(2));
   const app = process.env.AGENT_CONSOLE_HOME || path.join(os.homedir(), ".local", "share", "agent-console");
@@ -263,6 +273,11 @@ async function main() {
     return;
   }
   fs.mkdirSync(path.join(app, "deps"), { recursive: true });
+  if (!process.env.AGENT_CONSOLE_RELEASE_LOCKED) {
+    // Builds of one sha share a destination dir: serialize them. The loser of the race finds `.ready` once it gets the lock.
+    relockUnderFlock(path.join(app, `.build-${sha.slice(0, 12)}.lock`));
+    return;
+  }
   try {
     await buildRelease(app, repo, ref, sha, dest);
   } catch (failure) {
