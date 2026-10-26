@@ -162,7 +162,7 @@ async function stopScratch(child) {
   if (child.exitCode !== null || child.signalCode !== null) return;
   const exited = new Promise((resolve) => child.once("exit", resolve));
   process.kill(-child.pid, "SIGTERM");
-  await Promise.race([exited, delay(3000)]);
+  await Promise.race([exited, delay(3000, undefined, { ref: false })]);
   try {
     process.kill(-child.pid, "SIGKILL"); // stragglers in the process group
   } catch {}
