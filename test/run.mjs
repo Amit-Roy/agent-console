@@ -1,9 +1,9 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { run } from "node:test";
 import { spec } from "node:test/reporters";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { execFileSync } from "node:child_process";
 import { build } from "esbuild";
 import { planShards } from "./shard-plan.mjs";
 

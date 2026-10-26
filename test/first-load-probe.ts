@@ -10,17 +10,33 @@ import { freePort } from "./free-port.ts";
 const RUNS = Number(process.env.PROBE_RUNS) || 5;
 const repo = path.join(import.meta.dirname, "..");
 const bundleDir = path.join(os.tmpdir(), "ac-first-load-bundle", "public");
-execFileSync(process.execPath, [path.join(repo, "scripts", "bundle-web.mjs"), bundleDir], { stdio: "inherit" });
+execFileSync(process.execPath, [path.join(repo, "scripts", "bundle-web.mjs"), bundleDir], {
+  stdio: "inherit",
+});
 
 const data = fs.mkdtempSync(path.join(os.tmpdir(), "ac-first-load-"));
 for (const dir of ["uploads", "logs"]) fs.mkdirSync(path.join(data, dir));
 fs.writeFileSync(
   path.join(data, "threads.json"),
   JSON.stringify([
-    { id: "probe-a", provider: "mock", model: "echo", mode: "acceptEdits", title: "Probe 1", cwd: os.tmpdir(), status: "idle", cost: 0, createdAt: 1, updatedAt: 1 },
+    {
+      id: "probe-a",
+      provider: "mock",
+      model: "echo",
+      mode: "acceptEdits",
+      title: "Probe 1",
+      cwd: os.tmpdir(),
+      status: "idle",
+      cost: 0,
+      createdAt: 1,
+      updatedAt: 1,
+    },
   ]),
 );
-fs.writeFileSync(path.join(data, "logs", "probe-a.jsonl"), `${JSON.stringify({ type: "user_input", text: "fixture" })}\n`);
+fs.writeFileSync(
+  path.join(data, "logs", "probe-a.jsonl"),
+  `${JSON.stringify({ type: "user_input", text: "fixture" })}\n`,
+);
 process.env.AGENT_CONSOLE_DATA = data;
 const { makeToken } = await import("../server/auth.ts");
 
@@ -55,25 +71,42 @@ const median = (values: number[]) => {
 };
 
 async function measure(browser: Awaited<ReturnType<typeof chromium.launch>>, base: string) {
-  const runs = { composerMs: [] as number[], jsRequests: [] as number[], jsBytes: [] as number[], scriptSec: [] as number[] };
+  const runs = {
+    composerMs: [] as number[],
+    jsRequests: [] as number[],
+    jsBytes: [] as number[],
+    scriptSec: [] as number[],
+  };
   const errors: string[] = [];
   for (let i = 0; i < RUNS; i++) {
-    const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, reducedMotion: "reduce" });
+    const context = await browser.newContext({
+      viewport: { width: 1280, height: 900 },
+      reducedMotion: "reduce",
+    });
     await context.addCookies([
-      { name: "__Host-ac_session", value: makeToken(), domain: new URL(base).hostname, path: "/", secure: true },
+      {
+        name: "__Host-ac_session",
+        value: makeToken(),
+        domain: new URL(base).hostname,
+        path: "/",
+        secure: true,
+      },
     ]);
     const page = await context.newPage();
     page.on("pageerror", (error) => errors.push(error.message));
     page.on("console", (msg) => msg.type() === "error" && errors.push(msg.text()));
     const scripts: Promise<number>[] = [];
     page.on("requestfinished", (request) => {
-      if (request.resourceType() === "script") scripts.push(request.sizes().then((s) => s.responseBodySize));
+      if (request.resourceType() === "script")
+        scripts.push(request.sizes().then((sizes) => sizes.responseBodySize));
     });
     const cdp = await context.newCDPSession(page);
     await cdp.send("Performance.enable");
     const t0 = performance.now();
     await page.goto(base);
-    await page.waitForFunction(() => !(document.getElementById("input") as HTMLTextAreaElement)?.disabled);
+    await page.waitForFunction(
+      () => !(document.getElementById("input") as HTMLTextAreaElement)?.disabled,
+    );
     runs.composerMs.push(performance.now() - t0);
     const metrics = (await cdp.send("Performance.getMetrics")).metrics;
     runs.scriptSec.push(metrics.find((m) => m.name === "ScriptDuration")?.value ?? Number.NaN);
@@ -96,7 +129,10 @@ const servers: ChildProcess[] = [];
 const browser = await chromium.launch();
 try {
   const result: Record<string, unknown> = {};
-  for (const [name, bundle] of [["source", ""], ["bundle", bundleDir]]) {
+  for (const [name, bundle] of [
+    ["source", ""],
+    ["bundle", bundleDir],
+  ]) {
     const port = await freePort();
     servers.push(await startServer(bundle, port));
     result[name] = await measure(browser, `http://127.0.0.1:${port}`);
