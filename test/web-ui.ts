@@ -39,7 +39,15 @@ try {
   browser = await chromium.launch();
   for (const width of [1280, 390]) {
     const ctx = await browser.newContext({ viewport: { width, height: 900 } });
-    await ctx.addCookies([{ name: "ac_session", value: makeToken(), url: base }]);
+    await ctx.addCookies([
+      {
+        name: "__Host-ac_session",
+        value: makeToken(),
+        domain: new URL(base).hostname,
+        path: "/",
+        secure: true,
+      },
+    ]);
     await ctx.addInitScript((id) => localStorage.setItem("ac_thread", id), id);
     const events: any[] = [{ type: "user_input", text: "Browse the web" }];
     let client: any;

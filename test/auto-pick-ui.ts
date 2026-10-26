@@ -116,7 +116,15 @@ try {
       isMobile: name === "phone",
       hasTouch: name === "phone",
     });
-    await context.addCookies([{ name: "ac_session", value: makeToken(), url: base }]);
+    await context.addCookies([
+      {
+        name: "__Host-ac_session",
+        value: makeToken(),
+        domain: new URL(base).hostname,
+        path: "/",
+        secure: true,
+      },
+    ]);
     const page = await context.newPage();
     const pageErrors: string[] = [];
     page.on("pageerror", (error) => pageErrors.push(error.message));

@@ -144,7 +144,7 @@ try {
       );
     }
   }
-  const headers = { cookie: `ac_session=${makeToken()}` };
+  const headers = { cookie: `__Host-ac_session=${makeToken()}` };
   for (const query of ["", "!!!", "a".repeat(501)]) {
     assert.equal(
       (await fetch(`${base}/api/sessions/search?q=${encodeURIComponent(query)}`, { headers }))
@@ -199,7 +199,15 @@ try {
       isMobile: mobile,
       hasTouch: mobile,
     });
-    await context.addCookies([{ name: "ac_session", value: makeToken(), url: base }]);
+    await context.addCookies([
+      {
+        name: "__Host-ac_session",
+        value: makeToken(),
+        domain: new URL(base).hostname,
+        path: "/",
+        secure: true,
+      },
+    ]);
     const page = await context.newPage();
     page.on("pageerror", (error) => errors.push(error.message));
     await page.goto(`${base}/sessions?q=orchard`);

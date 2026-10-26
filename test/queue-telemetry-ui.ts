@@ -93,7 +93,15 @@ try {
       isMobile: width === 390,
       hasTouch: width === 390,
     });
-    await context.addCookies([{ name: "ac_session", value: makeToken(), url: base }]);
+    await context.addCookies([
+      {
+        name: "__Host-ac_session",
+        value: makeToken(),
+        domain: new URL(base).hostname,
+        path: "/",
+        secure: true,
+      },
+    ]);
     await context.addInitScript((id) => localStorage.setItem("ac_thread", id), a);
     const page = await context.newPage(),
       errors: string[] = [];
@@ -231,7 +239,7 @@ try {
   server = start();
   await ready();
   const persisted = await fetch(base + "/api/latency", {
-    headers: { cookie: `ac_session=${makeToken()}` },
+    headers: { cookie: `__Host-ac_session=${makeToken()}` },
   }).then((r) => r.json());
   assert.ok(persisted.count > 0);
   console.log("PASS latency samples persist across server restarts");

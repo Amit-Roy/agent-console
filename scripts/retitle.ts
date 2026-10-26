@@ -10,7 +10,7 @@ import { suggestTitle } from "../server/providers/title.ts";
 const BASE = process.env.BASE || "http://127.0.0.1:7070";
 const dry = process.argv.includes("--dry");
 const ws = new WebSocket(BASE.replace("http", "ws") + "/ws", {
-  headers: { cookie: `ac_session=${makeToken()}`, origin: BASE },
+  headers: { cookie: `__Host-ac_session=${makeToken()}`, origin: BASE },
 });
 const inbox: any[] = [];
 ws.on("message", (d) => inbox.push(JSON.parse(String(d))));
