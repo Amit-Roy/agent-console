@@ -4,29 +4,18 @@ import { run } from "node:test";
 import { spec } from "node:test/reporters";
 import { pathToFileURL } from "node:url";
 import { build } from "esbuild";
+import { planShards } from "./shard-plan.mjs";
 
-// Node's CLI sorts file names. Start the longest suites first so they overlap
-// short suites instead of extending the end of the pool (CI baseline, 2026-10-23).
-// Shards take every Nth file, so alternate the heavy suites across the two shards.
-// Order by measured CI time so each shard gets an equal share (PR #349: about 48 s of heavy suites per shard).
-// Pin every heavy suite here: unlisted files shift shard whenever a test file is added.
-const slow = [
-  "test/attachment-drafts-ui.ts",
-  "test/github-triage-cli.ts",
-  "test/drafts-ui.ts",
-  "test/composer-scroll-ui.ts",
-  "test/idle-compaction-ui.ts",
-  "test/pi-e2e-ui.ts",
-  "test/issue-review.ts",
-  "test/sw-restart-ui.ts",
-];
+const weights = JSON.parse(
+  await fs.readFile(new URL("./weights.json", import.meta.url), "utf8"),
+);
+
+// Node's CLI sorts file names. Start the longest suites first so they overlap short suites
+// instead of extending the end of the pool. Shards come from a longest-first plan over
+// measured seconds per file (test/weights.json, regenerate with scripts/test-weights.mjs).
 let files = process.argv.slice(2);
-const priority = (file) => {
-  const index = slow.indexOf(file);
-  return index < 0 ? slow.length : index;
-};
-files.sort((a, b) => priority(a) - priority(b));
 if (!files.length) throw new Error("Pass test files to the runner.");
+files = planShards(files, weights, 1)[0];
 if (process.env.TEST_SHARD) {
   const match = /^(\d+)\/(\d+)$/.exec(process.env.TEST_SHARD);
   const index = Number(match?.[1]),
@@ -36,7 +25,7 @@ if (process.env.TEST_SHARD) {
   console.log(`Test suite files: ${JSON.stringify(files)}`);
   console.log(`Test run started: ${Date.now() - performance.now()}`);
   const count = files.length;
-  files = files.filter((_, position) => position % total === index - 1);
+  files = planShards(files, weights, total)[index - 1];
   console.log(`Test shard ${index}/${total}: ${files.length} of ${count} files.`);
 }
 const outdir = ".bundle/tests";
