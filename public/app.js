@@ -104,6 +104,8 @@ let ws,
   reconnectTimer = 0,
   probeTimer = 0;
 let draftsLoaded = false;
+let restartClosedAt = 0; // when the last 1012 (service restart) close arrived; 0 = not restarting
+let bannerTimer = 0; // delays the "Disconnected" banner while restarting
 
 // ---------- connection ----------
 function connect() {
@@ -116,12 +118,15 @@ function connect() {
   sock.onopen = () => {
     if (sock !== ws) return;
     retry = 0;
+    restartClosedAt = 0;
+    clearTimeout(bannerTimer);
+    bannerTimer = 0;
     signedOut = false;
     questions.setConnected(true);
     banner("");
   };
-  sock.onclose = () => {
-    if (sock === ws) closed();
+  sock.onclose = (event) => {
+    if (sock === ws) closed(event.code);
   };
   sock.onmessage = (m) => {
     if (sock !== ws) return;
@@ -138,7 +143,7 @@ function connect() {
     handle(message);
   };
 }
-function closed() {
+function closed(code) {
   clearTimeout(probeTimer);
   probeTimer = 0;
   questions.setConnected(false);
@@ -150,9 +155,19 @@ function closed() {
     $("queue-save").disabled = queueEditor.revision == null;
     $("queue-draft").disabled = queueEditor.revision == null;
   }
+  if (code === 1012) restartClosedAt = Date.now(); // server restarting (deploy): retry fast for a few seconds
+  const restarting = Date.now() - restartClosedAt < 3000;
+  if (restarting) {
+    if (!bannerTimer)
+      bannerTimer = setTimeout(showDisconnected, restartClosedAt + 1000 - Date.now());
+  } else showDisconnected();
+  if (!restarting && retry >= 1) checkSignIn();
+  if (restarting) reconnectTimer = setTimeout(connect, 100);
+  else reconnectTimer = setTimeout(connect, Math.min(1000 * 2 ** retry++, 10000));
+}
+function showDisconnected() {
+  bannerTimer = 0;
   if (!signedOut) banner("Disconnected. Reconnecting…");
-  if (retry >= 1) checkSignIn();
-  reconnectTimer = setTimeout(connect, Math.min(1000 * 2 ** retry++, 10000));
 }
 // After a phone wakes the socket can look open yet be dead. Ping; no reply within 1.5 s means drop it and reconnect now.
 function probe() {

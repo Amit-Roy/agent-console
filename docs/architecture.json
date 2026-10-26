@@ -1,6 +1,6 @@
 {
-  "title": "Console auth flow",
-  "subtitle": "Caddy to agent-console request authorization",
+  "title": "Console auth flow and release deploy",
+  "subtitle": "Caddy to agent-console authorization; source tree to immutable release to standby handoff",
   "items": [
     {
       "group": "Edge",
@@ -63,6 +63,97 @@
           "color": "purple"
         }
       ]
+    },
+    {
+      "group": "Build source",
+      "icon": "git-branch",
+      "border": "solid",
+      "items": [
+        {
+          "id": "source",
+          "label": "Source git tree",
+          "tech": "~/repos/agent-console (main)",
+          "desc": "Build source only; never served directly",
+          "icon": "folder-git-2",
+          "color": "slate"
+        },
+        {
+          "id": "builder",
+          "label": "Release builder",
+          "tech": "scripts/release.mjs",
+          "desc": "Idempotent; git archive, bundle, smoke boot",
+          "icon": "package",
+          "color": "blue",
+          "step": 1
+        }
+      ]
+    },
+    {
+      "group": "Release store",
+      "sub": "~/.local/share/agent-console",
+      "icon": "hard-drive",
+      "border": "solid",
+      "items": [
+        {
+          "id": "deps",
+          "label": "Dependency store",
+          "tech": "deps/<lockhash>",
+          "desc": "One npm ci per lockfile, hardlinked into releases",
+          "icon": "archive",
+          "color": "teal"
+        },
+        {
+          "id": "release",
+          "label": "Immutable release",
+          "tech": "releases/<sha>/",
+          "desc": "Prebuilt bundle, read-only, .ready after smoke boot",
+          "icon": "package-check",
+          "color": "indigo"
+        },
+        {
+          "id": "links",
+          "label": "Release pointers",
+          "tech": "current / previous symlinks",
+          "desc": "Atomic switch; previous kept for rollback",
+          "icon": "link",
+          "color": "purple"
+        }
+      ]
+    },
+    {
+      "group": "Supervisor and servers",
+      "sub": "bin/agent-console, scripts/idle-restart.mjs",
+      "icon": "server",
+      "border": "dashed",
+      "items": [
+        {
+          "id": "supervisor",
+          "label": "Supervisor",
+          "tech": "bin/agent-console supervise",
+          "desc": "Starts the standby of the new release, owns the port handoff",
+          "icon": "cpu",
+          "color": "blue",
+          "step": 3
+        },
+        {
+          "id": "standby",
+          "label": "Standby server (S2)",
+          "tech": "server standby gate",
+          "desc": "Boots and binds first; serves nothing until go",
+          "icon": "power",
+          "color": "teal",
+          "step": 4
+        },
+        {
+          "id": "old",
+          "label": "Live server (S1)",
+          "tech": "previous release",
+          "desc": "Fast shutdown on handoff, then S2 takes the port",
+          "icon": "server",
+          "color": "slate",
+          "step": 5
+        }
+      ]
     }
   ],
   "edges": [
@@ -85,6 +176,51 @@
       "from": "origin",
       "to": "login",
       "label": "guards POST"
+    },
+    {
+      "from": "source",
+      "to": "builder",
+      "label": "git archive <sha>",
+      "step": 1
+    },
+    {
+      "from": "builder",
+      "to": "deps",
+      "label": "build or reuse"
+    },
+    {
+      "from": "deps",
+      "to": "release",
+      "label": "hardlink"
+    },
+    {
+      "from": "builder",
+      "to": "release",
+      "label": "bundle + smoke boot",
+      "step": 2
+    },
+    {
+      "from": "release",
+      "to": "links",
+      "label": "flip on ready"
+    },
+    {
+      "from": "links",
+      "to": "supervisor",
+      "label": "idle restart picks new release",
+      "step": 3
+    },
+    {
+      "from": "supervisor",
+      "to": "standby",
+      "label": "spawn from release",
+      "step": 4
+    },
+    {
+      "from": "supervisor",
+      "to": "old",
+      "label": "stop, then go",
+      "step": 5
     }
   ]
 }
