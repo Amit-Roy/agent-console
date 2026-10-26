@@ -193,6 +193,53 @@
           "color": "purple"
         }
       ]
+    },
+    {
+      "group": "CI test gate",
+      "icon": "flask-conical",
+      "border": "dashed",
+      "items": [
+        {
+          "id": "order",
+          "label": "Measured file weights",
+          "tech": "test/weights.json, scripts/test-weights.mjs",
+          "desc": "Median seconds per file from recent CI runs",
+          "icon": "scale",
+          "color": "orange"
+        },
+        {
+          "id": "planner",
+          "label": "Longest-first shard plan",
+          "tech": "test/shard-plan.mjs",
+          "desc": "Heaviest file goes to the least-loaded shard",
+          "icon": "split",
+          "color": "orange"
+        },
+        {
+          "id": "suites",
+          "label": "Heavy browser suites",
+          "tech": "drafts-ui, idle-compaction-ui, attachment-drafts-ui",
+          "desc": "2 lanes each; attachment capped by AC_ATTACH_LANES",
+          "icon": "app-window",
+          "color": "orange"
+        },
+        {
+          "id": "shards",
+          "label": "3 test runners",
+          "tech": "ubuntu-latest, 4 vCPU, 8 files at once",
+          "desc": "About 75 s summed per shard",
+          "icon": "cpu",
+          "color": "orange"
+        },
+        {
+          "id": "budget",
+          "label": "Shard budget gate",
+          "tech": "test/shard-budget.mjs, SHARD_COUNT",
+          "desc": "15 s per file, 25 s whole run",
+          "icon": "gauge",
+          "color": "orange"
+        }
+      ]
     }
   ],
   "edges": [
@@ -280,6 +327,31 @@
       "from": "host-page",
       "to": "host-telemetry",
       "label": "History"
+    },
+    {
+      "from": "order",
+      "to": "planner",
+      "label": "weights"
+    },
+    {
+      "from": "planner",
+      "to": "shards",
+      "label": "file lists"
+    },
+    {
+      "from": "suites",
+      "to": "shards",
+      "label": "run in"
+    },
+    {
+      "from": "shards",
+      "to": "budget",
+      "label": "test logs"
+    },
+    {
+      "from": "budget",
+      "to": "release",
+      "label": "gates deploy"
     }
   ]
 }

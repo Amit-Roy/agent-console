@@ -1,5 +1,6 @@
 import { setTimeout as delay } from "node:timers/promises";
 
+const count = Number(process.env.SHARD_COUNT || 2);
 const deadline = Date.now() + 120_000;
 const url = `${process.env.GITHUB_API_URL}/repos/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}/artifacts?per_page=100`;
 while (Date.now() < deadline) {
@@ -12,10 +13,12 @@ while (Date.now() < deadline) {
   const ready = artifacts.filter(
     (artifact) => !artifact.expired && artifact.name.startsWith(process.env.READY_PREFIX),
   );
-  if (ready.length === 2) {
-    console.log("Both runners are ready; starting the test windows.");
+  if (ready.length === count) {
+    console.log(`All ${count} runners are ready; starting the test windows.`);
     process.exit(0);
   }
   await delay(1000);
 }
-throw new Error("Both CI runners must finish setup within 120 seconds of the first ready runner.");
+throw new Error(
+  `All ${count} CI runners must finish setup within 120 seconds of the first ready runner.`,
+);
