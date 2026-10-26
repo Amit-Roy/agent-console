@@ -1,84 +1,85 @@
 {
-  "title": "Transcript read path",
-  "subtitle": "Turn end, retitle and export read logs without blocking the event loop",
+  "title": "Token telemetry transcript path",
+  "subtitle": "Incremental async reads replace whole-log sync scans",
   "items": [
     {
-      "group": "Storage",
-      "sub": "thread data dir",
+      "group": "Agent Console data",
+      "sub": "~/.config/agent-console",
       "border": "solid",
       "icon": "database",
       "items": [
         {
           "id": "logs",
           "label": "Thread JSONL logs",
-          "tech": "up to 57 MB",
-          "desc": "Append-only transcripts",
+          "tech": "logs/<thread>.jsonl",
+          "desc": "Transcripts up to 59 MB",
           "icon": "file-json"
+        },
+        {
+          "id": "turns",
+          "label": "turns.jsonl",
+          "tech": "Turn ledger",
+          "desc": "Per-turn usage rows",
+          "icon": "list"
+        },
+        {
+          "id": "threads",
+          "label": "threads.json",
+          "tech": "Thread registry",
+          "desc": "Provider, model, PR links",
+          "icon": "folder-kanban"
         }
       ]
     },
     {
-      "group": "Readers",
-      "sub": "server/threads.ts",
-      "border": "solid",
+      "group": "Node server",
+      "sub": "server/",
+      "border": "dashed",
       "icon": "server",
       "items": [
         {
-          "id": "history",
-          "label": "history",
-          "tech": "server/threads.ts",
-          "desc": "Sync full read and parse of the transcript",
-          "icon": "history"
+          "id": "svc",
+          "label": "Telemetry service",
+          "tech": "scanLog / debounced syncItem",
+          "desc": "Reads appended bytes only via async fs; async 128 KB chunk rescans",
+          "icon": "activity"
         },
         {
-          "id": "historyTail",
-          "label": "historyTail",
-          "tech": "256 KB async chunks, backwards",
-          "desc": "Reads only the log tail",
-          "icon": "file-clock"
+          "id": "cache",
+          "label": "Offset cache",
+          "tech": "Per-thread tail state",
+          "desc": "Byte offset, unterminated tail, 64-byte check, parsed results; idle evicted after 1 h",
+          "icon": "hard-drive"
         },
         {
-          "id": "historyAsync",
-          "label": "historyAsync",
-          "tech": "async line stream",
-          "desc": "Streams the log without blocking",
-          "icon": "workflow"
+          "id": "acct",
+          "label": "Accounting replayer",
+          "tech": "server/accounting-log.ts",
+          "desc": "Resumable accountingReplayer; accountingSamples is a wrapper",
+          "icon": "calculator"
+        },
+        {
+          "id": "raised",
+          "label": "Raised replayer",
+          "tech": "server/session-prs.ts",
+          "desc": "Resumable raisedReplayer; raisedItems is a wrapper",
+          "icon": "git-pull-request"
         }
       ]
     },
     {
-      "group": "Consumers",
-      "sub": "server/schedules.ts and routes",
+      "group": "GitHub",
+      "sub": "api.github.com",
       "border": "solid",
-      "icon": "workflow",
+      "color": "slate",
+      "icon": "d2:dev/github",
       "items": [
         {
-          "id": "turnEnded",
-          "label": "turnEnded",
-          "tech": "historyTail, ending set",
-          "desc": "Run stays running until read; re-entry blocked",
-          "icon": "timer"
-        },
-        {
-          "id": "userTexts",
-          "label": "Retitle userTexts",
-          "tech": "readLines",
-          "desc": "Async stream, no full parse",
-          "icon": "type"
-        },
-        {
-          "id": "export",
-          "label": "/export",
-          "tech": "historyAsync",
-          "desc": "Async stream, output unchanged",
-          "icon": "download"
-        },
-        {
-          "id": "compose",
-          "label": "composePrompt",
-          "tech": "threads.history (sync)",
-          "desc": "Still reads synchronously",
-          "icon": "message-square-text"
+          "id": "comments",
+          "label": "Telemetry comments",
+          "tech": "Issue and PR comments",
+          "desc": "Rendered usage summary",
+          "icon": "message-square"
         }
       ]
     }
@@ -86,38 +87,43 @@
   "edges": [
     {
       "from": "logs",
-      "to": "history",
-      "label": "full read"
+      "to": "svc",
+      "label": "transcript bytes"
     },
     {
-      "from": "logs",
-      "to": "historyTail",
-      "label": "tail chunks"
+      "from": "turns",
+      "to": "svc",
+      "label": "turn rows"
     },
     {
-      "from": "logs",
-      "to": "historyAsync",
-      "label": "line stream"
+      "from": "threads",
+      "to": "svc",
+      "label": "parsed on stat change"
     },
     {
-      "from": "historyTail",
-      "to": "turnEnded",
-      "label": "last events"
+      "from": "svc",
+      "to": "cache",
+      "label": "offset and tail"
     },
     {
-      "from": "historyAsync",
-      "to": "userTexts",
-      "label": "user lines"
+      "from": "cache",
+      "to": "acct",
+      "label": "resume"
     },
     {
-      "from": "historyAsync",
-      "to": "export",
-      "label": "all lines"
+      "from": "cache",
+      "to": "raised",
+      "label": "resume"
     },
     {
-      "from": "history",
-      "to": "compose",
-      "label": "sync read"
+      "from": "acct",
+      "to": "comments",
+      "label": "usage samples"
+    },
+    {
+      "from": "raised",
+      "to": "comments",
+      "label": "raised items"
     }
   ]
 }

@@ -65,15 +65,26 @@ function recordBlock(block: any, calls: Set<string>, out: RaisedPr[], create: Re
         out.push(raised);
 }
 
-function scan(log: string, create: RegExp, url: RegExp): RaisedPr[] {
+/** Resumable scan: feed log lines in order, in any split; the tool_use to tool_result call set persists across feeds. */
+export function raisedReplayer(create: RegExp = CREATE_ITEM, url: RegExp = ITEM_URL) {
   const calls = new Set<string>();
   const out: RaisedPr[] = [];
-  for (const line of log.split("\n")) {
-    const content = parseLogLine(line)?.message?.content;
-    if (Array.isArray(content))
-      for (const block of content) recordBlock(block, calls, out, create, url);
-  }
-  return out;
+  return {
+    feed(line: string) {
+      const content = parseLogLine(line)?.message?.content;
+      if (Array.isArray(content))
+        for (const block of content) recordBlock(block, calls, out, create, url);
+    },
+    get raised() {
+      return out;
+    },
+  };
+}
+
+function scan(log: string, create: RegExp, url: RegExp): RaisedPr[] {
+  const replay = raisedReplayer(create, url);
+  for (const line of log.split("\n")) replay.feed(line);
+  return replay.raised;
 }
 
 /** Accepts a github.com PR/issue/comment URL, `owner/repo#n`, or a bare number (any repo). */

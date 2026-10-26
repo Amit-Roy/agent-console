@@ -1,9 +1,9 @@
 import { execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { accountingSamples } from "./accounting-log.ts";
+import { accountingReplayer, type accountingSamples } from "./accounting-log.ts";
 import { type GithubRequest, githubRequest } from "./github-triage.ts";
-import { raisedItems } from "./session-prs.ts";
+import { raisedReplayer } from "./session-prs.ts";
 import { safeTriageText } from "./triage-comment.ts";
 
 export const TELEMETRY_MARKER = "<!-- agent-console-telemetry -->";
@@ -199,18 +199,21 @@ export function renderTelemetry(req: RenderRequest): RenderResponse {
 }
 
 // ---- Upsert service ----
+type MaybePromise<T> = T | Promise<T>;
 export type TelemetryOptions = {
   repos: () => string[];
   dataDir: string;
   github?: GithubRequest;
-  threads?: () => (ThreadFacts & {
-    provider: string;
-    model?: string;
-    title?: string;
-    createdAt?: number;
-    cwd?: string;
-    archived?: number;
-  })[];
+  threads?: () => MaybePromise<
+    (ThreadFacts & {
+      provider: string;
+      model?: string;
+      title?: string;
+      createdAt?: number;
+      cwd?: string;
+      archived?: number;
+    })[]
+  >;
   git?: (cwd: string, ...args: string[]) => Promise<string>;
   debounceMs?: number;
   log?: (event: string, fields?: Record<string, unknown>) => void;
@@ -231,10 +234,8 @@ export function parseRemote(url: string): string | undefined {
 const why = (e: unknown) =>
   (e as any)?.status ? `http ${(e as any).status}` : String((e as any)?.name ?? "Error");
 
-type TelemetryThread = ReturnType<NonNullable<TelemetryOptions["threads"]>>[number];
+type TelemetryThread = Awaited<ReturnType<NonNullable<TelemetryOptions["threads"]>>>[number];
 type LogScan = {
-  size: number;
-  mtimeMs: number;
   texts: string[];
   raised: ThreadFacts["raised"];
   samples?: ReturnType<typeof accountingSamples>;
@@ -245,9 +246,11 @@ type TelemetryContext = {
   github: GithubRequest;
   git: (cwd: string, ...args: string[]) => Promise<string>;
   delay: number;
-  threads: () => TelemetryThread[];
-  // Logs are append-only: a log whose size and mtime are unchanged yields the same facts and samples, so scan it once.
-  scans: Map<string, LogScan>;
+  threads: () => TelemetryThread[] | Promise<TelemetryThread[]>;
+  // Logs are append-only: each keeps a byte offset and the parse state so later scans read only appended bytes.
+  scans: Map<string, TailSlot>;
+  ledger: TailSlot;
+  lastSweep: number;
   actor: Promise<string> | undefined;
   gitInfo: Map<string, { at: number; info: Promise<GitInfo | undefined> }>;
   timers: Map<string, ReturnType<typeof setTimeout>>;
@@ -262,13 +265,6 @@ function telemetryLog(
   try {
     context.options.log?.(event, fields);
   } catch {}
-}
-function readThreadLog(context: TelemetryContext, id: string) {
-  try {
-    return fs.readFileSync(path.join(context.options.dataDir, "logs", `${id}.jsonl`), "utf8");
-  } catch {
-    return null;
-  }
 }
 function ledgerSample(row: any): Sample | undefined {
   if (
@@ -286,62 +282,266 @@ function ledgerSample(row: any): Sample | undefined {
     cache: counter(row.cache),
   };
 }
-// App-server usage reaches the turn ledger without being written to the conversation log.
-function codexLedger(context: TelemetryContext) {
-  const ledger = new Map<string, Map<number, Sample>>();
-  let raw: string;
-  try {
-    raw = fs.readFileSync(path.join(context.options.dataDir, "turns.jsonl"), "utf8");
-  } catch {
-    return ledger;
+// ---- Incremental tail reader: later scans read only appended bytes, asynchronously and in chunks. ----
+const CHUNK_BYTES = 128 * 1024;
+const ANCHOR_BYTES = 64;
+const IDLE_EVICT_MS = 60 * 60_000;
+const SWEEP_EVERY_MS = 60_000;
+type LineConsumer = { key: string; impl: { feed(line: string): void } };
+type FileTail = {
+  ino: number;
+  offset: number; // start of the first line not yet completed by a newline
+  anchor: Buffer; // bytes just before offset, to notice in-place rewrites
+  tail: Buffer; // the unterminated last line
+  tailFed: boolean; // tail parsed as a complete JSON line, as a full read would
+  mtimeMs: number;
+  consumers: Map<string, LineConsumer>;
+};
+type TailSlot = { state?: FileTail; chain: Promise<unknown>; touched: number };
+type WantedConsumer = { name: string; key: string; make: () => LineConsumer["impl"] };
+class TailReset extends Error {}
+
+const newSlot = (): TailSlot => ({ chain: Promise.resolve(), touched: Date.now() });
+const yieldLoop = () => new Promise<void>((resolve) => setImmediate(resolve));
+const sameLine = (grown: string, fed: string) =>
+  grown.startsWith(fed) && /^[ \t\r]*$/.test(grown.slice(fed.length));
+
+async function readAt(handle: fs.promises.FileHandle, pos: number, len: number) {
+  const buf = Buffer.allocUnsafe(len);
+  let got = 0;
+  while (got < len) {
+    const { bytesRead } = await handle.read(buf, got, len - got, pos + got);
+    if (!bytesRead) throw new TailReset();
+    got += bytesRead;
   }
-  for (const line of raw.split("\n")) {
-    try {
-      const row = JSON.parse(line);
-      const sample = ledgerSample(row);
-      if (!sample) continue;
-      const turns = ledger.get(row.thread) ?? new Map<number, Sample>();
-      if (hasTokens(sample) || !hasTokens(turns.get(row.ts))) turns.set(row.ts, sample);
-      ledger.set(row.thread, turns);
-    } catch {} // An incomplete append must not hide earlier completed turns.
-  }
-  return ledger;
+  return buf;
 }
-function userTexts(raw: string) {
-  const texts: string[] = [];
-  for (const line of raw.split("\n")) {
-    if (!line.includes('"user_input"')) continue;
-    try {
-      const event = JSON.parse(line);
-      if (event.type === "user_input" && typeof event.text === "string")
-        texts.push(event.text.slice(0, 4000));
-    } catch {}
-  }
-  return texts;
+function nextAnchor(previous: Buffer, buf: Buffer, end: number) {
+  const piece = buf.subarray(Math.max(0, end - ANCHOR_BYTES), end);
+  return piece.length >= ANCHOR_BYTES
+    ? Buffer.from(piece)
+    : Buffer.concat([previous.subarray(-(ANCHOR_BYTES - piece.length)), piece]);
 }
-function scanLog(context: TelemetryContext, id: string): LogScan | null {
-  let stat: fs.Stats;
-  try {
-    stat = fs.statSync(path.join(context.options.dataDir, "logs", `${id}.jsonl`));
-  } catch {
-    context.scans.delete(id);
-    return null;
+/** Feed whole lines in [from, to) in chunks, yielding between chunks. Returns the unterminated rest. */
+async function pumpLines(
+  handle: fs.promises.FileHandle,
+  from: number,
+  to: number,
+  anchor: Buffer,
+  onLines: (lines: string[]) => void,
+) {
+  let carry = Buffer.alloc(0);
+  let pos = from;
+  while (pos < to) {
+    const chunk = await readAt(handle, pos, Math.min(CHUNK_BYTES, to - pos));
+    pos += chunk.length;
+    const buf = carry.length ? Buffer.concat([carry, chunk]) : chunk;
+    const newline = buf.lastIndexOf(10);
+    if (newline < 0) {
+      carry = Buffer.from(buf);
+      continue;
+    }
+    anchor = nextAnchor(anchor, buf, newline + 1);
+    onLines(buf.toString("utf8", 0, newline).split("\n"));
+    carry = Buffer.from(buf.subarray(newline + 1));
+    await yieldLoop();
   }
-  const hit = context.scans.get(id);
-  if (hit && hit.size === stat.size && hit.mtimeMs === stat.mtimeMs) return hit;
-  const raw = readThreadLog(context, id);
-  if (raw == null) {
-    context.scans.delete(id);
-    return null;
-  }
-  const scan = {
-    size: stat.size,
-    mtimeMs: stat.mtimeMs,
-    texts: userTexts(raw),
-    raised: raisedItems(raw),
+  return { carry, anchor };
+}
+const feedAll = (consumers: Iterable<LineConsumer>, lines: string[]) => {
+  for (const consumer of consumers) for (const line of lines) consumer.impl.feed(line);
+};
+async function catchUp(handle: fs.promises.FileHandle, state: FileTail, added: LineConsumer[]) {
+  await pumpLines(handle, 0, state.offset, Buffer.alloc(0), (lines) => feedAll(added, lines));
+  if (state.tailFed) feedAll(added, [state.tail.toString("utf8")]);
+}
+async function advance(handle: fs.promises.FileHandle, state: FileTail, size: number) {
+  const fed = state.tailFed ? state.tail.toString("utf8") : null;
+  let skip = fed;
+  const onLines = (lines: string[]) => {
+    if (skip != null && lines.length) {
+      if (!sameLine(lines.shift() as string, skip)) throw new TailReset();
+      skip = null;
+    }
+    feedAll(state.consumers.values(), lines);
   };
-  context.scans.set(id, scan);
-  return scan;
+  const { carry, anchor } = await pumpLines(handle, state.offset, size, state.anchor, onLines);
+  state.offset = size - carry.length;
+  state.anchor = anchor;
+  state.tail = carry;
+  if (skip != null) {
+    if (!sameLine(carry.toString("utf8"), skip)) throw new TailReset();
+    return;
+  }
+  state.tailFed = false;
+  if (!carry.length) return;
+  const text = carry.toString("utf8");
+  try {
+    JSON.parse(text);
+  } catch {
+    return; // incomplete append: a full read would skip it too, and it is read again once complete
+  }
+  feedAll(state.consumers.values(), [text]);
+  state.tailFed = true;
+}
+async function stillSame(handle: fs.promises.FileHandle, state: FileTail) {
+  const expected = Buffer.concat([state.anchor, state.tail]);
+  if (!expected.length) return true;
+  const head = await readAt(handle, state.offset - state.anchor.length, expected.length);
+  return head.equals(expected);
+}
+function usableState(state: FileTail | undefined, fileStat: fs.Stats): FileTail | undefined {
+  if (!state || state.ino !== fileStat.ino) return undefined;
+  const have = state.offset + state.tail.length;
+  if (fileStat.size < have || (fileStat.size === have && fileStat.mtimeMs !== state.mtimeMs))
+    return undefined;
+  return state;
+}
+const hasAll = (state: FileTail, wanted: WantedConsumer[]) =>
+  wanted.every((w) => state.consumers.get(w.name)?.key === w.key);
+async function syncOnce(
+  slot: TailSlot,
+  file: string,
+  wanted: WantedConsumer[],
+  fileStat: fs.Stats,
+) {
+  let state = usableState(slot.state, fileStat);
+  if (state && fileStat.size === state.offset + state.tail.length && hasAll(state, wanted))
+    return state;
+  const handle = await fs.promises.open(file, "r");
+  try {
+    if (state && !(await stillSame(handle, state))) state = undefined;
+    state ??= {
+      ino: fileStat.ino,
+      offset: 0,
+      anchor: Buffer.alloc(0),
+      tail: Buffer.alloc(0),
+      tailFed: false,
+      mtimeMs: fileStat.mtimeMs,
+      consumers: new Map(),
+    };
+    slot.state = state;
+    const added: LineConsumer[] = [];
+    for (const w of wanted) {
+      if (state.consumers.get(w.name)?.key === w.key) continue;
+      const consumer = { key: w.key, impl: w.make() };
+      state.consumers.set(w.name, consumer);
+      added.push(consumer);
+    }
+    if (added.length && (state.offset || state.tailFed)) await catchUp(handle, state, added);
+    await advance(handle, state, fileStat.size);
+    state.mtimeMs = fileStat.mtimeMs;
+    return state;
+  } finally {
+    await handle.close();
+  }
+}
+async function syncTail(slot: TailSlot, file: string, wanted: WantedConsumer[]) {
+  slot.touched = Date.now();
+  for (let attempt = 0; ; attempt++) {
+    let fileStat: fs.Stats;
+    try {
+      fileStat = await fs.promises.stat(file);
+    } catch {
+      slot.state = undefined;
+      return null;
+    }
+    try {
+      return await syncOnce(slot, file, wanted, fileStat);
+    } catch (error) {
+      slot.state = undefined;
+      if (error instanceof TailReset && attempt < 2) continue; // file shrank or was rewritten: rescan
+      if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return null;
+      throw error;
+    }
+  }
+}
+/** Serialize passes over one file so concurrent callers share one offset. */
+function queued<T>(slot: TailSlot, job: () => Promise<T>): Promise<T> {
+  const run = slot.chain.then(job, job);
+  slot.chain = run.catch(() => undefined);
+  return run;
+}
+function sweepIdle(context: TelemetryContext) {
+  const now = Date.now();
+  if (now - context.lastSweep < SWEEP_EVERY_MS) return;
+  context.lastSweep = now;
+  for (const [id, slot] of context.scans)
+    if (now - slot.touched > IDLE_EVICT_MS) context.scans.delete(id);
+}
+
+function ledgerConsumer() {
+  const ledger = new Map<string, Map<number, Sample>>();
+  return {
+    ledger,
+    feed(line: string) {
+      try {
+        const row = JSON.parse(line);
+        const sample = ledgerSample(row);
+        if (!sample) return;
+        const turns = ledger.get(row.thread) ?? new Map<number, Sample>();
+        if (hasTokens(sample) || !hasTokens(turns.get(row.ts))) turns.set(row.ts, sample);
+        ledger.set(row.thread, turns);
+      } catch {} // An incomplete append must not hide earlier completed turns.
+    },
+  };
+}
+// App-server usage reaches the turn ledger without being written to the conversation log.
+async function codexLedger(context: TelemetryContext) {
+  const file = path.join(context.options.dataDir, "turns.jsonl");
+  const state = await queued(context.ledger, () =>
+    syncTail(context.ledger, file, [{ name: "ledger", key: "", make: ledgerConsumer }]),
+  );
+  return (
+    (state?.consumers.get("ledger")?.impl as ReturnType<typeof ledgerConsumer> | undefined)
+      ?.ledger ?? new Map<string, Map<number, Sample>>()
+  );
+}
+function textsConsumer() {
+  const texts: string[] = [];
+  return {
+    texts,
+    feed(line: string) {
+      if (!line.includes('"user_input"')) return;
+      try {
+        const event = JSON.parse(line);
+        if (event.type === "user_input" && typeof event.text === "string")
+          texts.push(event.text.slice(0, 4000));
+      } catch {}
+    },
+  };
+}
+type SampleMeta = { id: string; provider: string; model?: string; createdAt?: number };
+async function scanLog(
+  context: TelemetryContext,
+  id: string,
+  meta?: SampleMeta,
+): Promise<LogScan | null> {
+  sweepIdle(context);
+  const slot = context.scans.get(id) ?? newSlot();
+  context.scans.set(id, slot);
+  const wanted: WantedConsumer[] = [
+    { name: "texts", key: "", make: textsConsumer },
+    { name: "raised", key: "", make: raisedReplayer },
+  ];
+  if (meta)
+    wanted.push({
+      name: "samples",
+      key: JSON.stringify([meta.provider, meta.model, meta.createdAt]),
+      make: () => accountingReplayer(meta),
+    });
+  const file = path.join(context.options.dataDir, "logs", `${id}.jsonl`);
+  const state = await queued(slot, () => syncTail(slot, file, wanted));
+  if (!state) {
+    context.scans.delete(id);
+    return null;
+  }
+  const impl = (name: string) => state.consumers.get(name)?.impl as any;
+  return {
+    texts: [...impl("texts").texts],
+    raised: [...impl("raised").raised],
+    samples: meta ? [...impl("samples").samples] : undefined,
+  };
 }
 function githubLogin(context: TelemetryContext) {
   context.actor ??= context
@@ -376,8 +576,8 @@ async function findComment(context: TelemetryContext, repo: string, number: numb
   }
   throw new Error("Too many comments to locate telemetry comment");
 }
-function factsOf(context: TelemetryContext, thread: TelemetryThread): ThreadFacts {
-  const scan = scanLog(context, thread.id);
+async function factsOf(context: TelemetryContext, thread: TelemetryThread): Promise<ThreadFacts> {
+  const scan = await scanLog(context, thread.id);
   return {
     id: thread.id,
     issueRun: thread.issueRun,
@@ -411,24 +611,19 @@ async function enrich(context: TelemetryContext, thread: TelemetryThread, fresh 
 }
 async function prepared(context: TelemetryContext, raw: TelemetryThread, fresh = false) {
   const thread = await enrich(context, raw, fresh);
-  return { thread, facts: factsOf(context, thread) };
+  return { thread, facts: await factsOf(context, thread) };
 }
-function threadSamples(
+async function threadSamples(
   context: TelemetryContext,
   thread: TelemetryThread,
   ledger: Map<string, Map<number, Sample>>,
 ) {
-  const scan = scanLog(context, thread.id);
-  if (scan && !scan.samples) {
-    const log = readThreadLog(context, thread.id);
-    if (log != null)
-      scan.samples = accountingSamples(log, {
-        id: thread.id,
-        provider: thread.provider,
-        model: thread.model,
-        createdAt: thread.createdAt,
-      });
-  }
+  const scan = await scanLog(context, thread.id, {
+    id: thread.id,
+    provider: thread.provider,
+    model: thread.model,
+    createdAt: thread.createdAt,
+  });
   let samples = scan?.samples ?? null;
   const stored = thread.provider === "codex" ? ledger.get(thread.id) : undefined;
   if (stored) {
@@ -463,8 +658,8 @@ async function syncItem(context: TelemetryContext, req: SyncRequest) {
   const existing = await findComment(context, req.repo, req.number);
   if (existing && req.createOnly) return { status: "unchanged" as const };
   const runs: TelemetryRun[] = [];
-  const ledger = codexLedger(context);
-  for (const raw of context.threads()) {
+  const ledger = await codexLedger(context);
+  for (const raw of await context.threads()) {
     const { thread, facts } = await prepared(context, raw);
     if (!linkThread({ thread: facts, repos, item: req }).linked) continue;
     runs.push({
@@ -473,7 +668,7 @@ async function syncItem(context: TelemetryContext, req: SyncRequest) {
       provider: thread.provider,
       model: thread.model,
       createdAt: thread.createdAt,
-      samples: threadSamples(context, thread, ledger),
+      samples: await threadSamples(context, thread, ledger),
     });
   }
   const { body } = renderTelemetry({ repo: req.repo, number: req.number, runs });
@@ -610,9 +805,23 @@ async function flushTelemetry(context: TelemetryContext) {
 }
 function closeTelemetry(context: TelemetryContext) {
   context.scans.clear();
+  context.ledger = newSlot();
   context.gitInfo.clear();
   for (const timer of context.timers.values()) clearTimeout(timer);
   context.timers.clear();
+}
+
+// threads.json is large and rewritten rarely compared with how often syncs run: parse it only when it changes.
+function cachedThreads(file: string) {
+  let cached: { key: string; threads: TelemetryThread[] } | undefined;
+  return async () => {
+    const fileStat = await fs.promises.stat(file);
+    const key = `${fileStat.ino}:${fileStat.size}:${fileStat.mtimeMs}`;
+    if (cached?.key === key) return cached.threads;
+    const threads = JSON.parse(await fs.promises.readFile(file, "utf8"));
+    cached = { key, threads };
+    return threads as TelemetryThread[];
+  };
 }
 
 export function createTelemetryService(options: TelemetryOptions) {
@@ -622,8 +831,10 @@ export function createTelemetryService(options: TelemetryOptions) {
     github: options.github ?? githubRequest,
     git: options.git ?? defaultGit,
     delay: options.debounceMs ?? 20_000,
-    threads: options.threads ?? (() => JSON.parse(fs.readFileSync(threadsFile, "utf8"))),
-    scans: new Map<string, LogScan>(),
+    threads: options.threads ?? cachedThreads(threadsFile),
+    scans: new Map<string, TailSlot>(),
+    ledger: newSlot(),
+    lastSweep: Date.now(),
     actor: undefined,
     gitInfo: new Map(),
     timers: new Map(),

@@ -77,8 +77,8 @@ function finishResult(state: ReplayState, event: any) {
   state.compact = false;
 }
 
-/** Reconstruct only provider-reported usage; never infer a price for missing telemetry. */
-export function accountingSamples(raw: string, thread: AccountingThread) {
+/** Resumable replay: feed log lines in order, in any split; `samples` is the live result. */
+export function accountingReplayer(thread: AccountingThread) {
   const state: ReplayState = {
     accounting: new SessionAccounting(),
     thread,
@@ -90,15 +90,26 @@ export function accountingSamples(raw: string, thread: AccountingThread) {
     tools: {},
     samples: [],
   };
-  for (const line of raw.split("\n")) {
-    let event: any;
-    try {
-      event = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    trackTurnEvent(state, event);
-    if (event.type === "result") finishResult(state, event);
-  }
-  return state.samples;
+  return {
+    feed(line: string) {
+      let event: any;
+      try {
+        event = JSON.parse(line);
+      } catch {
+        return;
+      }
+      trackTurnEvent(state, event);
+      if (event.type === "result") finishResult(state, event);
+    },
+    get samples() {
+      return state.samples;
+    },
+  };
+}
+
+/** Reconstruct only provider-reported usage; never infer a price for missing telemetry. */
+export function accountingSamples(raw: string, thread: AccountingThread) {
+  const replay = accountingReplayer(thread);
+  for (const line of raw.split("\n")) replay.feed(line);
+  return replay.samples;
 }
