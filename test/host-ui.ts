@@ -636,6 +636,14 @@ async function composerHostChecks() {
         "61 samples",
       ) === true,
     );
+    check(
+      `${name}: visible CPU scale`,
+      (await card.locator(".host-card-y-axis").innerText()).replace(/\s/g, "") === "100%50%0%",
+    );
+    check(
+      `${name}: time axis label`,
+      (await card.locator(".host-card-axis").innerText()).includes("Time"),
+    );
     await page.screenshot({ path: `${OUT}/fixture-cpu-${name}.png` });
     const beforeTabs = requests.length;
     await page.getByRole("tab", { name: "CPU", exact: true }).focus();
@@ -649,6 +657,10 @@ async function composerHostChecks() {
     await page.keyboard.press("End");
     await page.getByText("backup", { exact: true }).waitFor();
     check(`${name}: static tabs share snapshot`, requests.length === beforeTabs);
+    check(
+      `${name}: visible disk units`,
+      (await card.locator(".host-card-y-axis").innerText()).includes("/s"),
+    );
     await page.screenshot({ path: `${OUT}/fixture-${name}.png` });
     await page.getByRole("tab", { name: "CPU", exact: true }).click();
     check(
