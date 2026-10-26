@@ -57,8 +57,20 @@ function runLogs(runId, scratch) {
 function collectLogs(args, count) {
   if (args.length) return args.map((file) => [fs.readFileSync(file, "utf8")]);
   const runs = JSON.parse(
-    gh("run", "list", "--branch", "main", "--workflow", "ci.yml", "--status", "success",
-      "--limit", String(count), "--json", "databaseId"),
+    gh(
+      "run",
+      "list",
+      "--branch",
+      "main",
+      "--workflow",
+      "ci.yml",
+      "--status",
+      "success",
+      "--limit",
+      String(count),
+      "--json",
+      "databaseId",
+    ),
   );
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "test-weights-"));
   return runs.map((run) => runLogs(run.databaseId, scratch));

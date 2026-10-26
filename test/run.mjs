@@ -6,9 +6,7 @@ import { pathToFileURL } from "node:url";
 import { build } from "esbuild";
 import { planShards } from "./shard-plan.mjs";
 
-const weights = JSON.parse(
-  await fs.readFile(new URL("./weights.json", import.meta.url), "utf8"),
-);
+const weights = JSON.parse(await fs.readFile(new URL("./weights.json", import.meta.url), "utf8"));
 
 // Node's CLI sorts file names. Start the longest suites first so they overlap short suites
 // instead of extending the end of the pool. Shards come from a longest-first plan over

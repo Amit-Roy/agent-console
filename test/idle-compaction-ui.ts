@@ -206,7 +206,10 @@ try {
     lifecycleContexts.push(context);
     return context;
   };
-  const runScenario = async (lifecycleContext: Awaited<ReturnType<typeof newLifecycleContext>>, scenario: string) => {
+  const runScenario = async (
+    lifecycleContext: Awaited<ReturnType<typeof newLifecycleContext>>,
+    scenario: string,
+  ) => {
     const page = await lifecycleContext.newPage();
     page.setDefaultTimeout(5000);
     const errors: string[] = [];

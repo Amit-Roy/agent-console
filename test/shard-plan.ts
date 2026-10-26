@@ -2,7 +2,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { planShards } from "./shard-plan.mjs";
 
-const weights: Record<string, number> = { "a.ts": 9, "b.ts": 7, "c.ts": 5, "d.ts": 4, "e.ts": 3, "f.ts": 1 };
+const weights: Record<string, number> = {
+  "a.ts": 9,
+  "b.ts": 7,
+  "c.ts": 5,
+  "d.ts": 4,
+  "e.ts": 3,
+  "f.ts": 1,
+};
 const files = [...Object.keys(weights), "new1.ts", "new2.ts"];
 const load = (shard: string[]) => shard.reduce((sum, file) => sum + (weights[file] ?? 4), 0);
 

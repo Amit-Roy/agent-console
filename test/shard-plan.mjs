@@ -9,7 +9,9 @@ export function planShards(files, weights, total) {
       ? known[mid]
       : (known[mid - 1] + known[mid]) / 2;
   const weightOf = (file) => (Number.isFinite(weights[file]) ? weights[file] : fallback);
-  const ordered = [...files].sort((a, b) => weightOf(b) - weightOf(a) || (a < b ? -1 : a > b ? 1 : 0));
+  const ordered = [...files].sort(
+    (a, b) => weightOf(b) - weightOf(a) || (a < b ? -1 : a > b ? 1 : 0),
+  );
   const shards = Array.from({ length: total }, () => ({ load: 0, files: [] }));
   for (const file of ordered) {
     let best = shards[0];
