@@ -62,7 +62,10 @@ function runOnce(): Promise<void> {
     const logFd = fs.openSync(logFile(), "w", 0o600);
     const cmd = process.env.VAULT_BACKUP_CMD || "iron backup";
     writeStatus("running");
+    let finished = false;
     const done = (code: number | null) => {
+      if (finished) return; // spawn failure emits both "error" and "close"
+      finished = true;
       fs.closeSync(logFd);
       if (code === 0) writeStatus("ok");
       else writeStatus("failed", logMentionsDrive() ? "failed: drive" : "failed");
