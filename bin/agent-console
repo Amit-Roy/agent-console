@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# agent-console start|stop|restart|restart-when-idle|status|password|url  (supervise: internal, run by start)
+# agent-console start|stop|restart|restart-when-idle|status|password|url|release [ref] [--repo PATH]  (supervise: internal, run by start)
+# release: build an immutable release under $AGENT_CONSOLE_HOME/releases/<sha12> (default ~/.local/share/agent-console), print its path
 set -u
 DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
 RUN="${AGENT_CONSOLE_RUN:-$HOME/.cache/agent-console}"; mkdir -p "$RUN"; export AGENT_CONSOLE_RUN="$RUN"; PORT="${PORT:-7070}"
@@ -62,4 +63,5 @@ case "${1:-status}" in
   status) running && echo "up (pid $(cat "$RUN/pid"))" || echo down ;;
   password) cat "$HOME/.config/agent-console/password" 2>/dev/null || echo "(created on first start)" ;;
   url) PORT=$PORT node "$DIR/scripts/console-url.ts" ;;
+  release) shift; exec node "$DIR/scripts/release.mjs" "$@" ;;
 esac
