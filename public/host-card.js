@@ -60,11 +60,11 @@ function chart(history, resource) {
   const path = points
     .map(
       ([time, value], index) =>
-        `${index && time - points[index - 1][0] <= 15_000 ? "L" : "M"}${12 + ((time - first) / 300_000) * 376},${85 - (Math.max(0, value) / maximum) * 72}`,
+        `${index && time - points[index - 1][0] <= 15_000 ? "L" : "M"}${((time - first) / 300_000) * 400},${80 - (Math.max(0, value) / maximum) * 80}`,
     )
     .join(" ");
   const svg = document.createElementNS(SVG_NS, "svg");
-  svg.setAttribute("viewBox", "0 0 400 96");
+  svg.setAttribute("viewBox", "0 0 400 80");
   svg.setAttribute("preserveAspectRatio", "none");
   svg.setAttribute("class", "host-card-chart");
   svg.setAttribute("role", "img");
@@ -72,18 +72,27 @@ function chart(history, resource) {
     "aria-label",
     `${LABELS[resource]} history, ${points.length} samples. Latest ${resource === "disk" ? `${bytes(points.at(-1)[1])}/s` : percent(points.at(-1)[1])}. Scale 0 to ${resource === "disk" ? `${bytes(maximum)}/s` : "100%"}.`,
   );
+  for (const height of [0, 40, 80]) {
+    const gridline = document.createElementNS(SVG_NS, "line");
+    for (const [attribute, value] of Object.entries({ x1: 0, x2: 400, y1: height, y2: height }))
+      gridline.setAttribute(attribute, value);
+    svg.append(gridline);
+  }
+  const vertical = el("div", "host-card-y-axis");
+  vertical.setAttribute("aria-hidden", "true");
+  for (const value of [maximum, maximum / 2, 0])
+    vertical.append(el("span", "", resource === "disk" ? `${bytes(value)}/s` : `${value}%`));
+  const plot = el("div", "host-card-plot");
   const line = document.createElementNS(SVG_NS, "path");
   line.setAttribute("d", path);
   svg.append(line);
   const axis = el("div", "host-card-axis");
   const time = (stamp) =>
     new Date(stamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  axis.append(
-    el("span", "", time(first)),
-    el("span", "", resource === "disk" ? `0–${bytes(maximum)}/s` : "0–100%"),
-    el("span", "", time(last)),
-  );
-  figure.append(svg, axis);
+  axis.setAttribute("aria-hidden", "true");
+  axis.append(el("span", "", time(first)), el("span", "", "Time"), el("span", "", time(last)));
+  plot.append(vertical, svg, axis);
+  figure.append(plot);
   return figure;
 }
 
