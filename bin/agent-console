@@ -9,6 +9,8 @@ APP="${AGENT_CONSOLE_HOME:-$HOME/.local/share/agent-console}"
 LIVE=0; [ -z "${AGENT_CONSOLE_RUN:-}" ] && LIVE=1 # no RUN override: this is the live server, not a scratch one
 RUN="${AGENT_CONSOLE_RUN:-$HOME/.cache/agent-console}"; mkdir -p "$RUN"; export AGENT_CONSOLE_RUN="$RUN"; PORT="${PORT:-7070}"
 export PATH="$HOME/.local/bin:$PATH"
+# claude.ai connectors attach per account and change a thread's tool list mid-life; every child Claude inherits this off switch.
+export ENABLE_CLAUDEAI_MCP_SERVERS=false
 # PMG (SafeDep) shims go first so every agent's npm/pip/uv/bun install is checked for known malware before it runs.
 PMG_SHIMS="$HOME/.local/share/safedep/pmg/bin"; [ -x "$PMG_SHIMS/npm" ] && export PATH="$PMG_SHIMS:$PATH"
 # A restart issued from a Nefro thread inherits its profile; Sunny must keep the default Claude login.

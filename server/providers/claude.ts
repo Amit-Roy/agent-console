@@ -39,17 +39,16 @@ export function leanMcpArgs(): string[] {
     .map((x) => x.trim())
     .filter(Boolean);
   const consoleServer = consoleMcpServer();
-  if (keep.includes("all"))
-    return consoleServer
-      ? ["--mcp-config", JSON.stringify({ mcpServers: { agent_console: consoleServer } })]
-      : [];
   let servers: Record<string, unknown> = {};
   try {
     const all =
       JSON.parse(fs.readFileSync(path.join(os.homedir(), ".claude.json"), "utf8")).mcpServers ?? {};
-    servers = Object.fromEntries(keep.filter((k) => all[k]).map((k) => [k, all[k]]));
+    servers = keep.includes("all")
+      ? { ...all }
+      : Object.fromEntries(keep.filter((k) => all[k]).map((k) => [k, all[k]]));
   } catch {}
   if (consoleServer) servers.agent_console = consoleServer;
+  // always strict: a thread's tools array must not depend on account-level or project-level MCP config
   return ["--strict-mcp-config", "--mcp-config", JSON.stringify({ mcpServers: servers })];
 }
 
@@ -291,6 +290,7 @@ export function claudeStartArgs(thread: ThreadSpec): string[] {
 function claudeStartEnv(thread: ThreadSpec, account: ReturnType<typeof requireClaudeAccount>) {
   const env = claudeRoutingEnv(process.env);
   env.AGENT_CONSOLE_THREAD = thread.id;
+  env.ENABLE_TOOL_SEARCH = "false"; // deferred tool loading changes the tools array mid-thread and busts the prompt cache
   const toolEnv = toolEnvFile();
   if (toolEnv && !env.CLAUDE_ENV_FILE) env.CLAUDE_ENV_FILE = toolEnv; // Bash commands start at the lower tool priority
   if (account === "nefro") env.CLAUDE_CONFIG_DIR = claudeConfigDir(account);
