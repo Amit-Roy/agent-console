@@ -272,11 +272,6 @@
       "label": "300s history"
     },
     {
-      "from": "host-api",
-      "to": "host-telemetry",
-      "label": "Latest I/O"
-    },
-    {
       "from": "host-page",
       "to": "host-api",
       "label": "Metrics"
