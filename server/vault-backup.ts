@@ -15,16 +15,10 @@ export type BackupStatus = {
 const DEFAULT_DEBOUNCE_MS = 30_000;
 const DRIVE_HINT = /drive|verify/i;
 const stateDir = () =>
-  path.join(
-    process.env.VAULT_HOME || os.homedir(),
-    ".local",
-    "state",
-    "agent-console",
-  );
+  path.join(process.env.VAULT_HOME || os.homedir(), ".local", "state", "agent-console");
 const statusFile = () => path.join(stateDir(), "iron-backup.json");
 const logFile = () => path.join(stateDir(), "iron-backup.log");
-const debounceMs = () =>
-  Number(process.env.VAULT_BACKUP_DEBOUNCE_MS) || DEFAULT_DEBOUNCE_MS;
+const debounceMs = () => Number(process.env.VAULT_BACKUP_DEBOUNCE_MS) || DEFAULT_DEBOUNCE_MS;
 
 let timer: NodeJS.Timeout | null = null;
 let running = false;
@@ -33,13 +27,9 @@ let again = false;
 function writeStatus(state: BackupState, error: string | null = null) {
   try {
     fs.mkdirSync(stateDir(), { recursive: true });
-    fs.writeFileSync(
-      statusFile(),
-      JSON.stringify({ state, at: Date.now(), error }),
-      {
-        mode: 0o600,
-      },
-    );
+    fs.writeFileSync(statusFile(), JSON.stringify({ state, at: Date.now(), error }), {
+      mode: 0o600,
+    });
   } catch {
     /* status is best effort */
   }
@@ -75,8 +65,7 @@ function runOnce(): Promise<void> {
     const done = (code: number | null) => {
       fs.closeSync(logFd);
       if (code === 0) writeStatus("ok");
-      else
-        writeStatus("failed", logMentionsDrive() ? "failed: drive" : "failed");
+      else writeStatus("failed", logMentionsDrive() ? "failed: drive" : "failed");
       resolve();
     };
     const child = spawn("setsid", ["-w", "sh", "-c", cmd], {

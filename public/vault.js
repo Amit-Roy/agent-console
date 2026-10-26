@@ -8,7 +8,12 @@ const el = (tag, cls, text) => {
   if (text != null) n.textContent = text;
   return n;
 };
-const state = { backup: null, groups: [], pk: { known: false, enrolled: 0, passkeys: [] }, restart: false };
+const state = {
+  backup: null,
+  groups: [],
+  pk: { known: false, enrolled: 0, passkeys: [] },
+  restart: false,
+};
 const SECRETISH = /(KEY|TOKEN|SECRET|PASS|AUTH|CRED|PRIVATE|DSN|URL)/i;
 let toastTimer;
 function toast(text, tone) {

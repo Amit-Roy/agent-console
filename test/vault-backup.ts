@@ -10,15 +10,11 @@ process.env.VAULT_HOME = dir;
 process.env.VAULT_BACKUP_DEBOUNCE_MS = "150";
 process.env.VAULT_BACKUP_CMD = `echo run >> ${counter}`;
 
-const { scheduleBackup, retryBackup, backupStatus } =
-  await import("../server/vault-backup.ts");
+const { scheduleBackup, retryBackup, backupStatus } = await import("../server/vault-backup.ts");
 const runs = () =>
-  fs.existsSync(counter)
-    ? fs.readFileSync(counter, "utf8").split("\n").length - 1
-    : 0;
+  fs.existsSync(counter) ? fs.readFileSync(counter, "utf8").split("\n").length - 1 : 0;
 const until = async (check: () => boolean) => {
-  for (let tick = 0; tick < 100 && !check(); tick++)
-    await new Promise((r) => setTimeout(r, 50));
+  for (let tick = 0; tick < 100 && !check(); tick++) await new Promise((resolve) => setTimeout(resolve, 50));
   assert.ok(check(), "condition reached");
 };
 
@@ -37,10 +33,7 @@ try {
   const secretLine = "SECRET-LOG-TEXT-xyz";
   process.env.VAULT_BACKUP_CMD = `echo ${secretLine}; exit 3`;
   await retryBackup();
-  assert.deepEqual(
-    [backupStatus().state, backupStatus().error],
-    ["failed", "failed"],
-  );
+  assert.deepEqual([backupStatus().state, backupStatus().error], ["failed", "failed"]);
 
   process.env.VAULT_BACKUP_CMD = `echo "drive verify mismatch ${secretLine}"; exit 1`;
   await retryBackup();
@@ -49,9 +42,7 @@ try {
     path.join(dir, ".local/state/agent-console/iron-backup.json"),
     "utf8",
   );
-  assert.ok(
-    !statusText.includes(secretLine) && !statusText.includes("mismatch"),
-  );
+  assert.ok(!statusText.includes(secretLine) && !statusText.includes("mismatch"));
 
   // retry runs immediately (no debounce wait)
   process.env.VAULT_BACKUP_CMD = `echo run >> ${counter}`;

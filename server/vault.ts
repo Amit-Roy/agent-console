@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import express from "express";
+import { backupStatus, retryBackup, scheduleBackup } from "./vault-backup.ts";
 import {
   type IronMap,
   ironCached,
@@ -13,7 +14,6 @@ import {
   KNOWN_MANAGED,
 } from "./vault-iron.ts";
 import { createPasskeys } from "./vault-passkey.ts";
-import { backupStatus, retryBackup, scheduleBackup } from "./vault-backup.ts";
 
 // Vault: write-only management of API tokens (env files, single-value files, GitHub Actions secrets).
 // Secret values are never read back out to a client, a log or an error: lists carry metadata only.
