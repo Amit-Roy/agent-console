@@ -4,6 +4,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import express from "express";
+import {
+  type IronMap,
+  ironCached,
+  ironSet,
+  ironStatus,
+  ironToken,
+  KNOWN_MANAGED,
+} from "./vault-iron.ts";
 import { createPasskeys } from "./vault-passkey.ts";
 
 // Vault: write-only management of API tokens (env files, single-value files, GitHub Actions secrets).
@@ -250,7 +258,15 @@ function atomicWrite(file: string, data: string) {
 }
 
 /* ---------- file sources ---------- */
-function readEnv(file: string) {
+const sha256 = (v: string) => crypto.createHash("sha256").update(v).digest("hex");
+type Proxy = "proxied" | "real-key" | "unproxied";
+function classify(key: string, value: string, iron: IronMap | null): Proxy {
+  const want = iron?.get(key);
+  if (!want) return "unproxied";
+  return sha256(value) === want.tokenSha ? "proxied" : "real-key";
+}
+
+function readEnv(file: string, iron: IronMap | null = null) {
   const text = fs.readFileSync(file, "utf8"),
     mtime = fs.statSync(file).mtimeMs;
   const entries: any[] = [];
@@ -261,6 +277,7 @@ function readEnv(file: string) {
         meta(m[2], parseValue(m[4]).value, mtime, {
           editable: ENV_KEY.test(m[2]),
           viewable: false,
+          proxy: classify(m[2], parseValue(m[4]).value, iron),
         }),
       );
   }
@@ -462,10 +479,10 @@ const ownEnv = (s: Source) =>
     }
   })();
 
-async function realEntries(s: Source): Promise<any[]> {
+async function realEntries(s: Source, iron: IronMap | null = null): Promise<any[]> {
   if (s.kind === "github") return readGithub(s.repo!);
   if (s.kind === "virtual" || !exists(s.file!)) return [];
-  return s.kind === "env" ? readEnv(s.file!) : readSingle(s.file!);
+  return s.kind === "env" ? readEnv(s.file!, iron) : readSingle(s.file!);
 }
 const shape = (s: Source, x: Extra, mtime: number | null) =>
   s.kind === "github"
@@ -490,10 +507,16 @@ function listMtime(s: Source, extra: Extra[]): number | null {
   return null;
 }
 
-async function listSource(s: Source, all: Extra[], showAll: boolean, opts: { mine?: boolean }) {
+async function listSource(
+  s: Source,
+  all: Extra[],
+  showAll: boolean,
+  opts: { mine?: boolean },
+  iron: IronMap | null,
+) {
   const base = { id: s.id, label: s.label, canAdd: s.kind === "env" || s.kind === "github" };
   try {
-    const real = await realEntries(s);
+    const real = await realEntries(s, iron);
     const have = new Set(real.map((e) => e.key));
     const extra = all.filter((x) => owns(s, x) && !have.has(x.key));
     // every extra in a file group takes the file's mtime, like the real keys; a label group shares its newest time
@@ -502,6 +525,8 @@ async function listSource(s: Source, all: Extra[], showAll: boolean, opts: { min
       ...real.map((e) => ({ ...e, ...(opts.mine ? { mine: true } : {}) })),
       ...extra.map((x) => ({ ...shape(s, x, mtime), ...(opts.mine ? { mine: false } : {}) })),
     ];
+    if (s.kind === "env" || s.kind === "virtual")
+      entries = entries.map((e) => ({ ...e, proxy: e.proxy ?? "unproxied" }));
     if ((s.kind === "env" || s.kind === "virtual") && !showAll)
       entries = entries.filter((e) => SECRETISH.test(e.key));
     entries.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
@@ -519,8 +544,9 @@ export async function listVault(opts: { mine?: boolean } = {}) {
   const all = loadExtras(),
     srcs = sources(),
     showAll = config().showAllKeys;
+  const iron = await ironStatus();
   const out = await Promise.all(
-    [...srcs, ...extraGroups(all, srcs)].map((s) => listSource(s, all, showAll, opts)),
+    [...srcs, ...extraGroups(all, srcs)].map((s) => listSource(s, all, showAll, opts, iron)),
   );
   return { sources: out };
 }
@@ -541,6 +567,8 @@ export function checkValue(v: unknown): string {
   if (typeof v !== "string" || v === "") throw new VaultError(400, "Enter a value.");
   if (/[\n\r\0]/.test(v)) throw new VaultError(400, "A value cannot contain a line break or NUL.");
   if (Buffer.byteLength(v) > MAX_VALUE) throw new VaultError(400, "A value can be at most 8 KiB.");
+  const shas = new Set([...(ironCached()?.values() ?? [])].map((e) => e.tokenSha));
+  if (shas.has(sha256(v))) throw new VaultError(400, "That is a proxy token, paste the real key.");
   return v;
 }
 /* the extra entry behind (source, key), unless a real key of that name exists */
@@ -584,11 +612,51 @@ async function setReal(s: Source, key: string, v: string) {
   audit("set", s, key);
 }
 
+/* ---------- iron-managed keys: the real value goes to iron, the file only ever holds the proxy token ---------- */
+const isManaged = (iron: IronMap | null, key: string) =>
+  iron ? iron.has(key) : KNOWN_MANAGED.has(key);
+
+function envValues(file: string): Map<string, string> {
+  const out = new Map<string, string>();
+  if (!exists(file)) return out;
+  for (const line of fs.readFileSync(file, "utf8").split("\n")) {
+    const m = ENV_LINE.exec(line.replace(/\r$/, ""));
+    if (m && !line.trimStart().startsWith("#")) out.set(m[2], parseValue(m[4]).value);
+  }
+  return out;
+}
+
+async function writeIronToken(s: Source, key: string, iron: IronMap) {
+  const entry = iron.get(key)!;
+  const current = envValues(s.file!).get(key);
+  if (current !== undefined && sha256(current) === entry.tokenSha) return;
+  const token = await ironToken(entry.name);
+  if (!token) throw new VaultError(502, "iron set failed");
+  const inFile = envValues(s.file!);
+  const aliases = [...iron].filter(
+    ([k, e]) => e.name === entry.name && (k === key || inFile.has(k)),
+  );
+  for (const [alias] of aliases) writeEnv(s.file!, alias, token);
+}
+
+async function setProxied(s: Source, key: string, v: string) {
+  const iron = await ironStatus();
+  if (!iron) throw new VaultError(502, "iron unreachable, nothing saved");
+  const entry = iron.get(key);
+  if (!entry || !(await ironSet(entry.name, v))) throw new VaultError(502, "iron set failed");
+  if (s.kind === "env") await writeIronToken(s, key, iron);
+  audit("set", s, key);
+  return { ok: true, proxied: true, ...(ownEnv(s) ? { restartNeeded: true } : {}) };
+}
+
 export function setSecret(id: string, key: string, value: unknown, c: Client = NOBODY) {
   const s = find(id);
   checkKey(s, key);
-  const v = checkValue(value);
+  checkValue(value);
   return serial(async () => {
+    const iron = await ironStatus();
+    const v = checkValue(value); // again, now that the token list is fresh
+    if (s.kind !== "virtual" && isManaged(iron, key)) return setProxied(s, key, v);
     const x = await extraAt(s, key);
     if (x) setExtra(s, key, v, c);
     else await setReal(s, key, v);
@@ -617,6 +685,8 @@ export function deleteSecret(id: string, key: string, c: Client = NOBODY) {
   const s = find(id);
   checkKey(s, key);
   return serial(async () => {
+    if (s.kind !== "virtual" && isManaged(await ironStatus(), key))
+      throw new VaultError(400, "proxied key: use iron off");
     const x = await extraAt(s, key);
     if (x) deleteExtra(s, key, c);
     else await deleteReal(s, key);
