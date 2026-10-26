@@ -288,3 +288,37 @@ select.input {
     display: none;
   }
 }
+.vbackup {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  margin: var(--sp-3) 0 0;
+  color: var(--t2);
+  font: var(--fw-reg) var(--f-sm);
+}
+.vbackup .bk-failed {
+  color: var(--bad);
+}
+.vbackup .bk-ok {
+  color: var(--ok);
+}
+.pbadge {
+  align-self: flex-start;
+  margin: var(--sp-1) 0;
+  padding: 1px var(--sp-2);
+  border-radius: var(--r-md);
+  font: var(--fw-med) var(--f-xs);
+  white-space: nowrap;
+}
+.pbadge.ok {
+  color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 14%, transparent);
+}
+.pbadge.bad {
+  color: var(--bad);
+  background: color-mix(in srgb, var(--bad) 14%, transparent);
+}
+.pbadge.off {
+  color: var(--t3);
+  background: color-mix(in srgb, var(--t3) 14%, transparent);
+}
