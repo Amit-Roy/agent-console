@@ -110,11 +110,17 @@ const server = spawn(process.execPath, ["server/index.ts"], {
   },
   stdio: "ignore",
 });
-const cookie = { name: "ac_session", value: makeToken(), url: base };
+const cookie = {
+  name: "__Host-ac_session",
+  value: makeToken(),
+  domain: new URL(base).hostname,
+  path: "/",
+  secure: true,
+};
 const post = (body: object) =>
   fetch(base + "/api/automation/_mock/event", {
     method: "POST",
-    headers: { "content-type": "application/json", cookie: `ac_session=${cookie.value}` },
+    headers: { "content-type": "application/json", cookie: `__Host-ac_session=${cookie.value}` },
     body: JSON.stringify(body),
   });
 let browser: Browser;

@@ -15,7 +15,15 @@ const check = (n: string, ok: boolean, x = "") => {
 };
 const newCtx = async (o: any) => {
   const ctx = await browser.newContext(o);
-  await ctx.addCookies([{ name: "ac_session", value: makeToken(), url: BASE }]);
+  await ctx.addCookies([
+    {
+      name: "__Host-ac_session",
+      value: makeToken(),
+      domain: new URL(BASE).hostname,
+      path: "/",
+      secure: true,
+    },
+  ]);
   return ctx;
 };
 

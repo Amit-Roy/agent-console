@@ -72,7 +72,15 @@ async function open(
   opts: { enrolled?: number; hang?: boolean } = {},
 ) {
   const ctx = await browser.newContext({ viewport, colorScheme: scheme });
-  await ctx.addCookies([{ name: "ac_session", value: makeToken(), url: BASE }]);
+  await ctx.addCookies([
+    {
+      name: "__Host-ac_session",
+      value: makeToken(),
+      domain: new URL(BASE).hostname,
+      path: "/",
+      secure: true,
+    },
+  ]);
   const page = await ctx.newPage();
   const errors: string[] = [],
     external: string[] = [],

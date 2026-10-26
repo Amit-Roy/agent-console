@@ -253,7 +253,7 @@ try {
     });
     const login = await fetch(`${origin}/login`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { Origin: origin, "Content-Type": "application/json" },
       body: JSON.stringify({ password }),
     });
     return { child, cookie: login.headers.get("set-cookie")!.split(";")[0] };

@@ -14,7 +14,15 @@ try {
     viewport: { width: 1280, height: 900 },
     colorScheme: "dark",
   });
-  await ctx.addCookies([{ name: "ac_session", value: makeToken(), url: base }]);
+  await ctx.addCookies([
+    {
+      name: "__Host-ac_session",
+      value: makeToken(),
+      domain: new URL(base).hostname,
+      path: "/",
+      secure: true,
+    },
+  ]);
   const page = await ctx.newPage();
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(e.message));
@@ -127,7 +135,15 @@ try {
       hasTouch: true,
       colorScheme: "dark",
     });
-    await phone.addCookies([{ name: "ac_session", value: makeToken(), url: base }]);
+    await phone.addCookies([
+      {
+        name: "__Host-ac_session",
+        value: makeToken(),
+        domain: new URL(base).hostname,
+        path: "/",
+        secure: true,
+      },
+    ]);
     const p = await phone.newPage();
     await p.goto(base);
     await p.locator("#chat .run-report").waitFor();

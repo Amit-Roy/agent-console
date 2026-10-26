@@ -5,7 +5,7 @@ import { makeToken } from "../server/auth.ts";
 const base = process.env.BASE || "http://127.0.0.1:7071";
 const inbox: any[] = [];
 const ws = new WebSocket(base.replace("http", "ws") + "/ws", {
-  headers: { origin: base, cookie: `ac_session=${makeToken()}` },
+  headers: { origin: base, cookie: `__Host-ac_session=${makeToken()}` },
 });
 ws.on("message", (d) => inbox.push(JSON.parse(String(d))));
 async function wait(pred: (m: any) => boolean, timeout = 6000) {

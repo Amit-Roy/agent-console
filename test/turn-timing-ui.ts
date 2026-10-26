@@ -122,7 +122,15 @@ try {
     colorScheme: "dark",
     hasTouch: true,
   });
-  await context.addCookies([{ name: "ac_session", value: makeToken(), url: base }]);
+  await context.addCookies([
+    {
+      name: "__Host-ac_session",
+      value: makeToken(),
+      domain: new URL(base).hostname,
+      path: "/",
+      secure: true,
+    },
+  ]);
   await context.addInitScript(() => localStorage.setItem("ac_thread", "mock-timing"));
   const page = await context.newPage();
   const errors: string[] = [];
@@ -344,7 +352,7 @@ try {
     (await page.locator("#run-details[open]").count()) === 1 &&
       (await page.evaluate(() => document.activeElement?.classList.contains("tb-open"))),
   );
-  const cookie = { headers: { cookie: `ac_session=${makeToken()}` } };
+  const cookie = { headers: { cookie: `__Host-ac_session=${makeToken()}` } };
   const detail = await (
     await fetch(`${base}/api/turn-latency?thread=mock-timing&detail=10`, cookie)
   ).json();
@@ -421,7 +429,15 @@ try {
       viewport,
       colorScheme: name === "phone" ? "dark" : "light",
     });
-    await dash.context().addCookies([{ name: "ac_session", value: makeToken(), url: base }]);
+    await dash.context().addCookies([
+      {
+        name: "__Host-ac_session",
+        value: makeToken(),
+        domain: new URL(base).hostname,
+        path: "/",
+        secure: true,
+      },
+    ]);
     dash.on("pageerror", (e) => errors.push(String(e)));
     await dash.goto(`${base}/dashboard#7`);
     await dash.locator(".panel h2", { hasText: "Turn latency" }).waitFor();

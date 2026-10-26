@@ -56,7 +56,7 @@ const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
 async function connect(compress: boolean) {
   const ws = new WebSocket(base.replace("http", "ws") + "/ws", {
     perMessageDeflate: compress,
-    headers: { origin: base, cookie: `ac_session=${makeToken()}` },
+    headers: { origin: base, cookie: `__Host-ac_session=${makeToken()}` },
   });
   clients.push(ws);
   const messages: any[] = [];

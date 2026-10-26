@@ -15,7 +15,7 @@ import {
 
 export const TICKET_MS = 60_000;
 // File and project grants have no practical time limit; process restart revokes them.
-export const SESSION_EXPIRES_AT = Number.MAX_SAFE_INTEGER;
+export const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 const MAX_GRANTS = 1000;
 export const token = () => randomBytes(32).toString("base64url");
 export const revision = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
@@ -158,13 +158,13 @@ export function sessionFromRequest(ctx: BridgeContext, req: Req) {
   return grant;
 }
 
-export async function projectRoot(grant: Grant) {
+export async function projectRoot(grant: Grant, now: number) {
   const cwd = await realpath(grant.cwd);
   // Preserve the chosen workspace, including sibling repositories. A symlinked
   // instructions file must not narrow ~/repos to its backing brain repository.
   const root = inside(cwd, grant.target) ? cwd : path.dirname(grant.target);
   const info = await lstat(root);
-  return { root, dev: info.dev, ino: info.ino, expiresAt: SESSION_EXPIRES_AT };
+  return { root, dev: info.dev, ino: info.ino, expiresAt: now + SESSION_TTL_MS };
 }
 
 export async function projectFromRequest(ctx: BridgeContext, req: Req) {

@@ -112,7 +112,7 @@ try {
   assert.equal((await fetch(origin + "/api/automation/log?step=review")).status, 401);
   const login = await fetch(origin + "/login", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { Origin: origin, "Content-Type": "application/json" },
     body: JSON.stringify({ password }),
   });
   const headers = { Cookie: login.headers.get("set-cookie")!.split(";")[0] };

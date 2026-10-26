@@ -13,7 +13,7 @@ import {
   prune,
   type Req,
   type Res,
-  SESSION_EXPIRES_AT,
+  SESSION_TTL_MS,
   sessionFromRequest,
   TICKET_MS,
   token,
@@ -43,7 +43,7 @@ async function openFileRoute(ctx: BridgeContext, req: Req, res: Res) {
     candidate,
     dev: info.dev,
     ino: info.ino,
-    expiresAt: SESSION_EXPIRES_AT,
+    expiresAt: ctx.now() + SESSION_TTL_MS,
   };
   const file = await checked(grant);
   try {
@@ -66,13 +66,13 @@ async function openFileRoute(ctx: BridgeContext, req: Req, res: Res) {
   }
 }
 
-async function aliasProjectFor(workspace: string, candidate: string) {
+async function aliasProjectFor(workspace: string, candidate: string, now: number) {
   const info = await lstat(workspace);
   const aliasProject: Project = {
     root: workspace,
     dev: info.dev,
     ino: info.ino,
-    expiresAt: SESSION_EXPIRES_AT,
+    expiresAt: now + SESSION_TTL_MS,
   };
   await projectPath(aliasProject, path.relative(workspace, candidate));
   return aliasProject;
@@ -85,7 +85,9 @@ async function createRoute(ctx: BridgeContext, req: Req, res: Res) {
   const resolved = await scopedPath(scope.cwd, req.query.path, scope.threadId);
   const workspace = await realpath(scope.cwd);
   const isAlias = resolved.candidate !== resolved.target;
-  const aliasProject = isAlias ? await aliasProjectFor(workspace, resolved.candidate) : undefined;
+  const aliasProject = isAlias
+    ? await aliasProjectFor(workspace, resolved.candidate, ctx.now())
+    : undefined;
   const info = await lstat(resolved.target);
   const grant: Grant = {
     project: aliasProject,
@@ -115,11 +117,11 @@ async function exchangeRoute(ctx: BridgeContext, req: Req, res: Res) {
   await file.handle.close();
   prune(ctx, ctx.sessions);
   const session = token();
-  const expiresAt = SESSION_EXPIRES_AT;
+  const expiresAt = ctx.now() + SESSION_TTL_MS;
   ctx.sessions.set(session, { ...grant, expiresAt });
   prune(ctx, ctx.projects);
   const projectToken = token();
-  const projectGrant = await projectRoot(grant);
+  const projectGrant = await projectRoot(grant, ctx.now());
   ctx.projects.set(projectToken, projectGrant);
   res.json({
     project: {

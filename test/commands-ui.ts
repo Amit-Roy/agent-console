@@ -5,7 +5,7 @@ import { makeToken } from "../server/auth.ts";
 
 const base = process.env.BASE || "http://127.0.0.1:7071";
 const ws = new WebSocket(base.replace("http", "ws") + "/ws", {
-  headers: { origin: base, cookie: `ac_session=${makeToken()}` },
+  headers: { origin: base, cookie: `__Host-ac_session=${makeToken()}` },
 });
 const inbox: any[] = [];
 ws.on("message", (d) => inbox.push(JSON.parse(String(d))));
@@ -37,7 +37,15 @@ try {
       isMobile: width === 390,
       hasTouch: width === 390,
     });
-    await ctx.addCookies([{ name: "ac_session", value: makeToken(), url: base }]);
+    await ctx.addCookies([
+      {
+        name: "__Host-ac_session",
+        value: makeToken(),
+        domain: new URL(base).hostname,
+        path: "/",
+        secure: true,
+      },
+    ]);
     await ctx.addInitScript((id) => localStorage.setItem("ac_thread", id), id);
     const page = await ctx.newPage();
     const errors: string[] = [];

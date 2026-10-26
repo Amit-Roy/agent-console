@@ -88,7 +88,7 @@ const cleanup = () => {
 process.on("exit", cleanup);
 for (let attempt = 0; ; attempt++) {
   const ready = await fetch(`${BASE}/api/host/metrics`, {
-    headers: { cookie: `ac_session=${makeToken()}` },
+    headers: { cookie: `__Host-ac_session=${makeToken()}` },
   }).then(
     (res) => res.ok,
     () => false,
@@ -167,7 +167,15 @@ for (const [name, viewport, scheme] of [
   ["phone-dark", { width: 390, height: 844 }, "dark"],
 ] as const) {
   const ctx = await browser.newContext({ viewport, colorScheme: scheme });
-  await ctx.addCookies([{ name: "ac_session", value: makeToken(), url: BASE }]);
+  await ctx.addCookies([
+    {
+      name: "__Host-ac_session",
+      value: makeToken(),
+      domain: new URL(BASE).hostname,
+      path: "/",
+      secure: true,
+    },
+  ]);
   const page = await ctx.newPage();
   const errors: string[] = [],
     external: string[] = [];
@@ -272,7 +280,15 @@ for (const [name, viewport, scheme] of [
 // deploy skew: new page files against an older server (no io field, no history endpoint)
 {
   const ctx = await browser.newContext({ viewport: { width: 390, height: 844 } });
-  await ctx.addCookies([{ name: "ac_session", value: makeToken(), url: BASE }]);
+  await ctx.addCookies([
+    {
+      name: "__Host-ac_session",
+      value: makeToken(),
+      domain: new URL(BASE).hostname,
+      path: "/",
+      secure: true,
+    },
+  ]);
   const page = await ctx.newPage();
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(String(e)));
@@ -303,13 +319,13 @@ for (const [name, viewport, scheme] of [
 // API contracts
 {
   const r = await fetch(`${BASE}/api/host/metrics`, {
-    headers: { cookie: `ac_session=${makeToken()}` },
+    headers: { cookie: `__Host-ac_session=${makeToken()}` },
   });
   check("api: metrics ok", r.status === 200, String(r.status));
 }
 {
   const r = await fetch(`${BASE}/api/host/history?range=300`, {
-    headers: { cookie: `ac_session=${makeToken()}` },
+    headers: { cookie: `__Host-ac_session=${makeToken()}` },
   });
   const j = await r.json();
   check(
@@ -320,7 +336,7 @@ for (const [name, viewport, scheme] of [
 }
 {
   const r = await fetch(`${BASE}/api/host/du?path=/`, {
-    headers: { cookie: `ac_session=${makeToken()}` },
+    headers: { cookie: `__Host-ac_session=${makeToken()}` },
   });
   const j = await r.json();
   check(
@@ -332,13 +348,13 @@ for (const [name, viewport, scheme] of [
 {
   const r = await fetch(`${BASE}/api/host/du/rescan`, {
     method: "POST",
-    headers: { cookie: `ac_session=${makeToken()}`, origin: "https://evil.example" },
+    headers: { cookie: `__Host-ac_session=${makeToken()}`, origin: "https://evil.example" },
   });
   check("api: rescan refuses cross-site", r.status === 403, String(r.status));
 }
 {
   const r = await fetch(`${BASE}/api/host/processes`, {
-    headers: { cookie: `ac_session=${makeToken()}` },
+    headers: { cookie: `__Host-ac_session=${makeToken()}` },
   });
   const j = await r.json();
   check(
@@ -349,7 +365,7 @@ for (const [name, viewport, scheme] of [
 }
 {
   const r = await fetch(`${BASE}/api/host/ports`, {
-    headers: { cookie: `ac_session=${makeToken()}` },
+    headers: { cookie: `__Host-ac_session=${makeToken()}` },
   });
   const j = await r.json();
   check(
@@ -361,7 +377,9 @@ for (const [name, viewport, scheme] of [
 {
   // the console's own process tree and PID 1 are listed as protected and refused by the kill API
   const j = await (
-    await fetch(`${BASE}/api/host/processes`, { headers: { cookie: `ac_session=${makeToken()}` } })
+    await fetch(`${BASE}/api/host/processes`, {
+      headers: { cookie: `__Host-ac_session=${makeToken()}` },
+    })
   ).json();
   const guarded = j.processes.find((p: any) => p.protected);
   check("api: protected processes flagged", !!guarded, guarded?.label ?? "none");
@@ -369,7 +387,7 @@ for (const [name, viewport, scheme] of [
     const r = await fetch(`${BASE}/api/host/processes/${guarded.pid}/kill`, {
       method: "POST",
       headers: {
-        cookie: `ac_session=${makeToken()}`,
+        cookie: `__Host-ac_session=${makeToken()}`,
         origin: BASE,
         "content-type": "application/json",
       },
@@ -380,7 +398,7 @@ for (const [name, viewport, scheme] of [
 }
 {
   const res = await fetch(`${BASE}/api/host/headroom-profile?range=1h`, {
-    headers: { cookie: `ac_session=${makeToken()}` },
+    headers: { cookie: `__Host-ac_session=${makeToken()}` },
   });
   const body = await res.json();
   check(

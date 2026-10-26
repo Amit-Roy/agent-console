@@ -24,7 +24,7 @@ const read = () => {
   }
 };
 const original = read();
-const auth = { origin: `http://127.0.0.1:${PORT}`, cookie: `ac_session=${makeToken()}` };
+const auth = { origin: `http://127.0.0.1:${PORT}`, cookie: `__Host-ac_session=${makeToken()}` };
 const ws = new WebSocket(`ws://127.0.0.1:${PORT}/ws`, { headers: auth });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // background subagents run inside the agent process: a restart kills them even though their thread looks idle

@@ -1,88 +1,90 @@
 {
-  "title": "Idea and scheduled-task CLI access",
-  "subtitle": "Authenticated command discovery and server-owned state",
+  "title": "Console auth flow",
+  "subtitle": "Caddy to agent-console request authorization",
   "items": [
     {
-      "group": "Agent workspace",
-      "icon": "terminal",
+      "group": "Edge",
+      "icon": "globe",
+      "border": "solid",
       "items": [
         {
-          "id": "search",
-          "label": "CLI discovery",
-          "tech": "MCP cli_search",
-          "desc": "Searches tool descriptions and tags",
-          "icon": "search"
-        },
-        {
-          "id": "manifest",
-          "label": "CLI manifest",
-          "tech": "tools.json",
-          "desc": "Adds app-ideas and scheduled-tasks commands",
-          "icon": "list"
-        },
-        {
-          "id": "commands",
-          "label": "Ideas and tasks CLIs",
-          "tech": "app-ideas / scheduled-tasks",
-          "desc": "Read ideas, reports and transcripts; update task config",
-          "icon": "terminal"
+          "id": "caddy",
+          "label": "Reverse proxy",
+          "tech": "Caddy",
+          "desc": "Fronts the console on the Coder app host",
+          "icon": "network",
+          "color": "indigo"
         }
       ]
     },
     {
-      "group": "Console server",
+      "group": "agent-console server",
       "icon": "server",
       "border": "dashed",
       "items": [
         {
-          "id": "gateway",
-          "label": "Tool gateway",
-          "tech": "POST /api/agent-tools/:name",
-          "desc": "Authorizes CLI reads and task config updates",
-          "icon": "shield-check"
+          "id": "gate",
+          "label": "Coder-host trust (fail closed)",
+          "tech": "server/auth.ts, x-agent-console-proxy",
+          "desc": "SSO needs valid proxy proof; unset secret disables SSO",
+          "icon": "shield-check",
+          "color": "blue"
         },
         {
-          "id": "state",
-          "label": "Ideas and schedules",
-          "tech": "Ideas / Schedules",
-          "desc": "Server owns idea files and task state",
-          "icon": "database"
+          "id": "login",
+          "label": "POST /login",
+          "tech": "server/index.ts",
+          "desc": "Password login; requires same Origin",
+          "icon": "log-in",
+          "color": "blue"
         },
         {
-          "id": "history",
-          "label": "Run history",
-          "tech": "Reports / session transcripts",
-          "desc": "Stored task outputs and conversation events",
-          "icon": "file-text"
+          "id": "origin",
+          "label": "Same-Origin guard",
+          "tech": "sameOrigin middleware",
+          "desc": "Rejects POST /login without matching Origin (403)",
+          "icon": "shield-alert",
+          "color": "blue"
+        },
+        {
+          "id": "session",
+          "label": "Session cookie",
+          "tech": "__Host-ac_session, 30d",
+          "desc": "Signed cookie; Secure, host-only, path /",
+          "icon": "cookie",
+          "color": "teal"
+        },
+        {
+          "id": "acode",
+          "label": "Acode edit sessions",
+          "tech": "server/acode-core.ts",
+          "desc": "Edit grants expire after 12h",
+          "icon": "file-pen",
+          "color": "purple"
         }
       ]
     }
   ],
   "edges": [
     {
-      "from": "manifest",
-      "to": "search",
-      "label": "BM25 index"
+      "from": "caddy",
+      "to": "gate",
+      "label": "Coder-host requests"
     },
     {
-      "from": "gateway",
-      "to": "state",
-      "label": "CLI reads and updates"
+      "from": "login",
+      "to": "session",
+      "label": "sets cookie"
     },
     {
-      "from": "state",
-      "to": "history",
-      "label": "Task run references"
+      "from": "gate",
+      "to": "acode",
+      "label": "authorizes grants"
     },
     {
-      "from": "search",
-      "to": "commands",
-      "label": "Path and usage"
-    },
-    {
-      "from": "commands",
-      "to": "gateway",
-      "label": "Authenticated HTTP JSON"
+      "from": "origin",
+      "to": "login",
+      "label": "guards POST"
     }
   ]
 }
