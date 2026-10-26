@@ -28,7 +28,14 @@ function sshCommand(args: string[]): { bin: string; argv: string[] } {
   if (override) return { bin: override, argv: args };
   const host = process.env.VAULT_IRON_HOST || "vps";
   const key = path.join(os.homedir(), ".ssh", "id_iron_vault");
-  const opts = ["-i", key, "-o", "BatchMode=yes", "-o", "ConnectTimeout=5"];
+  const opts = [
+    "-i", key,
+    "-o", "IdentitiesOnly=yes",
+    "-o", "ControlMaster=no",
+    "-o", "ControlPath=none",
+    "-o", "BatchMode=yes",
+    "-o", "ConnectTimeout=5",
+  ];
   return { bin: "ssh", argv: [...opts, `root@${host}`, ...args] };
 }
 
