@@ -761,7 +761,6 @@ export class Threads {
     } catch {} // usage history from logs written before the dashboard existed
     this.loadCosts();
     this.loadQueues();
-    for (const thread of this.threads.values()) this.refreshIdleCompaction(thread);
   }
 
   private loadCommands() {
@@ -805,13 +804,18 @@ export class Threads {
   private loadCosts() {
     try {
       repairAccounting(DATA_DIR, true); // startup precedes new turns; preserves an exclusive original backup
-      const rows = readTurns(0, Date.now(), Number.MAX_SAFE_INTEGER).filter(
-        (row) => row.accounting === 2,
-      );
+      const totals = new Map<string, { sum: number; count: number }>();
+      for (const row of readTurns(0, Date.now(), Number.MAX_SAFE_INTEGER)) {
+        if (row.accounting !== 2 || row.cost == null) continue;
+        const total = totals.get(row.thread) ?? { sum: 0, count: 0 };
+        total.sum += row.cost;
+        total.count++;
+        totals.set(row.thread, total);
+      }
       for (const thread of this.threads.values()) {
-        const known = rows.filter((row) => row.thread === thread.id && row.cost != null);
-        thread.cost = known.reduce((sum, row) => sum + row.cost!, 0);
-        thread.costMeasured = known.length > 0;
+        const total = totals.get(thread.id);
+        thread.cost = total?.sum ?? 0;
+        thread.costMeasured = total != null;
       }
     } catch {
       /* malformed/incomplete legacy history must not stop the console */
@@ -840,6 +844,16 @@ export class Threads {
         if (thread.provider === "claude") recordClaudeUsage(thread);
         if (thread.provider === "codex") this.restoreCodexTelemetry(thread);
       } catch {} // one unreadable log must not stop the rest
+    }
+  }
+
+  // Idle-compaction deadlines and timers, deferred past listen like restoreTelemetry. Threads touched meanwhile were already
+  // refreshed; open tabs get an event only for threads whose deadline changed.
+  restoreIdleCompaction() {
+    for (const thread of this.threads.values()) {
+      const before = thread.idleCompactionDueAt;
+      this.refreshIdleCompaction(thread);
+      if (thread.idleCompactionDueAt !== before) this.emit({ t: "thread", thread });
     }
   }
 

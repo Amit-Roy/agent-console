@@ -1846,6 +1846,8 @@ function startServing() {
     boot.mark("headroom-launched");
     threads.restoreTelemetry();
     boot.mark("telemetry-restored");
+    threads.restoreIdleCompaction();
+    boot.mark("idle-compaction-restored");
     threads.warmAccounting();
     boot.mark("accounting-warm");
     void sessionSearch
