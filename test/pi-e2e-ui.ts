@@ -8,9 +8,10 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { type Browser, chromium } from "playwright";
+import { freePort } from "./free-port.ts";
 
 const data = fs.mkdtempSync(path.join(os.tmpdir(), "ac-pi-e2e-"));
-const port = Number(process.env.PI_E2E_PORT || 7076),
+const port = Number(process.env.PI_E2E_PORT) || (await freePort()),
   base = `http://127.0.0.1:${port}`;
 
 // The stub streams one chat-completions answer that echoes the last user message.
