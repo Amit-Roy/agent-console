@@ -9,7 +9,8 @@ import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "ac-release-test-"));
-const app = path.join(tmp, "app");
+// Dot segment on purpose: the live console runs from ~/.local/share/agent-console, and send() 404s dot paths without `root`.
+const app = path.join(tmp, ".local", "share", "agent-console");
 const clone = path.join(tmp, "repo");
 const env: NodeJS.ProcessEnv = { ...process.env, AGENT_CONSOLE_HOME: app };
 for (const key of Object.keys(env))
