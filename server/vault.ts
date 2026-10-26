@@ -656,7 +656,7 @@ export function setSecret(id: string, key: string, value: unknown, c: Client = N
   return serial(async () => {
     const iron = await ironStatus();
     const v = checkValue(value); // again, now that the token list is fresh
-    if (s.kind !== "virtual" && isManaged(iron, key)) return setProxied(s, key, v);
+    if (s.kind === "env" && isManaged(iron, key)) return setProxied(s, key, v);
     const x = await extraAt(s, key);
     if (x) setExtra(s, key, v, c);
     else await setReal(s, key, v);
@@ -685,7 +685,7 @@ export function deleteSecret(id: string, key: string, c: Client = NOBODY) {
   const s = find(id);
   checkKey(s, key);
   return serial(async () => {
-    if (s.kind !== "virtual" && isManaged(await ironStatus(), key))
+    if (s.kind === "env" && isManaged(await ironStatus(), key))
       throw new VaultError(400, "proxied key: use iron off");
     const x = await extraAt(s, key);
     if (x) deleteExtra(s, key, c);
