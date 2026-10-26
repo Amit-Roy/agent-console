@@ -6,6 +6,9 @@
 //   cytoscape:   minified ES module, lazy-loaded by brain.js only when the Brain graph view opens (MIT)
 //   libavoid-js: orthogonal connector router (JS + wasm), lazy-loaded by arch.js for ```arch diagrams (LGPL-2.1)
 //   lucide:      icons.json, a name -> inner SVG markup map built from lucide-static, used by arch.js (ISC)
+//   marked:      markdown parser ES module, imported by render.js as /vendor/marked.js (MIT)
+//   purify:      DOMPurify ES module, imported by render.js as /vendor/purify.js (MPL-2.0 OR Apache-2.0)
+//   simplewebauthn-browser: UMD bundle loaded by vault.html for passkeys (MIT)
 import fs from "node:fs";
 import path from "node:path";
 
@@ -77,6 +80,16 @@ copy(nm("cytoscape/LICENSE"), out("vendor/cytoscape.LICENSE.txt"));
 copy(nm("libavoid-js/dist/index.js"), out("vendor/libavoid/index.js"));
 copy(nm("libavoid-js/dist/libavoid.wasm"), out("vendor/libavoid/libavoid.wasm"));
 copy(nm("libavoid-js/LICENSE"), out("vendor/libavoid/LICENSE.txt"));
+copy(nm("marked/lib/marked.esm.js"), out("vendor/marked.js"));
+copy(nm("marked/LICENSE"), out("vendor/marked.LICENSE.txt"));
+copy(nm("dompurify/dist/purify.es.mjs"), out("vendor/purify.js"));
+copy(nm("dompurify/LICENSE"), out("vendor/purify.LICENSE.txt"));
+copy(nm("dompurify/LICENSE-MPL"), out("vendor/purify.LICENSE-MPL.txt"));
+copy(
+  nm("@simplewebauthn/browser/dist/bundle/index.umd.min.js"),
+  out("vendor/simplewebauthn-browser.js"),
+);
+copy(nm("@simplewebauthn/browser/LICENSE.md"), out("vendor/simplewebauthn-browser.LICENSE.txt"));
 const nodes = JSON.parse(fs.readFileSync(nm("lucide-static/icon-nodes.json"), "utf8"));
 const attrText = (attrs) =>
   Object.entries(attrs)
@@ -90,5 +103,5 @@ fs.mkdirSync(out("vendor/lucide"), { recursive: true });
 fs.writeFileSync(out("vendor/lucide/icons.json"), JSON.stringify(icons));
 copy(nm("lucide-static/LICENSE"), out("vendor/lucide/LICENSE.txt"));
 console.log(
-  "vendored fonts + highlight.js + chart.js + cytoscape + libavoid + lucide into public/",
+  "vendored fonts + highlight.js + chart.js + cytoscape + libavoid + lucide + marked + purify + simplewebauthn into public/",
 );

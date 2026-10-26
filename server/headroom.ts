@@ -1,4 +1,5 @@
 import { type ChildProcess, spawn } from "node:child_process";
+import fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -43,6 +44,45 @@ let profileStore: HeadroomProfileStore | undefined;
 let profilePort = 0;
 const trigger = new ProfileTrigger();
 const current = (epoch: number) => active && enabled() && !latched && generation === epoch;
+
+// Restart handoff (#348): the previous server SIGTERMs its proxy without waiting and leaves the pid in an orphan file.
+const ORPHAN_GRACE_MS = 5000; // from the orphan file's mtime, then SIGKILL
+const ORPHAN_GIVE_UP_MS = 2000; // after SIGKILL, e.g. a pid we may not signal
+
+// Only our own proxy on our port counts: a reused pid or a zombie (empty cmdline) is gone.
+function orphanAlive(pid: number): boolean {
+  try {
+    const args = fs.readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0");
+    const flag = args.indexOf("--port");
+    return args.includes("proxy") && flag >= 0 && args[flag + 1] === String(PORT);
+  } catch {
+    return false;
+  }
+}
+
+function readOrphan(file: string): { pid: number; written: number } | undefined {
+  try {
+    const pid = Number(fs.readFileSync(file, "utf8").trim());
+    const written = fs.statSync(file).mtimeMs;
+    return Number.isSafeInteger(pid) && pid > 1 ? { pid, written } : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function reapOrphan(file: string) {
+  const orphan = readOrphan(file);
+  const killAt = (orphan?.written ?? 0) + ORPHAN_GRACE_MS;
+  while (orphan && orphanAlive(orphan.pid) && Date.now() < killAt + ORPHAN_GIVE_UP_MS) {
+    if (Date.now() >= killAt) {
+      try {
+        process.kill(orphan.pid, "SIGKILL");
+      } catch {}
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  fs.rmSync(file, { force: true });
+}
 
 async function live(): Promise<boolean> {
   try {
@@ -341,6 +381,18 @@ export const headroom = {
     diagnostic("stop");
     return stopping;
   },
+  /** Restart handoff: SIGTERM our proxy without waiting for it; the next server finishes the job from the orphan file. */
+  release(orphanFile: string) {
+    const p = child;
+    void headroom.stop();
+    if (!p?.pid || p.exitCode !== null || p.signalCode !== null) return;
+    try {
+      fs.writeFileSync(orphanFile, String(p.pid));
+    } catch {}
+    p.unref();
+  },
+  /** Waits for a proxy the previous server left exiting (SIGKILL 5 s after it was released), so it never looks external. */
+  reapOrphan,
   url: () => (enabled() && active && !latched && healthy ? URL_ : undefined),
   async probe(refreshRouting = false) {
     const responding = await live();
