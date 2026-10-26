@@ -2,7 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { run } from "node:test";
 import { spec } from "node:test/reporters";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { execFileSync } from "node:child_process";
 import { build } from "esbuild";
 import { planShards } from "./shard-plan.mjs";
 
@@ -25,6 +26,16 @@ if (process.env.TEST_SHARD) {
   const count = files.length;
   files = planShards(files, weights, total)[index - 1];
   console.log(`Test shard ${index}/${total}: ${files.length} of ${count} files.`);
+}
+// Build the frontend bundle once; UI tests spawn servers that serve it (AGENT_CONSOLE_WEB_BUNDLE is inherited).
+if (!process.env.AGENT_CONSOLE_WEB_BUNDLE) {
+  const webDir = path.resolve(".bundle/public");
+  execFileSync(
+    process.execPath,
+    [fileURLToPath(new URL("../scripts/bundle-web.mjs", import.meta.url)), webDir],
+    { stdio: "inherit" },
+  );
+  process.env.AGENT_CONSOLE_WEB_BUNDLE = webDir;
 }
 const outdir = ".bundle/tests";
 await build({

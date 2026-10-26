@@ -82,6 +82,8 @@ const { makeToken } = await import("../server/auth.ts");
 const server = spawn(process.execPath, [process.env.TEST_SERVER_ENTRY || "server/index.ts"], {
   env: {
     ...process.env,
+    // A replaced app.js must be what the page loads, so the server must not serve the bundle.
+    ...(process.env.COMPOSER_SCROLL_APP_JS ? { AGENT_CONSOLE_WEB_BUNDLE: "" } : {}),
     PORT: String(port),
     AGENT_CONSOLE_MOCK: "1",
     AGENT_CONSOLE_PAGE: "12",
