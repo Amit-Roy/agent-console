@@ -6,6 +6,7 @@ import { createAutoLane } from "/automation-lane.js";
 import { createChatSearch } from "/chat-search.js";
 import { composerField } from "/composer-field.js";
 import { openContextEconomics } from "/context-economics.js";
+import { createHostCard } from "/host-card.js";
 import { createMenu } from "/menu.js";
 import { setupNotifications } from "/notifications.js";
 import { createPromptImprove } from "/prompt-improve.js";
@@ -30,6 +31,7 @@ import { toolName, toolSummary } from "/tool-display.js";
 import { closeBreakdown, openBreakdown } from "/turn-breakdown.js";
 
 composerField($("input"));
+const hostCard = createHostCard($("composer").querySelector(".cwrap"));
 
 const MODE_META = {
   plan: { label: "Plan", desc: "Read-only. Plans without editing.", icon: "eye" },
@@ -544,6 +546,7 @@ function onRemovedMessage(message) {
     renderThumbs();
   }
   if (state.current === message.thread) {
+    hostCard.close();
     state.current = null;
     $("input").value = "";
     sizeInput();
@@ -1738,6 +1741,7 @@ function revalidateCachedView(cached) {
 }
 function openThread(id) {
   const switching = state.current !== id;
+  if (switching) hostCard.close();
   if (switching) chatSearch.close(false);
   if (switching) saveDraft();
   recordCancelledMeasurement();
@@ -4188,6 +4192,14 @@ function attachmentSnapshot(item) {
 async function submit(mode) {
   const box = $("input");
   if (submitting || !state.current) return;
+  if (/^\/host$/i.test(box.value.trim())) {
+    box.value = "";
+    saveDraft();
+    sizeInput();
+    closeSlash();
+    hostCard.open();
+    return;
+  }
   if (!box.value.trim() && !pending.length) return;
   submitting = true;
   const tapAt = performance.now();
@@ -4598,7 +4610,10 @@ function slashMatches(q) {
     if (c.description.toLowerCase().includes(q)) return 4;
     return 9;
   };
-  return (state.commands[cur()?.provider || "claude"] || [])
+  const commands = (state.commands[cur()?.provider || "claude"] || []).filter(
+    (command) => command.name.toLowerCase() !== "host",
+  );
+  return [{ name: "host", description: "Host CPU, RAM, disk and top processes" }, ...commands]
     .filter((c) => !c.name.startsWith("_"))
     .map((c) => [rank(c), c])
     .filter(([r]) => r < 9)

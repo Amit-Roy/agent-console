@@ -154,6 +154,45 @@
           "step": 5
         }
       ]
+    },
+    {
+      "group": "Host resource diagnostics",
+      "icon": "activity",
+      "border": "solid",
+      "items": [
+        {
+          "id": "host-page",
+          "label": "Host dashboard",
+          "tech": "public/host.js",
+          "desc": "Existing full-page host diagnostics",
+          "icon": "activity",
+          "color": "blue"
+        },
+        {
+          "id": "host-card",
+          "label": "Local /host card",
+          "tech": "public/app.js, host-card.js",
+          "desc": "CPU, RAM and Disk tabs; static five-minute graph and top three processes; no agent turn",
+          "icon": "panels-top-left",
+          "color": "blue"
+        },
+        {
+          "id": "host-api",
+          "label": "Host snapshot API",
+          "tech": "server/host.ts",
+          "desc": "Current metrics and all-process CPU, RAM and disk I/O rankings",
+          "icon": "cpu",
+          "color": "teal"
+        },
+        {
+          "id": "host-telemetry",
+          "label": "Host telemetry store",
+          "tech": "server/host-history.ts",
+          "desc": "Five-second samples; CPU/RAM usage and disk I/O history",
+          "icon": "database",
+          "color": "purple"
+        }
+      ]
     }
   ],
   "edges": [
@@ -221,6 +260,26 @@
       "to": "old",
       "label": "stop, then go",
       "step": 5
+    },
+    {
+      "from": "host-card",
+      "to": "host-api",
+      "label": "Snapshot"
+    },
+    {
+      "from": "host-card",
+      "to": "host-telemetry",
+      "label": "300s history"
+    },
+    {
+      "from": "host-page",
+      "to": "host-api",
+      "label": "Metrics"
+    },
+    {
+      "from": "host-page",
+      "to": "host-telemetry",
+      "label": "History"
     }
   ]
 }
