@@ -40,9 +40,11 @@ export function leanMcpArgs(): string[] {
     .filter(Boolean);
   const consoleServer = consoleMcpServer();
   if (keep.includes("all"))
-    return consoleServer
-      ? ["--mcp-config", JSON.stringify({ mcpServers: { agent_console: consoleServer } })]
-      : [];
+    return [
+      "--strict-mcp-config",
+      "--mcp-config",
+      JSON.stringify({ mcpServers: consoleServer ? { agent_console: consoleServer } : {} }),
+    ];
   let servers: Record<string, unknown> = {};
   try {
     const all =
@@ -291,6 +293,7 @@ export function claudeStartArgs(thread: ThreadSpec): string[] {
 function claudeStartEnv(thread: ThreadSpec, account: ReturnType<typeof requireClaudeAccount>) {
   const env = claudeRoutingEnv(process.env);
   env.AGENT_CONSOLE_THREAD = thread.id;
+  env.ENABLE_TOOL_SEARCH = "false"; // deferred tool loading changes the tools array mid-thread and busts the prompt cache
   const toolEnv = toolEnvFile();
   if (toolEnv && !env.CLAUDE_ENV_FILE) env.CLAUDE_ENV_FILE = toolEnv; // Bash commands start at the lower tool priority
   if (account === "nefro") env.CLAUDE_CONFIG_DIR = claudeConfigDir(account);

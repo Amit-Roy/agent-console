@@ -162,9 +162,11 @@ check(
 );
 process.env.AGENT_CONSOLE_MCP = "all";
 check(
-  "lean context: AGENT_CONSOLE_MCP=all restores every server",
-  leanMcpArgs().length ===
-    (process.env.AGENT_CONSOLE_TOOL_URL && process.env.AGENT_CONSOLE_TOOL_TOKEN ? 2 : 0),
+  "lean context: AGENT_CONSOLE_MCP=all stays strict (fixed tool surface)",
+  leanMcpArgs()[0] === "--strict-mcp-config" &&
+    leanMcpArgs()[1] === "--mcp-config" &&
+    Object.keys(JSON.parse(leanMcpArgs()[2]).mcpServers).length ===
+      (process.env.AGENT_CONSOLE_TOOL_URL && process.env.AGENT_CONSOLE_TOOL_TOKEN ? 1 : 0),
 );
 delete process.env.AGENT_CONSOLE_MCP;
 check(
