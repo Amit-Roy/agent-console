@@ -142,6 +142,8 @@ jobs:
           name: test-ready-${{ github.run_attempt }}-${{ strategy.job-index }}
           path: ${{ runner.temp }}/shard-ready
           retention-days: 1
+      - name: Probe first load (temporary)
+        run: node test/first-load-probe.ts 2>&1 | tail -20
       - name: Wait for both runners to be ready
         env:
           GH_TOKEN: ${{ github.token }}
