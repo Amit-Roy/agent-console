@@ -14,8 +14,8 @@ const slow = [
   "test/drafts-ui.ts",
   "test/composer-scroll-ui.ts",
   "test/pi-e2e-ui.ts",
-  "test/github-triage-cli.ts",
   "test/issue-review.ts",
+  "test/github-triage-cli.ts",
 ];
 let files = process.argv.slice(2);
 const priority = (file) => {
