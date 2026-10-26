@@ -197,7 +197,10 @@ export class SessionSearch {
     if (this.closed || this.maintenance || this.cleanupPaused()) return;
     try {
       const began = performance.now();
-      const phase = ECHO_PHASES.find((entry) => this.phaseLast(entry) < this.phaseMax(entry));
+      // Version-2 indexes finished the echo cleanup already; only the fts_map backfill remains.
+      const phase = this.echoPending
+        ? ECHO_PHASES.find((entry) => this.phaseLast(entry) < this.phaseMax(entry))
+        : undefined;
       if (!phase && !this.mapPending) return this.finishCleanup();
       if (phase) this.cleanBatch(phase);
       else this.mapBatch();

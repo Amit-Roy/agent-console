@@ -338,6 +338,45 @@ async function reliabilityChecks() {
     assert.equal(count("SELECT count(*) AS n FROM fts_map WHERE thread='mig'"), 0);
     migrated.close();
 
+    // Migration: a version-2 index skips the echo cleanup and only backfills fts_map.
+    const second = path.join(dir, "migrate-v2");
+    fs.mkdirSync(path.join(second, "logs"), { recursive: true });
+    fs.writeFileSync(
+      path.join(second, "threads.json"),
+      JSON.stringify([{ id: "mig2", provider: "claude", title: "Migrate two" }]),
+    );
+    fs.writeFileSync(path.join(second, "logs", "mig2.jsonl"), "");
+    const seedTwo = new SessionSearch(second);
+    await seedTwo.warm();
+    const sqliteTwo = (seedTwo as any).db;
+    for (const [line, text] of [
+      [1, "mcp__agent_console__session_search\nversiontwoecho"],
+      [2, "Bash\nversiontwokept"],
+    ] as const) {
+      sqliteTwo
+        .prepare("INSERT INTO events(thread,line,role,text) VALUES('mig2',?,'tool',?)")
+        .run(line, text);
+      sqliteTwo
+        .prepare(
+          "INSERT INTO session_fts(title,text,thread,line,role) VALUES('Migrate two',?,'mig2',?,'tool')",
+        )
+        .run(text, line);
+    }
+    sqliteTwo.exec("DELETE FROM fts_map; PRAGMA user_version=2");
+    seedTwo.close();
+    const migratedTwo = new SessionSearch(second);
+    await migratedTwo.whenCleaned();
+    const twoDb = (migratedTwo as any).db;
+    const countTwo = (sql: string) => Number(twoDb.prepare(sql).get().n);
+    // The echo row survives because version 2 never re-runs the echo scan.
+    assert.equal(
+      countTwo("SELECT count(*) AS n FROM session_fts WHERE thread='mig2' AND line>0"),
+      2,
+    );
+    assert.equal(countTwo("SELECT count(*) AS n FROM fts_map WHERE thread='mig2' AND line>0"), 2);
+    assert.equal(Number(twoDb.prepare("PRAGMA user_version").get().user_version), 3);
+    migratedTwo.close();
+
     await cleanupChecks(old);
 
     // Slow refresh: answer stale within the wait, then include new data once the refresh ends.
