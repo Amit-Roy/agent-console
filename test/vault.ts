@@ -15,6 +15,7 @@ fs.mkdirSync(conf, { recursive: true });
 fs.mkdirSync(path.join(dir, ".config", "agentmail"), { recursive: true });
 fs.mkdirSync(path.join(dir, ".aws"), { recursive: true });
 process.env.VAULT_HOME = dir;
+process.env.VAULT_IRON_SSH = "/bin/false"; // never reach a real iron host from tests
 
 const REAL = "sk-test-0123456789abcdefghijklmnopqrstuvwxyz"; // 44 chars, fake
 const SHORT = "fake-short-1";
