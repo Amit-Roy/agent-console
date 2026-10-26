@@ -8,12 +8,14 @@ const logs = fs
   .readdirSync(directory, { withFileTypes: true })
   .filter((entry) => entry.isDirectory())
   .map(({ name }) => fs.readFileSync(path.join(directory, name, "test.log"), "utf8"));
-assert.equal(logs.length, 2, "Both CI shard logs are required.");
+const count = Number(process.env.SHARD_COUNT || 2);
+assert.equal(logs.length, count, `All ${count} CI shard logs are required.`);
 const manifests = logs.map((log) =>
   JSON.parse(log.match(/^Test suite files: (.+)$/m)?.[1] || "null"),
 );
 assert.ok(Array.isArray(manifests[0]), "The full suite manifest is required.");
-assert.deepEqual(manifests[0], manifests[1], "Both shards must select from the same full suite.");
+for (const manifest of manifests.slice(1))
+  assert.deepEqual(manifest, manifests[0], "Every shard must select from the same full suite.");
 const timings = logs.flatMap((log) => [...log.matchAll(/^[✔✖] (test\/\S+) \(([\d.]+)ms\)/gm)]);
 const executed = logs.flatMap((log) =>
   JSON.parse(log.match(/^Test executed files: (.+)$/m)?.[1] || "null"),

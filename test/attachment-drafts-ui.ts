@@ -695,7 +695,16 @@ try {
   };
   restarting = restartFlow();
   restarting.catch(() => {});
-  await Promise.all([laneA(), laneB(), laneC(), restarting]);
+  // Cap concurrent page lanes (default 2) so neighbouring test files keep CPU; the restart lane runs alongside.
+  const laneLimit = Math.max(1, Number(process.env.AC_ATTACH_LANES) || 2);
+  const pending = [laneA, laneB, laneC];
+  const worker = async () => {
+    for (let next = pending.shift(); next; next = pending.shift()) await next();
+  };
+  await Promise.all([
+    ...Array.from({ length: Math.min(laneLimit, pending.length) }, worker),
+    restarting,
+  ]);
   await browser.close();
   browser = launching = undefined;
   await restarting;

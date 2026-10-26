@@ -74,12 +74,13 @@ jobs:
         env:
           TEST_FILE_BUDGET_S: "15"
           TEST_WALL_BUDGET_S: "25"
+          SHARD_COUNT: "3"
         run: node test/shard-budget.mjs "$RUNNER_TEMP/test-logs"
   test-shard:
     strategy:
       fail-fast: false
       matrix:
-        shard: ["1/2", "2/2"]
+        shard: ["1/3", "2/3", "3/3"]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -145,6 +146,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           READY_PREFIX: test-ready-${{ github.run_attempt }}-
+          SHARD_COUNT: "3"
         run: node test/wait-ci-shards.mjs
       # One parallel pool per shard, with independent UI servers and browsers.
       # TEST_CONCURRENCY above the CPU count pays off because most files wait on servers and browsers.
