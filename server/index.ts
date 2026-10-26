@@ -55,6 +55,7 @@ import { createBootTiming } from "./boot-timing.ts";
 import { BrainGraph, BrainGraphError } from "./brain-graph.ts";
 import { cancelClaudeLogin, finishClaudeLogin, startClaudeLogin } from "./claude-login.ts";
 import { CliSearch } from "./cli-search.ts";
+import { consoleCliTool, isConsoleCliTool } from "./console-cli-tools.ts";
 import { contextAllocation } from "./context-allocation.ts";
 import { createDoctor } from "./doctor.ts";
 import { threadToMarkdown } from "./export.ts";
@@ -631,7 +632,13 @@ app.post("/api/agent-tools/:name", express.json({ limit: "1mb" }), async (req, r
               ? await sessionSearch.read(input)
               : req.params.name === "pi_research"
                 ? await piResearch(input, thread)
-                : schedules.tool(req.params.name, thread, input);
+                : isConsoleCliTool(req.params.name)
+                  ? await consoleCliTool(req.params.name, input, {
+                      ideas,
+                      schedules,
+                      sessionSearch,
+                    })
+                  : schedules.tool(req.params.name, thread, input);
     res.setHeader("Cache-Control", "no-store");
     res.json(result);
   } catch (e: any) {

@@ -26,7 +26,18 @@ export function checkToolToken(
   return { ok: false, derived: false };
 }
 
-const READ_ONLY_TOOLS = ["session_search", "session_read", "cli_search"];
+const READ_ONLY_TOOLS = [
+  "session_search",
+  "session_read",
+  "cli_search",
+  "idea_list",
+  "idea_read",
+  "schedule_config_list",
+  "schedule_get",
+  "schedule_runs",
+  "schedule_report",
+  "schedule_transcript",
+];
 
 /** Gate for one agent-tool call. Derived tokens always get issue-run limits, whatever the header says. */
 export function gateToolCall(
