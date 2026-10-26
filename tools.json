@@ -98,7 +98,17 @@
         "console-tool research \"TASK\" [--folder DIR] (up to 11 min: run_in_background)",
         "console-tool redact scan|apply|verify|status [--job ID]"
       ],
-      "tags": ["sessions", "history", "search", "research", "pi", "redact", "cli", "lookup", "transcripts"]
+      "tags": [
+        "sessions",
+        "history",
+        "search",
+        "research",
+        "pi",
+        "redact",
+        "cli",
+        "lookup",
+        "transcripts"
+      ]
     }
   ],
   "internal": []

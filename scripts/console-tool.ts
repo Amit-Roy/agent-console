@@ -71,7 +71,10 @@ export function parseConsoleToolArgs(args: string[]): ToolRequest | undefined {
   if (verb === "cli")
     return {
       tool: "cli_search",
-      input: { terms: requireWords(rest, "CLI search terms").slice(0, 10), ...withDefined({ limit }) },
+      input: {
+        terms: requireWords(rest, "CLI search terms").slice(0, 10),
+        ...withDefined({ limit }),
+      },
       timeoutMs: 30_000,
     };
   if (verb === "research") {
@@ -119,7 +122,9 @@ if (entry === import.meta.url) {
   try {
     console.log(await runConsoleTool(process.argv.slice(2)));
   } catch (failure) {
-    console.error(`console-tool: ${failure instanceof Error ? failure.message : "Command failed."}`);
+    console.error(
+      `console-tool: ${failure instanceof Error ? failure.message : "Command failed."}`,
+    );
     process.exitCode = 1;
   }
 }

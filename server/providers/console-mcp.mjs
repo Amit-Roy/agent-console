@@ -63,11 +63,7 @@ export async function handleMcp(request) {
       const name = request.params?.name;
       if (!TOOLS.some((t) => t.name === name && exposed(name)))
         return error(-32602, "Unknown session tool.");
-      const text = await callTool(
-        name,
-        request.params?.arguments,
-        AbortSignal.timeout(30_000),
-      );
+      const text = await callTool(name, request.params?.arguments, AbortSignal.timeout(30_000));
       return result({
         content: [{ type: "text", text }],
         ...(text.startsWith("Error:") ? { isError: true } : {}),
