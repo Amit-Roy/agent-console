@@ -120,9 +120,11 @@ try {
   assert(JSON.parse(leanMcpArgs()[2]).mcpServers.agent_console);
   process.env.AGENT_CONSOLE_MCP = "all";
   const all = leanMcpArgs();
-  assert(!all.includes("--strict-mcp-config"));
-  assert(JSON.parse(all[1]).mcpServers.agent_console);
+  assert.equal(all[0], "--strict-mcp-config");
+  assert(JSON.parse(all[2]).mcpServers.agent_console);
   assert((await harnessInstructions()).includes(SESSION_INSTRUCTIONS));
+  assert(SESSION_INSTRUCTIONS.includes("skill `agent-console-tools` (CLI `console-tool`)"));
+  assert(!/session_search|pi_research|cli_search|session_read/.test(SESSION_INSTRUCTIONS));
   assert(TOOLS.some((t: any) => t.name === "session_search"));
   assert(TOOLS.some((t: any) => t.name === "session_read"));
 
@@ -161,52 +163,43 @@ try {
   const list = await request("tools/list");
   assert.deepEqual(
     list.result.tools.map((t: any) => t.name),
-    [
-      "thread_list",
-      "thread_send",
-      "session_redact",
-      "session_search",
-      "cli_search",
-      "session_read",
-      "pi_research",
-    ],
-  );
-  assert(
-    list.result.tools
-      .filter((tool: any) => !["session_redact", "thread_send"].includes(tool.name))
-      .every((t: any) => t.annotations.readOnlyHint),
+    ["thread_list", "thread_send"],
   );
   assert.equal(
-    list.result.tools.find((t: any) => t.name === "session_redact").annotations.readOnlyHint,
-    false,
-  );
-  assert.equal(
-    list.result.tools.find((t: any) => t.name === "session_redact").annotations.destructiveHint,
+    list.result.tools.find((t: any) => t.name === "thread_list").annotations.readOnlyHint,
     true,
   );
-  const search = await request("tools/call", {
-    name: "session_search",
-    arguments: { query: "pr-standards", provider: "codex", limit: 3 },
-  });
-  assert(search.result.content[0].text.includes("session:past-thread:L7"));
-  await request("tools/call", {
-    name: "session_read",
-    arguments: { thread: "past-thread", start: 7, limit: 5 },
-  });
-  const research = await request("tools/call", {
-    name: "pi_research",
-    arguments: { task: "map callers" },
-  });
-  assert(!research.result.isError);
+  assert.equal(
+    list.result.tools.find((t: any) => t.name === "thread_send").annotations.readOnlyHint,
+    false,
+  );
+  const listed = await request("tools/call", { name: "thread_list", arguments: {} });
+  assert(!listed.result.isError);
   assert.deepEqual(
     calls.map((c) => c.url),
-    [
-      "/api/agent-tools/session_search",
-      "/api/agent-tools/session_read",
-      "/api/agent-tools/pi_research",
-    ],
+    ["/api/agent-tools/thread_list"],
   );
-  assert.deepEqual(calls[2].body, { task: "map callers" });
+  for (const moved of [
+    "session_search",
+    "session_read",
+    "session_redact",
+    "pi_research",
+    "cli_search",
+  ]) {
+    const refused = await request("tools/call", { name: moved, arguments: { query: "x" } });
+    assert.equal(refused.error.code, -32602, `${moved} must not be an MCP tool`);
+  }
+  assert.equal(calls.length, 1, "moved tools never reach the HTTP routes through MCP");
+  // The HTTP routes stay: console-tool and Pi call them through callTool.
+  const toolsModule = await import("../server/providers/console-tools.mjs");
+  const search = await toolsModule.callTool("session_search", {
+    query: "pr-standards",
+    provider: "codex",
+    limit: 3,
+  });
+  assert(search.includes("session:past-thread:L7"));
+  assert.equal(calls.at(-1).url, "/api/agent-tools/session_search");
+  assert.deepEqual(calls.at(-1).body, { query: "pr-standards", provider: "codex", limit: 3 });
   const registered: string[] = [];
   (await import("../server/providers/console-tools.mjs")).default({
     registerTool: (t: any) => registered.push(t.name),
@@ -216,14 +209,6 @@ try {
     "Pi must not delegate to Pi",
   );
   assert(calls.every((c) => c.token === "isolated-test-token" && c.thread === "calling-thread"));
-  assert.deepEqual(calls[0].body, { query: "pr-standards", provider: "codex", limit: 3 });
-  const cleanup = await request("tools/call", {
-    name: "session_redact",
-    arguments: { action: "scan", scope: "console" },
-  });
-  assert(!cleanup.result.isError);
-  assert.equal(calls.at(-1).url, "/api/agent-tools/session_redact");
-  assert.deepEqual(calls.at(-1).body, { action: "scan", scope: "console" });
   const denied = await request("tools/call", { name: "schedule_delete", arguments: { id: "x" } });
   assert.equal(denied.error.code, -32602);
   delete process.env.AGENT_CONSOLE_TOOL_TOKEN;

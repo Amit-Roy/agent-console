@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -eu
+DIRECTORY="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+exec node "$DIRECTORY/scripts/console-tool.ts" "$@"

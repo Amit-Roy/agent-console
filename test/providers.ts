@@ -161,11 +161,28 @@ check(
       (process.env.AGENT_CONSOLE_TOOL_URL && process.env.AGENT_CONSOLE_TOOL_TOKEN ? 1 : 0),
 );
 process.env.AGENT_CONSOLE_MCP = "all";
-check(
-  "lean context: AGENT_CONSOLE_MCP=all restores every server",
-  leanMcpArgs().length ===
-    (process.env.AGENT_CONSOLE_TOOL_URL && process.env.AGENT_CONSOLE_TOOL_TOKEN ? 2 : 0),
-);
+{
+  const realHome = process.env.HOME;
+  const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), "lean-mcp-"));
+  fs.writeFileSync(
+    path.join(fakeHome, ".claude.json"),
+    JSON.stringify({ mcpServers: { alpha: { command: "a" }, beta: { command: "b" } } }),
+  );
+  process.env.HOME = fakeHome;
+  const args = leanMcpArgs();
+  const names = Object.keys(JSON.parse(args[2]).mcpServers);
+  process.env.HOME = realHome;
+  fs.rmSync(fakeHome, { recursive: true, force: true });
+  check(
+    "lean context: AGENT_CONSOLE_MCP=all loads every configured server, still strict",
+    args[0] === "--strict-mcp-config" &&
+      args[1] === "--mcp-config" &&
+      names.includes("alpha") &&
+      names.includes("beta") &&
+      names.includes("agent_console") ===
+        !!(process.env.AGENT_CONSOLE_TOOL_URL && process.env.AGENT_CONSOLE_TOOL_TOKEN),
+  );
+}
 delete process.env.AGENT_CONSOLE_MCP;
 check(
   "labels: parses a clean JSON array",
