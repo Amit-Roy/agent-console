@@ -13,6 +13,7 @@ import {
   KNOWN_MANAGED,
 } from "./vault-iron.ts";
 import { createPasskeys } from "./vault-passkey.ts";
+import { backupStatus, retryBackup, scheduleBackup } from "./vault-backup.ts";
 
 // Vault: write-only management of API tokens (env files, single-value files, GitHub Actions secrets).
 // Secret values are never read back out to a client, a log or an error: lists carry metadata only.
@@ -548,7 +549,7 @@ export async function listVault(opts: { mine?: boolean } = {}) {
   const out = await Promise.all(
     [...srcs, ...extraGroups(all, srcs)].map((s) => listSource(s, all, showAll, opts, iron)),
   );
-  return { sources: out };
+  return { sources: out, backup: backupStatus() };
 }
 
 function find(id: string): Source {
@@ -646,6 +647,7 @@ async function setProxied(s: Source, key: string, v: string) {
   if (!entry || !(await ironSet(entry.name, v))) throw new VaultError(502, "iron set failed");
   if (s.kind === "env") await writeIronToken(s, key, iron);
   audit("set", s, key);
+  scheduleBackup();
   return { ok: true, proxied: true, ...(ownEnv(s) ? { restartNeeded: true } : {}) };
 }
 
@@ -900,6 +902,15 @@ export function mountVault(app: express.Express, sameOrigin: express.RequestHand
     pk.requireGrant(false),
     body,
     guard((req) => setSecret(req.params.source, req.params.key, req.body?.value, client(req))),
+  );
+  app.post(
+    "/api/vault/backup/retry",
+    sameOrigin,
+    pk.requireGrant(false),
+    guard(async () => {
+      void retryBackup();
+      return { ok: true, backup: backupStatus() };
+    }),
   );
   app.post(
     "/api/vault/:source/:key/reveal",

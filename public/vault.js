@@ -8,7 +8,7 @@ const el = (tag, cls, text) => {
   if (text != null) n.textContent = text;
   return n;
 };
-const state = { groups: [], pk: { known: false, enrolled: 0, passkeys: [] }, restart: false };
+const state = { backup: null, groups: [], pk: { known: false, enrolled: 0, passkeys: [] }, restart: false };
 const SECRETISH = /(KEY|TOKEN|SECRET|PASS|AUTH|CRED|PRIVATE|DSN|URL)/i;
 let toastTimer;
 function toast(text, tone) {
@@ -101,6 +101,35 @@ function btn(label, cls, fn, aria) {
   b.addEventListener("click", fn);
   return b;
 }
+const PROXY_BADGE = {
+  proxied: ["Proxied", "ok"],
+  "real-key": ["Real key on disk", "bad"],
+  unproxied: ["Not proxied", "off"],
+};
+function renderBackup() {
+  const info = state.backup;
+  const box = $("backup");
+  box.hidden = !info || !info.state;
+  if (box.hidden) return;
+  const text = {
+    ok: `Backup ok · ${ago(info.at) || "just now"}`,
+    pending: "Backup pending",
+    running: "Backup running",
+    failed: info.error === "failed: drive" ? "Backup failed: drive" : "Backup failed",
+  }[info.state];
+  const label = el("span", `bk-${info.state}`, text);
+  box.replaceChildren(label);
+  if (info.state === "failed") box.append(btn("Retry", "", retryBackup, "Retry backup"));
+}
+async function retryBackup() {
+  try {
+    const reply = await write("POST", "/api/vault/backup/retry");
+    state.backup = reply.backup;
+    renderBackup();
+  } catch (err) {
+    toast(err.message, "bad");
+  }
+}
 function row(g, e) {
   const r = el("div", "hrow vrow");
   const n = el("div", "hname");
@@ -114,6 +143,8 @@ function row(g, e) {
     ctx.append(bits.length ? " · " : "", l);
   }
   n.append(el("b", "", e.key), ctx);
+  const badge = PROXY_BADGE[e.proxy];
+  if (badge) n.querySelector("b").after(el("span", `pbadge ${badge[1]}`, badge[0]));
   // owner-only hint: the server sends `mine` only to a client holding a passkey grant
   if (e.mine === false) {
     const m = el("span", "hmark", "not live");
@@ -183,6 +214,7 @@ async function load() {
     ]);
     if (!v.ok) throw fail(v);
     state.groups = v.j.sources || [];
+    state.backup = v.j.backup || null;
     if (p.ok) state.pk = { known: true, enrolled: p.j.enrolled, passkeys: p.j.passkeys || [] };
     $("vmsg").hidden = true;
   } catch (e) {
@@ -191,6 +223,7 @@ async function load() {
     $("vmsg").hidden = false;
   }
   $("hm").removeAttribute("aria-busy");
+  renderBackup();
   renderGroups();
   renderPasskeys();
   showRestart();
@@ -329,7 +362,10 @@ $("edit-form").addEventListener("submit", async (ev) => {
     );
     closeEdit();
     if (j.restartNeeded) state.restart = true;
-    toast(`${key} saved.${j.restartNeeded ? " Restart agent-console to apply." : ""}`, "ok");
+    const note = j.proxied
+      ? "Saved to iron-proxy; the env file holds the proxy token"
+      : `${key} saved.${j.restartNeeded ? " Restart agent-console to apply." : ""}`;
+    toast(note, "ok");
     await load();
   } catch (e) {
     err.textContent = e.message;
