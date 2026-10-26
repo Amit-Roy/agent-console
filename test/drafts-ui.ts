@@ -10,7 +10,7 @@ import { type Browser, chromium } from "playwright";
 const data = fs.mkdtempSync(path.join(os.tmpdir(), "ac-drafts-ui-"));
 const port = Number(process.env.DRAFTS_UI_PORT || 7075),
   base = `http://127.0.0.1:${port}`;
-const ids = ["draft-a", "draft-b"];
+const ids = ["draft-a", "draft-b", "draft-c"];
 fs.mkdirSync(path.join(data, "uploads"));
 fs.mkdirSync(path.join(data, "logs"));
 fs.writeFileSync(
@@ -85,244 +85,272 @@ try {
     });
   });
   browser = await chromium.launch();
-  let context = await browser.newContext({
-    viewport: { width: 1280, height: 900 },
-    reducedMotion: "reduce",
-  });
-  await context.addCookies([
-    {
-      name: "__Host-ac_session",
-      value: makeToken(),
-      domain: new URL(base).hostname,
-      path: "/",
-      secure: true,
-    },
-  ]);
-  let hello: string | undefined, replay: ((raw: string) => void) | undefined;
-  await context.routeWebSocket("**/ws", (socket) => {
-    const up = socket.connectToServer();
-    replay = (raw) => socket.send(raw);
-    up.onMessage((raw) => {
-      if (JSON.parse(String(raw)).t === "hello") hello = String(raw);
-      socket.send(raw);
+  const newLane = async (storageState?: any) => {
+    const context = await browser.newContext({
+      storageState,
+      viewport: { width: 1280, height: 900 },
+      reducedMotion: "reduce",
     });
-    socket.onMessage((raw) => up.send(raw));
-  });
-  let page = await context.newPage();
-  const errors: string[] = [];
-  const open = async () => {
+    if (!storageState)
+      await context.addCookies([
+        {
+          name: "__Host-ac_session",
+          value: makeToken(),
+          domain: new URL(base).hostname,
+          path: "/",
+          secure: true,
+        },
+      ]);
+    return context;
+  };
+  // Lane 1: draft persistence, send recovery, rejection and acknowledgement (threads draft-a, draft-b).
+  const sendLane = async () => {
+    let context = await newLane();
+    let hello: string | undefined, replay: ((raw: string) => void) | undefined;
+    await context.routeWebSocket("**/ws", (socket) => {
+      const up = socket.connectToServer();
+      replay = (raw) => socket.send(raw);
+      up.onMessage((raw) => {
+        if (JSON.parse(String(raw)).t === "hello") hello = String(raw);
+        socket.send(raw);
+      });
+      socket.onMessage((raw) => up.send(raw));
+    });
+    let page = await context.newPage();
+    const errors: string[] = [];
+    const open = async () => {
+      page.on("pageerror", (error) => errors.push(error.message));
+      await page.goto(base);
+      await page.waitForFunction(
+        () => !(document.getElementById("input") as HTMLTextAreaElement)?.disabled,
+      );
+    };
+    const thread = async (title: string) => {
+      await page.locator("#threads li .t", { hasText: title }).click();
+      await page.waitForFunction((t) => document.getElementById("ttl")?.textContent === t, title);
+    };
+    await open();
+    await thread("Draft 1");
+    const first = "First draft\n  keep whitespace  ";
+    await page.fill("#input", first);
+    assert.equal(
+      await page.evaluate(() => localStorage.getItem("ac_draft:draft-a")),
+      first,
+      "input persists immediately",
+    );
+    await thread("Draft 2");
+    assert.equal(
+      await page.locator("#input").evaluate((e: any) => e.value),
+      "",
+      "new thread starts empty",
+    );
+    await page.fill("#input", "Second draft");
+    await thread("Draft 1");
+    assert.equal(
+      await page.locator("#input").evaluate((e: any) => e.value),
+      first,
+      "return restores exact draft",
+    );
+    await page.locator("#ttl").evaluate((title) => {
+      title.textContent = "Waiting for reconnect hello";
+    });
+    replay!(hello!);
+    await page.waitForFunction(() => document.getElementById("ttl")?.textContent === "Draft 1");
+    assert.equal(
+      await page.locator("#input").evaluate((e: any) => e.value),
+      first,
+      "reconnect hello keeps current draft",
+    );
+    await page.reload();
+    await page.waitForFunction(() => document.getElementById("ttl")?.textContent === "Draft 1");
+    assert.equal(
+      await page.locator("#input").evaluate((e: any) => e.value),
+      first,
+      "reload restores draft",
+    );
+    const saved = await context.storageState();
+    await context.close();
+    context = await newLane(saved);
+    page = await context.newPage();
+    await open();
+    assert.equal(
+      await page.locator("#input").evaluate((e: any) => e.value),
+      first,
+      "closing and reopening page restores draft",
+    );
+    await thread("Draft 2");
+    assert.equal(
+      await page.locator("#input").evaluate((e: any) => e.value),
+      "Second draft",
+      "other thread survives reload and close",
+    );
+    await page.fill("#input", "");
+    assert.equal(
+      await page.evaluate(() => localStorage.getItem("ac_draft:draft-b")),
+      null,
+      "clearing deletes stored draft",
+    );
+    await thread("Draft 1");
+    await page.click("#send");
+    await page.waitForFunction(
+      () => (document.getElementById("input") as HTMLTextAreaElement).value === "",
+    );
+    assert.equal(
+      await page.locator("#input").evaluate((e: any) => e.value),
+      "",
+      "send clears composer",
+    );
+    assert.equal(
+      await page.evaluate(() => localStorage.getItem("ac_draft:draft-a")),
+      null,
+      "send deletes stored draft",
+    );
+    await page.waitForFunction(
+      () => !Object.keys(localStorage).some((key) => key.startsWith("ac_sending:")),
+    );
+    await page.reload();
+    await page.waitForFunction(
+      () =>
+        document.getElementById("ttl")?.textContent &&
+        !(document.getElementById("input") as HTMLTextAreaElement).disabled,
+    );
+    assert.equal(
+      await page.locator("#input").evaluate((e: any) => e.value),
+      "",
+      "sent draft does not return",
+    );
+    await page.evaluate(() => {
+      localStorage.removeItem("ac_draft:draft-a");
+      sessionStorage.setItem("ac_draft", "Legacy draft");
+    });
+    await page.reload();
+    await page.waitForFunction(
+      () => (document.getElementById("input") as HTMLTextAreaElement).value === "Legacy draft",
+    );
+    assert.equal(
+      await page.evaluate(() => sessionStorage.getItem("ac_draft")),
+      null,
+      "legacy draft consumed",
+    );
+    assert.equal(
+      await page.evaluate(() => localStorage.getItem("ac_draft:draft-a")),
+      "Legacy draft",
+      "legacy draft migrated",
+    );
+    // Keep sends away from the mock server to control acknowledgement and rejection precisely.
+    let reply: ((message: any) => void) | undefined;
+    const outgoing: any[] = [];
+    await context.routeWebSocket("**/ws", (socket) => {
+      const upstream = socket.connectToServer();
+      reply = (message) => socket.send(JSON.stringify(message));
+      upstream.onMessage((raw) => socket.send(raw));
+      socket.onMessage((raw) => {
+        const message = JSON.parse(String(raw));
+        if (message.t === "send") outgoing.push(message);
+        else upstream.send(raw);
+      });
+    });
+    await page.reload();
+    await page.waitForFunction(() => !(document.getElementById("input") as any)?.disabled);
+    const recovery = "Keep this until accepted\n  including whitespace  ";
+    await page.fill("#input", recovery);
+    await page.click("#send");
+    await page.waitForFunction(() => (document.getElementById("input") as any).value === "");
+    assert.equal(outgoing.length, 1, "send is held before server acceptance");
+    assert.equal(
+      await page.evaluate(
+        () => Object.keys(localStorage).filter((k) => k.startsWith("ac_sending:")).length,
+      ),
+      1,
+      "recovery copy remains until acknowledgement",
+    );
+    await page.reload();
+    await page.waitForFunction(
+      () =>
+        (document.getElementById("input") as any).value ===
+        "Keep this until accepted\n  including whitespace  ",
+    );
+    assert.equal(
+      outgoing.length,
+      1,
+      "recovered send stays unsent instead of replaying automatically",
+    );
+    await page.click("#send");
+    await page.waitForFunction(() => (document.getElementById("input") as any).value === "");
+    reply!({ t: "error", cid: outgoing.at(-1).cid, message: "Rejected fixture" });
+    await page.waitForFunction(
+      () =>
+        (document.getElementById("input") as any).value ===
+        "Keep this until accepted\n  including whitespace  ",
+    );
+    await page.click("#send");
+    await page.waitForFunction(() => (document.getElementById("input") as any).value === "");
+    await page.fill("#input", "Newer edits");
+    reply!({ t: "ack", cid: outgoing.at(-1).cid });
+    await page.waitForFunction(
+      () => !Object.keys(localStorage).some((k) => k.startsWith("ac_sending:")),
+    );
+    assert.equal(
+      await page.locator("#input").evaluate((e: any) => e.value),
+      "Newer edits",
+      "late acknowledgement preserves newer typing",
+    );
+    await page.reload();
+    await page.waitForFunction(
+      () => (document.getElementById("input") as any).value === "Newer edits",
+    );
+    assert.deepEqual(errors, []);
+    await context.close();
+  };
+  // Lane 2: unread and usage-limit state on its own threads (unread-a, draft-c), no shared draft state.
+  const unreadLane = async () => {
+    const context = await newLane();
+    const page = await context.newPage();
+    const errors: string[] = [];
     page.on("pageerror", (error) => errors.push(error.message));
+    const thread = async (title: string) => {
+      await page.locator("#threads li .t", { hasText: title }).click();
+      await page.waitForFunction((t) => document.getElementById("ttl")?.textContent === t, title);
+    };
     await page.goto(base);
     await page.waitForFunction(
       () => !(document.getElementById("input") as HTMLTextAreaElement)?.disabled,
     );
+    const unreadRow = page.locator("#threads li", { hasText: "Unread 1" });
+    assert.equal(
+      await unreadRow.evaluate((e) => e.classList.contains("unread")),
+      true,
+      "unread row",
+    );
+    assert.equal(await unreadRow.locator(".dot.unread").count(), 1, "unread dot");
+    assert.equal(await unreadRow.locator(".limit-tag").count(), 1, "limit tag");
+    assert.match(
+      (await unreadRow.locator(".limit-tag").getAttribute("title")) || "",
+      /Resets .*\nFixture limit hit/,
+      "limit tooltip",
+    );
+    await thread("Unread 1");
+    await page.waitForFunction(
+      () =>
+        ![...document.querySelectorAll("#threads li")]
+          .find((e) => e.textContent?.includes("Unread 1"))
+          ?.classList.contains("unread"),
+    );
+    // Needs server `read` handling: readAt must persist across reload.
+    await page.reload();
+    await page.waitForFunction(() => document.getElementById("ttl")?.textContent === "Unread 1");
+    await thread("Draft 3");
+    assert.equal(
+      await page
+        .locator("#threads li", { hasText: "Unread 1" })
+        .evaluate((e) => e.classList.contains("unread")),
+      false,
+      "read persists across reload (server-dependent)",
+    );
+    assert.deepEqual(errors, []);
+    await context.close();
   };
-  const thread = async (title: string) => {
-    await page.locator("#threads li .t", { hasText: title }).click();
-    await page.waitForFunction((t) => document.getElementById("ttl")?.textContent === t, title);
-  };
-  await open();
-  await thread("Draft 1");
-  const first = "First draft\n  keep whitespace  ";
-  await page.fill("#input", first);
-  assert.equal(
-    await page.evaluate(() => localStorage.getItem("ac_draft:draft-a")),
-    first,
-    "input persists immediately",
-  );
-  await thread("Draft 2");
-  assert.equal(
-    await page.locator("#input").evaluate((e: any) => e.value),
-    "",
-    "new thread starts empty",
-  );
-  await page.fill("#input", "Second draft");
-  await thread("Draft 1");
-  assert.equal(
-    await page.locator("#input").evaluate((e: any) => e.value),
-    first,
-    "return restores exact draft",
-  );
-  await page.locator("#ttl").evaluate((title) => {
-    title.textContent = "Waiting for reconnect hello";
-  });
-  replay!(hello!);
-  await page.waitForFunction(() => document.getElementById("ttl")?.textContent === "Draft 1");
-  assert.equal(
-    await page.locator("#input").evaluate((e: any) => e.value),
-    first,
-    "reconnect hello keeps current draft",
-  );
-  await page.reload();
-  await page.waitForFunction(() => document.getElementById("ttl")?.textContent === "Draft 1");
-  assert.equal(
-    await page.locator("#input").evaluate((e: any) => e.value),
-    first,
-    "reload restores draft",
-  );
-  const saved = await context.storageState();
-  await context.close();
-  context = await browser.newContext({
-    storageState: saved,
-    reducedMotion: "reduce",
-    viewport: { width: 1280, height: 900 },
-  });
-  page = await context.newPage();
-  await open();
-  assert.equal(
-    await page.locator("#input").evaluate((e: any) => e.value),
-    first,
-    "closing and reopening page restores draft",
-  );
-  await thread("Draft 2");
-  assert.equal(
-    await page.locator("#input").evaluate((e: any) => e.value),
-    "Second draft",
-    "other thread survives reload and close",
-  );
-  await page.fill("#input", "");
-  assert.equal(
-    await page.evaluate(() => localStorage.getItem("ac_draft:draft-b")),
-    null,
-    "clearing deletes stored draft",
-  );
-  await thread("Draft 1");
-  await page.click("#send");
-  await page.waitForFunction(
-    () => (document.getElementById("input") as HTMLTextAreaElement).value === "",
-  );
-  assert.equal(
-    await page.locator("#input").evaluate((e: any) => e.value),
-    "",
-    "send clears composer",
-  );
-  assert.equal(
-    await page.evaluate(() => localStorage.getItem("ac_draft:draft-a")),
-    null,
-    "send deletes stored draft",
-  );
-  await page.waitForFunction(
-    () => !Object.keys(localStorage).some((key) => key.startsWith("ac_sending:")),
-  );
-  await page.reload();
-  await page.waitForFunction(
-    () =>
-      document.getElementById("ttl")?.textContent &&
-      !(document.getElementById("input") as HTMLTextAreaElement).disabled,
-  );
-  assert.equal(
-    await page.locator("#input").evaluate((e: any) => e.value),
-    "",
-    "sent draft does not return",
-  );
-  await page.evaluate(() => {
-    localStorage.removeItem("ac_draft:draft-a");
-    sessionStorage.setItem("ac_draft", "Legacy draft");
-  });
-  await page.reload();
-  await page.waitForFunction(
-    () => (document.getElementById("input") as HTMLTextAreaElement).value === "Legacy draft",
-  );
-  assert.equal(
-    await page.evaluate(() => sessionStorage.getItem("ac_draft")),
-    null,
-    "legacy draft consumed",
-  );
-  assert.equal(
-    await page.evaluate(() => localStorage.getItem("ac_draft:draft-a")),
-    "Legacy draft",
-    "legacy draft migrated",
-  );
-  // Keep sends away from the mock server to control acknowledgement and rejection precisely.
-  let reply: ((message: any) => void) | undefined;
-  const outgoing: any[] = [];
-  await context.routeWebSocket("**/ws", (socket) => {
-    const upstream = socket.connectToServer();
-    reply = (message) => socket.send(JSON.stringify(message));
-    upstream.onMessage((raw) => socket.send(raw));
-    socket.onMessage((raw) => {
-      const message = JSON.parse(String(raw));
-      if (message.t === "send") outgoing.push(message);
-      else upstream.send(raw);
-    });
-  });
-  await page.reload();
-  await page.waitForFunction(() => !(document.getElementById("input") as any)?.disabled);
-  const recovery = "Keep this until accepted\n  including whitespace  ";
-  await page.fill("#input", recovery);
-  await page.click("#send");
-  await page.waitForFunction(() => (document.getElementById("input") as any).value === "");
-  assert.equal(outgoing.length, 1, "send is held before server acceptance");
-  assert.equal(
-    await page.evaluate(
-      () => Object.keys(localStorage).filter((k) => k.startsWith("ac_sending:")).length,
-    ),
-    1,
-    "recovery copy remains until acknowledgement",
-  );
-  await page.reload();
-  await page.waitForFunction(
-    () =>
-      (document.getElementById("input") as any).value ===
-      "Keep this until accepted\n  including whitespace  ",
-  );
-  assert.equal(
-    outgoing.length,
-    1,
-    "recovered send stays unsent instead of replaying automatically",
-  );
-  await page.click("#send");
-  await page.waitForFunction(() => (document.getElementById("input") as any).value === "");
-  reply!({ t: "error", cid: outgoing.at(-1).cid, message: "Rejected fixture" });
-  await page.waitForFunction(
-    () =>
-      (document.getElementById("input") as any).value ===
-      "Keep this until accepted\n  including whitespace  ",
-  );
-  await page.click("#send");
-  await page.waitForFunction(() => (document.getElementById("input") as any).value === "");
-  await page.fill("#input", "Newer edits");
-  reply!({ t: "ack", cid: outgoing.at(-1).cid });
-  await page.waitForFunction(
-    () => !Object.keys(localStorage).some((k) => k.startsWith("ac_sending:")),
-  );
-  assert.equal(
-    await page.locator("#input").evaluate((e: any) => e.value),
-    "Newer edits",
-    "late acknowledgement preserves newer typing",
-  );
-  await page.reload();
-  await page.waitForFunction(
-    () => (document.getElementById("input") as any).value === "Newer edits",
-  );
-  const unreadRow = page.locator("#threads li", { hasText: "Unread 1" });
-  assert.equal(await unreadRow.evaluate((e) => e.classList.contains("unread")), true, "unread row");
-  assert.equal(await unreadRow.locator(".dot.unread").count(), 1, "unread dot");
-  assert.equal(await unreadRow.locator(".limit-tag").count(), 1, "limit tag");
-  assert.match(
-    (await unreadRow.locator(".limit-tag").getAttribute("title")) || "",
-    /Resets .*\nFixture limit hit/,
-    "limit tooltip",
-  );
-  await thread("Unread 1");
-  await page.waitForFunction(
-    () =>
-      ![...document.querySelectorAll("#threads li")]
-        .find((e) => e.textContent?.includes("Unread 1"))
-        ?.classList.contains("unread"),
-  );
-  // Needs server `read` handling: readAt must persist across reload.
-  await page.reload();
-  await page.waitForFunction(() => document.getElementById("ttl")?.textContent === "Unread 1");
-  await thread("Draft 2");
-  assert.equal(
-    await page
-      .locator("#threads li", { hasText: "Unread 1" })
-      .evaluate((e) => e.classList.contains("unread")),
-    false,
-    "read persists across reload (server-dependent)",
-  );
-  assert.deepEqual(errors, []);
+  await Promise.all([sendLane(), unreadLane()]);
   console.log(
     "PASS drafts: thread isolation, exact text, reconnect, reload, close, clear, send, unacknowledged recovery, rejection, newer edits",
   );
