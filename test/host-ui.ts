@@ -1,5 +1,5 @@
 // Host dashboard: real browser, desktop + phone, first-party only, no console errors.
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -64,7 +64,25 @@ function seedProfile(file: string) {
 }
 seedProfile(path.join(data, "latency.sqlite"));
 
-const PORT = process.env.HOST_UI_PORT || "17851";
+const cardThreads = [
+  "11111111-1111-4111-8111-111111111111",
+  "22222222-2222-4222-8222-222222222222",
+].map((id, index) => ({
+  id,
+  provider: "mock",
+  model: "echo",
+  effort: "medium",
+  mode: "plan",
+  title: `Host card ${index + 1}`,
+  cwd: process.cwd(),
+  status: "idle",
+  cost: 0,
+  createdAt: Date.now(),
+  updatedAt: Date.now(),
+}));
+fs.writeFileSync(path.join(data, "threads.json"), JSON.stringify(cardThreads));
+fs.writeFileSync(path.join(data, "commands.json"), "{}");
+const PORT = process.env.HOST_UI_PORT || "7075";
 const BASE = `http://127.0.0.1:${PORT}`;
 const OUT = process.env.OUT || "/tmp";
 const server = spawn(process.execPath, ["server/index.ts"], {
@@ -76,6 +94,9 @@ const server = spawn(process.execPath, ["server/index.ts"], {
     AGENT_CONSOLE_MOCK: "1",
     AGENT_CONSOLE_HEADROOM: "0",
     AGENT_CONSOLE_WARM_MAX: "0",
+    AGENT_CONSOLE_PID_FILE: "",
+    AGENT_CONSOLE_ENV_FILES: "/dev/null",
+    AGENT_CONSOLE_LABELS: "0",
   },
   stdio: ["ignore", "ignore", "pipe"],
 });
@@ -94,7 +115,8 @@ for (let attempt = 0; ; attempt++) {
     () => false,
   );
   if (ready) break;
-  if (attempt > 150) throw new Error(`server did not start: ${serverErrors.slice(0, 300)}`);
+  if (server.exitCode !== null || attempt > 150)
+    throw new Error(`server did not start: ${serverErrors.slice(0, 300)}`);
   await new Promise((resolve) => setTimeout(resolve, 200));
 }
 let failed = 0;
@@ -160,12 +182,14 @@ async function headroomEmptyStates(page: any, name: string) {
   await page.click('#hr-range button[data-range="1h"]');
   await page.waitForSelector("#hr-body:not([hidden]) #hr-sites tbody tr");
 }
-for (const [name, viewport, scheme] of [
-  ["desktop-light", { width: 1280, height: 900 }, "light"],
-  ["desktop-dark", { width: 1280, height: 900 }, "dark"],
-  ["phone-light", { width: 390, height: 844 }, "light"],
-  ["phone-dark", { width: 390, height: 844 }, "dark"],
-] as const) {
+for (const [name, viewport, scheme] of process.env.HOST_CARD_ONLY
+  ? []
+  : ([
+      ["desktop-light", { width: 1280, height: 900 }, "light"],
+      ["desktop-dark", { width: 1280, height: 900 }, "dark"],
+      ["phone-light", { width: 390, height: 844 }, "light"],
+      ["phone-dark", { width: 390, height: 844 }, "dark"],
+    ] as const)) {
   const ctx = await browser.newContext({ viewport, colorScheme: scheme });
   await ctx.addCookies([
     {
@@ -278,7 +302,7 @@ for (const [name, viewport, scheme] of [
   await ctx.close();
 }
 // deploy skew: new page files against an older server (no io field, no history endpoint)
-{
+if (!process.env.HOST_CARD_ONLY) {
   const ctx = await browser.newContext({ viewport: { width: 390, height: 844 } });
   await ctx.addCookies([
     {
@@ -362,6 +386,21 @@ for (const [name, viewport, scheme] of [
     Array.isArray(j.processes) && j.processes.length > 0 && typeof j.processes[0].pid === "number",
     JSON.stringify(j).slice(0, 120),
   );
+  if (!process.env.HOST_CARD_BASELINE) {
+    for (const resource of ["cpu", "mem", "disk"]) {
+      check(
+        `api: ${resource} top three`,
+        Array.isArray(j.topProcesses?.[resource]) && j.topProcesses[resource].length <= 3,
+      );
+      const values = j.topProcesses[resource].map((row: any) =>
+        resource === "disk" ? row.readBps + row.writeBps : row[resource],
+      );
+      check(
+        `api: ${resource} ranking descending`,
+        values.every((value: number, index: number) => index === 0 || value <= values[index - 1]),
+      );
+    }
+  }
 }
 {
   const r = await fetch(`${BASE}/api/host/ports`, {
@@ -414,9 +453,260 @@ for (const [name, viewport, scheme] of [
   const r = await fetch(`${BASE}/api/host/metrics`);
   check("api: unauth refused", r.status === 401, String(r.status));
 }
+await composerHostChecks();
 await browser.close();
+cleanup();
 if (failed) {
   console.log(`\n${failed} FAILED`);
   process.exit(1);
 }
 console.log("\nall host checks passed");
+
+async function composerHostChecks() {
+  fs.mkdirSync(OUT, { recursive: true });
+  const observations: any = {
+    revision: execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
+    implementationState: process.env.HOST_CARD_BASELINE
+      ? "baseline /host absent"
+      : "candidate /host module present; implementation copied from feature worktree",
+    cases: [],
+  };
+  for (const [name, width, scheme] of [
+    ["desktop-dark", 1280, "dark"],
+    ["phone-dark", 390, "dark"],
+    ["phone-light", 390, "light"],
+  ] as const) {
+    const context = await browser.newContext({
+      viewport: { width, height: width === 390 ? 844 : 900 },
+      colorScheme: scheme,
+      recordVideo: process.env.HOST_CARD_VIDEO
+        ? { dir: OUT, size: { width, height: width === 390 ? 844 : 900 } }
+        : undefined,
+    });
+    await context.addCookies([
+      {
+        name: "__Host-ac_session",
+        value: makeToken(),
+        domain: new URL(BASE).hostname,
+        path: "/",
+        secure: true,
+      },
+    ]);
+    await context.addInitScript((id) => localStorage.setItem("ac_thread", id), cardThreads[0].id);
+    const page = await context.newPage();
+    const agentMessages: string[] = [];
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    page.on("websocket", (socket) =>
+      socket.on("framesent", ({ payload }) => {
+        const text = String(payload);
+        if (/"t":"(send|command)"/.test(text)) agentMessages.push(text);
+      }),
+    );
+    await page.goto(BASE);
+    await page.waitForFunction(
+      () => !(document.querySelector("#input") as HTMLInputElement)?.disabled,
+    );
+    await page.fill("#input", "/hos");
+    if (process.env.HOST_CARD_BASELINE) {
+      const completion = await page.locator("#slash .cmd", { hasText: "/host" }).count();
+      await page.screenshot({ path: `${OUT}/baseline-${name}.png` });
+      observations.cases.push({
+        name,
+        hostCompletion: completion,
+        hostCard: await page.locator("#host-card").count(),
+      });
+      await context.close();
+      continue;
+    }
+    await page.locator("#slash .cmd", { hasText: "/host" }).waitFor();
+    await page.locator("#input").press("Tab");
+    check(
+      `${name}: host autocomplete`,
+      (await page.locator("#input").innerText()).trim() === "/host",
+    );
+    await page.locator("#file").setInputFiles({
+      name: "host-note.txt",
+      mimeType: "text/plain",
+      buffer: Buffer.from("Keep this attachment"),
+    });
+    await page.waitForFunction(
+      () =>
+        document.querySelectorAll("#thumbs li").length === 1 &&
+        !document.querySelector('#thumbs [aria-busy="true"]'),
+    );
+    await page.locator("#input").press("Enter");
+    check(
+      `${name}: host preserves attachment`,
+      (await page.locator("#thumbs li").count()) === 1 &&
+        !(await page.locator("#thumbs").innerText()).includes("Retry"),
+    );
+    await page.locator("#thumbs .rm").click();
+    const card = page.locator("#host-card");
+    await card.waitFor();
+    await page.locator(".host-card-current").waitFor();
+    check(
+      `${name}: CPU default`,
+      (await page.getByRole("tab", { name: "CPU", exact: true }).getAttribute("aria-selected")) ===
+        "true",
+    );
+    await page.screenshot({ path: `${OUT}/real-${name}.png` });
+    const originalMessages = agentMessages.length;
+    const requests: string[] = [];
+    const now = Date.now();
+    const history = {
+      cols: ["ts", "cpu", "mem", "swap", "load", "rx", "tx", "rd", "wr"],
+      range: 300,
+      step: 5000,
+      points: Array.from({ length: 61 }, (_, index) => [
+        now - 300000 + index * 5000,
+        10 + index,
+        40 + index / 3,
+        0,
+        1,
+        0,
+        0,
+        index * 100,
+        index * 20,
+      ]),
+    };
+    const processRow = (label: string, index: number) => ({
+      pid: 900 + index,
+      label,
+      cmd: label,
+      cpu: 9 - index,
+      mem: 8 - index,
+      rss: (8 - index) * MIB,
+      readBps: 900 - index * 10,
+      writeBps: 100,
+      protected: false,
+    });
+    const ranking = {
+      cpu: ["compiler", "browser", "worker"],
+      mem: ["database", "editor", "cache"],
+      disk: ["backup", "sync", "logger"],
+    };
+    const fixtureProcesses = {
+      processes: [processRow("unranked", 0)],
+      topProcesses: Object.fromEntries(
+        Object.entries(ranking).map(([resource, labels]) => [resource, labels.map(processRow)]),
+      ),
+    };
+    let fixtureMode = "normal";
+    let releaseLoading: (() => void) | undefined;
+    let loaded = Promise.resolve();
+    await page.route("**/api/host/{metrics,history*,processes}", async (route) => {
+      const url = new URL(route.request().url());
+      requests.push(url.pathname + url.search);
+      await loaded;
+      if (fixtureMode === "error")
+        return route.fulfill({ status: 503, json: { error: "Fixture unavailable" } });
+      if (url.pathname.endsWith("history"))
+        return route.fulfill({
+          json: { ...history, points: fixtureMode === "empty" ? [] : history.points },
+        });
+      if (url.pathname.endsWith("processes"))
+        return route.fulfill({
+          json:
+            fixtureMode === "empty"
+              ? { processes: [], topProcesses: { cpu: [], mem: [], disk: [] } }
+              : fixtureProcesses,
+        });
+      return route.fulfill({
+        json: {
+          cpu: { total: 37, n: 8 },
+          mem: { total: 16 * 1024 * MIB, used: 7 * 1024 * MIB, pct: 43.75 },
+          disk: [{ target: "/", size: 100 * 1024 * MIB, used: 38 * 1024 * MIB, pcent: 38 }],
+          io: { rd: 2048, wr: 1024 },
+        },
+      });
+    });
+    await page.getByRole("button", { name: "Refresh host stats", exact: true }).click();
+    await page.getByText("compiler", { exact: true }).waitFor();
+    check(`${name}: five-minute history`, requests.includes("/api/host/history?range=300"));
+    check(
+      `${name}: ranked CPU top three`,
+      (await page.locator(".host-card-processes").innerText()).includes("worker") &&
+        !(await card.innerText()).includes("unranked"),
+    );
+    await page.locator(".host-card-chart").waitFor();
+    check(
+      `${name}: graph plots five-minute fixture`,
+      (await page.locator(".host-card-chart").getAttribute("aria-label"))?.includes(
+        "61 samples",
+      ) === true,
+    );
+    await page.screenshot({ path: `${OUT}/fixture-cpu-${name}.png` });
+    const beforeTabs = requests.length;
+    await page.getByRole("tab", { name: "CPU", exact: true }).focus();
+    await page.keyboard.press("ArrowRight");
+    await page.getByText("database", { exact: true }).waitFor();
+    check(
+      `${name}: keyboard RAM tab`,
+      (await page.getByRole("tab", { name: "RAM", exact: true }).getAttribute("aria-selected")) ===
+        "true",
+    );
+    await page.keyboard.press("End");
+    await page.getByText("backup", { exact: true }).waitFor();
+    check(`${name}: static tabs share snapshot`, requests.length === beforeTabs);
+    await page.screenshot({ path: `${OUT}/fixture-${name}.png` });
+    await page.getByRole("tab", { name: "CPU", exact: true }).click();
+    check(
+      `${name}: local command no agent send`,
+      agentMessages.length === originalMessages && originalMessages === 0,
+    );
+    await page.fill("#input", "/host");
+    await page.locator("#input").press("Enter");
+    check(`${name}: one card`, (await card.count()) === 1);
+    check(
+      `${name}: no horizontal overflow`,
+      await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
+    );
+    fixtureMode = "empty";
+    await page.getByRole("button", { name: "Refresh host stats", exact: true }).click();
+    await page
+      .getByText(/No (process|samples|telemetry)/)
+      .first()
+      .waitFor();
+    fixtureMode = "error";
+    await page.getByRole("button", { name: "Refresh host stats", exact: true }).click();
+    await page
+      .getByText(/unavailable|Couldn.t|Could not|Unable/)
+      .first()
+      .waitFor();
+    fixtureMode = "normal";
+    loaded = new Promise<void>((resolve) => {
+      releaseLoading = resolve;
+    });
+    await page.getByRole("button", { name: "Refresh host stats", exact: true }).click();
+    check(`${name}: loading state`, (await card.innerText()).includes("Loading"));
+    releaseLoading?.();
+    await page.getByText("compiler", { exact: true }).waitFor();
+    await page.getByRole("button", { name: "Close host stats", exact: true }).click();
+    check(`${name}: close`, (await card.count()) === 0);
+    await page.fill("#input", "/host");
+    await page.locator("#input").press("Enter");
+    await card.waitFor();
+    if (width === 390) await page.locator("#menu").click();
+    await page.locator("#threads li .t", { hasText: "Host card 2" }).click();
+    await page.waitForFunction(() => !document.querySelector("#host-card"));
+    check(`${name}: thread navigation clears card`, true);
+    check(`${name}: no page errors`, errors.length === 0, errors.join(" | "));
+    observations.cases.push({
+      name,
+      hostCompletion: 1,
+      hostCard: 1,
+      historyRange: 300,
+      fixtureTopThree: ranking,
+      agentMessages: agentMessages.length,
+      errors,
+    });
+    const video = page.video();
+    await context.close();
+    if (video) fs.renameSync(await video.path(), `${OUT}/host-card-${name}.webm`);
+  }
+  fs.writeFileSync(
+    `${OUT}/${process.env.HOST_CARD_BASELINE ? "baseline" : "candidate"}-observations.json`,
+    JSON.stringify(observations, null, 2),
+  );
+}

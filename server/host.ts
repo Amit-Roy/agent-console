@@ -68,6 +68,10 @@ export interface Proc {
   cwd: string;
   cpu?: number;
   memPct?: number;
+  readBytes?: number | null;
+  writeBytes?: number | null;
+  readBps?: number | null;
+  writeBps?: number | null;
 }
 
 const HOME = os.homedir();
@@ -137,6 +141,19 @@ function readSlowInfo(dir: string, name: string) {
   return { uid, cmd: cmd || `(${name})`, label: procLabel(argv, name), cwd };
 }
 
+function readProcIo(dir: string): { readBytes: number | null; writeBytes: number | null } {
+  try {
+    const text = fs.readFileSync(path.join(dir, "io"), "utf8");
+    const counter = (name: string) => {
+      const match = new RegExp(`^${name}:\\s+(\\d+)$`, "m").exec(text);
+      return match ? Number(match[1]) : null;
+    };
+    return { readBytes: counter("read_bytes"), writeBytes: counter("write_bytes") };
+  } catch {
+    return { readBytes: null, writeBytes: null };
+  }
+}
+
 function readProcStat(pid: string, memTotal: number): Proc | null {
   const dir = path.join(PROC, pid);
   try {
@@ -158,6 +175,7 @@ function readProcStat(pid: string, memTotal: number): Proc | null {
       slow.set(key, info);
     }
     return {
+      ...readProcIo(dir),
       pid: Number(pid),
       ppid: Number(rest[1]) || 0,
       name,
@@ -233,8 +251,13 @@ export function sleep(ms: number) {
 /* One /proc pass per request. Per-process CPU% is the delta against the previous pass (the page
    polls every 2 s); with no recent pass, a second one runs 250 ms later. Results are shared for
    a second so several open tabs cost one pass. */
-let lastPass: { ts: number; total: number; ticks: Map<number, number> } | null = null;
-let snapshot: { ts: number; promise: Promise<{ procs: Proc[] }> } | null = null;
+type ProcPass = ReturnType<typeof pass>;
+export interface HostSnapshot {
+  procs: Proc[];
+  topProcesses: { cpu: Proc[]; mem: Proc[]; disk: Proc[] };
+}
+let lastPass: ProcPass | null = null;
+let snapshot: { ts: number; promise: Promise<HostSnapshot> } | null = null;
 
 function pass(memTotal: number) {
   const procs = readAllProcs(memTotal);
@@ -243,11 +266,33 @@ function pass(memTotal: number) {
     procs,
     total,
     ts: Date.now(),
-    ticks: new Map(procs.map((p) => [p.pid, p.utime + p.stime])),
+    previous: new Map(procs.map((proc) => [`${proc.pid}:${proc.starttime}`, proc])),
   };
 }
 
-export function hostSnapshot(): Promise<{ procs: Proc[] }> {
+export function ioRate(
+  current: number | null | undefined,
+  previous: number | null | undefined,
+  seconds: number,
+) {
+  return current != null && previous != null && seconds > 0
+    ? Math.max(0, (current - previous) / seconds)
+    : null;
+}
+
+export function processIoRates(current: Proc, previous: Proc | undefined, seconds: number) {
+  const sameProcess = previous?.pid === current.pid && previous?.starttime === current.starttime;
+  return {
+    readBps: ioRate(current.readBytes, sameProcess ? previous?.readBytes : null, seconds),
+    writeBps: ioRate(current.writeBytes, sameProcess ? previous?.writeBytes : null, seconds),
+  };
+}
+
+function diskRate(proc: Proc) {
+  return (proc.readBps ?? 0) + (proc.writeBps ?? 0);
+}
+
+export function hostSnapshot(): Promise<HostSnapshot> {
   if (snapshot && Date.now() - snapshot.ts < 1000) return snapshot.promise;
   const promise = (async () => {
     const memTotal = readMeminfo().MemTotal ?? 0;
@@ -260,18 +305,32 @@ export function hostSnapshot(): Promise<{ procs: Proc[] }> {
     const dTotal = cur.total - prev.total;
     const out: Proc[] = [];
     for (const p of cur.procs) {
-      const before = prev.ticks.get(p.pid);
+      const previous = prev.previous.get(`${p.pid}:${p.starttime}`);
+      const before = previous ? previous.utime + previous.stime : undefined;
       const cpu =
         before != null && dTotal > 0
           ? Math.max(0, ((p.utime + p.stime - before) / dTotal) * 100)
           : 0;
-      out.push({ ...p, cpu });
+      const seconds = (cur.ts - prev.ts) / 1000;
+      out.push({
+        ...p,
+        cpu,
+        ...processIoRates(p, previous, seconds),
+      });
     }
     lastPass = cur;
     const live = new Set(cur.procs.map((p) => `${p.pid}:${p.starttime}`));
     for (const k of slow.keys()) if (!live.has(k)) slow.delete(k);
     out.sort((a, b) => (b.cpu ?? 0) - (a.cpu ?? 0));
-    return { procs: out.slice(0, MAX_PROCS) };
+    const topProcesses = {
+      cpu: out.slice(0, 3),
+      mem: [...out].sort((left, right) => right.rssPages - left.rssPages).slice(0, 3),
+      disk: out
+        .filter((proc) => proc.readBps != null && proc.writeBps != null)
+        .sort((left, right) => diskRate(right) - diskRate(left))
+        .slice(0, 3),
+    };
+    return { procs: out.slice(0, MAX_PROCS), topProcesses };
   })();
   snapshot = { ts: Date.now(), promise };
   return promise;
@@ -373,27 +432,35 @@ export function hostMetrics(req: express.Request, res: express.Response) {
 type Reply = { status: number; body: unknown };
 
 async function processList(): Promise<Reply> {
-  const { procs } = await hostSnapshot();
+  const { procs, topProcesses } = await hostSnapshot();
   const guard = protectedPids();
+  const row = (p: Proc) => ({
+    protected: guard.has(p.pid),
+    pid: p.pid,
+    ppid: p.ppid,
+    name: p.name,
+    user: userOf(p.uid),
+    state: p.state,
+    cpu: p.cpu ?? 0,
+    readBps: p.readBps ?? null,
+    writeBps: p.writeBps ?? null,
+    mem: p.memPct ?? 0,
+    rss: p.rssPages * PAGE_SIZE,
+    threads: p.threads,
+    nice: p.nice,
+    cmd: p.cmd.slice(0, 400),
+    label: p.label,
+    cwd: p.cwd,
+  });
   return {
     status: 200,
     body: {
-      processes: procs.map((p) => ({
-        protected: guard.has(p.pid),
-        pid: p.pid,
-        ppid: p.ppid,
-        name: p.name,
-        user: userOf(p.uid),
-        state: p.state,
-        cpu: p.cpu ?? 0,
-        mem: p.memPct ?? 0,
-        rss: p.rssPages * PAGE_SIZE,
-        threads: p.threads,
-        nice: p.nice,
-        cmd: p.cmd.slice(0, 400),
-        label: p.label,
-        cwd: p.cwd,
-      })),
+      processes: procs.map(row),
+      topProcesses: {
+        cpu: topProcesses.cpu.map(row),
+        mem: topProcesses.mem.map(row),
+        disk: topProcesses.disk.map(row),
+      },
     },
   };
 }

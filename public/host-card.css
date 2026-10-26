@@ -1,0 +1,133 @@
+.host-card {
+  margin-block-end: 0.75rem;
+  padding: 0.75rem;
+  border: 1px solid var(--edge-strong);
+  border-radius: 0.875rem;
+  background: var(--s1);
+  color: var(--t1);
+  font-size: 0.8125rem;
+  font-variant-numeric: tabular-nums;
+  max-height: min(28rem, 55dvh);
+  overflow: auto;
+}
+.host-card-header {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+.host-card-header h2 {
+  font-size: 0.875rem;
+  font-weight: 600;
+  margin: 0;
+  flex: 1;
+}
+.host-card-header .btn {
+  min-width: 44px;
+  min-height: 44px;
+}
+.host-card-tabs {
+  display: flex;
+  gap: 0.25rem;
+  background: var(--s2);
+  border-radius: 0.625rem;
+  padding: 0.25rem;
+}
+.host-card-tab {
+  flex: 1;
+  min-height: 44px;
+  border: 0;
+  border-radius: 0.375rem;
+  background: transparent;
+  color: var(--t2);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.host-card-tab:hover {
+  background: var(--s3);
+}
+.host-card-tab:active {
+  background: var(--press);
+}
+.host-card-tab[aria-selected="true"] {
+  background: var(--s1);
+  color: var(--accent);
+  box-shadow: var(--shadow-card);
+}
+.host-card button:focus-visible,
+.host-card-panel:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+.host-card-current {
+  font-size: 0.875rem;
+  font-weight: 500;
+  margin: 0.875rem 0;
+  overflow-wrap: anywhere;
+}
+.host-card-history {
+  margin: 0;
+}
+.host-card-caption {
+  font-size: 0.75rem;
+  color: var(--t2);
+  font-weight: 500;
+  margin: 0 0 0.375rem;
+}
+.host-card-chart {
+  width: 100%;
+  height: 80px;
+  display: block;
+  border-bottom: 1px solid var(--edge);
+}
+.host-card-chart path {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+.host-card-axis {
+  display: flex;
+  justify-content: space-between;
+  color: var(--t3);
+  font-size: 0.6875rem;
+  margin-block-start: 0.25rem;
+}
+.host-card-processes {
+  margin-block-start: 0.75rem;
+}
+.host-card-processes ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.host-card-processes li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 0.625rem;
+  align-items: baseline;
+  padding-block: 0.375rem;
+}
+.host-card-process-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.host-card-process-value {
+  text-align: right;
+}
+.host-card-muted {
+  color: var(--t3);
+  font-size: 0.75rem;
+}
+.host-card-state {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 2.75rem;
+}
+.host-card-updated {
+  margin: 0.625rem 0 0;
+  font-size: 0.6875rem;
+}
