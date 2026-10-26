@@ -19,4 +19,6 @@ while (Date.now() < deadline) {
   }
   await delay(1000);
 }
-throw new Error(`All ${count} CI runners must finish setup within 120 seconds of the first ready runner.`);
+throw new Error(
+  `All ${count} CI runners must finish setup within 120 seconds of the first ready runner.`,
+);
