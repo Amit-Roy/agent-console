@@ -190,18 +190,23 @@ try {
   };
 
   // Exact counts and completed replay prevent empty history from passing.
-  const lifecycleContext = await browser.newContext({ viewport: { width: 1280, height: 900 } });
-  await lifecycleContext.addCookies([
-    {
-      name: "__Host-ac_session",
-      value: makeToken(),
-      domain: new URL(base).hostname,
-      path: "/",
-      secure: true,
-    },
-  ]);
-  await lifecycleContext.addInitScript(() => localStorage.setItem("ac_thread", "lifecycle"));
-  const runScenario = async (scenario: string) => {
+  const lifecycleContexts: Awaited<ReturnType<typeof browser.newContext>>[] = [];
+  const newLifecycleContext = async () => {
+    const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+    await context.addCookies([
+      {
+        name: "__Host-ac_session",
+        value: makeToken(),
+        domain: new URL(base).hostname,
+        path: "/",
+        secure: true,
+      },
+    ]);
+    await context.addInitScript(() => localStorage.setItem("ac_thread", "lifecycle"));
+    lifecycleContexts.push(context);
+    return context;
+  };
+  const runScenario = async (lifecycleContext: Awaited<ReturnType<typeof newLifecycleContext>>, scenario: string) => {
     const page = await lifecycleContext.newPage();
     page.setDefaultTimeout(5000);
     const errors: string[] = [];
@@ -363,18 +368,20 @@ try {
     await page.close();
     console.log(`PASS tool card lifecycle ${scenario}`);
   };
-  // Toggle widths (own threads) and the scenario lane use separate pages: run concurrently.
+  // Toggle widths (own threads) and two scenario lanes (own contexts) run concurrently.
   const scenarios = process.env.AC_LIFECYCLE_CASE
     ? [process.env.AC_LIFECYCLE_CASE]
     : ["idle", "done-launch", "active", "background", "delta", "earlier", "result", "aborted"];
+  const half = Math.ceil(scenarios.length / 2);
+  const lanes = [scenarios.slice(0, half), scenarios.slice(half)].filter((lane) => lane.length);
   await Promise.all([
     ...(process.env.AC_LIFECYCLE_CASE ? [] : [1280, 390]).map(runToggle),
-    // Scenarios stay in one sequential lane so page loads do not starve on small CI runners.
-    (async () => {
-      for (const scenario of scenarios) await runScenario(scenario);
-    })(),
+    ...lanes.map(async (lane) => {
+      const context = await newLifecycleContext();
+      for (const scenario of lane) await runScenario(context, scenario);
+    }),
   ]);
-  await lifecycleContext.close();
+  await Promise.all(lifecycleContexts.map((context) => context.close()));
 
   assert.equal(
     fs.existsSync(path.join(data, "turns.jsonl")) &&
