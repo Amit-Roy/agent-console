@@ -11,7 +11,12 @@ import type { Browser, BrowserContext, Page, Route } from "playwright";
 const data = fs.mkdtempSync(path.join(os.tmpdir(), "ac-attachment-drafts-"));
 const port = Number(process.env.ATTACHMENT_DRAFTS_UI_PORT || 7074),
   base = `http://127.0.0.1:${port}`;
-const ids = ["a10c801e-893e-4d42-b1df-f57eced19ad1", "b20c801e-893e-4d42-b1df-f57eced19ad2"];
+const ids = [
+  "a10c801e-893e-4d42-b1df-f57eced19ad1",
+  "b20c801e-893e-4d42-b1df-f57eced19ad2",
+  "c30c801e-893e-4d42-b1df-f57eced19ad3",
+  "d40c801e-893e-4d42-b1df-f57eced19ad4",
+];
 const out = process.env.OUT;
 if (out) fs.mkdirSync(out, { recursive: true });
 fs.mkdirSync(path.join(data, "uploads"));
@@ -28,8 +33,8 @@ fs.writeFileSync(
       cwd: os.tmpdir(),
       status: "idle",
       cost: 0,
-      createdAt: 2 - i,
-      updatedAt: 2 - i,
+      createdAt: ids.length - i,
+      updatedAt: ids.length - i,
     })),
   ),
 );
@@ -67,11 +72,10 @@ const listening = new Promise<void>((resolve, reject) => {
 listening.catch(() => {});
 let browser: Browser | undefined;
 let launching: Promise<Browser> | undefined;
-let context: BrowserContext | undefined;
+const contexts: BrowserContext[] = [];
 let restartContext: BrowserContext | undefined;
 let restarting: Promise<void> | undefined;
 const errors: string[] = [];
-const sent: any[] = [];
 const videos: string[] = [];
 try {
   const [{ makeToken }, { chromium }] = await Promise.all([
@@ -80,13 +84,12 @@ try {
   ]);
   launching = chromium.launch();
   launching.catch(() => {});
-  let holdSend = false;
-  const configureSocket = (current: BrowserContext) =>
+  const gateSocket = (current: BrowserContext, gate: { hold: boolean }) =>
     current.routeWebSocket("**/ws", (socket) => {
       const upstream = socket.connectToServer();
       upstream.onMessage((raw) => socket.send(raw));
       socket.onMessage((raw) => {
-        if (!(holdSend && JSON.parse(String(raw)).t === "send")) upstream.send(raw);
+        if (!(gate.hold && JSON.parse(String(raw)).t === "send")) upstream.send(raw);
       });
     });
   const options = {
@@ -102,7 +105,7 @@ try {
       headless: true,
     }));
     opened.setDefaultTimeout(7000);
-    await configureSocket(opened);
+    await gateSocket(opened, { hold: false });
     await opened.addCookies([{ name: "ac_session", value: makeToken(), url: base }]);
     return opened;
   };
@@ -110,12 +113,7 @@ try {
   restartOpening.catch(() => {});
   await listening;
   browser = await launching;
-  context = await browser.newContext(options);
-  context.setDefaultTimeout(7000);
-  await configureSocket(context);
-  await context.addCookies([{ name: "ac_session", value: makeToken(), url: base }]);
-  let page: Page;
-  const track = (next: Page) => {
+  const track = (next: Page, sent: any[]) => {
     next.on("pageerror", (error) => errors.push(error.message));
     next.on("websocket", (socket) =>
       socket.on("framesent", (frame) => {
@@ -124,11 +122,28 @@ try {
       }),
     );
   };
-  const watch = (next: Page) => {
-    page = next;
-    track(next);
+  // Every lane owns a context (its own IndexedDB, storage and sockets) and its own threads, so lanes run concurrently.
+  const openLane = async (storageState?: any) => {
+    const current = await browser!.newContext({
+      ...options,
+      ...(storageState ? { storageState } : {}),
+    });
+    contexts.push(current);
+    current.setDefaultTimeout(7000);
+    const gate = { hold: false };
+    const sent: any[] = [];
+    await gateSocket(current, gate);
+    if (!storageState)
+      await current.addCookies([{ name: "ac_session", value: makeToken(), url: base }]);
+    const opened = await current.newPage();
+    track(opened, sent);
+    return { context: current, page: opened, gate, sent };
   };
-  watch(await context.newPage());
+  const closeLane = async (current: BrowserContext, opened: Page) => {
+    const recorded = opened.video();
+    await current.close();
+    if (recorded) videos.push(await recorded.path());
+  };
   // Composer readiness is the assertion; unrelated resource loading must not delay navigation.
   const navigation = { waitUntil: "domcontentloaded" as const, timeout: 15000 };
   // Timer polling: the default requestAnimationFrame polling keeps Chromium rendering frames for the whole wait.
@@ -198,7 +213,6 @@ try {
       );
     return { ready, thread, value, attachmentOrder, settled, stored };
   };
-  const { ready, thread, value, attachmentOrder, settled, stored } = composer(() => page);
   const file = (name: string, text: string) => ({
     name,
     mimeType: "text/plain",
@@ -242,7 +256,7 @@ try {
     const open = async (opening: Promise<BrowserContext>) => {
       const reopened = await opening;
       restartPage = reopened.pages()[0] || (await reopened.newPage());
-      track(restartPage);
+      track(restartPage, []);
       return reopened;
     };
     let restarted = await open(restartOpening);
@@ -296,359 +310,376 @@ try {
     restartContext = undefined;
     if (reopenedVideo) videos.push(await reopenedVideo.path());
   };
-  restarting = restartFlow();
-  restarting.catch(() => {});
-  await page.goto(base, navigation);
-  await ready();
-  await thread(0);
-  await page.fill("#input", "First draft\n  keep whitespace  ");
-  await page.locator("#file").setInputFiles([file("first.txt", "first attachment"), image]);
-  await settled(2);
-  await stored(ids[0], 2);
-  const firstOrder = ["Remove first.txt", "Remove draft-image.png"];
-  assert.deepEqual(await attachmentOrder(), firstOrder, "attachments retain insertion order");
-  const first = await value();
-  assert.match(first, /\[Image #1\]/, "image label is inserted");
-  assert.equal(
-    await page
-      .locator("#thumbs img")
-      .evaluate((img: HTMLImageElement) => img.complete && img.naturalWidth > 0),
-    true,
-    "image preview decodes",
-  );
-  await thread(1);
-  await page.fill("#input", "Second draft");
-  await page.locator("#file").setInputFiles(file("second.txt", "second attachment"));
-  await settled(1);
-  await stored(ids[1], 1);
-  await thread(0);
-  await settled(2);
-  assert.equal(await value(), first, "thread switch restores exact text");
-  await page.reload(navigation);
-  await ready();
-  await thread(0);
-  await settled(2);
-  assert.equal(await value(), first, "reload restores text and attachments");
-  assert.deepEqual(await attachmentOrder(), firstOrder, "reload preserves attachment order");
-  const saved = await context.storageState({ indexedDB: true });
-  const firstVideo = page.video();
-  await context.close();
-  if (firstVideo) videos.push(await firstVideo.path());
-  context = await browser.newContext({ ...options, storageState: saved });
-  context.setDefaultTimeout(7000);
-  await configureSocket(context);
-  watch(await context.newPage());
-  await page.goto(base, navigation);
-  await ready();
-  await thread(0);
-  await settled(2);
-  assert.equal(await value(), first, "closed browser context restores draft");
-  assert.deepEqual(
-    await attachmentOrder(),
-    firstOrder,
-    "closed browser context preserves attachment order",
-  );
-  assert.equal(
-    await page
-      .locator("#thumbs img")
-      .evaluate((img: HTMLImageElement) => img.complete && img.naturalWidth > 0),
-    true,
-    "restored image preview loads",
-  );
-  await page.getByRole("button", { name: "Remove first.txt", exact: true }).click();
-  await settled(1);
-  await stored(ids[0], 1);
-  await stored(ids[1], 1);
-  await page.reload(navigation);
-  await ready();
-  await thread(0);
-  await settled(1);
-  assert.equal(
-    await page.getByRole("button", { name: "Remove first.txt", exact: true }).count(),
-    0,
-    "removed attachment stays removed",
-  );
-  await page.click("#send");
-  await page.waitForFunction(
-    () => (document.getElementById("input") as any).value === "",
-    undefined,
-    poll,
-  );
-  await settled(0);
-  await stored(ids[0], 0);
-  await stored(ids[1], 1);
-  await thread(1);
-  await settled(1);
-  assert.equal(await value(), "Second draft", "sending clears only its own thread");
-
-  let failUpload = true;
-  // A route makes every request in the context round-trip through this process, so each one is removed once its step is done.
-  const failPattern = `**/uploads/${ids[1]}`;
-  const failHandler = async (route: Route) => {
-    if (
-      route.request().method() === "POST" &&
-      decodeURIComponent(route.request().headers()["x-name"] || "") === "retry.txt" &&
-      failUpload
-    ) {
-      await route.fulfill({
-        status: 503,
-        contentType: "application/json",
-        body: JSON.stringify({ error: "Fixture upload failure" }),
-      });
-    } else await route.continue();
-  };
-  await context.route(failPattern, failHandler);
-  await page.locator("#file").setInputFiles(file("retry.txt", "retry attachment"));
-  await page.getByRole("button", { name: "Retry retry.txt", exact: true }).waitFor();
-  await stored(ids[1], 2, true);
-  const beforeFailureSend = sent.length;
-  await page.click("#send");
-  await page
-    .getByText("Retry or remove failed attachments before sending.", { exact: true })
-    .waitFor();
-  assert.equal(sent.length, beforeFailureSend, "failed attachment blocks partial sends");
-  assert.equal(await value(), "Second draft", "failed send retains text");
-  await page.reload(navigation);
-  await ready();
-  await thread(1);
-  await page.getByRole("button", { name: "Retry retry.txt", exact: true }).waitFor();
-  assert.equal(await value(), "Second draft", "failed upload draft survives reload");
-  failUpload = false;
-  await page.getByRole("button", { name: "Retry retry.txt", exact: true }).click();
-  await settled(2);
-  assert.equal(
-    await page.getByRole("button", { name: "Retry retry.txt", exact: true }).count(),
-    0,
-    "retry succeeds with original bytes",
-  );
-  await page.click("#send");
-  await settled(0);
-  await stored(ids[1], 0);
-  const secondSend = sent.filter((message) => message.thread === ids[1]).at(-1);
-  assert.equal(secondSend?.attachments.length, 2, "successful retry sends both attachments");
-  await context.unroute(failPattern, failHandler);
-
-  await thread(0);
-  await page.fill("#input", "Resume interrupted upload");
-  let release!: () => void;
-  const blocked = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  let intercepted!: () => void;
-  const held = new Promise<void>((resolve) => {
-    intercepted = resolve;
-  });
-  let blockUpload = true;
-  const blockPattern = `**/uploads/${ids[0]}`;
-  const blockHandler = async (route: Route) => {
-    if (route.request().method() === "POST" && blockUpload) {
-      blockUpload = false;
-      intercepted();
-      await blocked;
-      await route.abort("aborted").catch(() => {});
-    } else await route.continue();
-  };
-  await context.route(blockPattern, blockHandler);
-  await page.locator("#file").setInputFiles(file("resume.txt", "persist these interrupted bytes"));
-  // Request events precede routing; wait until the original upload is actually held.
-  await held;
-  await stored(ids[0], 1, true);
-  assert.equal(
-    await page.locator('#thumbs li[aria-busy="true"]').count(),
-    1,
-    "interrupted upload is still pending",
-  );
-  // Keep the interrupted request held until the old document has unloaded.
-  try {
+  const laneA = async () => {
+    let { context, page } = await openLane();
+    const { ready, thread, value, attachmentOrder, settled, stored } = composer(() => page);
+    await page.goto(base, navigation);
+    await ready();
+    await thread(0);
+    await page.fill("#input", "First draft\n  keep whitespace  ");
+    await page.locator("#file").setInputFiles([file("first.txt", "first attachment"), image]);
+    await settled(2);
+    await stored(ids[0], 2);
+    const firstOrder = ["Remove first.txt", "Remove draft-image.png"];
+    assert.deepEqual(await attachmentOrder(), firstOrder, "attachments retain insertion order");
+    const first = await value();
+    assert.match(first, /\[Image #1\]/, "image label is inserted");
+    assert.equal(
+      await page
+        .locator("#thumbs img")
+        .evaluate((img: HTMLImageElement) => img.complete && img.naturalWidth > 0),
+      true,
+      "image preview decodes",
+    );
+    await thread(1);
+    await page.fill("#input", "Second draft");
+    await page.locator("#file").setInputFiles(file("second.txt", "second attachment"));
+    await settled(1);
+    await stored(ids[1], 1);
+    await thread(0);
+    await settled(2);
+    assert.equal(await value(), first, "thread switch restores exact text");
     await page.reload(navigation);
-  } finally {
-    release();
-  }
-  await ready();
-  await thread(0);
-  await settled(1);
-  assert.equal(await value(), "Resume interrupted upload", "interrupted upload retains prompt");
-  const resumed = fs
-    .readdirSync(path.join(data, "uploads", ids[0]))
-    .flatMap((entry) => {
-      const location = path.join(data, "uploads", ids[0], entry);
-      return fs.statSync(location).isDirectory()
-        ? fs.readdirSync(location).map((name) => path.join(location, name))
-        : [location];
-    })
-    .some((location) => fs.readFileSync(location, "utf8") === "persist these interrupted bytes");
-  assert.equal(resumed, true, "resumed upload preserves exact stored Blob bytes");
-  await context.unroute(blockPattern, blockHandler);
-  await page.getByRole("button", { name: "Remove resume.txt", exact: true }).click();
-  await settled(0);
-  await stored(ids[0], 0);
-  await page.fill("#input", "");
-  await page.reload(navigation);
-  await ready();
-  await thread(0);
-  await settled(0);
-  assert.equal(await value(), "", "explicit clear survives reload");
-  await page.fill("#input", "Recover unacknowledged message");
-  await page
-    .locator("#file")
-    .setInputFiles([file("unacknowledged.txt", "recover this uploaded file"), image]);
-  await settled(2);
-  const unacknowledged = await value();
-  holdSend = true;
-  await page.click("#send");
-  await page.waitForFunction(
-    () => (document.getElementById("input") as any).value === "",
-    undefined,
-    poll,
-  );
-  await settled(0);
-  const originalRecoveryCopy = await page.evaluate(() => {
-    const key = Object.keys(localStorage).find((key) => key.startsWith("ac_sending:"))!;
-    return { key, value: localStorage.getItem(key)! };
-  });
-  await page.fill("#input", "Later unacknowledged message");
-  await page.locator("#file").setInputFiles({ ...image, name: "later-image.png" });
-  await settled(1);
-  const later = await value();
-  await page.click("#send");
-  await page.waitForFunction(
-    () => (document.getElementById("input") as any).value === "",
-    undefined,
-    poll,
-  );
-  await settled(0);
-  await page.reload(navigation);
-  await ready();
-  await thread(0);
-  await settled(3);
-  assert.equal(
-    await value(),
-    `${unacknowledged.replace("[Image #1]", "[Image #2]")}\n\n${later}`,
-    "held sends recover chronologically with unique image labels",
-  );
-  assert.equal(
-    await page.getByRole("button", { name: "Remove unacknowledged.txt", exact: true }).count(),
-    1,
-    "unacknowledged send restores uploaded file",
-  );
-  await page.waitForFunction(
-    () => {
-      const image = document.querySelector("#thumbs img") as HTMLImageElement | null;
-      return image?.complete && image.naturalWidth > 0;
-    },
-    undefined,
-    poll,
-  );
-  assert.deepEqual(
-    (await page.locator("#thumbs .n").allTextContents()).sort(),
-    ["1", "2"],
-    "recovered images have distinct attachment labels",
-  );
-  assert.deepEqual(
-    await attachmentOrder(),
-    ["Remove unacknowledged.txt", "Remove draft-image.png", "Remove later-image.png"],
-    "held sends recover attachment insertion order",
-  );
-  await stored(ids[0], 3);
-  const recoveredText = await value();
-  await page.evaluate(({ key, value }) => localStorage.setItem(key, value), originalRecoveryCopy);
-  await page.reload(navigation);
-  await ready();
-  await thread(0);
-  await settled(3);
-  assert.equal(
-    await value(),
-    recoveredText,
-    "interrupted recovery cleanup remains idempotent after image renumbering",
-  );
-  assert.deepEqual(
-    await attachmentOrder(),
-    ["Remove unacknowledged.txt", "Remove draft-image.png", "Remove later-image.png"],
-    "repeated recovery keeps attachment order and does not duplicate attachments",
-  );
-  assert.deepEqual(
-    (await page.locator("#thumbs .n").allTextContents()).sort(),
-    ["1", "2"],
-    "repeated recovery keeps remapped image labels",
-  );
-  holdSend = false;
-  assert.deepEqual(errors, []);
-  if (out) {
-    await page.screenshot({ path: path.join(out, "attachment-drafts-restored-desktop.png") });
-    await page.setViewportSize({ width: 390, height: 844 });
+    await ready();
+    await thread(0);
+    await settled(2);
+    assert.equal(await value(), first, "reload restores text and attachments");
+    assert.deepEqual(await attachmentOrder(), firstOrder, "reload preserves attachment order");
+    const saved = await context.storageState({ indexedDB: true });
+    await closeLane(context, page);
+    ({ context, page } = await openLane(saved));
+    await page.goto(base, navigation);
+    await ready();
+    await thread(0);
+    await settled(2);
+    assert.equal(await value(), first, "closed browser context restores draft");
+    assert.deepEqual(
+      await attachmentOrder(),
+      firstOrder,
+      "closed browser context preserves attachment order",
+    );
+    assert.equal(
+      await page
+        .locator("#thumbs img")
+        .evaluate((img: HTMLImageElement) => img.complete && img.naturalWidth > 0),
+      true,
+      "restored image preview loads",
+    );
+    await page.getByRole("button", { name: "Remove first.txt", exact: true }).click();
+    await settled(1);
+    await stored(ids[0], 1);
+    await stored(ids[1], 1);
+    await page.reload(navigation);
+    await ready();
+    await thread(0);
+    await settled(1);
+    assert.equal(
+      await page.getByRole("button", { name: "Remove first.txt", exact: true }).count(),
+      0,
+      "removed attachment stays removed",
+    );
+    await page.click("#send");
     await page.waitForFunction(
-      () => getComputedStyle(document.getElementById("side")!).visibility === "hidden",
+      () => (document.getElementById("input") as any).value === "",
       undefined,
       poll,
     );
-    await page.screenshot({ path: path.join(out, "attachment-drafts-restored-narrow.png") });
-    await page.setViewportSize({ width: 1280, height: 900 });
-  }
-  const stale = await page.evaluate(
-    async () =>
-      new Promise<any>((resolve, reject) => {
-        const open = indexedDB.open("ac_composer", 1);
-        open.onerror = () => reject(open.error);
-        open.onsuccess = () => {
-          const db = open.result,
-            transaction = db.transaction("attachments");
-          const request = transaction.objectStore("attachments").getAll();
-          request.onsuccess = () => resolve(request.result.find((row) => row.id));
-          transaction.oncomplete = () => db.close();
-        };
-      }),
-  );
-  while (await page.locator("#thumbs .rm").count())
-    await page.locator("#thumbs .rm").first().click();
-  await page.fill("#input", "");
-  await stored(ids[0], 0);
-  await page.evaluate(
-    async ({ stale, threadId }) => {
-      localStorage.setItem(
-        "ac_sending:accepted-fixture",
-        JSON.stringify({
-          thread: threadId,
-          text: "Accepted message must not restore",
-          attachments: [stale],
-          accepted: true,
-          createdAt: Date.now(),
-          sequence: 1,
-        }),
+    await settled(0);
+    await stored(ids[0], 0);
+    await stored(ids[1], 1);
+    await thread(1);
+    await settled(1);
+    assert.equal(await value(), "Second draft", "sending clears only its own thread");
+    await closeLane(context, page);
+  };
+  const laneB = async () => {
+    const { context, page, sent } = await openLane();
+    const { ready, thread, value, settled, stored } = composer(() => page);
+    await page.goto(base, navigation);
+    await ready();
+    await thread(2);
+    await page.fill("#input", "Second draft");
+    await page.locator("#file").setInputFiles(file("second.txt", "second attachment"));
+    await settled(1);
+    await stored(ids[2], 1);
+    let failUpload = true;
+    // A route makes every request in the context round-trip through this process, so each one is removed once its step is done.
+    const failPattern = `**/uploads/${ids[2]}`;
+    const failHandler = async (route: Route) => {
+      if (
+        route.request().method() === "POST" &&
+        decodeURIComponent(route.request().headers()["x-name"] || "") === "retry.txt" &&
+        failUpload
+      ) {
+        await route.fulfill({
+          status: 503,
+          contentType: "application/json",
+          body: JSON.stringify({ error: "Fixture upload failure" }),
+        });
+      } else await route.continue();
+    };
+    await context.route(failPattern, failHandler);
+    await page.locator("#file").setInputFiles(file("retry.txt", "retry attachment"));
+    await page.getByRole("button", { name: "Retry retry.txt", exact: true }).waitFor();
+    await stored(ids[2], 2, true);
+    const beforeFailureSend = sent.length;
+    await page.click("#send");
+    await page
+      .getByText("Retry or remove failed attachments before sending.", { exact: true })
+      .waitFor();
+    assert.equal(sent.length, beforeFailureSend, "failed attachment blocks partial sends");
+    assert.equal(await value(), "Second draft", "failed send retains text");
+    await page.reload(navigation);
+    await ready();
+    await thread(2);
+    await page.getByRole("button", { name: "Retry retry.txt", exact: true }).waitFor();
+    assert.equal(await value(), "Second draft", "failed upload draft survives reload");
+    failUpload = false;
+    await page.getByRole("button", { name: "Retry retry.txt", exact: true }).click();
+    await settled(2);
+    assert.equal(
+      await page.getByRole("button", { name: "Retry retry.txt", exact: true }).count(),
+      0,
+      "retry succeeds with original bytes",
+    );
+    await page.click("#send");
+    await settled(0);
+    await stored(ids[2], 0);
+    const secondSend = sent.filter((message) => message.thread === ids[2]).at(-1);
+    assert.equal(secondSend?.attachments.length, 2, "successful retry sends both attachments");
+    await context.unroute(failPattern, failHandler);
+    await closeLane(context, page);
+  };
+  const laneC = async () => {
+    const { context, page, gate } = await openLane();
+    const { ready, thread, value, attachmentOrder, settled, stored } = composer(() => page);
+    await page.goto(base, navigation);
+    await ready();
+    await thread(3);
+    await thread(3);
+    await page.fill("#input", "Resume interrupted upload");
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let intercepted!: () => void;
+    const held = new Promise<void>((resolve) => {
+      intercepted = resolve;
+    });
+    let blockUpload = true;
+    const blockPattern = `**/uploads/${ids[3]}`;
+    const blockHandler = async (route: Route) => {
+      if (route.request().method() === "POST" && blockUpload) {
+        blockUpload = false;
+        intercepted();
+        await blocked;
+        await route.abort("aborted").catch(() => {});
+      } else await route.continue();
+    };
+    await context.route(blockPattern, blockHandler);
+    await page
+      .locator("#file")
+      .setInputFiles(file("resume.txt", "persist these interrupted bytes"));
+    // Request events precede routing; wait until the original upload is actually held.
+    await held;
+    await stored(ids[3], 1, true);
+    assert.equal(
+      await page.locator('#thumbs li[aria-busy="true"]').count(),
+      1,
+      "interrupted upload is still pending",
+    );
+    // Keep the interrupted request held until the old document has unloaded.
+    try {
+      await page.reload(navigation);
+    } finally {
+      release();
+    }
+    await ready();
+    await thread(3);
+    await settled(1);
+    assert.equal(await value(), "Resume interrupted upload", "interrupted upload retains prompt");
+    const resumed = fs
+      .readdirSync(path.join(data, "uploads", ids[3]))
+      .flatMap((entry) => {
+        const location = path.join(data, "uploads", ids[3], entry);
+        return fs.statSync(location).isDirectory()
+          ? fs.readdirSync(location).map((name) => path.join(location, name))
+          : [location];
+      })
+      .some((location) => fs.readFileSync(location, "utf8") === "persist these interrupted bytes");
+    assert.equal(resumed, true, "resumed upload preserves exact stored Blob bytes");
+    await context.unroute(blockPattern, blockHandler);
+    await page.getByRole("button", { name: "Remove resume.txt", exact: true }).click();
+    await settled(0);
+    await stored(ids[3], 0);
+    await page.fill("#input", "");
+    await page.reload(navigation);
+    await ready();
+    await thread(3);
+    await settled(0);
+    assert.equal(await value(), "", "explicit clear survives reload");
+    await page.fill("#input", "Recover unacknowledged message");
+    await page
+      .locator("#file")
+      .setInputFiles([file("unacknowledged.txt", "recover this uploaded file"), image]);
+    await settled(2);
+    const unacknowledged = await value();
+    gate.hold = true;
+    await page.click("#send");
+    await page.waitForFunction(
+      () => (document.getElementById("input") as any).value === "",
+      undefined,
+      poll,
+    );
+    await settled(0);
+    const originalRecoveryCopy = await page.evaluate(() => {
+      const key = Object.keys(localStorage).find((key) => key.startsWith("ac_sending:"))!;
+      return { key, value: localStorage.getItem(key)! };
+    });
+    await page.fill("#input", "Later unacknowledged message");
+    await page.locator("#file").setInputFiles({ ...image, name: "later-image.png" });
+    await settled(1);
+    const later = await value();
+    await page.click("#send");
+    await page.waitForFunction(
+      () => (document.getElementById("input") as any).value === "",
+      undefined,
+      poll,
+    );
+    await settled(0);
+    await page.reload(navigation);
+    await ready();
+    await thread(3);
+    await settled(3);
+    assert.equal(
+      await value(),
+      `${unacknowledged.replace("[Image #1]", "[Image #2]")}\n\n${later}`,
+      "held sends recover chronologically with unique image labels",
+    );
+    assert.equal(
+      await page.getByRole("button", { name: "Remove unacknowledged.txt", exact: true }).count(),
+      1,
+      "unacknowledged send restores uploaded file",
+    );
+    await page.waitForFunction(
+      () => {
+        const image = document.querySelector("#thumbs img") as HTMLImageElement | null;
+        return image?.complete && image.naturalWidth > 0;
+      },
+      undefined,
+      poll,
+    );
+    assert.deepEqual(
+      (await page.locator("#thumbs .n").allTextContents()).sort(),
+      ["1", "2"],
+      "recovered images have distinct attachment labels",
+    );
+    assert.deepEqual(
+      await attachmentOrder(),
+      ["Remove unacknowledged.txt", "Remove draft-image.png", "Remove later-image.png"],
+      "held sends recover attachment insertion order",
+    );
+    await stored(ids[3], 3);
+    const recoveredText = await value();
+    await page.evaluate(({ key, value }) => localStorage.setItem(key, value), originalRecoveryCopy);
+    await page.reload(navigation);
+    await ready();
+    await thread(3);
+    await settled(3);
+    assert.equal(
+      await value(),
+      recoveredText,
+      "interrupted recovery cleanup remains idempotent after image renumbering",
+    );
+    assert.deepEqual(
+      await attachmentOrder(),
+      ["Remove unacknowledged.txt", "Remove draft-image.png", "Remove later-image.png"],
+      "repeated recovery keeps attachment order and does not duplicate attachments",
+    );
+    assert.deepEqual(
+      (await page.locator("#thumbs .n").allTextContents()).sort(),
+      ["1", "2"],
+      "repeated recovery keeps remapped image labels",
+    );
+    gate.hold = false;
+    assert.deepEqual(errors, []);
+    if (out) {
+      await page.screenshot({ path: path.join(out, "attachment-drafts-restored-desktop.png") });
+      await page.setViewportSize({ width: 390, height: 844 });
+      await page.waitForFunction(
+        () => getComputedStyle(document.getElementById("side")!).visibility === "hidden",
+        undefined,
+        poll,
       );
-      await new Promise<void>((resolve, reject) => {
-        const open = indexedDB.open("ac_composer", 1);
-        open.onerror = () => reject(open.error);
-        open.onsuccess = () => {
-          const db = open.result,
-            transaction = db.transaction("attachments", "readwrite");
-          transaction.objectStore("attachments").put(stale);
-          transaction.oncomplete = () => {
-            db.close();
-            resolve();
+      await page.screenshot({ path: path.join(out, "attachment-drafts-restored-narrow.png") });
+      await page.setViewportSize({ width: 1280, height: 900 });
+    }
+    const stale = await page.evaluate(
+      async () =>
+        new Promise<any>((resolve, reject) => {
+          const open = indexedDB.open("ac_composer", 1);
+          open.onerror = () => reject(open.error);
+          open.onsuccess = () => {
+            const db = open.result,
+              transaction = db.transaction("attachments");
+            const request = transaction.objectStore("attachments").getAll();
+            request.onsuccess = () => resolve(request.result.find((row) => row.id));
+            transaction.oncomplete = () => db.close();
           };
-          transaction.onerror = () => reject(transaction.error);
-        };
-      });
-    },
-    { stale, threadId: ids[0] },
-  );
-  await stored(ids[0], 1);
-  await page.reload(navigation);
-  await ready();
-  await thread(0);
-  await settled(0);
-  await stored(ids[0], 0);
-  assert.equal(await value(), "", "accepted receipt prevents stale attachment resurrection");
-  assert.equal(
-    await page.evaluate(() => localStorage.getItem("ac_sending:accepted-fixture")),
-    null,
-    "accepted receipt is removed after stale rows are deleted",
-  );
-  assert.deepEqual(errors, []);
-  const finalVideo = page.video();
-  await context.close();
-  context = undefined;
-  if (finalVideo) videos.push(await finalVideo.path());
+        }),
+    );
+    while (await page.locator("#thumbs .rm").count())
+      await page.locator("#thumbs .rm").first().click();
+    await page.fill("#input", "");
+    await stored(ids[3], 0);
+    await page.evaluate(
+      async ({ stale, threadId }) => {
+        localStorage.setItem(
+          "ac_sending:accepted-fixture",
+          JSON.stringify({
+            thread: threadId,
+            text: "Accepted message must not restore",
+            attachments: [stale],
+            accepted: true,
+            createdAt: Date.now(),
+            sequence: 1,
+          }),
+        );
+        await new Promise<void>((resolve, reject) => {
+          const open = indexedDB.open("ac_composer", 1);
+          open.onerror = () => reject(open.error);
+          open.onsuccess = () => {
+            const db = open.result,
+              transaction = db.transaction("attachments", "readwrite");
+            transaction.objectStore("attachments").put(stale);
+            transaction.oncomplete = () => {
+              db.close();
+              resolve();
+            };
+            transaction.onerror = () => reject(transaction.error);
+          };
+        });
+      },
+      { stale, threadId: ids[3] },
+    );
+    await stored(ids[3], 1);
+    await page.reload(navigation);
+    await ready();
+    await thread(3);
+    await settled(0);
+    await stored(ids[3], 0);
+    assert.equal(await value(), "", "accepted receipt prevents stale attachment resurrection");
+    assert.equal(
+      await page.evaluate(() => localStorage.getItem("ac_sending:accepted-fixture")),
+      null,
+      "accepted receipt is removed after stale rows are deleted",
+    );
+    assert.deepEqual(errors, []);
+    await closeLane(context, page);
+  };
+  restarting = restartFlow();
+  restarting.catch(() => {});
+  await Promise.all([laneA(), laneB(), laneC(), restarting]);
   await browser.close();
   browser = launching = undefined;
   await restarting;
@@ -660,7 +691,7 @@ try {
 } finally {
   await restartContext?.close().catch(() => {});
   await restarting?.catch(() => {});
-  await context?.close();
+  await Promise.all(contexts.map((current) => current.close().catch(() => {})));
   browser ??= await launching?.catch(() => undefined);
   await browser?.close();
   if (server.exitCode === null) {
