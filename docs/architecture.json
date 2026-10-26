@@ -264,7 +264,7 @@
     {
       "from": "host-card",
       "to": "host-api",
-      "label": "GET metrics + processes once per open or refresh"
+      "label": "GET metrics + processes on open/refresh"
     },
     {
       "from": "host-card",
