@@ -8,12 +8,8 @@ import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "ac-triage-cli-"));
-const runtime = path.join(scratch, "run");
-const configuration = path.join(scratch, "configuration.json");
 const fixtureBin = path.join(scratch, "bin");
 fs.mkdirSync(fixtureBin);
-const githubState = path.join(scratch, "github.json");
-fs.writeFileSync(githubState, JSON.stringify({ calls: [], hooks: {}, pages: [[]], failPage: 0 }));
 // Each GitHub API request launches this fixture, so use a minimal Python process.
 fs.writeFileSync(
   path.join(fixtureBin, "gh"),
@@ -68,42 +64,73 @@ const freePort = async () => {
   await new Promise<void>((resolve) => server.close(() => resolve()));
   return port;
 };
-const port = await freePort();
-fs.writeFileSync(
-  configuration,
-  JSON.stringify({
-    repos: ["fixture/repository"],
-    secret: "test-only-scratch-webhook-secret-1234567890",
-    url: "https://example.invalid/api/github/webhook",
-    port,
-    host: "127.0.0.1",
-  }),
-  { mode: 0o600 },
-);
-const env = {
-  ...process.env,
-  PATH: `${fixtureBin}:${process.env.PATH}`,
-  TRIAGE_TEST_GITHUB: githubState,
-  AGENT_CONSOLE_ENV_FILES: "/dev/null",
-  AGENT_CONSOLE_TRIAGE_CONFIG: configuration,
-  AGENT_CONSOLE_TRIAGE_RUN: runtime,
-  // Reuse the runner cache across CLI processes, with a scratch cache for direct runs.
-  NODE_COMPILE_CACHE: process.env.NODE_COMPILE_CACHE || path.join(scratch, "compile-cache"),
+// Each fixture is an isolated worker, configuration and fake GitHub, so scenarios on different fixtures can run together.
+const makeFixture = async (name: string) => {
+  const runtime = path.join(scratch, `run-${name}`);
+  const configuration = path.join(scratch, `configuration-${name}.json`);
+  const githubState = path.join(scratch, `github-${name}.json`);
+  fs.writeFileSync(githubState, JSON.stringify({ calls: [], hooks: {}, pages: [[]], failPage: 0 }));
+  const port = await freePort();
+  fs.writeFileSync(
+    configuration,
+    JSON.stringify({
+      repos: ["fixture/repository"],
+      secret: "test-only-scratch-webhook-secret-1234567890",
+      url: "https://example.invalid/api/github/webhook",
+      port,
+      host: "127.0.0.1",
+    }),
+    { mode: 0o600 },
+  );
+  const env = {
+    ...process.env,
+    PATH: `${fixtureBin}:${process.env.PATH}`,
+    TRIAGE_TEST_GITHUB: githubState,
+    AGENT_CONSOLE_ENV_FILES: "/dev/null",
+    AGENT_CONSOLE_TRIAGE_CONFIG: configuration,
+    AGENT_CONSOLE_TRIAGE_RUN: runtime,
+    // Reuse the runner cache across CLI processes, with a scratch cache for direct runs.
+    NODE_COMPILE_CACHE: process.env.NODE_COMPILE_CACHE || path.join(scratch, "compile-cache"),
+  };
+  delete env.AGENT_CONSOLE_MOCK;
+  const cli = (...args: string[]) =>
+    new Promise<string>((resolve, reject) => {
+      execFile(
+        process.execPath,
+        [path.join(root, "scripts/github-triage.ts"), ...args],
+        { cwd: root, env, timeout: 25_000 },
+        (error, stdout) => (error ? reject(error) : resolve(stdout)),
+      );
+    });
+  const workerPid = () => Number(fs.readFileSync(path.join(runtime, "pid"), "utf8"));
+  const readGithub = () => JSON.parse(fs.readFileSync(githubState, "utf8"));
+  const readConfig = () => JSON.parse(fs.readFileSync(configuration, "utf8"));
+  const saveGithub = (state: any) => fs.writeFileSync(githubState, JSON.stringify(state));
+  return {
+    runtime,
+    configuration,
+    githubState,
+    env,
+    cli,
+    workerPid,
+    readGithub,
+    readConfig,
+    saveGithub,
+  };
 };
-delete env.AGENT_CONSOLE_MOCK;
-const cli = (...args: string[]) =>
-  new Promise<string>((resolve, reject) => {
-    execFile(
-      process.execPath,
-      [path.join(root, "scripts/github-triage.ts"), ...args],
-      { cwd: root, env, timeout: 25_000 },
-      (error, stdout) => (error ? reject(error) : resolve(stdout)),
-    );
-  });
-const workerPid = () => Number(fs.readFileSync(path.join(runtime, "pid"), "utf8"));
-const readGithub = () => JSON.parse(fs.readFileSync(githubState, "utf8"));
-const readConfig = () => JSON.parse(fs.readFileSync(configuration, "utf8"));
-const saveGithub = (state: any) => fs.writeFileSync(githubState, JSON.stringify(state));
+let ownerFixture: Awaited<ReturnType<typeof makeFixture>> | undefined;
+const main = await makeFixture("main");
+const {
+  runtime,
+  configuration,
+  githubState,
+  env,
+  cli,
+  workerPid,
+  readGithub,
+  readConfig,
+  saveGithub,
+} = main;
 // --- Weekly effort calibration fixtures ---
 const quantileStats = (p80: number, p95: number, champion: boolean) => ({
   status: "validated",
@@ -397,6 +424,138 @@ try {
     );
   };
   const scheduleRun = scheduleScenario();
+  // Owner discovery and sync run on their own worker and fake GitHub, beside the crash-recovery flow.
+  const configureScenario = async () => {
+    const { configuration, runtime, cli, workerPid, readGithub, readConfig, saveGithub } =
+      (ownerFixture = await makeFixture("owner"));
+    await cli("watchdog");
+    const initial = { ...readConfig(), deploy: "fixture/repository" };
+    fs.writeFileSync(configuration, JSON.stringify(initial), { mode: 0o600 });
+    await assert.rejects(cli("configure", "--owner", "invalid/owner", initial.url));
+    assert.deepEqual(
+      readConfig(),
+      initial,
+      "Invalid owner configuration must not replace the existing configuration",
+    );
+    await assert.rejects(cli("configure", "--owner", "someone-else", initial.url));
+    assert.deepEqual(
+      readConfig(),
+      initial,
+      "A different authenticated owner must not replace the existing configuration",
+    );
+    const owned = (name: string, extra: any = {}) => ({
+      full_name: `fixture/${name}`,
+      owner: { login: "fixture" },
+      permissions: { admin: true },
+      has_issues: true,
+      archived: false,
+      disabled: false,
+      ...extra,
+    });
+    const state = readGithub();
+    state.pages = [
+      [
+        owned("private", { private: true }),
+        owned("fork", { fork: true }),
+        owned("archived", { archived: true }),
+        owned("disabled", { disabled: true }),
+        owned("no-issues", { has_issues: false }),
+        owned("no-admin", { permissions: { admin: false } }),
+        owned("collaborator", { full_name: "someone/other", owner: { login: "someone" } }),
+        ...Array.from({ length: 93 }, (_, index) => owned(`ignored-${index}`, { archived: true })),
+      ],
+      [owned("second-page")],
+    ];
+    state.hooks["fixture/repository"] = [{ id: 7, config: { url: initial.url }, events: ["push"] }];
+    saveGithub(state);
+    state.failPage = 2;
+    saveGithub(state);
+    await assert.rejects(cli("configure", "--owner", "fixture", initial.url));
+    assert.deepEqual(
+      readConfig(),
+      initial,
+      "Failed owner discovery must preserve existing configuration",
+    );
+    state.failPage = 0;
+    saveGithub(state);
+    await cli("configure", "--owner", "fixture", initial.url);
+    const ownerConfig = readConfig();
+    assert.equal(ownerConfig.owner, "fixture");
+    for (const key of ["secret", "deploy", "port", "host", "url"]) {
+      assert.deepEqual(ownerConfig[key], initial[key], `Owner configuration must preserve ${key}`);
+    }
+    assert.deepEqual([...ownerConfig.repos].sort(), [
+      "fixture/fork",
+      "fixture/private",
+      "fixture/repository",
+      "fixture/second-page",
+    ]);
+    assert.equal(fs.statSync(configuration).mode & 0o777, 0o600);
+    await cli("sync");
+    assert.deepEqual([...readConfig().repos].sort(), [
+      "fixture/fork",
+      "fixture/private",
+      "fixture/repository",
+      "fixture/second-page",
+    ]);
+    assert.equal(readConfig().secret, initial.secret);
+    assert.equal(readConfig().deploy, initial.deploy);
+    const synced = readGithub();
+    assert.ok(
+      synced.calls.some(
+        (call: any) => call.endpoint === "user/repos?affiliation=owner&per_page=100&page=2",
+      ),
+      "Discovery must fetch repositories after the first full page",
+    );
+    assert.deepEqual([...synced.hooks["fixture/repository"][0].events].sort(), [
+      "issues",
+      "pull_request",
+      "push",
+      "workflow_run",
+    ]);
+    for (const repo of ["fixture/fork", "fixture/private", "fixture/second-page"]) {
+      assert.deepEqual([...synced.hooks[repo][0].events].sort(), ["issues", "pull_request"]);
+    }
+    const postCount = synced.calls.filter((call: any) => call.method === "POST").length;
+    const savedConfiguration = fs.readFileSync(configuration, "utf8");
+    const savedMtime = fs.statSync(configuration).mtimeMs;
+    await cli("sync");
+    assert.equal(
+      readGithub().calls.filter((call: any) => call.method === "POST").length,
+      postCount,
+      "Repeated sync must not create duplicate webhooks",
+    );
+    assert.equal(fs.readFileSync(configuration, "utf8"), savedConfiguration);
+    assert.equal(
+      fs.statSync(configuration).mtimeMs,
+      savedMtime,
+      "An unchanged sync must not rewrite configuration",
+    );
+
+    const failing = readGithub();
+    failing.pages[0][0] = owned("must-not-save");
+    failing.failPage = 2;
+    saveGithub(failing);
+    await assert.rejects(cli("sync"));
+    assert.equal(
+      fs.readFileSync(configuration, "utf8"),
+      savedConfiguration,
+      "A later discovery-page failure must retain the complete previous allowlist",
+    );
+    failing.failPage = 0;
+    failing.pages = [[owned("watchdog-added")]];
+    saveGithub(failing);
+    const beforeWatchdog = workerPid();
+    fs.writeFileSync(path.join(runtime, "last-reconcile"), "1");
+    await cli("watchdog");
+    assert.ok(
+      readConfig().repos.includes("fixture/watchdog-added"),
+      "Watchdog must discover new owned repositories",
+    );
+    assert.equal(workerPid(), beforeWatchdog, "Repository discovery must not restart the worker");
+  };
+  const configured = configureScenario();
+  configured.catch(() => {});
   await retainedFailure;
   assert.equal(
     fs.readFileSync(retained, "utf8"),
@@ -438,130 +597,6 @@ try {
     "Explicit repository mode must not discover owned repositories",
   );
 
-  const initial = { ...readConfig(), deploy: "fixture/repository" };
-  fs.writeFileSync(configuration, JSON.stringify(initial), { mode: 0o600 });
-  await assert.rejects(cli("configure", "--owner", "invalid/owner", initial.url));
-  assert.deepEqual(
-    readConfig(),
-    initial,
-    "Invalid owner configuration must not replace the existing configuration",
-  );
-  await assert.rejects(cli("configure", "--owner", "someone-else", initial.url));
-  assert.deepEqual(
-    readConfig(),
-    initial,
-    "A different authenticated owner must not replace the existing configuration",
-  );
-  const owned = (name: string, extra: any = {}) => ({
-    full_name: `fixture/${name}`,
-    owner: { login: "fixture" },
-    permissions: { admin: true },
-    has_issues: true,
-    archived: false,
-    disabled: false,
-    ...extra,
-  });
-  const state = readGithub();
-  state.pages = [
-    [
-      owned("private", { private: true }),
-      owned("fork", { fork: true }),
-      owned("archived", { archived: true }),
-      owned("disabled", { disabled: true }),
-      owned("no-issues", { has_issues: false }),
-      owned("no-admin", { permissions: { admin: false } }),
-      owned("collaborator", { full_name: "someone/other", owner: { login: "someone" } }),
-      ...Array.from({ length: 93 }, (_, n) => owned(`ignored-${n}`, { archived: true })),
-    ],
-    [owned("second-page")],
-  ];
-  state.hooks["fixture/repository"] = [{ id: 7, config: { url: initial.url }, events: ["push"] }];
-  saveGithub(state);
-  state.failPage = 2;
-  saveGithub(state);
-  await assert.rejects(cli("configure", "--owner", "fixture", initial.url));
-  assert.deepEqual(
-    readConfig(),
-    initial,
-    "Failed owner discovery must preserve existing configuration",
-  );
-  state.failPage = 0;
-  saveGithub(state);
-  await cli("configure", "--owner", "fixture", initial.url);
-  const ownerConfig = readConfig();
-  assert.equal(ownerConfig.owner, "fixture");
-  for (const key of ["secret", "deploy", "port", "host", "url"]) {
-    assert.deepEqual(ownerConfig[key], initial[key], `Owner configuration must preserve ${key}`);
-  }
-  assert.deepEqual([...ownerConfig.repos].sort(), [
-    "fixture/fork",
-    "fixture/private",
-    "fixture/repository",
-    "fixture/second-page",
-  ]);
-  assert.equal(fs.statSync(configuration).mode & 0o777, 0o600);
-  await cli("sync");
-  assert.deepEqual([...readConfig().repos].sort(), [
-    "fixture/fork",
-    "fixture/private",
-    "fixture/repository",
-    "fixture/second-page",
-  ]);
-  assert.equal(readConfig().secret, initial.secret);
-  assert.equal(readConfig().deploy, initial.deploy);
-  const synced = readGithub();
-  assert.ok(
-    synced.calls.some(
-      (call: any) => call.endpoint === "user/repos?affiliation=owner&per_page=100&page=2",
-    ),
-    "Discovery must fetch repositories after the first full page",
-  );
-  assert.deepEqual([...synced.hooks["fixture/repository"][0].events].sort(), [
-    "issues",
-    "pull_request",
-    "push",
-    "workflow_run",
-  ]);
-  for (const repo of ["fixture/fork", "fixture/private", "fixture/second-page"]) {
-    assert.deepEqual([...synced.hooks[repo][0].events].sort(), ["issues", "pull_request"]);
-  }
-  const postCount = synced.calls.filter((call: any) => call.method === "POST").length;
-  const savedConfiguration = fs.readFileSync(configuration, "utf8");
-  const savedMtime = fs.statSync(configuration).mtimeMs;
-  await cli("sync");
-  assert.equal(
-    readGithub().calls.filter((call: any) => call.method === "POST").length,
-    postCount,
-    "Repeated sync must not create duplicate webhooks",
-  );
-  assert.equal(fs.readFileSync(configuration, "utf8"), savedConfiguration);
-  assert.equal(
-    fs.statSync(configuration).mtimeMs,
-    savedMtime,
-    "An unchanged sync must not rewrite configuration",
-  );
-
-  const failing = readGithub();
-  failing.pages[0][0] = owned("must-not-save");
-  failing.failPage = 2;
-  saveGithub(failing);
-  await assert.rejects(cli("sync"));
-  assert.equal(
-    fs.readFileSync(configuration, "utf8"),
-    savedConfiguration,
-    "A later discovery-page failure must retain the complete previous allowlist",
-  );
-  failing.failPage = 0;
-  failing.pages = [[owned("watchdog-added")]];
-  saveGithub(failing);
-  const beforeWatchdog = workerPid();
-  fs.writeFileSync(path.join(runtime, "last-reconcile"), "1");
-  await cli("watchdog");
-  assert.ok(
-    readConfig().repos.includes("fixture/watchdog-added"),
-    "Watchdog must discover new owned repositories",
-  );
-  assert.equal(workerPid(), beforeWatchdog, "Repository discovery must not restart the worker");
   // --- Weekly effort calibration: champion/challenger gate, toggles, events, schedule ---
   // Repricing calls the live worker, so this one waits until the lifecycle flow is done.
   const promoted = await calibrationRun({
@@ -663,11 +698,13 @@ try {
     "Disabled features step must not run",
   );
 
+  await configured;
   await scheduleRun;
   console.log(
     "GitHub triage CLI: watchdog recovery, owner discovery, safe configuration, webhook registration, and weekly effort calibration passed.",
   );
 } finally {
+  await ownerFixture?.cli("stop").catch(() => {});
   await cli("stop").catch(() => {
     try {
       process.kill(workerPid(), "SIGKILL");

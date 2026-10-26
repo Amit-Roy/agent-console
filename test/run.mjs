@@ -8,15 +8,16 @@ import { build } from "esbuild";
 // Node's CLI sorts file names. Start the longest suites first so they overlap
 // short suites instead of extending the end of the pool (CI baseline, 2026-10-23).
 // Shards take every Nth file, so alternate the heavy suites across the two shards.
+// Order by measured CI time so each shard gets an equal share (PR #349: about 48 s of heavy suites per shard).
 // Pin every heavy suite here: unlisted files shift shard whenever a test file is added.
 const slow = [
   "test/attachment-drafts-ui.ts",
-  "test/idle-compaction-ui.ts",
   "test/github-triage-cli.ts",
   "test/drafts-ui.ts",
   "test/composer-scroll-ui.ts",
-  "test/issue-review.ts",
+  "test/idle-compaction-ui.ts",
   "test/pi-e2e-ui.ts",
+  "test/issue-review.ts",
   "test/sw-restart-ui.ts",
 ];
 let files = process.argv.slice(2);
