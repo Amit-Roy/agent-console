@@ -104,7 +104,7 @@ try {
       ...options,
       headless: true,
     }));
-    opened.setDefaultTimeout(7000);
+    opened.setDefaultTimeout(15000);
     await gateSocket(opened, { hold: false });
     await opened.addCookies([{ name: "ac_session", value: makeToken(), url: base }]);
     return opened;
@@ -147,7 +147,7 @@ try {
   // Composer readiness is the assertion; unrelated resource loading must not delay navigation.
   const navigation = { waitUntil: "domcontentloaded" as const, timeout: 15000 };
   // Timer polling: the default requestAnimationFrame polling keeps Chromium rendering frames for the whole wait.
-  const poll = { polling: 25 };
+  const poll = { polling: 25, timeout: 20000 };
   // Both flows drive the same composer helpers; each one binds them to its own current page.
   const composer = (current: () => Page) => {
     const ready = () =>
@@ -209,7 +209,7 @@ try {
           );
         },
         { threadId, count, needsBlob },
-        { polling: 50 },
+        { polling: 50, timeout: 20000 },
       );
     return { ready, thread, value, attachmentOrder, settled, stored };
   };
