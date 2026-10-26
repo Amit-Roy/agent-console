@@ -127,6 +127,10 @@ import {
 import { createOpener, loadOpenerConfig } from "./window-opener.ts";
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
+const PUBLIC_DIR = path.join(ROOT, "public");
+// Without `root`, send() applies its dotfiles check to the whole absolute path, so a release dir under a dot segment (~/.local/share) 404s. Names here are constants.
+const sendPublic = (res: express.Response, name: string) =>
+  res.sendFile(name, { root: PUBLIC_DIR });
 const PORT = Number(process.env.PORT || 7070);
 const HOST = "127.0.0.1"; // never listen publicly; Coder's port proxy is the only way in
 const HOME = os.homedir();
@@ -556,9 +560,7 @@ app.use((_req, res, next) => {
   next();
 });
 
-app.get("/login", (req, res) =>
-  authed(req) ? res.redirect("/") : res.sendFile(path.join(ROOT, "public", "login.html")),
-);
+app.get("/login", (req, res) => (authed(req) ? res.redirect("/") : sendPublic(res, "login.html")));
 // ---- attachments: upload (raw bytes), download, discard. State-changing, so cookie auth alone is not enough: same-origin only.
 const sameOrigin: express.RequestHandler = (req, res, next) => {
   try {
@@ -575,13 +577,11 @@ app.post("/login", sameOrigin, express.json({ limit: "1kb" }), (req, res) => {
   res.setHeader("Set-Cookie", setCookie(makeToken()));
   res.json({ ok: true });
 });
-app.get("/login.js", (_req, res) => res.sendFile(path.join(ROOT, "public", "login.js")));
-app.get("/style.css", (_req, res) => res.sendFile(path.join(ROOT, "public", "style.css")));
+app.get("/login.js", (_req, res) => sendPublic(res, "login.js"));
+app.get("/style.css", (_req, res) => sendPublic(res, "style.css"));
 app.use("/fonts", express.static(path.join(ROOT, "public", "fonts"), { maxAge: "7d" })); // OFL fonts: public, so the sign-in page can use them too
-app.get("/icon.svg", (_req, res) => res.sendFile(path.join(ROOT, "public", "icon.svg")));
-app.get("/manifest.webmanifest", (_req, res) =>
-  res.sendFile(path.join(ROOT, "public", "manifest.webmanifest")),
-);
+app.get("/icon.svg", (_req, res) => sendPublic(res, "icon.svg"));
+app.get("/manifest.webmanifest", (_req, res) => sendPublic(res, "manifest.webmanifest"));
 
 // Loopback broker for the single model queue. Pi, the triage worker and the label helpers all admit through here.
 const MODEL_RATE_TOKEN_HEADER = "x-agent-console-tool";
@@ -745,7 +745,7 @@ app.get("/api/sessions/:thread", async (req, res) => {
     res.status(400).json({ error: e?.message || "Session unavailable." });
   }
 });
-app.get("/sessions", (_req, res) => res.sendFile(path.join(ROOT, "public", "sessions.html")));
+app.get("/sessions", (_req, res) => sendPublic(res, "sessions.html"));
 
 const benchmarks = createBenchmarks({
   dataDir: DATA_DIR,
@@ -817,7 +817,7 @@ app.post(
   },
 );
 const doctor = createDoctor(threads);
-app.get("/doctor", (_req, res) => res.sendFile(path.join(ROOT, "public", "doctor.html")));
+app.get("/doctor", (_req, res) => sendPublic(res, "doctor.html"));
 app.get("/api/doctor", async (_req, res) => {
   res.setHeader("Cache-Control", "no-store");
   try {
@@ -1112,7 +1112,7 @@ app.post(
   },
   acode.create,
 );
-app.get("/acode-setup", (_req, res) => res.sendFile(path.join(ROOT, "public", "acode-setup.html")));
+app.get("/acode-setup", (_req, res) => sendPublic(res, "acode-setup.html"));
 app.get("/api/acode/setup", (_req, res) => {
   res.setHeader("Cache-Control", "no-store");
   res.json({
