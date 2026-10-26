@@ -161,6 +161,14 @@
       "border": "solid",
       "items": [
         {
+          "id": "host-page",
+          "label": "Host dashboard",
+          "tech": "public/host.js",
+          "desc": "Existing full-page host diagnostics",
+          "icon": "activity",
+          "color": "blue"
+        },
+        {
           "id": "host-card",
           "label": "Local /host card",
           "tech": "public/app.js, host-card.js",
@@ -183,14 +191,6 @@
           "desc": "Five-second samples; CPU/RAM usage and disk I/O history",
           "icon": "database",
           "color": "purple"
-        },
-        {
-          "id": "host-page",
-          "label": "Host dashboard",
-          "tech": "public/host.js",
-          "desc": "Existing full-page host diagnostics",
-          "icon": "activity",
-          "color": "blue"
         }
       ]
     }
@@ -264,27 +264,27 @@
     {
       "from": "host-card",
       "to": "host-api",
-      "label": "GET metrics + processes on open/refresh"
+      "label": "Snapshot"
     },
     {
       "from": "host-card",
       "to": "host-telemetry",
-      "label": "GET /api/host/history?range=300"
+      "label": "300s history"
     },
     {
       "from": "host-api",
       "to": "host-telemetry",
-      "label": "Latest I/O rates"
+      "label": "Latest I/O"
     },
     {
       "from": "host-page",
       "to": "host-api",
-      "label": "Existing metrics and process polling"
+      "label": "Metrics"
     },
     {
       "from": "host-page",
       "to": "host-telemetry",
-      "label": "Existing history charts"
+      "label": "History"
     }
   ]
 }
