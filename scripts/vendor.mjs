@@ -85,7 +85,10 @@ copy(nm("marked/LICENSE"), out("vendor/marked.LICENSE.txt"));
 copy(nm("dompurify/dist/purify.es.mjs"), out("vendor/purify.js"));
 copy(nm("dompurify/LICENSE"), out("vendor/purify.LICENSE.txt"));
 copy(nm("dompurify/LICENSE-MPL"), out("vendor/purify.LICENSE-MPL.txt"));
-copy(nm("@simplewebauthn/browser/dist/bundle/index.umd.min.js"), out("vendor/simplewebauthn-browser.js"));
+copy(
+  nm("@simplewebauthn/browser/dist/bundle/index.umd.min.js"),
+  out("vendor/simplewebauthn-browser.js"),
+);
 copy(nm("@simplewebauthn/browser/LICENSE.md"), out("vendor/simplewebauthn-browser.LICENSE.txt"));
 const nodes = JSON.parse(fs.readFileSync(nm("lucide-static/icon-nodes.json"), "utf8"));
 const attrText = (attrs) =>

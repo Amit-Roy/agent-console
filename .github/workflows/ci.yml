@@ -40,6 +40,19 @@ jobs:
             echo "No telemetry comment yet (attempt $attempt of 20)."; [ "$attempt" -lt 20 ] && sleep 15
           done
           echo "::error::No agent-console telemetry comment on this PR."; exit 1
+  # Release build, standby server and handoff tests (cold npm ci, bundle, smoke boot; about 80 s each for
+  # release and handoff, standby about 15 s): over the 15 s per-file shard budget, so they run as their own job. Part of the CI workflow, so it also gates deploys.
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run test:release
   test:
     if: always()
     needs: test-shard

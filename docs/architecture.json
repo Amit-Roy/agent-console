@@ -1,88 +1,48 @@
 {
-  "title": "Idea and scheduled-task CLI access",
-  "subtitle": "Authenticated command discovery and server-owned state",
+  "title": "Immutable release deploy",
+  "subtitle": "Build source tree to release store to supervised standby handoff",
+  "direction": "row",
   "items": [
     {
-      "group": "Agent workspace",
-      "icon": "terminal",
+      "group": "Build source",
+      "icon": "git-branch",
+      "border": "solid",
       "items": [
-        {
-          "id": "search",
-          "label": "CLI discovery",
-          "tech": "MCP cli_search",
-          "desc": "Searches tool descriptions and tags",
-          "icon": "search"
-        },
-        {
-          "id": "manifest",
-          "label": "CLI manifest",
-          "tech": "tools.json",
-          "desc": "Adds app-ideas and scheduled-tasks commands",
-          "icon": "list"
-        },
-        {
-          "id": "commands",
-          "label": "Ideas and tasks CLIs",
-          "tech": "app-ideas / scheduled-tasks",
-          "desc": "Read ideas, reports and transcripts; update task config",
-          "icon": "terminal"
-        }
+        {"id": "source", "label": "Source git tree", "tech": "~/repos/agent-console (main)", "desc": "Build source only; never served directly", "icon": "folder-git-2", "color": "slate"},
+        {"id": "builder", "label": "Release builder", "tech": "scripts/release.mjs", "desc": "Idempotent; git archive, bundle, smoke boot", "icon": "package", "color": "blue", "step": 1}
       ]
     },
     {
-      "group": "Console server",
+      "group": "Release store",
+      "sub": "~/.local/share/agent-console",
+      "icon": "hard-drive",
+      "border": "solid",
+      "items": [
+        {"id": "deps", "label": "Dependency store", "tech": "deps/<lockhash>/node_modules", "desc": "One npm ci per lockfile, hardlinked into releases", "icon": "archive", "color": "teal"},
+        {"id": "release", "label": "Immutable release", "tech": "releases/<sha>/", "desc": "Prebuilt bundle, read-only, .ready after smoke boot", "icon": "package-check", "color": "indigo"},
+        {"id": "links", "label": "Release pointers", "tech": "current / previous symlinks", "desc": "Atomic switch; previous kept for rollback", "icon": "link", "color": "purple"}
+      ]
+    },
+    {
+      "group": "Supervisor and servers",
+      "sub": "bin/agent-console, scripts/idle-restart.mjs",
       "icon": "server",
       "border": "dashed",
       "items": [
-        {
-          "id": "gateway",
-          "label": "Tool gateway",
-          "tech": "POST /api/agent-tools/:name",
-          "desc": "Authorizes CLI reads and task config updates",
-          "icon": "shield-check"
-        },
-        {
-          "id": "state",
-          "label": "Ideas and schedules",
-          "tech": "Ideas / Schedules",
-          "desc": "Server owns idea files and task state",
-          "icon": "database"
-        },
-        {
-          "id": "history",
-          "label": "Run history",
-          "tech": "Reports / session transcripts",
-          "desc": "Stored task outputs and conversation events",
-          "icon": "file-text"
-        }
+        {"id": "supervisor", "label": "Supervisor", "tech": "bin/agent-console supervise", "desc": "Starts the standby of the new release, owns the port handoff", "icon": "cpu", "color": "blue", "step": 3},
+        {"id": "standby", "label": "Standby server (S2)", "tech": "server standby gate", "desc": "Boots and binds first; serves nothing until go", "icon": "power", "color": "teal", "step": 4},
+        {"id": "old", "label": "Live server (S1)", "tech": "previous release", "desc": "Fast shutdown on handoff, then S2 takes the port", "icon": "server", "color": "slate", "step": 5}
       ]
     }
   ],
   "edges": [
-    {
-      "from": "manifest",
-      "to": "search",
-      "label": "BM25 index"
-    },
-    {
-      "from": "gateway",
-      "to": "state",
-      "label": "CLI reads and updates"
-    },
-    {
-      "from": "state",
-      "to": "history",
-      "label": "Task run references"
-    },
-    {
-      "from": "search",
-      "to": "commands",
-      "label": "Path and usage"
-    },
-    {
-      "from": "commands",
-      "to": "gateway",
-      "label": "Authenticated HTTP JSON"
-    }
+    {"from": "source", "to": "builder", "label": "git archive <sha>", "step": 1},
+    {"from": "builder", "to": "deps", "label": "build or reuse"},
+    {"from": "deps", "to": "release", "label": "hardlink"},
+    {"from": "builder", "to": "release", "label": "bundle + smoke boot", "step": 2},
+    {"from": "release", "to": "links", "label": "flip on ready"},
+    {"from": "links", "to": "supervisor", "label": "idle restart picks new release", "step": 3},
+    {"from": "supervisor", "to": "standby", "label": "spawn from release", "step": 4},
+    {"from": "supervisor", "to": "old", "label": "stop, then go", "step": 5}
   ]
 }

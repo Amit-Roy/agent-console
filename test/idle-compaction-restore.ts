@@ -41,11 +41,19 @@ fs.writeFileSync(path.join(dir, "turns.backfilled"), "fixture");
 const events: any[] = [];
 const threads = new Threads((event) => events.push(event));
 try {
-  assert.equal(threads.get("fresh")!.idleCompactionDueAt, undefined, "constructor defers deadlines");
+  assert.equal(
+    threads.get("fresh")!.idleCompactionDueAt,
+    undefined,
+    "constructor defers deadlines",
+  );
   assert.deepEqual(events, [], "constructor emits nothing");
   threads.restoreIdleCompaction();
   assert.equal(threads.get("fresh")!.idleCompactionDueAt, future + 70_000);
-  assert.equal(threads.get("overdue")!.idleCompactionDueAt, undefined, "overdue work is not caught up");
+  assert.equal(
+    threads.get("overdue")!.idleCompactionDueAt,
+    undefined,
+    "overdue work is not caught up",
+  );
   assert.equal(threads.get("same")!.idleCompactionDueAt, future + 70_000);
   assert.deepEqual(
     events.map((event) => event.thread.id).sort(),

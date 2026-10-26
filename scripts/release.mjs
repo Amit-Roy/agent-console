@@ -21,9 +21,11 @@ const BUNDLE_ENTRY = path.join(".bundle", "server", "index.ts.mjs");
 const SELF_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const began = performance.now();
 
-const lap = (label) => console.error(`[release] ${label}: ${((performance.now() - began) / 1000).toFixed(1)}s`);
+const lap = (label) =>
+  console.error(`[release] ${label}: ${((performance.now() - began) / 1000).toFixed(1)}s`);
 const exists = (file) => fs.existsSync(file);
-const hashFile = (file) => crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex").slice(0, 16);
+const hashFile = (file) =>
+  crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex").slice(0, 16);
 // Child output goes to stderr so stdout carries only the release path.
 const run = (cmd, args, options = {}) =>
   execFileSync(cmd, args, { stdio: ["ignore", 2, 2], ...options });
@@ -48,14 +50,20 @@ function removeTree(target) {
 
 function cleanEnv() {
   const env = { ...process.env };
-  for (const key of Object.keys(env)) if (key.startsWith("AGENT_CONSOLE_") || key === "PORT") delete env[key];
+  for (const key of Object.keys(env))
+    if (key.startsWith("AGENT_CONSOLE_") || key === "PORT") delete env[key];
   return env;
 }
 
 function lockFiles(repo, sha) {
-  const names = execFileSync("git", ["-C", repo, "ls-tree", "-r", "--name-only", sha], { encoding: "utf8", maxBuffer: 1 << 26 })
+  const names = execFileSync("git", ["-C", repo, "ls-tree", "-r", "--name-only", sha], {
+    encoding: "utf8",
+    maxBuffer: 1 << 26,
+  })
     .split("\n")
-    .filter((name) => path.basename(name) === "package-lock.json" && !name.includes("node_modules/"));
+    .filter(
+      (name) => path.basename(name) === "package-lock.json" && !name.includes("node_modules/"),
+    );
   if (!names.includes("package-lock.json")) throw new Error(`${sha} has no root package-lock.json`);
   return names.map((name) => path.dirname(name));
 }
@@ -67,7 +75,8 @@ function ensureStore(app, sourceDir, hash) {
   removeTree(store);
   const tmp = path.join(app, "deps", `.tmp-${process.pid}-${Date.now()}`);
   fs.mkdirSync(tmp, { recursive: true });
-  for (const name of ["package.json", "package-lock.json"]) fs.copyFileSync(path.join(sourceDir, name), path.join(tmp, name));
+  for (const name of ["package.json", "package-lock.json"])
+    fs.copyFileSync(path.join(sourceDir, name), path.join(tmp, name));
   run("npm", ["ci", "--omit=dev", "--no-audit", "--no-fund"], { cwd: tmp });
   fs.writeFileSync(path.join(tmp, ".ready"), "");
   try {
@@ -103,26 +112,35 @@ function freePort() {
 }
 
 function checkSyntax(dest, entry) {
-  const files = [entry, "scripts/bundle-server.mjs", "scripts/idle-restart.mjs"].filter((file) => exists(path.join(dest, file)));
-  for (const file of files) execFileSync(process.execPath, ["--check", path.join(dest, file)], { stdio: "pipe" });
+  const files = [entry, "scripts/bundle-server.mjs", "scripts/idle-restart.mjs"].filter((file) =>
+    exists(path.join(dest, file)),
+  );
+  for (const file of files)
+    execFileSync(process.execPath, ["--check", path.join(dest, file)], { stdio: "pipe" });
 }
 
 async function waitForHttp(port, child, logFile) {
   const deadline = Date.now() + BOOT_TIMEOUT_MS;
   while (Date.now() < deadline) {
-    if (child.exitCode !== null || child.signalCode !== null) throw new Error(`scratch server exited during boot\n${tail(logFile)}`);
-    const answer = await fetch(`http://127.0.0.1:${port}/login`, { signal: AbortSignal.timeout(1000) }).catch(() => null);
+    if (child.exitCode !== null || child.signalCode !== null)
+      throw new Error(`scratch server exited during boot\n${tail(logFile)}`);
+    const answer = await fetch(`http://127.0.0.1:${port}/login`, {
+      signal: AbortSignal.timeout(1000),
+    }).catch(() => null);
     if (answer?.status === 200) return;
     await delay(100);
   }
-  throw new Error(`scratch server did not answer GET /login within ${BOOT_TIMEOUT_MS / 1000}s\n${tail(logFile)}`);
+  throw new Error(
+    `scratch server did not answer GET /login within ${BOOT_TIMEOUT_MS / 1000}s\n${tail(logFile)}`,
+  );
 }
 
 const tail = (file) => fs.readFileSync(file, "utf8").split("\n").slice(-25).join("\n");
 
 async function expectStatus(url, headers, want) {
   const answer = await fetch(url, { headers, signal: AbortSignal.timeout(5000) });
-  if (answer.status !== want) throw new Error(`GET ${url} answered ${answer.status}, wanted ${want}`);
+  if (answer.status !== want)
+    throw new Error(`GET ${url} answered ${answer.status}, wanted ${want}`);
 }
 
 async function probeServer(dest, port) {
@@ -168,12 +186,20 @@ async function smokeBoot(dest, entry, compileCache) {
   };
   fs.mkdirSync(env.AGENT_CONSOLE_RUN, { recursive: true });
   const logFd = fs.openSync(logFile, "w");
-  const child = spawn(process.execPath, [entry], { cwd: dest, env, detached: true, stdio: ["ignore", logFd, logFd] });
+  const child = spawn(process.execPath, [entry], {
+    cwd: dest,
+    env,
+    detached: true,
+    stdio: ["ignore", logFd, logFd],
+  });
   fs.closeSync(logFd);
   try {
     await waitForHttp(port, child, logFile);
     await probeServer(dest, port);
-    const denied = fs.readFileSync(logFile, "utf8").split("\n").find((line) => /EACCES|EROFS/.test(line));
+    const denied = fs
+      .readFileSync(logFile, "utf8")
+      .split("\n")
+      .find((line) => /EACCES|EROFS/.test(line));
     if (denied) throw new Error(`server tried to write inside the read-only release: ${denied}`);
   } finally {
     await stopScratch(child);
@@ -184,7 +210,11 @@ async function smokeBoot(dest, entry, compileCache) {
 async function buildRelease(app, repo, ref, sha, dest) {
   removeTree(dest);
   fs.mkdirSync(dest, { recursive: true });
-  execFileSync("bash", ["-o", "pipefail", "-c", 'git -C "$1" archive "$2" | tar -x -C "$3"', "bash", repo, sha, dest], { stdio: ["ignore", 2, 2] });
+  execFileSync(
+    "bash",
+    ["-o", "pipefail", "-c", 'git -C "$1" archive "$2" | tar -x -C "$3"', "bash", repo, sha, dest],
+    { stdio: ["ignore", 2, 2] },
+  );
   lap("archive");
   const hashes = installDeps(app, dest, lockFiles(repo, sha));
   lap("deps");
@@ -193,7 +223,14 @@ async function buildRelease(app, repo, ref, sha, dest) {
   const entry = hasBundler ? BUNDLE_ENTRY : path.join("server", "index.ts");
   lap("bundle");
   checkSyntax(dest, entry);
-  const info = { sha, ref, repo, lockhash: hashes[0], depsHashes: hashes, builtAt: new Date().toISOString() };
+  const info = {
+    sha,
+    ref,
+    repo,
+    lockhash: hashes[0],
+    depsHashes: hashes,
+    builtAt: new Date().toISOString(),
+  };
   fs.writeFileSync(path.join(dest, "RELEASE.json"), `${JSON.stringify(info, null, 2)}\n`);
   run("chmod", ["-R", "a-w", dest]); // the smoke boot proves the server needs no writes inside its own tree
   fs.mkdirSync(path.join(app, "compile-cache"), { recursive: true });
@@ -230,17 +267,24 @@ function listReady(app) {
     .readdirSync(root)
     .map((name) => path.join(root, name))
     .filter((dir) => exists(path.join(dir, ".ready")))
-    .map((dir) => ({ dir, builtAt: readInfo(dir).builtAt ?? fs.statSync(path.join(dir, ".ready")).mtime.toISOString() }))
+    .map((dir) => ({
+      dir,
+      builtAt: readInfo(dir).builtAt ?? fs.statSync(path.join(dir, ".ready")).mtime.toISOString(),
+    }))
     .sort((left, right) => right.builtAt.localeCompare(left.builtAt));
 }
 
 function pruneDeps(app, kept) {
-  const wanted = new Set(kept.flatMap((release) => readInfo(release.dir).depsHashes ?? [readInfo(release.dir).lockhash]));
+  const wanted = new Set(
+    kept.flatMap((release) => readInfo(release.dir).depsHashes ?? [readInfo(release.dir).lockhash]),
+  );
   const root = path.join(app, "deps");
   if (!exists(root)) return;
   for (const name of fs.readdirSync(root)) {
     const dir = path.join(root, name);
-    const stale = name.startsWith(".tmp-") ? Date.now() - fs.statSync(dir).mtimeMs > STALE_TMP_MS : !wanted.has(name);
+    const stale = name.startsWith(".tmp-")
+      ? Date.now() - fs.statSync(dir).mtimeMs > STALE_TMP_MS
+      : !wanted.has(name);
     if (stale) removeTree(dir);
   }
 }
@@ -248,7 +292,9 @@ function pruneDeps(app, kept) {
 function prune(app) {
   const ready = listReady(app);
   const pinned = pinnedReleases(app);
-  const kept = ready.filter((release, index) => index < KEEP_RELEASES || pinned.has(fs.realpathSync(release.dir)));
+  const kept = ready.filter(
+    (release, index) => index < KEEP_RELEASES || pinned.has(fs.realpathSync(release.dir)),
+  );
   for (const release of ready) if (!kept.includes(release)) removeTree(release.dir);
   pruneDeps(app, kept);
   lap(`prune (kept ${kept.length})`);
@@ -265,8 +311,11 @@ function relockUnderFlock(lockFile) {
 
 async function main() {
   const { repo, ref } = parseArgs(process.argv.slice(2));
-  const app = process.env.AGENT_CONSOLE_HOME || path.join(os.homedir(), ".local", "share", "agent-console");
-  const sha = execFileSync("git", ["-C", repo, "rev-parse", "--verify", `${ref}^{commit}`], { encoding: "utf8" }).trim();
+  const app =
+    process.env.AGENT_CONSOLE_HOME || path.join(os.homedir(), ".local", "share", "agent-console");
+  const sha = execFileSync("git", ["-C", repo, "rev-parse", "--verify", `${ref}^{commit}`], {
+    encoding: "utf8",
+  }).trim();
   const dest = path.join(app, "releases", sha.slice(0, 12));
   if (exists(path.join(dest, ".ready"))) {
     console.log(dest);
