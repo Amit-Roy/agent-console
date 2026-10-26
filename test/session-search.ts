@@ -326,8 +326,56 @@ async function reliabilityChecks() {
       assert.equal((await migrated.search({ query: word })).results.length, 0, word);
     for (const word of ["migkeptcall", "migkeptresult", "migkeptprose"])
       assert.equal((await migrated.search({ query: word })).results.length, 1, word);
-    assert.equal(Number((migrated as any).db.prepare("PRAGMA user_version").get().user_version), 2);
+    assert.equal(Number((migrated as any).db.prepare("PRAGMA user_version").get().user_version), 3);
+    // fts_map was backfilled: deletes go by rowid and leave no FTS or map rows behind.
+    const mdb = (migrated as any).db;
+    const count = (sql: string) => Number(mdb.prepare(sql).get().n);
+    assert.equal(count("SELECT count(*) AS n FROM fts_map WHERE thread='mig'"), 4);
+    (migrated as any).deleteFts("mig", 4);
+    assert.equal(count("SELECT count(*) AS n FROM session_fts WHERE thread='mig'"), 2);
+    (migrated as any).deleteFts("mig");
+    assert.equal(count("SELECT count(*) AS n FROM session_fts WHERE thread='mig'"), 0);
+    assert.equal(count("SELECT count(*) AS n FROM fts_map WHERE thread='mig'"), 0);
     migrated.close();
+
+    // Migration: a version-2 index skips the echo cleanup and only backfills fts_map.
+    const second = path.join(dir, "migrate-v2");
+    fs.mkdirSync(path.join(second, "logs"), { recursive: true });
+    fs.writeFileSync(
+      path.join(second, "threads.json"),
+      JSON.stringify([{ id: "mig2", provider: "claude", title: "Migrate two" }]),
+    );
+    fs.writeFileSync(path.join(second, "logs", "mig2.jsonl"), "");
+    const seedTwo = new SessionSearch(second);
+    await seedTwo.warm();
+    const sqliteTwo = (seedTwo as any).db;
+    for (const [line, text] of [
+      [1, "mcp__agent_console__session_search\nversiontwoecho"],
+      [2, "Bash\nversiontwokept"],
+    ] as const) {
+      sqliteTwo
+        .prepare("INSERT INTO events(thread,line,role,text) VALUES('mig2',?,'tool',?)")
+        .run(line, text);
+      sqliteTwo
+        .prepare(
+          "INSERT INTO session_fts(title,text,thread,line,role) VALUES('Migrate two',?,'mig2',?,'tool')",
+        )
+        .run(text, line);
+    }
+    sqliteTwo.exec("DELETE FROM fts_map; PRAGMA user_version=2");
+    seedTwo.close();
+    const migratedTwo = new SessionSearch(second);
+    await migratedTwo.whenCleaned();
+    const twoDb = (migratedTwo as any).db;
+    const countTwo = (sql: string) => Number(twoDb.prepare(sql).get().n);
+    // The echo row survives because version 2 never re-runs the echo scan.
+    assert.equal(
+      countTwo("SELECT count(*) AS n FROM session_fts WHERE thread='mig2' AND line>0"),
+      2,
+    );
+    assert.equal(countTwo("SELECT count(*) AS n FROM fts_map WHERE thread='mig2' AND line>0"), 2);
+    assert.equal(Number(twoDb.prepare("PRAGMA user_version").get().user_version), 3);
+    migratedTwo.close();
 
     await cleanupChecks(old);
 
@@ -425,7 +473,7 @@ async function cleanupChecks(base: string) {
   await second.whenCleaned();
   assert.ok(second.cleanupStats.batches > 0);
   const done = (second as any).db;
-  assert.equal(Number(done.prepare("PRAGMA user_version").get().user_version), 2);
+  assert.equal(Number(done.prepare("PRAGMA user_version").get().user_version), 3);
   assert.equal(Number(done.prepare("SELECT count(*) AS n FROM events").get().n), 3000);
   assert.equal(
     Number(

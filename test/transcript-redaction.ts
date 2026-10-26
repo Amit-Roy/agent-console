@@ -253,7 +253,7 @@ try {
   }
   await cleaned;
   const migrationCheck = new DatabaseSync(path.join(migrationDir, "session-search.sqlite"));
-  assert.equal(Number(migrationCheck.prepare("PRAGMA user_version").get()!.user_version), 2);
+  assert.equal(Number(migrationCheck.prepare("PRAGMA user_version").get()!.user_version), 3);
   assert.equal(
     Number(
       migrationCheck.prepare("SELECT count(*) AS n FROM meta WHERE key LIKE 'echo_%'").get()!.n,
@@ -274,7 +274,7 @@ try {
   (resumed as any).hooks.cleanupBatchLimit = undefined;
   await resumed.endMaintenance(false);
   await resumed.whenCleaned();
-  assert.equal(Number((resumed as any).db.prepare("PRAGMA user_version").get()!.user_version), 2);
+  assert.equal(Number((resumed as any).db.prepare("PRAGMA user_version").get()!.user_version), 3);
   assert.equal((resumed as any).cleanupTimer, undefined);
   resumed.close();
 
