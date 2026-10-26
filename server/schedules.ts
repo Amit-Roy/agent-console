@@ -243,6 +243,7 @@ export class Schedules {
   private threads: Threads;
   private emit: Emit;
   private limit: number;
+  private ending = new Set<string>(); // run ids whose report is being read from the log
   private watchdogs = new Map<string, NodeJS.Timeout>(); // run id -> timer
   /** Called before a run's thread is created. If it throws or its promise rejects, the run fails and nothing starts. */
   onRunStart?: (task: Task, run: Run) => void | Promise<void>;
@@ -565,24 +566,44 @@ export class Schedules {
 
   private turnEnded(t: Thread, ev: any) {
     const found = this.findRun(t.id);
-    if (!found || found.run.status !== "running") return; // follow-up turns in a finished run change nothing
+    if (!found || found.run.status !== "running" || this.ending.has(found.run.id)) return; // follow-up turns in a finished run change nothing
     const { task, run } = found;
     clearTimeout(this.watchdogs.get(run.id));
     this.watchdogs.delete(run.id);
+    if (!run.output && task.saveOutput && !ev.is_error) {
+      // The report comes from the log's tail, read without blocking; the run stays "running" until it is in.
+      this.ending.add(run.id);
+      void this.threads
+        .historyTail(
+          t.id,
+          (events) =>
+            events.some((e: any) => e?.type === "user_input") || finalText(events).length > 200,
+        )
+        .then((events) => finalText(events as any[]))
+        .catch(() => "")
+        .then((text) => {
+          this.ending.delete(run.id);
+          if (run.status === "running") this.finishTurn(t, task, run, ev, text);
+        })
+        // A finalize failure must never break the turn or crash the server.
+        .catch((error) => console.error(`schedule run ${run.id} finalize failed:`, error));
+      return;
+    }
+    this.finishTurn(t, task, run, ev, "");
+  }
+
+  private finishTurn(t: Thread, task: Task, run: Run, ev: any, text: string) {
     run.status = ev.is_error ? "failed" : "done";
     if (ev.is_error) run.reason = "The agent ended the run with an error.";
     run.ms = Date.now() - run.at;
     run.cost = t.costMeasured ? t.cost : undefined;
     run.tokens = tokensOf(t.lastRun);
-    if (!run.output && task.saveOutput && !ev.is_error) {
-      const text = finalText(this.threads.history(t.id) as any[]);
-      if (text)
-        try {
-          run.output = this.commit(task, run, text);
-        } catch (e: any) {
-          run.reason = `The report could not be saved: ${e?.message || e}`;
-        }
-    }
+    if (text)
+      try {
+        run.output = this.commit(task, run, text);
+      } catch (e: any) {
+        run.reason = `The report could not be saved: ${e?.message || e}`;
+      }
     this.runEnded(task, run);
     this.changed();
     this.threads.note(t.id, {

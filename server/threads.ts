@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import readline from "node:readline";
 import {
   codexAccounting,
   type ModelUsage,
@@ -197,6 +198,19 @@ const NOISE = new Set([
 const kindOf = (e: any) => `${e?.type}${e?.subtype ? "/" + e.subtype : ""}`;
 const PAGE = Number(process.env.AGENT_CONSOLE_PAGE) || 40; // events the UI gets when it opens a thread; older ones load on request
 const PAGE_BYTES = Number(process.env.AGENT_CONSOLE_PAGE_BYTES) || 96_000; // sent JSON per page: a page widened back to its turn's start can exceed 150 events
+const TAIL_CHUNK = 256 * 1024; // bytes per backwards read of a log's tail
+/** Lines of a file, streamed so a huge log never blocks the event loop. */
+async function* readLines(file: string): AsyncGenerator<string> {
+  const lines = readline.createInterface({
+    input: fs.createReadStream(file, { encoding: "utf8" }),
+    crlfDelay: Infinity,
+  });
+  try {
+    yield* lines;
+  } finally {
+    lines.close();
+  }
+}
 const RESULT_CLIP = 4000; // tool output in replayed history (the card shows at most 8000 anyway, and live output is already clipped at 20000)
 const MAX_QUEUE = 20;
 
@@ -1274,6 +1288,51 @@ export class Threads {
         .filter((e) => !NOISE.has(kindOf(e)));
     } catch {
       return [];
+    }
+  }
+
+  /** history() without blocking the event loop: the log is streamed line by line. */
+  async historyAsync(id: string): Promise<unknown[]> {
+    const out: unknown[] = [];
+    try {
+      for await (const line of readLines(logFile(id))) {
+        if (!line) continue;
+        const ev = JSON.parse(line);
+        if (!NOISE.has(kindOf(ev))) out.push(ev);
+      }
+      return out;
+    } catch {
+      return [];
+    }
+  }
+
+  /** The newest events of the log, read backwards from the file end in chunks until `done(events)` holds (or the file start). Same events, in order, as the tail of history(). */
+  async historyTail(id: string, done: (events: any[]) => boolean): Promise<unknown[]> {
+    let handle: fs.promises.FileHandle | undefined;
+    try {
+      handle = await fs.promises.open(logFile(id), "r");
+      let pos = (await handle.stat()).size;
+      let events: any[] = [];
+      let rest = Buffer.alloc(0); // bytes of a line whose start is not read yet
+      while (pos > 0) {
+        const len = Math.min(TAIL_CHUNK, pos);
+        pos -= len;
+        const buf = Buffer.alloc(len);
+        await handle.read(buf, 0, len, pos);
+        rest = Buffer.concat([buf, rest]);
+        let from = pos > 0 ? rest.indexOf(10) + 1 : 0; // a partial first line waits for the next chunk
+        if (pos > 0 && from === 0) continue;
+        const lines = rest.subarray(from).toString("utf8").split("\n").filter(Boolean);
+        rest = rest.subarray(0, from);
+        const fresh = lines.map((l) => JSON.parse(l)).filter((e) => !NOISE.has(kindOf(e)));
+        events = [...fresh, ...events];
+        if (done(events)) break;
+      }
+      return events;
+    } catch {
+      return [];
+    } finally {
+      await handle?.close();
     }
   }
 
@@ -2676,36 +2735,32 @@ export class Threads {
     this.touch(t);
   }
 
-  private userTexts(id: string): string[] {
+  private async userTexts(id: string): Promise<string[]> {
+    const texts: string[] = [];
     try {
-      return fs
-        .readFileSync(logFile(id), "utf8")
-        .split("\n")
-        .filter((l) => l.includes('"user_input"'))
-        .flatMap((l) => {
-          try {
-            const e = JSON.parse(l);
-            return e.type === "user_input" &&
-              !e.auto &&
-              !e.sourceThread &&
-              !e.command &&
-              typeof e.text === "string"
-              ? [e.text]
-              : [];
-          } catch {
-            return [];
-          }
-        });
-    } catch {
-      return [];
-    }
+      for await (const l of readLines(logFile(id))) {
+        if (!l.includes('"user_input"')) continue;
+        try {
+          const e = JSON.parse(l);
+          if (
+            e.type === "user_input" &&
+            !e.auto &&
+            !e.sourceThread &&
+            !e.command &&
+            typeof e.text === "string"
+          )
+            texts.push(e.text);
+        } catch {}
+      }
+    } catch {}
+    return texts;
   }
 
   // Name the thread after all its user messages (newest weigh most). Never blocks the turn; on any failure the current title stays.
   private async retitle(t: Thread, latest: string) {
     const n = (this.titling.get(t.id) ?? 0) + 1;
     this.titling.set(t.id, n);
-    const texts = this.userTexts(t.id);
+    const texts = await this.userTexts(t.id);
     const title = await suggestTitle(texts.length ? texts : [latest]).catch(() => undefined);
     if (!title || !this.threads.has(t.id) || t.titleLocked || this.titling.get(t.id) !== n) return; // deleted, renamed by the user, or a newer prompt is already being named
     t.title = title;

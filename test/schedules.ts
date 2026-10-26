@@ -434,6 +434,35 @@ try {
     ]),
     "a\n\nb",
   );
+  // async log reads match the sync history(); the tail read stops early but returns the same newest events
+  {
+    const big = threads.create({ provider: "fixture", cwd: dir } as any);
+    const logs = path.join(dir, "logs", `${big.id}.jsonl`);
+    const evs: any[] = [];
+    for (let i = 0; i < 3000; i++) {
+      evs.push({ type: "user_input", text: `q${i} café 🧪` });
+      evs.push({
+        type: "assistant",
+        message: { content: [{ type: "text", text: `a${i} ${"x".repeat(300)} 🧪` }] },
+      });
+    }
+    fs.mkdirSync(path.dirname(logs), { recursive: true });
+    fs.writeFileSync(logs, evs.map((e) => JSON.stringify(e)).join("\n"));
+    assert.deepEqual(await threads.historyAsync(big.id), threads.history(big.id));
+    const tail = (await threads.historyTail(big.id, (e) =>
+      e.some((x: any) => x.type === "user_input"),
+    )) as any[];
+    assert.ok(tail.length >= 2 && tail.length < 2000, "tail read stops near the end");
+    assert.deepEqual(tail, threads.history(big.id).slice(-tail.length));
+    assert.equal(
+      finalText(tail),
+      finalText(threads.history(big.id) as any[]),
+      "same report as the full read",
+    );
+    const all = await threads.historyTail(big.id, () => false);
+    assert.deepEqual(all, threads.history(big.id));
+    assert.deepEqual(await threads.historyAsync("nope-missing"), []);
+  }
   console.log(
     "PASS schedules: presets, validation, run threads, no overlap, git reports, report card, follow-ups, failures, agent tools, restart, catch-up, delete",
   );
