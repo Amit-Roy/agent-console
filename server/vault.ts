@@ -4,10 +4,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import express from "express";
+import { type IronSpec, presets, SpecError, specHosts, validateSpec } from "./iron-spec.ts";
 import { backupStatus, retryBackup, scheduleBackup } from "./vault-backup.ts";
+import { refreshEgress } from "./vault-egress.ts";
 import {
   type IronMap,
   ironCached,
+  ironProviderAdd,
   ironSet,
   ironStatus,
   ironToken,
@@ -33,7 +36,13 @@ type Source = {
   repo?: string;
   label: string;
 };
-type Extra = { store: string; key: string; value: string; viewable: boolean; updatedAt: string };
+type Extra = {
+  store: string;
+  key: string;
+  value: string;
+  viewable: boolean;
+  updatedAt: string;
+};
 class VaultError extends Error {
   status: number;
   constructor(status: number, msg: string) {
@@ -127,7 +136,12 @@ function addGithubSource(spec: any, seen: Set<string>, out: Source[]) {
   const id = sid(`github:${spec.repo}`);
   if (seen.has(id)) return;
   seen.add(id);
-  out.push({ id, kind: "github", repo: spec.repo, label: `GitHub · ${spec.repo}` });
+  out.push({
+    id,
+    kind: "github",
+    repo: spec.repo,
+    label: `GitHub · ${spec.repo}`,
+  });
 }
 
 function addFileSources(spec: any, seen: Set<string>, out: Source[]) {
@@ -295,7 +309,10 @@ function replaceEnvLine(
   if (!m || m[2] !== key) return { hit: false, text: line };
   if (value === null) return { hit: true, text: null };
   const p = parseValue(m[4]);
-  return { hit: true, text: `${m[1]}${m[2]}${m[3]}${formatValue(value, p.quote)}${p.rest}` };
+  return {
+    hit: true,
+    text: `${m[1]}${m[2]}${m[3]}${formatValue(value, p.quote)}${p.rest}`,
+  };
 }
 
 function writeEnv(file: string, key: string, value: string | null) {
@@ -409,7 +426,13 @@ function seedExtras(): Extra[] {
     ["region", "AWS_REGION"],
   ] as const) {
     if (own && sec && sec[from])
-      list.push({ store: own.id, key, value: sec[from], viewable: true, updatedAt: at });
+      list.push({
+        store: own.id,
+        key,
+        value: sec[from],
+        viewable: true,
+        updatedAt: at,
+      });
   }
   const hex = () => crypto.randomBytes(4).toString("hex");
   const plain: [string, string][] = [
@@ -458,7 +481,11 @@ function loadExtras(): Extra[] {
     }));
 }
 const saveExtras = (l: Extra[]) => atomicWrite(extrasFile(), JSON.stringify(l, null, 2) + "\n");
-const virtual = (label: string): Source => ({ id: sid(`label:${label}`), kind: "virtual", label });
+const virtual = (label: string): Source => ({
+  id: sid(`label:${label}`),
+  kind: "virtual",
+  label,
+});
 const owns = (s: Source, x: Extra) =>
   s.kind === "virtual" ? x.store === s.label : x.store === s.id;
 const extraGroups = (all: Extra[], srcs: Source[]) => {
@@ -515,7 +542,11 @@ async function listSource(
   opts: { mine?: boolean },
   iron: IronMap | null,
 ) {
-  const base = { id: s.id, label: s.label, canAdd: s.kind === "env" || s.kind === "github" };
+  const base = {
+    id: s.id,
+    label: s.label,
+    canAdd: s.kind === "env" || s.kind === "github",
+  };
   try {
     const real = await realEntries(s, iron);
     const have = new Set(real.map((e) => e.key));
@@ -524,7 +555,10 @@ async function listSource(
     const mtime = listMtime(s, extra);
     let entries = [
       ...real.map((e) => ({ ...e, ...(opts.mine ? { mine: true } : {}) })),
-      ...extra.map((x) => ({ ...shape(s, x, mtime), ...(opts.mine ? { mine: false } : {}) })),
+      ...extra.map((x) => ({
+        ...shape(s, x, mtime),
+        ...(opts.mine ? { mine: false } : {}),
+      })),
     ];
     if (s.kind === "env" || s.kind === "virtual")
       entries = entries.map((e) => ({ ...e, proxy: e.proxy ?? "unproxied" }));
@@ -648,7 +682,55 @@ async function setProxied(s: Source, key: string, v: string) {
   if (s.kind === "env") await writeIronToken(s, key, iron);
   audit("set", s, key);
   scheduleBackup();
-  return { ok: true, proxied: true, ...(ownEnv(s) ? { restartNeeded: true } : {}) };
+  return {
+    ok: true,
+    proxied: true,
+    ...(ownEnv(s) ? { restartNeeded: true } : {}),
+  };
+}
+
+function alertProvider(name: string, hosts: string[], c: Client) {
+  // fire and forget; names and hosts only, never a value
+  void sendMail("[Agent Console] vault: iron provider added", [
+    `Time: ${new Date().toISOString()}`,
+    `Client IP: ${oneLine(c.ip, 80)}`,
+    `User-agent: ${oneLine(c.ua)}`,
+    `Provider: ${name}`,
+    `Hosts: ${hosts.join(", ")}`,
+  ]).catch((e) => console.warn("vault alert failed:", oneLine(e?.message, 80)));
+}
+
+function checkProviderSpec(raw: unknown, iron: IronMap | null): IronSpec {
+  if (!iron) throw new VaultError(502, "iron unreachable, nothing saved");
+  try {
+    return validateSpec(raw, iron.keys());
+  } catch (e) {
+    if (e instanceof SpecError) throw new VaultError(400, e.message);
+    throw e;
+  }
+}
+
+/* add a provider on iron, store its real value there, and put only the proxy token in the env file */
+export async function addIronProvider(rawSpec: unknown, value: unknown, c: Client = NOBODY) {
+  checkValue(value);
+  return serial(async () => {
+    const s = sources().find(ownEnv);
+    if (!s) throw new VaultError(400, "No env file to hold the proxy token.");
+    const v = checkValue(value);
+    const spec = checkProviderSpec(rawSpec, await ironStatus());
+    if (!(await ironProviderAdd(spec))) throw new VaultError(502, "iron provider add failed");
+    if (!(await ironSet(spec.name, v))) throw new VaultError(502, "iron set failed");
+    const iron = await ironStatus();
+    if (!iron || !spec.envVars.every((k) => iron.has(k)))
+      throw new VaultError(502, "iron set failed");
+    for (const alias of spec.envVars) await writeIronToken(s, alias, iron);
+    const hosts = specHosts(spec);
+    audit("add-provider", s, `${spec.name} ${hosts.join(",")}`);
+    const warnings = await refreshEgress(hosts);
+    scheduleBackup();
+    alertProvider(spec.name, hosts, c);
+    return { ok: true, name: spec.name, hosts, warnings, restartNeeded: true };
+  });
 }
 
 export function setSecret(id: string, key: string, value: unknown, c: Client = NOBODY) {
@@ -823,7 +905,10 @@ async function sendMail(subject: string, lines: string[]) {
     base = process.env.VAULT_ALERT_BASE || "https://api.agentmail.to";
   const r = await fetch(`${base}/v0/inboxes/${encodeURIComponent(inbox)}/messages/send`, {
     method: "POST",
-    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
     body: JSON.stringify({
       to: cfg.alertTo,
       cc: cfg.alertCc,
@@ -851,9 +936,9 @@ export function mountVault(app: express.Express, sameOrigin: express.RequestHand
   const body: express.RequestHandler = (req, res, next) =>
     parseJson(req, res, (err?: any) =>
       err
-        ? void res
-            .status(err.status === 413 ? 413 : 400)
-            .json({ error: err.status === 413 ? "Request too large." : "Invalid request." })
+        ? void res.status(err.status === 413 ? 413 : 400).json({
+            error: err.status === 413 ? "Request too large." : "Invalid request.",
+          })
         : next(),
     );
   const guard =
@@ -863,9 +948,9 @@ export function mountVault(app: express.Express, sameOrigin: express.RequestHand
       try {
         res.json(await fn(req));
       } catch (e: any) {
-        res
-          .status(e instanceof VaultError ? e.status : 500)
-          .json({ error: e instanceof VaultError ? e.message : "The vault is unavailable." });
+        res.status(e instanceof VaultError ? e.status : 500).json({
+          error: e instanceof VaultError ? e.message : "The vault is unavailable.",
+        });
       }
     };
   const client = (req: express.Request): Client => {
@@ -895,6 +980,17 @@ export function mountVault(app: express.Express, sameOrigin: express.RequestHand
     pk.requireGrant(false),
     body,
     guard((req) => addStore(req.body?.type, req.body?.value)),
+  );
+  app.get(
+    "/api/vault/iron/presets",
+    guard(async () => ({ presets: presets() })),
+  );
+  app.post(
+    "/api/vault/iron/providers",
+    sameOrigin,
+    pk.requireGrant(true),
+    body,
+    guard((req) => addIronProvider(req.body?.spec, req.body?.value, client(req))),
   );
   app.put(
     "/api/vault/:source/:key",

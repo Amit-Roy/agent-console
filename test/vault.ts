@@ -81,7 +81,11 @@ const mailSrv = http
     let b = "";
     req.on("data", (d) => (b += d));
     req.on("end", () => {
-      mails.push({ url: req.url, auth: req.headers.authorization, body: JSON.parse(b) });
+      mails.push({
+        url: req.url,
+        auth: req.headers.authorization,
+        body: JSON.parse(b),
+      });
       res.end("{}");
       onMail?.();
     });
@@ -110,7 +114,12 @@ const base = `http://127.0.0.1:${(server.address() as any).port}`;
 const api = async (method: string, p: string, body?: unknown, cookie = "", origin = base) => {
   const r = await fetch(`${base}/api/vault${p}`, {
     method,
-    headers: { origin, cookie, "content-type": "application/json", "user-agent": "vault-test/1.0" },
+    headers: {
+      origin,
+      cookie,
+      "content-type": "application/json",
+      "user-agent": "vault-test/1.0",
+    },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const text = await r.text();
@@ -455,8 +464,12 @@ try {
     200,
   );
   assert.equal(
-    (await api("POST", "/stepup/verify", { cid: o.json.cid, response: assertion(o.json.options) }))
-      .status,
+    (
+      await api("POST", "/stepup/verify", {
+        cid: o.json.cid,
+        response: assertion(o.json.options),
+      })
+    ).status,
     400,
     "assertion challenge is single-use",
   );
@@ -513,6 +526,37 @@ try {
   hooks.expireGrants();
   r = await api("PUT", `/${envSrc.id}/BRAND_NEW`, { value: "zzz" }, grant);
   assert.equal(r.status, 401, "expired grant is rejected");
+  grant = (await stepUp()).cookie;
+
+  // ---- iron providers: presets are public, adding needs a live single-use grant
+  const presetRes = await api("GET", "/iron/presets");
+  assert.equal(presetRes.status, 200);
+  assert.deepEqual(
+    presetRes.json.presets.map((p: any) => p.label),
+    ["Cloudflare", "OpenAI", "Anthropic", "Custom"],
+  );
+  const provBody = {
+    spec: {
+      name: "ACME_API_KEY",
+      envVars: ["ACME_API_KEY"],
+      rules: [{ host: "api.acme.example", paths: ["/v1/*"] }],
+      header: "Authorization",
+      prefix: "acme-px-",
+    },
+    value: "acme-real-FAKE-value-123456",
+  };
+  const provEnvBefore = text(envFile);
+  assert.equal((await api("POST", "/iron/providers", provBody)).status, 401, "no grant");
+  hooks.expireGrants();
+  assert.equal((await api("POST", "/iron/providers", provBody, grant)).status, 401, "stale grant");
+  grant = (await stepUp()).cookie;
+  r = await api("POST", "/iron/providers", provBody, grant);
+  assert.equal(r.status, 502, "iron down: refused");
+  assert.ok(!r.text.includes(provBody.value));
+  assert.equal(text(envFile), provEnvBefore, "iron failure writes no env");
+  assert.ok(
+    !text(path.join(dir, ".config", "agent-console", "vault-audit.jsonl")).includes(provBody.value),
+  );
   grant = (await stepUp()).cookie;
 
   // ---- delete is single-use
