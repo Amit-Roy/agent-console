@@ -486,8 +486,8 @@ async function submitIron() {
   if (bad) return showEditErr(bad);
   $("edit-save").disabled = true;
   try {
+    if (hasAllPaths()) spec.allowAllPaths = true;
     const body = { spec, value: value.value };
-    if (hasAllPaths()) body.allowAllPaths = true;
     const reply = await write("POST", "/api/vault/iron/providers", body, (w) => {
       $("edit-wait").hidden = !w;
     });
