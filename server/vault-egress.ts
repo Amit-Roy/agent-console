@@ -40,10 +40,8 @@ function pinCommand(): { bin: string; argv: string[] } {
   const override = process.env.VAULT_EGRESS_PIN;
   if (override) return { bin: override, argv: [] };
   const dotfiles = process.env.VAULT_DOTFILES || path.join(os.homedir(), "repos", "dotfiles");
-  return {
-    bin: "sudo",
-    argv: ["-n", path.join(dotfiles, "bin", "egress-pin")],
-  };
+  // egress-pin reads $HOME/.config/agent-console and calls sudo itself, so run it as this user.
+  return { bin: path.join(dotfiles, "bin", "egress-pin"), argv: [] };
 }
 
 function runPin(): Promise<boolean> {
