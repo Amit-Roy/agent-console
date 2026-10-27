@@ -63,7 +63,7 @@ const status = (tokenSha: string) =>
     path.join(dir, "status"),
     JSON.stringify({
       name: "deepseek",
-      envVars: ["DEEPSEEK_API_KEY", "DEEPAEEK_API_KEY"],
+      envVars: ["DEEPSEEK_API_KEY", "DEEPAEEK_API_KEY", "DEEPSEEK_NEFRO_DEV"],
       set: true,
       mtime: "2026-10-26T00:00:00Z",
       tokenSha,
@@ -77,7 +77,7 @@ fs.writeFileSync(
     sources: [{ type: "env", path: "~/.config/agent-console/env" }],
   }),
 );
-const initial = `DEEPSEEK_API_KEY=${REALKEY}\nDEEPAEEK_API_KEY=old-alias-FAKE-value-1\nOPENAI_API_KEY=${OTHER}\n`;
+const initial = `DEEPSEEK_API_KEY=${REALKEY}\nDEEPAEEK_API_KEY=old-alias-FAKE-value-1\nDEEPSEEK_NEFRO_DEV=old-alias-FAKE-value-2\nOPENAI_API_KEY=${OTHER}\n`;
 fs.writeFileSync(envFile, initial, { mode: 0o600 });
 
 const { sources, listVault, checkValue, setSecret, deleteSecret, addIronProvider } = await import(
@@ -94,6 +94,7 @@ try {
   // classification before: managed keys hold a real key
   assert.ok(await ironStatus());
   assert.equal(await proxyOf("DEEPSEEK_API_KEY"), "real-key");
+  assert.equal(await proxyOf("DEEPSEEK_NEFRO_DEV"), "real-key", "managed alias shows despite a non-secret name");
   assert.equal(await proxyOf("OPENAI_API_KEY"), "unproxied");
   assert.ok(!JSON.stringify(await listVault()).includes(REALKEY), "list carries no values");
 
