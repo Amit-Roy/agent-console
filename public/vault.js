@@ -257,6 +257,7 @@ const edit = $("edit"),
   value = $("value");
 function closeEdit() {
   value.value = "";
+  $("ir-all").checked = false;
   value.type = "password";
   $("reveal").textContent = "Show";
   $("reveal").setAttribute("aria-pressed", "false");
@@ -285,6 +286,7 @@ function openEdit(g, e) {
   $("edit-wait").hidden = true;
   $("edit-save").disabled = false;
   syncHint();
+  initStorage(adding);
   edit.showModal();
   (adding ? $("name") : value).focus();
 }
@@ -308,8 +310,14 @@ function syncHint() {
     !SECRETISH.test($("name").value)
   );
 }
-$("where").addEventListener("change", syncNew);
-$("new-type").addEventListener("change", syncNew);
+$("where").addEventListener("change", () => {
+  syncNew();
+  syncStorage();
+});
+$("new-type").addEventListener("change", () => {
+  syncNew();
+  syncStorage();
+});
 $("new-val").addEventListener("input", () => {
   $("edit-err").hidden = true;
 });
@@ -328,8 +336,190 @@ $("edit-cancel").addEventListener("click", closeEdit);
 edit.addEventListener("cancel", () => {
   value.value = "";
 });
+/* ---------- storage choice: Disk | Iron proxy ---------- */
+const IRON_HEADERS = ["Authorization", "X-Api-Key", "Api-Key", "X-Auth-Token"];
+const MAX_RULES = 3;
+const RE_UPPER = /^[A-Z_][A-Z0-9_]*$/;
+const RE_HOST = /^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
+const iron = { on: false, presets: [], require: undefined };
+const ironOn = () => iron.on && !$("iron-wrap").hidden;
+const csv = (s) =>
+  s
+    .split(",")
+    .map((x) => x.trim())
+    .filter(Boolean);
+function setStorage(on) {
+  iron.on = on;
+  $("st-disk").setAttribute("aria-pressed", String(!on));
+  $("st-iron").setAttribute("aria-pressed", String(on));
+  syncStorage();
+  if (on && !iron.presets.length) void loadPresets();
+}
+// the toggle only applies to env-file stores; a GitHub target stays on Disk
+function syncStorage() {
+  const adding = !!cur && !cur.e,
+    sel = $("where").value,
+    group = state.groups.find((item) => item.id === sel),
+    isGithub =
+      sel === "__new" ? $("new-type").value === "github" : !!group && /^GitHub/.test(group.label);
+  $("store-wrap").hidden = !adding || isGithub;
+  const useIron = adding && !isGithub && iron.on;
+  $("iron-wrap").hidden = !useIron;
+  $("where-wrap").hidden = !adding || useIron;
+  $("new-wrap").hidden = useIron || $("where").value !== "__new" || !adding;
+  $("name-wrap").hidden = !adding || useIron;
+  if (useIron) $("name-hint").hidden = true;
+  else syncHint();
+  if (useIron) syncSummary();
+}
+function initStorage(adding) {
+  iron.on = false;
+  $("st-disk").setAttribute("aria-pressed", "true");
+  $("st-iron").setAttribute("aria-pressed", "false");
+  $("ir-all").checked = false;
+  fillSpec({ name: "", envVars: [], rules: [{ host: "", paths: ["/"] }], header: "Authorization" });
+  $("ir-preset").value = "custom";
+  if (adding) syncStorage();
+  else $("store-wrap").hidden = $("iron-wrap").hidden = true;
+}
+async function loadPresets() {
+  const reply = await call("GET", "/api/vault/iron/presets");
+  if (!reply.ok || !Array.isArray(reply.j.presets)) {
+    showEditErr(reply.j.error || "Could not load provider presets.");
+    return;
+  }
+  iron.presets = reply.j.presets;
+  $("ir-preset").replaceChildren(
+    ...iron.presets.map((p) => Object.assign(el("option", "", p.label), { value: p.id })),
+  );
+  $("ir-preset").value = "custom";
+}
+function showEditErr(text) {
+  $("edit-err").textContent = text;
+  $("edit-err").hidden = false;
+}
+function ruleRow(rule) {
+  const wrap = el("div", "vrule");
+  const host = el("input", "input");
+  const paths = el("input", "input");
+  const removeBtn = el("button", "btn sm ghost", "Remove");
+  for (const field of [host, paths]) {
+    field.type = "text";
+    field.autocomplete = "off";
+    field.autocapitalize = "off";
+    field.spellcheck = false;
+    field.maxLength = 300;
+    field.addEventListener("input", syncSummary);
+  }
+  host.placeholder = "api.example.com";
+  host.value = rule.host || "";
+  host.setAttribute("aria-label", "Host");
+  paths.placeholder = "/v1/*, /models";
+  paths.value = (rule.paths || []).join(", ");
+  paths.setAttribute("aria-label", "Paths (comma list)");
+  removeBtn.type = "button";
+  removeBtn.setAttribute("aria-label", "Remove host");
+  removeBtn.addEventListener("click", () => {
+    wrap.remove();
+    syncSummary();
+  });
+  wrap.append(host, paths, removeBtn);
+  return wrap;
+}
+function readRules() {
+  return [...$("ir-rules").children].map((row) => {
+    const [hostIn, pathsIn] = row.querySelectorAll("input");
+    return { host: hostIn.value.trim(), paths: csv(pathsIn.value) };
+  });
+}
+function fillSpec(spec) {
+  $("ir-name").value = spec.name || "";
+  $("ir-env").value = (spec.envVars || []).join(", ");
+  $("ir-header").value = IRON_HEADERS.includes(spec.header) ? spec.header : "Authorization";
+  $("ir-prefix").value = spec.prefix || "";
+  iron.require = spec.require;
+  const rules = spec.rules?.length ? spec.rules : [{ host: "", paths: ["/"] }];
+  $("ir-rules").replaceChildren(...rules.slice(0, MAX_RULES).map(ruleRow));
+  syncSummary();
+}
+const hasAllPaths = () => readRules().some((r) => r.paths.includes("/*"));
+function syncSummary() {
+  const rules = readRules().filter((r) => r.host);
+  $("ir-sum").textContent = rules.length
+    ? `Will allow egress to ${rules.map((r) => `${r.host} ${r.paths.join(", ") || "(no paths)"}`).join("; ")}`
+    : "Will allow egress to no host yet.";
+  const all = hasAllPaths();
+  $("ir-warn").hidden = !all;
+  $("ir-all-wrap").hidden = !all;
+  if (!all) $("ir-all").checked = false;
+  $("ir-addrule").disabled = $("ir-rules").children.length >= MAX_RULES;
+}
+function ironProblem(spec) {
+  if (!RE_UPPER.test(spec.name)) return "Name uses capital letters, digits and underscores.";
+  if (spec.envVars.some((v) => !RE_UPPER.test(v)))
+    return "Env aliases use capital letters, digits and underscores.";
+  if (!spec.rules.length) return "Add at least one host.";
+  for (const rule of spec.rules) {
+    if (!RE_HOST.test(rule.host)) return `Host "${rule.host}" must be a lowercase domain name.`;
+    if (!rule.paths.length || rule.paths.some((path) => !path.startsWith("/")))
+      return `Paths for ${rule.host} must start with "/".`;
+  }
+  if (hasAllPaths() && !$("ir-all").checked) return "Tick the box to allow all paths.";
+  if (!value.value) return "Enter the key value.";
+  return "";
+}
+function readSpec() {
+  const spec = {
+    name: $("ir-name").value.trim(),
+    envVars: csv($("ir-env").value),
+    rules: readRules(),
+    header: $("ir-header").value,
+    prefix: $("ir-prefix").value,
+  };
+  if (iron.require !== undefined) spec.require = iron.require;
+  return spec;
+}
+async function submitIron() {
+  const spec = readSpec();
+  $("edit-err").hidden = true;
+  const bad = ironProblem(spec);
+  if (bad) return showEditErr(bad);
+  $("edit-save").disabled = true;
+  try {
+    if (hasAllPaths()) spec.allowAllPaths = true;
+    const body = { spec, value: value.value };
+    const reply = await write("POST", "/api/vault/iron/providers", body, (w) => {
+      $("edit-wait").hidden = !w;
+    });
+    closeEdit();
+    const warnings = reply.warnings || [];
+    const warn = warnings.length ? ` ${warnings.join(" ")}` : "";
+    toast(`${reply.name || spec.name} saved to iron-proxy.${warn}`, warnings.length ? "" : "ok");
+    await load();
+  } catch (error) {
+    showEditErr(error.message);
+    $("edit-save").disabled = false;
+  }
+}
+$("st-disk").addEventListener("click", () => setStorage(false));
+$("st-iron").addEventListener("click", () => setStorage(true));
+$("ir-preset").addEventListener("change", () => {
+  const preset = iron.presets.find((item) => item.id === $("ir-preset").value);
+  if (preset) fillSpec(preset.spec);
+});
+$("ir-name").addEventListener("input", (ev) => {
+  ev.target.value = ev.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, "_");
+});
+$("ir-addrule").addEventListener("click", () => {
+  if ($("ir-rules").children.length < MAX_RULES) $("ir-rules").append(ruleRow({ paths: ["/"] }));
+  syncSummary();
+});
+$("ir-all").addEventListener("change", () => {
+  $("edit-err").hidden = true;
+});
 $("edit-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
+  if (ironOn()) return void submitIron();
   const key = cur.e ? cur.e.key : $("name").value.trim();
   const err = $("edit-err");
   err.hidden = true;

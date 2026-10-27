@@ -1,18 +1,32 @@
 import { spawn } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
+import type { IronSpec } from "./iron-spec.ts";
 
 // Iron bridge: keys that iron-proxy manages are set on the iron host over ssh. The value goes to the
 // child on stdin only (never argv, env or logs); ssh stderr is discarded so no remote text is relayed.
-export type IronEntry = { name: string; tokenSha: string };
+export type IronEntry = {
+  name: string;
+  tokenSha: string;
+  hosts?: string[];
+  paths?: string[];
+  header?: string;
+};
 export type IronMap = Map<string, IronEntry>;
 
 const OK_TTL = 60_000;
 const FAIL_TTL = 10_000;
-const TIMEOUT = { status: 10_000, set: 20_000, token: 10_000 };
+const TIMEOUT = {
+  status: 10_000,
+  set: 20_000,
+  token: 10_000,
+  add: 20_000,
+  ca: 10_000,
+};
 const NAME = /^[A-Za-z0-9_.-]{1,64}$/;
 // Used when iron cannot be reached: these never fall back to plaintext.
 export const KNOWN_MANAGED = new Set([
+  "CLOUDFLARE_API_TOKEN",
   "NVIDIA_API_KEY",
   "DEEPAEEK_API_KEY",
   "DEEPSEEK_API_KEY",
@@ -48,7 +62,9 @@ function sshCommand(args: string[]): { bin: string; argv: string[] } {
 function run(args: string[], ms: number, stdin?: string): Promise<Run> {
   return new Promise((resolve) => {
     const cmd = sshCommand(args);
-    const child = spawn(cmd.bin, cmd.argv, { stdio: ["pipe", "pipe", "ignore"] });
+    const child = spawn(cmd.bin, cmd.argv, {
+      stdio: ["pipe", "pipe", "ignore"],
+    });
     let out = "";
     const timer = setTimeout(() => child.kill("SIGKILL"), ms);
     child.stdout.on("data", (d) => {
@@ -67,6 +83,12 @@ function run(args: string[], ms: number, stdin?: string): Promise<Run> {
   });
 }
 
+const strings = (v: unknown): string[] | undefined => {
+  const list = Array.isArray(v) ? v : typeof v === "string" ? v.split(",") : null;
+  const out = list?.filter((x): x is string => typeof x === "string" && x.trim() !== "");
+  return out?.map((x) => x.trim());
+};
+
 function parseStatus(out: string): IronMap | null {
   const map: IronMap = new Map();
   for (const line of out.split("\n")) {
@@ -81,7 +103,13 @@ function parseStatus(out: string): IronMap | null {
     const vars: unknown[] = Array.isArray(row.envVars) ? row.envVars : [];
     for (const v of vars) {
       if (typeof v === "string")
-        map.set(v, { name: row.name, tokenSha: row.tokenSha.toLowerCase() });
+        map.set(v, {
+          name: row.name,
+          tokenSha: row.tokenSha.toLowerCase(),
+          hosts: strings(row.hosts),
+          paths: strings(row.paths),
+          header: typeof row.header === "string" ? row.header : undefined,
+        });
     }
   }
   return map;
@@ -115,4 +143,22 @@ export async function ironToken(name: string): Promise<string | null> {
   const r = await run(["token", name], TIMEOUT.token);
   const token = r.out.replace(/\r?\n$/, "");
   return r.code === 0 && token && !/[\r\n\0]/.test(token) ? token : null;
+}
+
+/* register a provider on the iron host; the spec goes on stdin only */
+export async function ironProviderAdd(spec: IronSpec): Promise<boolean> {
+  if (!NAME.test(spec.name)) return false;
+  const r = await run(["provider-add", spec.name], TIMEOUT.add, JSON.stringify(spec));
+  ironForget();
+  return r.code === 0 && r.out.trim() === `ok ${spec.name}`;
+}
+
+/* the iron CA certificate (public) as PEM, or null */
+export async function ironCaPem(): Promise<string | null> {
+  const r = await run(["ca-pem"], TIMEOUT.ca);
+  const pem = r.out.trim();
+  const ok = /^-----BEGIN CERTIFICATE-----\n[A-Za-z0-9+/=\n]+\n-----END CERTIFICATE-----$/.test(
+    pem,
+  );
+  return r.code === 0 && ok ? pem + "\n" : null;
 }
