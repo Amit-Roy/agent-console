@@ -235,7 +235,13 @@ try {
       "Stop closes the pending prompt in every connected browser",
     );
 
-    ws.send(JSON.stringify({ t: "send", thread: id, text: "question composer reply fixture" }));
+    ws.send(
+      JSON.stringify({
+        t: "send",
+        thread: id,
+        text: "question composer reply fixture",
+      }),
+    );
     const chatRequest = (
       await wait((m) => m.t === "event" && m.thread === id && m.event.type === "question")
     ).event;
@@ -284,6 +290,91 @@ try {
       `PASS ${width}px question flow: keyboard/custom/multi-select, Back/reload, reconnect, completed summaries, stale/invalid replies, Skip, Stop and ordinary composer reply`,
     );
   }
+  // Reconnect replay: the cached view mounts the pending card, then the replayed event must not mount a twin.
+  ws.send(
+    JSON.stringify({
+      t: "create",
+      provider: "mock",
+      cwd: hello.dirs[0],
+      title: "Replay fixture",
+    }),
+  );
+  const replayId = (await wait((m) => m.t === "created")).thread.id;
+  ids.push(replayId);
+  ws.send(JSON.stringify({ t: "send", thread: replayId, text: "hello first" }));
+  await wait((m) => m.t === "event" && m.thread === replayId && m.event.type === "result");
+  const replayCtx = await browser.newContext({
+    viewport: { width: 390, height: 900 },
+    isMobile: true,
+    hasTouch: true,
+  });
+  await replayCtx.addCookies([
+    {
+      name: "__Host-ac_session",
+      value: makeToken(),
+      domain: new URL(base).hostname,
+      path: "/",
+      secure: true,
+    },
+  ]);
+  await replayCtx.addInitScript((id) => {
+    localStorage.setItem("ac_thread", id);
+    const Native = window.WebSocket;
+    (window as any).__socks = [];
+    (window as any).WebSocket = class extends Native {
+      constructor(...args: any[]) {
+        super(...(args as [any]));
+        (window as any).__socks.push(this);
+      }
+    };
+  }, replayId);
+  const replayPage = await replayCtx.newPage();
+  const replayErrors: string[] = [];
+  replayPage.on("pageerror", (e) => replayErrors.push(e.message));
+  await replayPage.goto(base);
+  await replayPage.waitForSelector(".msg.asst");
+  await replayPage.evaluate(() => {
+    const socks = (window as any).__socks;
+    const last = socks[socks.length - 1];
+    (window as any).__onclose = last.onclose;
+    last.onclose = null;
+    last.close();
+  });
+  ws.send(JSON.stringify({ t: "send", thread: replayId, text: "question" }));
+  const replayQuestion = (
+    await wait((m) => m.t === "event" && m.thread === replayId && m.event.type === "question")
+  ).event;
+  await replayPage.waitForTimeout(300);
+  await replayPage.evaluate(() => (window as any).__onclose?.({ code: 1006 }));
+  const replayCard = replayPage.locator(`.question-card[data-question-id="${replayQuestion.id}"]`);
+  await replayCard.first().waitFor();
+  await replayPage.waitForTimeout(2500);
+  assert.equal(await replayCard.count(), 1, "reconnect replay mounts exactly one question card");
+  assert.equal(
+    await replayPage.evaluate(() => {
+      const kids = [...document.querySelectorAll("#chat > *")];
+      const lastUser = kids.map((n) => n.matches(".msg.user")).lastIndexOf(true);
+      const at = kids.findIndex((n) => n.matches(".question-card"));
+      return lastUser >= 0 && at > lastUser;
+    }),
+    true,
+    "the card sits after the last user message",
+  );
+  await replayCard.getByRole("radio", { name: /Quick pass/ }).check();
+  await replayCard.getByRole("button", { name: "Continue", exact: true }).click();
+  await replayCard.getByRole("checkbox", { name: /Tests/ }).check();
+  await replayCard.getByRole("button", { name: "Send answer", exact: true }).click();
+  await wait((m) => m.t === "event" && m.thread === replayId && m.event.type === "result");
+  await replayPage.locator(".question-summary").first().waitFor();
+  if (process.env.REPLAY_SHOT)
+    await replayPage.screenshot({
+      path: process.env.REPLAY_SHOT,
+      fullPage: true,
+    });
+  assert.equal(await replayPage.locator(".question-summary").count(), 1, "one Answered summary");
+  assert.deepEqual(replayErrors, []);
+  await replayCtx.close();
+  console.log("PASS 390px reconnect replay mounts a single question card");
 } finally {
   for (const id of ids) ws.send(JSON.stringify({ t: "delete", thread: id }));
   ws.close();
