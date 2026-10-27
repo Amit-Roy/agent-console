@@ -315,6 +315,7 @@ done
 [ -f "$cookies" ] || exit 2
 case "$(cat "$(dirname "$0")/gmode" 2>/dev/null)" in
   login) echo "[instagram][error] HTTP redirect to login page (sessionid=SECRETSESSION)" >&2; exit 1 ;;
+  rate-limit) echo "[instagram][error] HttpError: 429 Too Many Requests" >&2; exit 1 ;;
 esac
 case "$range" in *-*) list="1 2 3" ;; *) list=$(echo "$range" | tr , ' ') ;; esac
 for i in $list; do
@@ -349,13 +350,15 @@ console.error = (...parts: unknown[]) => {
 };
 const galleryUrl = "https://www.instagram.com/p/GALLERY1111/";
 const galleryOut = galleryArgs(galleryUrl, "/tmp/stage", "/tmp/cookies.txt", []);
-assert.deepEqual(galleryOut.slice(0, 12), [
+assert.deepEqual(galleryOut.slice(0, 14), [
   "--config-ignore",
   "-q",
   "--no-part",
   "--no-mtime",
   "--http-timeout",
   "30",
+  "--retries",
+  "0",
   "--filesize-max",
   "100M",
   "--write-metadata",
@@ -363,6 +366,7 @@ assert.deepEqual(galleryOut.slice(0, 12), [
   "/tmp/cookies.txt",
   "-D",
 ]);
+assert.equal(galleryOut[galleryOut.indexOf("--retries") + 1], "0");
 assert.equal(galleryOut[galleryOut.indexOf("-D") + 1], "/tmp/stage");
 assert.equal(galleryOut[galleryOut.indexOf("-f") + 1], "{num}.{extension}");
 assert.equal(galleryOut[galleryOut.indexOf("--range") + 1], "1-10");
@@ -415,6 +419,12 @@ fs.writeFileSync(callFile("gmode"), "login");
 await assert.rejects(fetchProvider("IMAGE333333").run(), {
   message: COOKIES_EXPIRED_MESSAGE,
 });
+fs.writeFileSync(callFile("gmode"), "rate-limit");
+resetCalls();
+await assert.rejects(fetchProvider("LIMIT111111").run(), {
+  message: BLOCKED_MESSAGE,
+});
+assert.equal(calls("gcalls").length, 1, "rate-limited gallery-dl is not retried");
 fs.writeFileSync(callFile("gmode"), "ok");
 
 setMode("mixed");

@@ -135,6 +135,54 @@ try {
   const threads = JSON.parse(fs.readFileSync(path.join(data, "threads.json"), "utf8"));
   assert.equal(threads.length, 1, "only the dialog thread exists");
   assert.equal(threads[0].provider, "mock");
+  // A slow Instagram failure keeps the source link and existing draft, even after the toast expires.
+  await page.locator("#input").fill("Existing notes");
+  const failed = await open();
+  const failurePage = failed.page;
+  await failurePage.clock.install();
+  let releaseFailure: () => Promise<void> = async () => {};
+  const requested = new Promise<void>((resolve) => {
+    failurePage.route("**/api/share", (route) => {
+      releaseFailure = () =>
+        route.fulfill({ status: 422, json: { error: "Instagram download failed." } });
+      resolve();
+    });
+  });
+  const threadId = threads[0].id;
+  await failurePage.locator("#threads > li").first().click();
+  await requested;
+  const expectedDraft = `Existing notes\n${decodeURIComponent(link)}`;
+  assert.equal(await failurePage.locator("#input").evaluate((input) => input.value), expectedDraft);
+  await failurePage.clock.fastForward(4000);
+  assert.match(
+    (await failurePage.locator("#banner:visible").textContent()) || "",
+    /Fetching shared link/,
+  );
+  assert.equal(
+    await failurePage.evaluate((thread) => localStorage.getItem(`ac_draft:${thread}`), threadId),
+    expectedDraft,
+  );
+  await failurePage.locator("#input").fill(`${expectedDraft}\nKeep my edit`);
+  await releaseFailure();
+  await failurePage.getByText(/Instagram download failed\. Original link kept/).waitFor();
+  await failurePage.clock.fastForward(4000);
+  assert.match(
+    (await failurePage.locator("#banner:visible").textContent()) || "",
+    /Original link kept/,
+  );
+  assert.equal(
+    await failurePage.locator("#input").evaluate((input) => input.value),
+    `${expectedDraft}\nKeep my edit`,
+  );
+  if (shot) await failurePage.screenshot({ path: path.join(shot, "instagram-failure.png") });
+  await failurePage.reload();
+  await failurePage.locator("#input").waitFor();
+  await failurePage.waitForFunction(
+    (draft) => document.querySelector("#input")?.value === draft,
+    `${expectedDraft}\nKeep my edit`,
+  );
+  assert.deepEqual(failed.sends, [], "failed import never sends");
+  assert.deepEqual(failed.errors, []);
   console.log("share-ui ok");
 } finally {
   await closeBrowser();
