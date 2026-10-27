@@ -505,6 +505,10 @@ function ensure(ctx, thread, host = ctx.root()) {
   refreshCards(ctx, host);
 }
 
+export function find(host, id) {
+  return host?.querySelector(`.question-card[data-question-id="${CSS.escape(id)}"]`) || null;
+}
+
 export function createQuestions({ send, root, changed }) {
   const ctx = {
     entries: new Map(),
