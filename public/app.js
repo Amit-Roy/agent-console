@@ -10,7 +10,7 @@ import { createHostCard } from "/host-card.js";
 import { createMenu } from "/menu.js";
 import { setupNotifications } from "/notifications.js";
 import { createPromptImprove } from "/prompt-improve.js";
-import { createQuestions } from "/questions.js";
+import { createQuestions, find as findQuestionCard } from "/questions.js";
 import {
   $,
   el,
@@ -3525,23 +3525,22 @@ const AUTO_NOTES = {
   subagent: "Background subagent finished. Its result was sent to the agent.",
 };
 
-function hasQuestionCard(host, id) {
-  return [...host.querySelectorAll(".question-card")].some(
-    (card) => card.dataset.questionId === id,
-  );
+function existingQuestionCard(id) {
+  return findQuestionCard(state.into || $("chat"), id) || findQuestionCard($("chat"), id);
 }
 
+// A replayed question may already be mounted by showCachedView: move that card, never mount a twin.
 function onQuestionEvent(event, ctx) {
-  push(questions.mount(state.current, event), ctx.live);
+  const card = existingQuestionCard(event.id);
+  push(card || questions.mount(state.current, event), ctx.live);
+  if (card) questions.refresh(state.into || $("chat"));
 }
 
 function onQuestionAnswer(event, ctx) {
   questions.receive(state.current, event);
-  const host = state.into || $("chat");
-  const exists = hasQuestionCard(host, event.id);
-  if (!exists && !hasQuestionCard($("chat"), event.id))
-    push(questions.mount(state.current, event), ctx.live);
-  questions.refresh(host);
+  const card = existingQuestionCard(event.id);
+  if (!card) push(questions.mount(state.current, event), ctx.live);
+  questions.refresh(state.into || $("chat"));
 }
 
 function onCommandStatus(event, ctx) {
