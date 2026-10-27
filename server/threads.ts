@@ -2109,6 +2109,7 @@ export class Threads {
     return !!(
       thread.waiting ||
       thread.issueRun ||
+      thread.schedule ||
       thread.quotaPaused ||
       thread.usageStop ||
       thread.archived

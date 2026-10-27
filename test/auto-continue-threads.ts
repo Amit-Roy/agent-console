@@ -139,6 +139,22 @@ try {
   expectNone("issue run", (threadId) => {
     threads.get(threadId).issueRun = { repo: "o/r", number: 1 };
   });
+  expectNone("scheduled run", (threadId) => {
+    threads.get(threadId).schedule = { task: "digest", run: "scheduled" };
+  });
+
+  const scheduledLate = start("schedule assigned before continuation");
+  const beforeScheduledLate = nudges();
+  say(scheduledLate.id, ANNOUNCE);
+  emit(scheduledLate.id, { type: "result", subtype: "success" });
+  mock.timers.tick(200);
+  scheduledLate.schedule = { task: "digest", run: "late" };
+  mock.timers.tick(100);
+  assert.equal(
+    nudges(),
+    beforeScheduledLate,
+    "schedule assigned before the continuation callback blocks the nudge",
+  );
   expectNone("pending background bash", (threadId) =>
     emit(threadId, {
       type: "assistant",
