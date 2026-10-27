@@ -10,7 +10,7 @@ export type IronSpec = {
   require?: boolean;
   allowAllPaths?: boolean;
 };
-export type IronPreset = { label: string; spec: IronSpec };
+export type IronPreset = { id: string; label: string; spec: IronSpec };
 
 export class SpecError extends Error {}
 
@@ -31,6 +31,7 @@ const preset = (
   header: string,
   prefix: string,
 ): IronPreset => ({
+  id: label.toLowerCase(),
   label,
   spec: { name, envVars, rules: [{ host, paths: [path] }], header, prefix },
 });
@@ -64,6 +65,7 @@ export const presets = (): IronPreset[] => [
     "sk-ant-px-",
   ),
   {
+    id: "custom",
     label: "Custom",
     spec: {
       name: "",

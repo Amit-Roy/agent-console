@@ -532,8 +532,8 @@ try {
   const presetRes = await api("GET", "/iron/presets");
   assert.equal(presetRes.status, 200);
   assert.deepEqual(
-    presetRes.json.presets.map((p: any) => p.label),
-    ["Cloudflare", "OpenAI", "Anthropic", "Custom"],
+    presetRes.json.presets.map((preset: any) => `${preset.id}:${preset.label}`),
+    ["cloudflare:Cloudflare", "openai:OpenAI", "anthropic:Anthropic", "custom:Custom"],
   );
   const provBody = {
     spec: {
