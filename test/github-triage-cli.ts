@@ -1,13 +1,15 @@
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { TriageCliCleanup } from "./helpers/triage-cli-cleanup.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "ac-triage-cli-"));
+const cleanup = new TriageCliCleanup(path.join(root, "scripts/github-triage.ts"));
+cleanup.installHooks();
 const fixtureBin = path.join(scratch, "bin");
 fs.mkdirSync(fixtureBin);
 // Each GitHub API request launches this fixture, so use a minimal Python process.
@@ -93,9 +95,10 @@ const makeFixture = async (name: string) => {
     NODE_COMPILE_CACHE: process.env.NODE_COMPILE_CACHE || path.join(scratch, "compile-cache"),
   };
   delete env.AGENT_CONSOLE_MOCK;
+  cleanup.register(name, runtime, env);
   const cli = (...args: string[]) =>
     new Promise<string>((resolve, reject) => {
-      execFile(
+      cleanup.execFile(
         process.execPath,
         [path.join(root, "scripts/github-triage.ts"), ...args],
         { cwd: root, env, timeout: 25_000 },
@@ -277,7 +280,7 @@ const calibrationRun = (spec: CalibrationCase) =>
     if (spec.preseed) fs.writeFileSync(model, "old-model", { mode: 0o600 });
     if (spec.dataset !== undefined)
       fs.writeFileSync(path.join(path.dirname(model), "triage-effort-training.json"), spec.dataset);
-    execFile(
+    cleanup.execFile(
       process.execPath,
       [path.join(root, "scripts/github-triage.ts"), "calibrate"],
       {
@@ -310,7 +313,7 @@ try {
   // Independent scenarios start now and run alongside the worker-lifecycle flow below.
   const retainedFailure = assert.rejects(
     new Promise<void>((resolve, reject) => {
-      execFile(
+      cleanup.execFile(
         process.execPath,
         [path.join(root, "scripts/github-triage.ts"), "calibrate"],
         {
@@ -372,9 +375,10 @@ try {
       "AGENT_CONSOLE_DATA",
     ])
       delete watchEnv[key];
+    cleanup.register("home-watchdog", homeRun, watchEnv);
     const watchdog = () =>
       new Promise<void>((resolve, reject) => {
-        execFile(
+        cleanup.execFile(
           process.execPath,
           [path.join(root, "scripts/github-triage.ts"), "watchdog"],
           { cwd: root, env: watchEnv, timeout: 25_000 },
@@ -704,11 +708,11 @@ try {
     "GitHub triage CLI: watchdog recovery, owner discovery, safe configuration, webhook registration, and weekly effort calibration passed.",
   );
 } finally {
-  await ownerFixture?.cli("stop").catch(() => {});
-  await cli("stop").catch(() => {
-    try {
-      process.kill(workerPid(), "SIGKILL");
-    } catch {}
-  });
-  fs.rmSync(scratch, { recursive: true, force: true });
+  const cleaned = await cleanup.shutdown();
+  cleanup.removeHooks();
+  if (cleaned) fs.rmSync(scratch, { recursive: true, force: true });
+  else {
+    console.error(`Triage cleanup failed; preserved fixture logs at ${scratch}`);
+    process.exitCode = 1;
+  }
 }
