@@ -5080,20 +5080,37 @@ async function maybeShareLink() {
     let choice = await pickShareTarget();
     if (choice === "") choice = await createShareThread();
     if (choice === null) return void toast("Share cancelled");
-    toast("Fetching link…");
+    await prepareShareDraft(choice, url || text);
     const response = await apiFetch("/api/share", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ text, url, title, thread: choice }),
     });
     const body = await response.json().catch(() => ({}));
-    if (!response.ok || !body.thread) return void toast(body.error || "Could not fetch that link.");
+    if (!response.ok || body.thread !== choice)
+      throw new Error(body.error || "Could not fetch that link.");
     await fillShareDraft(body);
   } catch (error) {
-    toast(error.message || "Could not fetch that link.");
+    shareFailure(error);
   } finally {
     sharingLink = false;
   }
+}
+function shareFailure(error) {
+  if (!signedOut)
+    banner(`${error.message || "Could not fetch that link."} Original link kept in the draft.`, {
+      label: "Dismiss",
+      run: () => banner(""),
+    });
+}
+async function prepareShareDraft(thread, text) {
+  if (!(await waitForThread(thread))) throw new Error("The shared thread did not load.");
+  openThread(thread);
+  const box = $("input");
+  box.value = box.value.trim() ? `${box.value}\n${text}` : text;
+  saveDraft();
+  sizeInput();
+  if (!signedOut) banner("Fetching shared link… Original link saved in the draft.");
 }
 function handleCreated(threadId) {
   if (shareCreate?.submitted) return resolveShareCreate(threadId);
@@ -5142,9 +5159,10 @@ async function waitForThread(id) {
 async function fillShareDraft(body) {
   const thread = body.thread;
   if (!(await waitForThread(thread))) return void toast("Shared, but the thread did not load.");
-  openThread(thread);
   const box = $("input");
-  box.value = box.value.trim() ? `${box.value}\n${body.prompt || ""}` : body.prompt || "";
+  const text = state.current === thread ? box.value : drafts.get(thread) || "";
+  const draft = text.trim() ? `${text}\n${body.prompt || ""}` : body.prompt || "";
+  writeDraft(thread, draft);
   const list = attachmentDrafts.get(thread) || [];
   attachmentDrafts.set(thread, list);
   const saved = [];
@@ -5168,11 +5186,12 @@ async function fillShareDraft(body) {
   if (state.current === thread) {
     pending = list;
     renderThumbs();
+    box.value = draft;
+    sizeInput();
+    box.focus();
   }
-  saveDraft();
-  sizeInput();
-  box.focus();
   await Promise.all(saved);
+  if (!signedOut) banner("");
 }
 // Share mode: the left drawer doubles as the target picker. Resolves "" for a new thread, a thread id, or null when cancelled.
 function finishShare(value) {

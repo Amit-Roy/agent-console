@@ -28,6 +28,8 @@ export function galleryArgs(
     "--no-mtime",
     "--http-timeout",
     "30",
+    "--retries",
+    "0",
     "--filesize-max",
     "100M",
     "--write-metadata",
