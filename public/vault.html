@@ -35,6 +35,13 @@
   <form id="edit-form" autocomplete="off">
     <h2 id="edit-title">Replace key</h2>
     <p class="sub" id="edit-sub"></p>
+    <fieldset class="vseg" id="store-wrap" hidden>
+      <legend class="vseg-l">Storage</legend>
+      <div class="vseg-b">
+        <button type="button" class="vseg-o" id="st-disk" aria-pressed="true">Disk</button>
+        <button type="button" class="vseg-o" id="st-iron" aria-pressed="false">Iron proxy</button>
+      </div>
+    </fieldset>
     <label class="fld" id="where-wrap"><span>Where</span>
       <select class="input" id="where"></select></label>
     <div class="vnew" id="new-wrap" hidden>
@@ -42,6 +49,25 @@
         <select class="input" id="new-type"><option value="env">Env file (home folder)</option><option value="github">GitHub repo</option></select></label>
       <label class="fld"><span id="new-label">File path</span>
         <input class="input" id="new-val" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" maxlength="300" placeholder="~/project/.env"></label>
+    </div>
+    <div class="viron" id="iron-wrap" hidden>
+      <label class="fld"><span>Provider</span>
+        <select class="input" id="ir-preset"></select></label>
+      <label class="fld"><span>Name</span>
+        <input class="input" id="ir-name" type="text" autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false" maxlength="64" placeholder="CLOUDFLARE"></label>
+      <label class="fld"><span>Env aliases (comma list)</span>
+        <input class="input" id="ir-env" type="text" autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false" maxlength="300" placeholder="CLOUDFLARE_API_TOKEN, CF_API_TOKEN"></label>
+      <fieldset class="vrules"><legend>Allowed hosts and paths</legend>
+        <div id="ir-rules"></div>
+        <button type="button" class="btn sm" id="ir-addrule">Add host</button>
+      </fieldset>
+      <label class="fld"><span>Header</span>
+        <select class="input" id="ir-header"><option>Authorization</option><option>X-Api-Key</option><option>Api-Key</option><option>X-Auth-Token</option></select></label>
+      <label class="fld"><span>Placeholder prefix</span>
+        <input class="input" id="ir-prefix" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" maxlength="40" placeholder="Bearer "></label>
+      <p class="vsum" id="ir-sum" role="status"></p>
+      <p class="vwarn" id="ir-warn" hidden>This lets the key reach every path on the host.</p>
+      <label class="vchk" id="ir-all-wrap" hidden><input type="checkbox" id="ir-all"><span>I understand: allow all paths</span></label>
     </div>
     <label class="fld" id="name-wrap" hidden><span>Key name</span>
       <input class="input" id="name" type="text" autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false" maxlength="128" placeholder="OPENAI_API_KEY"></label>

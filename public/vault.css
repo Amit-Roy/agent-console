@@ -322,3 +322,124 @@ select.input {
   color: var(--t3);
   background: color-mix(in srgb, var(--t3) 14%, transparent);
 }
+
+/* storage toggle + iron-proxy provider form */
+.vseg {
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  display: grid;
+  gap: var(--sp-1);
+  margin: var(--sp-3) 0 0;
+}
+.vseg[hidden],
+.viron[hidden],
+.vwarn[hidden],
+.vchk[hidden] {
+  display: none;
+}
+.vseg-l {
+  padding: 0;
+  margin-bottom: var(--sp-1);
+  color: var(--t2);
+  font: var(--fw-med) var(--f-sm);
+}
+.vseg-b {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--r-sm);
+  background: var(--s2);
+}
+.vseg-o {
+  flex: 1;
+  min-height: 44px;
+  border: 0;
+  border-radius: calc(var(--r-sm) - 2px);
+  background: transparent;
+  color: var(--t2);
+  font: var(--fw-med) var(--f-sm);
+  cursor: pointer;
+  transition:
+    background-color var(--dur-1) var(--ease),
+    color var(--dur-1) var(--ease);
+}
+.vseg-o[aria-pressed="true"] {
+  background: var(--s1);
+  color: var(--t1);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.12);
+}
+.vseg-o:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.viron {
+  min-width: 0;
+}
+.vrules {
+  min-width: 0;
+  margin: var(--sp-3) 0 0;
+  padding: 0;
+  border: 0;
+  display: grid;
+  gap: var(--sp-2);
+}
+.vrules legend {
+  padding: 0;
+  margin-bottom: var(--sp-1);
+  color: var(--t2);
+  font: var(--fw-med) var(--f-sm);
+}
+.vrule {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-3);
+  padding-bottom: var(--sp-3);
+  border-bottom: 1px solid var(--edge);
+}
+.vrule .input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  font-family: var(--font-mono);
+}
+.vrule .input:first-child {
+  grid-column: 1 / -1;
+}
+.vrule .btn {
+  grid-column: 2;
+  grid-row: 2;
+}
+.vsum {
+  margin: var(--sp-3) 0 0;
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--r-sm);
+  background: var(--s2);
+  color: var(--t2);
+  font: var(--fw-reg) var(--f-sm);
+  overflow-wrap: anywhere;
+}
+.vwarn {
+  margin: var(--sp-2) 0 0;
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid color-mix(in srgb, var(--bad) 45%, var(--edge));
+  border-radius: var(--r-sm);
+  background: color-mix(in srgb, var(--bad) 12%, transparent);
+  color: var(--bad);
+  font: var(--fw-med) var(--f-sm);
+}
+.vchk {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: 44px;
+  margin-top: var(--sp-1);
+  color: var(--t1);
+  font: var(--fw-reg) var(--f-sm);
+}
+.vchk input {
+  width: 1.25rem;
+  height: 1.25rem;
+  accent-color: var(--bad);
+}
