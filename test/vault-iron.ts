@@ -94,7 +94,11 @@ try {
   // classification before: managed keys hold a real key
   assert.ok(await ironStatus());
   assert.equal(await proxyOf("DEEPSEEK_API_KEY"), "real-key");
-  assert.equal(await proxyOf("DEEPSEEK_NEFRO_DEV"), "real-key", "managed alias shows despite a non-secret name");
+  assert.equal(
+    await proxyOf("DEEPSEEK_NEFRO_DEV"),
+    "real-key",
+    "managed alias shows despite a non-secret name",
+  );
   assert.equal(await proxyOf("OPENAI_API_KEY"), "unproxied");
   assert.ok(!JSON.stringify(await listVault()).includes(REALKEY), "list carries no values");
 
