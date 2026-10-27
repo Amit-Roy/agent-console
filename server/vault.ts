@@ -563,7 +563,8 @@ async function listSource(
     if (s.kind === "env" || s.kind === "virtual")
       entries = entries.map((e) => ({ ...e, proxy: e.proxy ?? "unproxied" }));
     if ((s.kind === "env" || s.kind === "virtual") && !showAll)
-      entries = entries.filter((e) => SECRETISH.test(e.key));
+      // iron-managed keys always show, whatever their name
+      entries = entries.filter((entry) => SECRETISH.test(entry.key) || entry.proxy !== "unproxied");
     entries.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
     return { ...base, entries };
   } catch (e) {
