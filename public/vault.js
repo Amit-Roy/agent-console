@@ -8,11 +8,16 @@ const el = (tag, cls, text) => {
   if (text != null) n.textContent = text;
   return n;
 };
+
+import { readNdjsonStream } from "/step-timeline.js";
+import { createVaultSteps } from "/vault-steps.js";
+
 const state = {
   backup: null,
   groups: [],
   pk: { known: false, enrolled: 0, passkeys: [] },
   restart: false,
+  ironJob: null,
 };
 const SECRETISH = /(KEY|TOKEN|SECRET|PASS|AUTH|CRED|PRIVATE|DSN|URL)/i;
 let toastTimer;
@@ -70,23 +75,55 @@ async function stepUp(setWait) {
     setWait(false);
   }
 }
+/* a 401 stepUp reply: prompt the passkey once (caller retries the request) */
+async function grantStepUp(setWait) {
+  try {
+    await stepUp(setWait);
+  } catch (e) {
+    throw e.name === "NotAllowedError" ? new Error("Passkey cancelled.") : e;
+  }
+}
+function needsEnroll(reply) {
+  if (reply.enrolled) return false;
+  openEnroll();
+  throw new Error("Set up a passkey first.");
+}
 /* a write: try, and on 401 prompt the passkey once and retry */
 async function write(method, path, body, setWait = () => {}) {
   let r = await call(method, path, body);
   if (r.status === 401 && r.j.stepUp) {
-    if (!r.j.enrolled) {
-      openEnroll();
-      throw new Error("Set up a passkey first.");
-    }
-    try {
-      await stepUp(setWait);
-    } catch (e) {
-      throw e.name === "NotAllowedError" ? new Error("Passkey cancelled.") : e;
-    }
+    needsEnroll(r.j);
+    await grantStepUp(setWait);
     r = await call(method, path, body);
   }
   if (!r.ok) throw fail(r);
   return r.j;
+}
+const sendNdjson = (method, path, body) =>
+  fetch(path, {
+    method,
+    headers: { "Content-Type": "application/json", Accept: "application/x-ndjson" },
+    body: body ? JSON.stringify(body) : undefined,
+    cache: "no-store",
+  });
+/* a streaming write: same step-up rule; NDJSON goes to onMessage, a plain JSON reply is returned */
+async function writeStream(method, path, body, setWait, onMessage) {
+  let r = await sendNdjson(method, path, body);
+  if (r.status === 401) {
+    const j = await r
+      .clone()
+      .json()
+      .catch(() => ({}));
+    if (j.stepUp) {
+      needsEnroll(j);
+      await grantStepUp(setWait);
+      r = await sendNdjson(method, path, body);
+    }
+  }
+  if (!r.ok) throw fail({ status: r.status, j: await r.json().catch(() => ({})) });
+  if (!(r.headers.get("content-type") || "").includes("ndjson")) return r.json();
+  await readNdjsonStream(r, onMessage);
+  return undefined;
 }
 
 /* ---------- render ---------- */
@@ -220,6 +257,7 @@ async function load() {
     if (!v.ok) throw fail(v);
     state.groups = v.j.sources || [];
     state.backup = v.j.backup || null;
+    state.ironJob = v.j.ironJob || null;
     if (p.ok) state.pk = { known: true, enrolled: p.j.enrolled, passkeys: p.j.passkeys || [] };
     $("vmsg").hidden = true;
   } catch (e) {
@@ -232,6 +270,12 @@ async function load() {
   renderGroups();
   renderPasskeys();
   showRestart();
+  reopenIronJob();
+}
+function reopenIronJob() {
+  const job = state.ironJob;
+  if (!job || $("vs").open || steps.dismissed() === job.job) return;
+  if (!job.done || job.ok === false) steps.showSnapshot(job);
 }
 
 /* ---------- reveal (shown only for rows the server marks viewable) ---------- */
@@ -255,6 +299,37 @@ async function reveal(g, e, r, n) {
 let cur = null;
 const edit = $("edit"),
   value = $("value");
+const steps = createVaultSteps({
+  onSetOk: () => {
+    value.value = "";
+  },
+  onFinished(done) {
+    if (edit.open) closeEdit();
+    if (done.restartNeeded) state.restart = true;
+    const warnings = done.warnings || [];
+    toast(
+      `Saved to iron-proxy.${warnings.length ? ` ${warnings.join(" ")}` : ""}`,
+      warnings.length ? "" : "ok",
+    );
+    void load();
+  },
+  onDismiss() {
+    $("edit-save").disabled = false;
+    $("edit-wait").hidden = true;
+  },
+  focusForm() {
+    if (edit.open) value.focus();
+    else toast("Enter the value again to retry.", "bad");
+  },
+  retryVerify: (onMessage) =>
+    writeStream("POST", "/api/vault/iron/job/retry", undefined, () => {}, onMessage),
+  async poll() {
+    const reply = await call("GET", "/api/vault");
+    return reply.ok ? reply.j.ironJob || null : null;
+  },
+});
+const isIronManaged = (entry) =>
+  !!entry && (entry.proxy === "proxied" || entry.proxy === "real-key");
 function closeEdit() {
   value.value = "";
   $("ir-all").checked = false;
@@ -488,9 +563,13 @@ async function submitIron() {
   try {
     if (hasAllPaths()) spec.allowAllPaths = true;
     const body = { spec, value: value.value };
-    const reply = await write("POST", "/api/vault/iron/providers", body, (w) => {
+    const wait = (w) => {
       $("edit-wait").hidden = !w;
-    });
+    };
+    const reply = await steps.run(`Saving ${spec.name}`, (onMessage) =>
+      writeStream("POST", "/api/vault/iron/providers", body, wait, onMessage),
+    );
+    if (!reply) return;
     closeEdit();
     const warnings = reply.warnings || [];
     const warn = warnings.length ? ` ${warnings.join(" ")}` : "";
@@ -549,12 +628,13 @@ $("edit-form").addEventListener("submit", async (ev) => {
           wait,
         )
       ).id;
-    const j = await write(
-      "PUT",
-      `/api/vault/${encodeURIComponent(id)}/${encodeURIComponent(key)}`,
-      { value: value.value },
-      wait,
-    );
+    const path = `/api/vault/${encodeURIComponent(id)}/${encodeURIComponent(key)}`;
+    const j = isIronManaged(cur.e)
+      ? await steps.run(`Replacing ${key}`, (onMessage) =>
+          writeStream("PUT", path, { value: value.value }, wait, onMessage),
+        )
+      : await write("PUT", path, { value: value.value }, wait);
+    if (!j) return;
     closeEdit();
     if (j.restartNeeded) state.restart = true;
     const note = j.proxied
