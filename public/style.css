@@ -3506,7 +3506,8 @@ dialog .sub {
   margin-top: var(--sp-6);
 }
 /* Premium assignment timeline: a rail through one node per step; the rail fills as each step completes. */
-#ap {
+#ap,
+.ap-dlg {
   width: min(30rem, calc(100vw - var(--sp-8)));
 }
 .ap-steps {
@@ -3627,6 +3628,18 @@ dialog .sub {
 .ap-step[data-state="done"] .mark .ok,
 .ap-step[data-state="failed"] .mark .no {
   opacity: 1;
+}
+.ap-node .mark .skip {
+  stroke: var(--t3);
+}
+.ap-step[data-state="skipped"] .mark .skip {
+  opacity: 1;
+}
+.ap-step[data-state="skipped"] .ap-label {
+  color: var(--t3);
+}
+.ap-step[data-state="skipped"] .ap-label::after {
+  content: " (skipped)";
 }
 .ap-label {
   flex: 1;
