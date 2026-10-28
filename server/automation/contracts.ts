@@ -324,7 +324,7 @@ export const FLOW: { nodes: FlowNode[]; edges: FlowEdge[]; pipelines: Pipeline[]
       label: "Promotion gate",
       icon: "scale",
       kind: "gate",
-      hint: "p80 coverage 0.75 to 0.92, p95 coverage at least 0.90, beats the pinball baseline, mean pinball at most 1.02 times the champion on the same held-out rows (bootstrap when the champion cannot be scored). Rejected: the current model stays. Off: absolute bounds only",
+      hint: "Coverage targets: p80 0.75–0.92, p95 ≥0.90. Misses allow two standard errors relative to champion accuracy, or sampling noise around 0.80/0.95 without a scoreable champion. Hard bounds always apply: p80 0.60–0.98, p95 ≥0.80. Must beat the pinball baseline. Champion comparison needs at least 20 eligible held-out rows: paired bootstrap must not show statistically worse pinball (90% interval), with a 1.10× cap; without a paired result, the cap is 1.02×. Bootstrap mode means champion comparison is skipped when unscoreable. Rejected: the current model stays. Off: skip champion comparison; coverage and baseline checks still apply.",
     },
     {
       id: "effort_promote",
