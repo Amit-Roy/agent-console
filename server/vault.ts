@@ -17,6 +17,21 @@ import {
   KNOWN_MANAGED,
 } from "./vault-iron.ts";
 import { createPasskeys } from "./vault-passkey.ts";
+import {
+  beginJob,
+  ERR,
+  failSave,
+  ironJobSnapshot,
+  type Job,
+  type JobKind,
+  jobBusy,
+  ndjsonStream,
+  resumeJob,
+  type Sink,
+  startTail,
+  stepDone,
+  stepStart,
+} from "./vault-save-job.ts";
 
 // Vault: write-only management of API tokens (env files, single-value files, GitHub Actions secrets).
 // Secret values are never read back out to a client, a log or an error: lists carry metadata only.
@@ -584,7 +599,7 @@ export async function listVault(opts: { mine?: boolean } = {}) {
   const out = await Promise.all(
     [...srcs, ...extraGroups(all, srcs)].map((s) => listSource(s, all, showAll, opts, iron)),
   );
-  return { sources: out, backup: backupStatus() };
+  return { sources: out, backup: backupStatus(), ironJob: ironJobSnapshot() };
 }
 
 function find(id: string): Source {
@@ -675,19 +690,41 @@ async function writeIronToken(s: Source, key: string, iron: IronMap) {
   for (const [alias] of aliases) writeEnv(s.file!, alias, token);
 }
 
-async function setProxied(s: Source, key: string, v: string) {
+function openSave(kind: JobKind, progress: Sink) {
+  if (jobBusy()) throw new VaultError(409, "Another key save is still running.");
+  return beginJob(kind, progress);
+}
+
+async function replaceOnIron(s: Source, key: string, v: string): Promise<string> {
   const iron = await ironStatus();
-  if (!iron) throw new VaultError(502, "iron unreachable, nothing saved");
+  if (!iron) throw new VaultError(502, ERR.unreachable);
   const entry = iron.get(key);
-  if (!entry || !(await ironSet(entry.name, v))) throw new VaultError(502, "iron set failed");
+  if (!entry || !(await ironSet(entry.name, v))) throw new VaultError(502, ERR.setFailed);
   if (s.kind === "env") await writeIronToken(s, key, iron);
+  return entry.name;
+}
+
+async function setProxied(s: Source, key: string, v: string, progress?: Sink) {
+  const job = progress ? openSave("replace", progress) : null;
+  stepStart(job, "set");
+  let name: string;
+  try {
+    name = await replaceOnIron(s, key, v);
+  } catch (e) {
+    if (!job) throw e;
+    failSave(job, e instanceof VaultError ? e.message : ERR.setFailed);
+    return { ok: false };
+  }
   audit("set", s, key);
-  scheduleBackup();
-  return {
-    ok: true,
-    proxied: true,
-    ...(ownEnv(s) ? { restartNeeded: true } : {}),
-  };
+  const result = { ok: true, proxied: true, ...(ownEnv(s) ? { restartNeeded: true } : {}) };
+  if (!job) {
+    scheduleBackup();
+    return result;
+  }
+  job.name = name;
+  stepDone(job, "set");
+  startTail(job, { restartNeeded: ownEnv(s) });
+  return result;
 }
 
 function alertProvider(name: string, hosts: string[], c: Client) {
@@ -711,37 +748,67 @@ function checkProviderSpec(raw: unknown, iron: IronMap | null): IronSpec {
   }
 }
 
+async function storeProvider(s: Source, spec: IronSpec, v: string, job: Job | null) {
+  stepStart(job, "provider");
+  if (!(await ironProviderAdd(spec))) throw new VaultError(502, ERR.providerFailed);
+  stepDone(job, "provider");
+  stepStart(job, "set");
+  if (!(await ironSet(spec.name, v))) throw new VaultError(502, ERR.setFailed);
+  const iron = await ironStatus();
+  if (!iron || !spec.envVars.every((k) => iron.has(k))) throw new VaultError(502, ERR.setFailed);
+  for (const alias of spec.envVars) await writeIronToken(s, alias, iron);
+  stepDone(job, "set");
+}
+
 /* add a provider on iron, store its real value there, and put only the proxy token in the env file */
-export async function addIronProvider(rawSpec: unknown, value: unknown, c: Client = NOBODY) {
+export async function addIronProvider(
+  rawSpec: unknown,
+  value: unknown,
+  c: Client = NOBODY,
+  progress?: Sink,
+) {
   checkValue(value);
   return serial(async () => {
     const s = sources().find(ownEnv);
     if (!s) throw new VaultError(400, "No env file to hold the proxy token.");
     const v = checkValue(value);
     const spec = checkProviderSpec(rawSpec, await ironStatus());
-    if (!(await ironProviderAdd(spec))) throw new VaultError(502, "iron provider add failed");
-    if (!(await ironSet(spec.name, v))) throw new VaultError(502, "iron set failed");
-    const iron = await ironStatus();
-    if (!iron || !spec.envVars.every((k) => iron.has(k)))
-      throw new VaultError(502, "iron set failed");
-    for (const alias of spec.envVars) await writeIronToken(s, alias, iron);
+    const job = progress ? openSave("add", progress) : null;
+    try {
+      await storeProvider(s, spec, v, job);
+    } catch (e) {
+      if (!job) throw e;
+      failSave(job, e instanceof VaultError ? e.message : ERR.setFailed);
+      return { ok: false };
+    }
     const hosts = specHosts(spec);
     audit("add-provider", s, `${spec.name} ${hosts.join(",")}`);
+    stepStart(job, "pins");
     const warnings = await refreshEgress(hosts);
-    scheduleBackup();
     alertProvider(spec.name, hosts, c);
+    if (job) {
+      job.name = spec.name;
+      stepDone(job, "pins");
+      startTail(job, { restartNeeded: true, warnings });
+    } else scheduleBackup();
     return { ok: true, name: spec.name, hosts, warnings, restartNeeded: true };
   });
 }
 
-export function setSecret(id: string, key: string, value: unknown, c: Client = NOBODY) {
+export function setSecret(
+  id: string,
+  key: string,
+  value: unknown,
+  c: Client = NOBODY,
+  progress?: Sink,
+) {
   const s = find(id);
   checkKey(s, key);
   checkValue(value);
   return serial(async () => {
     const iron = await ironStatus();
     const v = checkValue(value); // again, now that the token list is fresh
-    if (s.kind === "env" && isManaged(iron, key)) return setProxied(s, key, v);
+    if (s.kind === "env" && isManaged(iron, key)) return setProxied(s, key, v, progress);
     const x = await extraAt(s, key);
     if (x) setExtra(s, key, v, c);
     else await setReal(s, key, v);
@@ -931,6 +998,33 @@ export function revealSecret(id: string, key: string, c: Client) {
 }
 
 /* ---------- routes ---------- */
+// Asking for NDJSON streams the save steps; without it the old JSON answer stays as is.
+const live =
+  (handler: (req: express.Request, sink?: Sink) => Promise<any>): express.RequestHandler =>
+  async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    const wantsLive = String(req.headers.accept).includes("application/x-ndjson");
+    const stream = ndjsonStream(res);
+    try {
+      const out = await handler(req, wantsLive ? stream.sink : undefined);
+      if (!stream.started()) res.json(out);
+    } catch (caught: any) {
+      const known = caught instanceof VaultError;
+      if (stream.started())
+        stream.sink({ t: "error", error: known ? caught.message : ERR.setFailed });
+      else
+        res.status(known ? caught.status : 500).json({
+          error: known ? caught.message : "The vault is unavailable.",
+        });
+    }
+  };
+
+async function retryJobHandler(_req: express.Request, sink?: Sink) {
+  const outcome = resumeJob(sink ?? (() => {}));
+  if (outcome === "busy") throw new VaultError(409, "Another key save is still running.");
+  if (outcome === "none") throw new VaultError(409, "No key save to retry.");
+  return { ok: true, ironJob: ironJobSnapshot() };
+}
 const parseJson = express.json({ limit: "16kb" });
 export function mountVault(app: express.Express, sameOrigin: express.RequestHandler) {
   // Fixed messages only: a parser error can quote the body, which may hold a secret.
@@ -991,15 +1085,18 @@ export function mountVault(app: express.Express, sameOrigin: express.RequestHand
     sameOrigin,
     pk.requireGrant(true),
     body,
-    guard((req) => addIronProvider(req.body?.spec, req.body?.value, client(req))),
+    live((req, sink) => addIronProvider(req.body?.spec, req.body?.value, client(req), sink)),
   );
   app.put(
     "/api/vault/:source/:key",
     sameOrigin,
     pk.requireGrant(false),
     body,
-    guard((req) => setSecret(req.params.source, req.params.key, req.body?.value, client(req))),
+    live((req, sink) =>
+      setSecret(req.params.source, req.params.key, req.body?.value, client(req), sink),
+    ),
   );
+  app.post("/api/vault/iron/job/retry", sameOrigin, pk.requireGrant(false), live(retryJobHandler));
   app.post(
     "/api/vault/backup/retry",
     sameOrigin,

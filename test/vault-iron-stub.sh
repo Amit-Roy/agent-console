@@ -4,7 +4,7 @@
 echo "$@" >> "$STUB_DIR/argv.log"
 case "$1" in
   status) cat "$STUB_DIR/status" ;;
-  set) cat > "$STUB_DIR/stdin.log"; echo "ok $2" ;;
+  set) [ -e "$STUB_DIR/failset" ] && exit 1; cat > "$STUB_DIR/stdin.log"; echo "ok $2" ;;
   token) cat "$STUB_DIR/token" ;;
   *) exit 2 ;;
 esac
