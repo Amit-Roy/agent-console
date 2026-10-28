@@ -102,6 +102,13 @@
     <div class="row"><button type="button" class="btn" id="enroll-cancel">Cancel</button><button type="submit" class="btn primary" id="enroll-go">Continue</button></div>
   </form>
 </dialog>
+<dialog id="vs" class="ap-dlg vdlg" aria-labelledby="vs-title">
+  <h2 id="vs-title">Saving to iron-proxy</h2>
+  <ol id="vs-steps" class="ap-steps" aria-live="polite"></ol>
+  <p class="err" id="vs-err" role="alert" hidden></p>
+  <p class="vs-note" id="vs-note" role="status" hidden></p>
+  <div class="row"><button type="button" class="btn" id="vs-close">Close</button><button type="button" class="btn primary" id="vs-retry" hidden>Retry</button></div>
+</dialog>
 <div id="toast" role="status" aria-live="polite"></div>
 <script src="/vendor/simplewebauthn-browser.js"></script>
 <script type="module" src="/vault.js"></script>
