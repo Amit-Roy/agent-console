@@ -44,6 +44,11 @@ try {
     code: "live",
     http: "none",
   });
+  // real iron exits 1 when only the live check fails: proxy stays ok, check carries code and http
+  assert.deepEqual(await run(swap("live", row("live", "fail", "403")), 1), {
+    proxy: { ok: true },
+    check: { ok: false, code: "live", http: "403" },
+  });
   const badHttp = await run(swap("live", row("live", "fail", "4x1; rm")), 1);
   assert.deepEqual(badHttp.check, { ok: false, code: "live" });
   assert.deepEqual((await run(swap("live", row("live", "skip")))).check, { skip: true });

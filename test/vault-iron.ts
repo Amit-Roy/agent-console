@@ -62,7 +62,7 @@ echo '{"check":"ssh","result":"pass"}'
 echo '{"check":"service","result":"pass"}'
 echo '{"check":"listener","result":"pass"}'
 echo '{"check":"token","result":"pass"}'
-if [ -e "$d/live-fail" ]; then echo "{\\"check\\":\\"live\\",\\"result\\":\\"fail\\",\\"http\\":\\"$(cat "$d/live-fail")\\"}"; exit 0; fi
+if [ -e "$d/live-fail" ]; then echo "{\\"check\\":\\"live\\",\\"result\\":\\"fail\\",\\"http\\":\\"$(cat "$d/live-fail")\\"}"; exit 1; fi
 echo '{"check":"live","result":"pass"}'
 `,
   { mode: 0o755 },
@@ -323,15 +323,16 @@ try {
   assert.equal((await snap()).ok, true);
 
   // failed check: no backup ran, snapshot shows the failed step with a table error
-  fs.writeFileSync(path.join(dir, "live-fail"), "401");
+  fs.writeFileSync(path.join(dir, "live-fail"), "403");
   const bad = await collect(replace);
   streamed.push(...bad);
   assert.equal(shape(bad), "plan step:set ok:set step:proxy ok:proxy step:check fail:check done");
-  assert.equal(bad.find((m) => m.t === "fail").error, "Provider rejected the key (HTTP 401)");
+  assert.equal(bad.find((msg) => msg.t === "fail").error, "Provider rejected the key (HTTP 403)");
   assert.deepEqual({ ok: bad.at(-1).ok, retry: bad.at(-1).retry }, { ok: false, retry: "verify" });
   assert.equal(count("backup.count"), 1, "backup never ran after a failed check");
   const failedJob = await snap();
-  assert.equal(failedJob.steps.find((x: any) => x.id === "check").state, "fail");
+  assert.equal(failedJob.steps.find((item: any) => item.id === "check").state, "failed");
+  assert.deepEqual([failedJob.done, failedJob.running, failedJob.job], [true, false, failedJob.id]);
   assert.equal(failedJob.retry, "verify");
 
   // retry resumes after the set step: iron is not called again, backup runs once
@@ -398,6 +399,7 @@ try {
     await sleep(30);
   }
   assert.equal(finalJob.ok, true, "job finished without its client");
+  assert.equal(finalJob.done, true);
   fs.rmSync(path.join(dir, "slow"));
 
   // add key with iron: provider, set, pins stream first; egress failure is a warning

@@ -274,13 +274,15 @@ export function ironJobSnapshot() {
   const { id: jobId, running, ok: success, retry, steps } = current;
   return {
     id: jobId,
+    job: jobId,
     running,
+    done: !running,
     ok: success,
     retry,
     steps: steps.map(({ id: stepId, label, state, error }) => ({
       id: stepId,
       label,
-      state,
+      state: state === "fail" ? "failed" : state,
       ...(error ? { error } : {}),
     })),
   };

@@ -40,24 +40,33 @@ function parseLine(line: string): DoctorCheckLine | null {
   }
 }
 
+function summarizeProxy(byId: Map<string, DoctorCheckLine>, unexplained: boolean): ProxyResult {
+  const failed = PROXY_IDS.find((checkId) => byId.get(checkId)?.result === "fail");
+  if (failed) return { ok: false, code: failed };
+  const missing = PROXY_IDS.find((checkId) => !byId.has(checkId));
+  if (missing) return { ok: false, code: missing };
+  return unexplained ? { ok: false, code: "doctor" } : { ok: true };
+}
+
+function summarizeCheck(byId: Map<string, DoctorCheckLine>, exitCode: number | null): CheckResult {
+  const checkLines = CHECK_IDS.map((checkId) => byId.get(checkId));
+  const failing = checkLines.find((entry) => entry?.result === "fail");
+  if (failing) {
+    const failed: CheckResult = { ok: false, code: failing.check };
+    if (failing.http) failed.http = failing.http;
+    return failed;
+  }
+  if (checkLines.some((entry) => entry?.result === "skip")) return { skip: true };
+  const allPass = checkLines.every((entry) => entry?.result === "pass");
+  return allPass && exitCode === 0 ? { ok: true } : { ok: false, code: "doctor" };
+}
+
+// Real iron exits 1 when the live check fails, so a non-zero exit alone only matters when no
+// line explains it.
 function summarize(lines: DoctorCheckLine[], exitCode: number | null): DoctorResult {
   const byId = new Map(lines.map((entry) => [entry.check, entry]));
-  const proxyFail = PROXY_IDS.find((id) => byId.get(id)?.result === "fail");
-  const proxyMissing = PROXY_IDS.find((id) => !byId.has(id));
-  let proxy: ProxyResult = { ok: true };
-  if (proxyFail) proxy = { ok: false, code: proxyFail };
-  else if (proxyMissing || exitCode !== 0) proxy = { ok: false, code: proxyMissing ?? "doctor" };
-  const checkFail = CHECK_IDS.map((id) => byId.get(id)).find((entry) => entry?.result === "fail");
-  const checkLines = CHECK_IDS.map((id) => byId.get(id));
-  let check: CheckResult;
-  if (checkFail) {
-    check = { ok: false, code: checkFail.check };
-    if (checkFail.http) check.http = checkFail.http;
-  } else if (checkLines.some((entry) => entry?.result === "skip")) check = { skip: true };
-  else if (checkLines.every((entry) => entry?.result === "pass") && exitCode === 0)
-    check = { ok: true };
-  else check = { ok: false, code: "doctor" };
-  return { proxy, check };
+  const unexplained = exitCode !== 0 && !lines.some((entry) => entry.result === "fail");
+  return { proxy: summarizeProxy(byId, unexplained), check: summarizeCheck(byId, exitCode) };
 }
 
 export function providerCheck(

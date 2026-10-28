@@ -64,8 +64,7 @@ export function createVaultSteps(hooks) {
     if (message.t === "done") return onDone(message);
     if (message.t === "error") return setError(message.error);
     timeline.handle(message);
-    if (message.t === "fail") setError(message.error);
-    else if (message.t === "ok" && message.id === "set") hooks.onSetOk();
+    if (message.t === "ok" && message.id === "set") hooks.onSetOk();
   }
   function streamDied() {
     timeline.failActive();
@@ -105,7 +104,6 @@ export function createVaultSteps(hooks) {
       else if (item.state === "skip") timeline.handle({ t: "skip", id: item.id, at });
       else if (item.state === "failed") {
         timeline.handle({ t: "fail", id: item.id, at, error: item.error || "Step failed." });
-        setError(item.error || "Step failed.");
       }
     }
     // durations are unknown for a reloaded job: hide the fake 0 s labels

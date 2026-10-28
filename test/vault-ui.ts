@@ -598,7 +598,8 @@ for (const scheme of ["light", "dark"] as const) {
     await page.waitForSelector("#vs-retry:not([hidden])");
     check(
       `steps ${scheme}: check fail shows the error and Retry`,
-      (await page.locator("#vs-err").innerText()).includes("502") &&
+      (await page.locator("#vs-steps .ap-step[data-state=failed]").innerText()).includes("502") &&
+        (await page.locator("#vs-err").isHidden()) &&
         (await page.locator("#vs-retry").isVisible()),
     );
     check(
@@ -693,7 +694,10 @@ for (const scheme of ["light", "dark"] as const) {
   await page.waitForSelector("#vs[open]");
   check(
     "steps: reload with a failed job shows error and Retry",
-    (await page.locator("#vs-err").innerText()).includes("Proxy check") &&
+    (await page.locator("#vs-steps .ap-step[data-state=failed]").innerText()).includes(
+      "Proxy check",
+    ) &&
+      (await page.locator("#vs-err").isHidden()) &&
       (await page.locator("#vs-retry").isVisible()),
   );
   await page.click("#vs-close");
