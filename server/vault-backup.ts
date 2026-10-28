@@ -155,7 +155,9 @@ function runSteps(onStep: (step: BackupStep) => void): Promise<BackupNowResult> 
     writeStatus("running");
     const run: StepRun = { sawDone: false, timedOut: false };
     let finished = false;
-    const child = spawn("setsid", ["-w", "sh", "-c", cmd], {
+    // detached = own session and process group, so killGroup reaches every child.
+    // No setsid wrapper: it would fork the command into a second group the kill misses.
+    const child = spawn("sh", ["-c", cmd], {
       stdio: ["ignore", "pipe", logFd],
       detached: true,
     });
