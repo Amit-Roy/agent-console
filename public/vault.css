@@ -443,3 +443,31 @@ select.input {
   height: 1.25rem;
   accent-color: var(--bad);
 }
+
+/* step dialog for iron-managed saves */
+#vs [hidden] {
+  display: none;
+}
+#vs .ap-row {
+  min-height: 44px;
+}
+#vs .vs-note {
+  margin: var(--sp-3) 0 0;
+  color: var(--t2);
+  font: var(--fw-reg) var(--f-sm);
+  overflow-wrap: anywhere;
+}
+#vs .err {
+  overflow-wrap: anywhere;
+}
+@media (max-width: 760px) {
+  #vs {
+    width: 100%;
+    max-width: none;
+    max-height: calc(100dvh - var(--sp-8));
+    overflow: auto;
+  }
+  #vs .btn {
+    min-height: 44px;
+  }
+}

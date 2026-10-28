@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import readline from "node:readline";
 
 // Auto-backup after iron changes: debounced `iron backup`, single flight. Command output goes to a
 // log file only; the status file carries fixed strings, never log text.
@@ -23,6 +24,21 @@ const debounceMs = () => Number(process.env.VAULT_BACKUP_DEBOUNCE_MS) || DEFAULT
 let timer: NodeJS.Timeout | null = null;
 let running = false;
 let again = false;
+let active: Promise<void> | null = null;
+
+export type BackupStepId =
+  | "backup_fetch"
+  | "drive_upload"
+  | "drive_verify"
+  | "drive_prune"
+  | "backup";
+export type BackupStepState = "running" | "ok" | "failed";
+export type BackupStep = { step: BackupStepId; state: BackupStepState };
+export type BackupNowResult = { ok: boolean; failed?: string };
+
+const STEP_IDS = new Set(["backup_fetch", "drive_upload", "drive_verify", "drive_prune", "backup"]);
+const STEP_STATES = new Set(["running", "ok", "failed"]);
+const NOW_TIMEOUT_MS = 10 * 60_000;
 
 function writeStatus(state: BackupState, error: string | null = null) {
   try {
@@ -80,19 +96,123 @@ function runOnce(): Promise<void> {
   });
 }
 
+function parseStep(line: string): BackupStep | null {
+  try {
+    const parsed = JSON.parse(line);
+    if (!parsed || typeof parsed !== "object") return null;
+    const { step, state } = parsed;
+    if (typeof step !== "string" || typeof state !== "string") return null;
+    if (!STEP_IDS.has(step) || !STEP_STATES.has(state)) return null;
+    return { step, state } as BackupStep;
+  } catch {
+    return null;
+  }
+}
+
+function killGroup(child: ReturnType<typeof spawn>) {
+  try {
+    if (child.pid) process.kill(-child.pid, "SIGKILL");
+  } catch {
+    /* already gone */
+  }
+}
+
+type StepRun = { failedStep?: string; sawDone: boolean; timedOut: boolean };
+
+function handleStepLine(
+  run: StepRun,
+  logFd: number,
+  line: string,
+  onStep: (step: BackupStep) => void,
+) {
+  const step = parseStep(line);
+  if (!step) {
+    fs.appendFileSync(logFd, `${line}\n`);
+    return;
+  }
+  if (step.state === "failed") run.failedStep = step.step;
+  if (step.step === "backup" && step.state === "ok") run.sawDone = true;
+  onStep(step);
+}
+
+function settleRun(run: StepRun, code: number | null): BackupNowResult {
+  if (code === 0 && !run.failedStep && !run.timedOut && run.sawDone) {
+    writeStatus("ok");
+    return { ok: true };
+  }
+  const failed = run.timedOut ? "timeout" : (run.failedStep ?? "backup");
+  const drive = failed.startsWith("drive_") || (!run.failedStep && logMentionsDrive());
+  writeStatus("failed", drive ? "failed: drive" : "failed");
+  return { ok: false, failed };
+}
+
+// One run with contract lines on stdout; everything else goes to the log file only.
+function runSteps(onStep: (step: BackupStep) => void): Promise<BackupNowResult> {
+  return new Promise((resolve) => {
+    fs.mkdirSync(stateDir(), { recursive: true });
+    const logFd = fs.openSync(logFile(), "w", 0o600);
+    const cmd = process.env.VAULT_BACKUP_CMD || "iron backup --json";
+    writeStatus("running");
+    const run: StepRun = { sawDone: false, timedOut: false };
+    let finished = false;
+    // detached = own session and process group, so killGroup reaches every child.
+    // No setsid wrapper: it would fork the command into a second group the kill misses.
+    const child = spawn("sh", ["-c", cmd], {
+      stdio: ["ignore", "pipe", logFd],
+      detached: true,
+    });
+    const timeout = setTimeout(() => {
+      run.timedOut = true;
+      killGroup(child);
+    }, Number(process.env.VAULT_BACKUP_NOW_TIMEOUT_MS) || NOW_TIMEOUT_MS);
+    const lines = child.stdout ? readline.createInterface({ input: child.stdout }) : null;
+    lines?.on("line", (line) => handleStepLine(run, logFd, line, onStep));
+    const done = (code: number | null) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timeout);
+      fs.closeSync(logFd);
+      resolve(settleRun(run, code));
+    };
+    child.on("error", () => done(null));
+    child.on("close", done);
+  });
+}
+
 async function runNow() {
   if (running) {
     again = true;
     return;
   }
   running = true;
+  active = (async () => {
+    try {
+      do {
+        again = false;
+        await runOnce();
+      } while (again);
+    } finally {
+      running = false;
+      active = null;
+    }
+  })();
+  await active;
+}
+
+/* manual backup with live steps: waits for any active run, then does one fresh run */
+export async function backupNow(onStep: (step: BackupStep) => void): Promise<BackupNowResult> {
+  if (timer) clearTimeout(timer);
+  timer = null;
+  while (active) await active;
+  running = true;
+  const mine = runSteps(onStep);
+  active = mine.then(() => undefined);
   try {
-    do {
-      again = false;
-      await runOnce();
-    } while (again);
+    return await mine;
   } finally {
     running = false;
+    active = null;
+    if (again) void runNow();
   }
 }
 

@@ -26,6 +26,7 @@ if (fs.existsSync(path.join(d, "down"))) process.exit(255);
 fs.appendFileSync(path.join(d, "argv.log"), process.argv.slice(2).join(" ") + "\\n");
 const stdin = () => fs.readFileSync(0, "utf8");
 const token = fs.readFileSync(path.join(d, "token"), "utf8").trim();
+if (verb === "set" && fs.existsSync(path.join(d, "failset"))) process.exit(1);
 if (verb === "status") process.stdout.write(fs.readFileSync(path.join(d, "status")));
 else if (verb === "token") console.log(token);
 else if (verb === "ca-pem") console.log(fs.readFileSync(path.join(d, "ca.pem"), "utf8").trim());
@@ -49,6 +50,40 @@ fs.writeFileSync(pin, `#!/bin/sh\necho pinned >> "${dir}/pin.log"\n`, {
   mode: 0o755,
 });
 process.env.VAULT_EGRESS_PIN = pin;
+
+// doctor and backup stubs: counters and failure switches live in the temp dir
+const doctorStub = path.join(dir, "doctor-stub.sh");
+fs.writeFileSync(
+  doctorStub,
+  `#!/bin/sh
+d="${dir}"
+n=$(cat "$d/doctor.count" 2>/dev/null || echo 0); echo $((n+1)) > "$d/doctor.count"
+echo '{"check":"ssh","result":"pass"}'
+echo '{"check":"service","result":"pass"}'
+echo '{"check":"listener","result":"pass"}'
+echo '{"check":"token","result":"pass"}'
+if [ -e "$d/live-fail" ]; then echo "{\\"check\\":\\"live\\",\\"result\\":\\"fail\\",\\"http\\":\\"$(cat "$d/live-fail")\\"}"; exit 1; fi
+echo '{"check":"live","result":"pass"}'
+`,
+  { mode: 0o755 },
+);
+const backupStub = path.join(dir, "backup-stub.sh");
+fs.writeFileSync(
+  backupStub,
+  `#!/bin/sh
+d="${dir}"
+n=$(cat "$d/backup.count" 2>/dev/null || echo 0); echo $((n+1)) > "$d/backup.count"
+echo "stub log text that must never be streamed"
+[ -e "$d/slow" ] && sleep 1
+for s in backup_fetch drive_upload drive_verify drive_prune backup; do
+  echo "{\\"step\\":\\"$s\\",\\"state\\":\\"running\\"}"
+  echo "{\\"step\\":\\"$s\\",\\"state\\":\\"ok\\"}"
+done
+`,
+  { mode: 0o755 },
+);
+process.env.VAULT_DOCTOR_BIN = doctorStub;
+process.env.VAULT_BACKUP_CMD = backupStub;
 
 const sha = (v: string) => crypto.createHash("sha256").update(v).digest("hex");
 const TOKEN = "proxy-token-FAKE-0123456789abcdef";
@@ -83,6 +118,7 @@ fs.writeFileSync(envFile, initial, { mode: 0o600 });
 const { sources, listVault, checkValue, setSecret, deleteSecret, addIronProvider } = await import(
   "../server/vault.ts"
 );
+const { resumeJob } = await import("../server/vault-save-job.ts");
 const { ironForget, ironStatus, ironProviderAdd, ironCaPem } = await import(
   "../server/vault-iron.ts"
 );
@@ -235,6 +271,178 @@ try {
   assert.equal((w as any).warnings.length, 2);
   assert.match(text(), new RegExp(`^OTHER_PROVIDER_KEY=${TOKEN}$`, "m"));
   assert.equal(await ironProviderAdd({ ...spec2, name: "bad name" }), false);
+
+  // ---- live save steps (NDJSON contract): env points the stubs at the temp dir
+  const count = (name: string) => Number(rd(name) || 0);
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+  const untilTrue = async (test: () => boolean) => {
+    for (let i = 0; i < 150 && !test(); i++) await sleep(20);
+    assert.ok(test(), "condition reached in time");
+  };
+  const collect = (start: (sink: (msg: any) => void) => Promise<unknown>) =>
+    new Promise<any[]>((resolve, reject) => {
+      const msgs: any[] = [];
+      start((msg) => {
+        msgs.push(msg);
+        if (msg.t === "done" || msg.t === "error") resolve(msgs);
+      }).catch(reject);
+    });
+  const shape = (msgs: any[]) => msgs.map((m) => (m.id ? `${m.t}:${m.id}` : m.t)).join(" ");
+  const BACKUP_ALL = "backup_fetch drive_upload drive_verify drive_prune";
+  const streamed: any[] = [];
+  const snapshots: any[] = [];
+  const snap = async () => {
+    const job = (await listVault()).ironJob;
+    snapshots.push(job);
+    return job as any;
+  };
+  fs.writeFileSync(envFile, initial, { mode: 0o600 });
+  process.env.VAULT_IRON_SSH = path.join(import.meta.dirname, "vault-iron-stub.sh");
+  ironForget();
+  const replace = (sink: (msg: any) => void) =>
+    setSecret(id, "DEEPSEEK_API_KEY", REALKEY, undefined, sink);
+
+  // happy path: plan first, then each step once, done last
+  assert.equal((await listVault()).ironJob, null);
+  const happy = await collect(replace);
+  streamed.push(...happy);
+  assert.equal(happy[0].t, "plan");
+  assert.deepEqual(
+    happy[0].steps.map((x: any) => x.id),
+    ["set", "proxy", "check", ...BACKUP_ALL.split(" ")],
+  );
+  assert.ok(happy.every((m) => typeof m.at === "number"));
+  const steps = (ids: string) =>
+    ids
+      .split(" ")
+      .map((x) => `step:${x} ok:${x}`)
+      .join(" ");
+  assert.equal(shape(happy), `plan ${steps(`set proxy check ${BACKUP_ALL}`)} done`);
+  assert.deepEqual(happy.at(-1), { t: "done", ok: true, restartNeeded: true, at: happy.at(-1).at });
+  assert.equal(count("backup.count"), 1);
+  assert.equal((await snap()).ok, true);
+
+  // failed check: no backup ran, snapshot shows the failed step with a table error
+  fs.writeFileSync(path.join(dir, "live-fail"), "403");
+  const bad = await collect(replace);
+  streamed.push(...bad);
+  assert.equal(shape(bad), "plan step:set ok:set step:proxy ok:proxy step:check fail:check done");
+  assert.equal(bad.find((msg) => msg.t === "fail").error, "Provider rejected the key (HTTP 403)");
+  assert.deepEqual({ ok: bad.at(-1).ok, retry: bad.at(-1).retry }, { ok: false, retry: "verify" });
+  assert.equal(count("backup.count"), 1, "backup never ran after a failed check");
+  const failedJob = await snap();
+  assert.equal(failedJob.steps.find((item: any) => item.id === "check").state, "failed");
+  assert.deepEqual([failedJob.done, failedJob.running, failedJob.job], [true, false, failedJob.id]);
+  assert.equal(failedJob.retry, "verify");
+
+  // retry resumes after the set step: iron is not called again, backup runs once
+  fs.rmSync(path.join(dir, "live-fail"));
+  const setsBefore = (rd("argv.log").match(/^set /gm) ?? []).length;
+  const resumed = await collect(async (sink) => assert.equal(resumeJob(sink), "started"));
+  streamed.push(...resumed);
+  assert.equal(
+    shape(resumed),
+    `plan ok:set step:proxy ok:proxy step:check ok:check ${steps(BACKUP_ALL)} done`,
+  );
+  assert.equal((rd("argv.log").match(/^set /gm) ?? []).length, setsBefore);
+  assert.equal(count("backup.count"), 2);
+  assert.equal(
+    resumeJob(() => {}),
+    "none",
+    "nothing left to retry after success",
+  );
+
+  // failed set stops everything and asks for a new save
+  fs.writeFileSync(path.join(dir, "failset"), "");
+  const doctorRuns = count("doctor.count");
+  const noSet = await collect(replace);
+  streamed.push(...noSet);
+  assert.equal(shape(noSet), "plan step:set fail:set done");
+  assert.deepEqual({ ok: noSet.at(-1).ok, retry: noSet.at(-1).retry }, { ok: false, retry: "set" });
+  assert.equal(noSet[2].error, "iron set failed");
+  assert.equal(count("doctor.count"), doctorRuns);
+  assert.equal(count("backup.count"), 2);
+  assert.equal(
+    resumeJob(() => {}),
+    "none",
+    "a failed set cannot be resumed",
+  );
+  fs.rmSync(path.join(dir, "failset"));
+
+  // second save while one runs: 409; the first job survives a client that vanished
+  fs.writeFileSync(path.join(dir, "slow"), "");
+  let seen = 0;
+  const first = replace(() => {
+    seen++;
+    if (seen > 3) throw new Error("client gone");
+  });
+  await untilTrue(() => seen > 3);
+  await assert.rejects(
+    setSecret(id, "DEEPSEEK_API_KEY", REALKEY, undefined, () => {}),
+    (e: any) => e.status === 409 && e.message === "Another key save is still running.",
+  );
+  await assert.rejects(
+    addIronProvider(
+      { ...spec, name: "BUSY_KEY_TOKEN", envVars: ["BUSY_KEY_TOKEN"] },
+      CF,
+      undefined,
+      () => {},
+    ),
+    (e: any) => e.status === 409,
+  );
+  await first;
+  await untilTrue(() => count("backup.count") === 3);
+  let finalJob: any;
+  for (let i = 0; i < 100; i++) {
+    finalJob = await snap();
+    if (!finalJob.running) break;
+    await sleep(30);
+  }
+  assert.equal(finalJob.ok, true, "job finished without its client");
+  assert.equal(finalJob.done, true);
+  fs.rmSync(path.join(dir, "slow"));
+
+  // add key with iron: provider, set, pins stream first; egress failure is a warning
+  const spec3 = { ...spec, name: "STREAMED_KEY_TOKEN", envVars: ["STREAMED_KEY_TOKEN"] };
+  process.env.VAULT_IRON_SSH = addStub;
+  ironForget();
+  const addMsgs = await collect((sink) => addIronProvider(spec3, CF, undefined, sink));
+  streamed.push(...addMsgs);
+  assert.deepEqual(addMsgs[0].steps.map((x: any) => x.id).slice(0, 5), [
+    "provider",
+    "set",
+    "pins",
+    "proxy",
+    "check",
+  ]);
+  assert.equal(shape(addMsgs), `plan ${steps(`provider set pins proxy check ${BACKUP_ALL}`)} done`);
+  assert.equal(addMsgs.at(-1).warnings.length, 2);
+  assert.equal(count("backup.count"), 4);
+
+  // JSON path (no progress): no job, backup stays debounced
+  process.env.VAULT_IRON_SSH = path.join(import.meta.dirname, "vault-iron-stub.sh");
+  process.env.VAULT_BACKUP_DEBOUNCE_MS = "300";
+  ironForget();
+  const beforeJson = count("backup.count");
+  const jsonRes = await setSecret(id, "DEEPSEEK_API_KEY", REALKEY);
+  assert.equal((jsonRes as any).proxied, true);
+  assert.equal(count("backup.count"), beforeJson, "not backed up at once");
+  await untilTrue(() => count("backup.count") === beforeJson + 1);
+
+  // no value anywhere a client or a log could see it
+  const stateDir = path.join(dir, ".local", "state", "agent-console");
+  const sinks = [
+    JSON.stringify(streamed),
+    JSON.stringify(snapshots),
+    fs.readFileSync(path.join(conf, "vault-audit.jsonl"), "utf8"),
+    fs.readFileSync(path.join(stateDir, "iron-backup.log"), "utf8"),
+  ].join("\n");
+  for (const secret of [REALKEY, CF]) assert.ok(!sinks.includes(secret), "no value leaked");
+  assert.ok(
+    !JSON.stringify([streamed, snapshots]).includes("stub log text"),
+    "command output is never streamed",
+  );
+  assert.ok(streamed.length > 40);
   console.log("PASS  vault iron");
 } finally {
   fs.rmSync(dir, { recursive: true, force: true });

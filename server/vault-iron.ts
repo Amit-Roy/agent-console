@@ -23,7 +23,7 @@ const TIMEOUT = {
   add: 20_000,
   ca: 10_000,
 };
-const NAME = /^[A-Za-z0-9_.-]{1,64}$/;
+export const NAME = /^[A-Za-z0-9_.-]{1,64}$/;
 // Used when iron cannot be reached: these never fall back to plaintext.
 export const KNOWN_MANAGED = new Set([
   "CLOUDFLARE_API_TOKEN",

@@ -441,6 +441,280 @@ for (const [name, viewport, scheme] of [
   check("setup: saving without a passkey opens setup", true);
   await ctx.close();
 }
+
+// ---------- iron-managed save: live step dialog (issue #386); static files come from this worktree ----------
+import { readFileSync } from "node:fs";
+
+const PUB = new URL("../public/", import.meta.url).pathname;
+const STATIC: Record<string, [string, string]> = {
+  "/vault": ["vault.html", "text/html"],
+  "/vault.js": ["vault.js", "text/javascript"],
+  "/vault-steps.js": ["vault-steps.js", "text/javascript"],
+  "/step-timeline.js": ["step-timeline.js", "text/javascript"],
+  "/vault.css": ["vault.css", "text/css"],
+  "/style.css": ["style.css", "text/css"],
+};
+const PLAN = [
+  { id: "set", label: "Store the key" },
+  { id: "check", label: "Check the proxy" },
+  { id: "backup", label: "Back up" },
+  { id: "drive", label: "Upload to Drive" },
+];
+const nd = (...msgs: object[]) => ({
+  status: 200,
+  contentType: "application/x-ndjson",
+  body: `${msgs.map((m) => JSON.stringify(m)).join("\n")}\n`,
+});
+const seq = (ids: string[]) =>
+  ids.flatMap((id) => [
+    { t: "step", id },
+    { t: "ok", id },
+  ]);
+const HAPPY = nd({ t: "plan", job: "j1", steps: PLAN }, ...seq(PLAN.map((x) => x.id)), {
+  t: "done",
+  ok: true,
+});
+const CHECK_FAIL = nd(
+  { t: "plan", job: "j2", steps: PLAN },
+  ...seq(["set"]),
+  { t: "step", id: "check" },
+  { t: "fail", id: "check", error: "Proxy check failed: 502 from upstream" },
+  { t: "done", ok: false, retry: "verify" },
+);
+const DRIVE_FAIL = nd(
+  { t: "plan", job: "j3", steps: PLAN },
+  ...seq(["set", "check", "backup"]),
+  { t: "step", id: "drive" },
+  { t: "fail", id: "drive", error: "Drive upload failed" },
+  { t: "done", ok: false, retry: "verify" },
+);
+const SET_FAIL = nd(
+  { t: "plan", job: "j4", steps: PLAN },
+  { t: "step", id: "set" },
+  { t: "fail", id: "set", error: "Could not write the key" },
+  { t: "done", ok: false, retry: "set" },
+);
+
+type IronSeen = { puts: number; retries: number; ironJob: any };
+const isKeyPut = (method: string, path: string) =>
+  method === "PUT" && /\/OPENAI_API_KEY$/.test(path);
+
+async function routeVault(route: any, harness: any, seen: IronSeen, handlers: any) {
+  const req = route.request();
+  const path = new URL(req.url()).pathname.replace("/api/vault", "") || "/";
+  const method = req.method();
+  if (method === "GET" && path === "/") {
+    const sources = GROUPS(harness.st.granted);
+    sources[0].entries[2] = { ...sources[0].entries[2], proxy: "proxied" } as any;
+    return route.fulfill(json({ sources, ironJob: seen.ironJob }));
+  }
+  const needsGrant = isKeyPut(method, path) || path === "/iron/job/retry";
+  if (needsGrant && !harness.st.granted)
+    return route.fulfill(
+      json({ error: "Confirm with your passkey first.", stepUp: true, enrolled: true }, 401),
+    );
+  if (isKeyPut(method, path)) {
+    seen.puts++;
+    expectAccept = req.headers().accept || "";
+    return route.fulfill(handlers.put);
+  }
+  if (path === "/iron/job/retry") {
+    seen.retries++;
+    return route.fulfill(handlers.retry);
+  }
+  return route.fallback();
+}
+
+async function openIron(
+  scheme: "light" | "dark",
+  viewport: { width: number; height: number },
+  handlers: { put?: any; retry?: any; ironJob?: any },
+) {
+  const o = await open(viewport, scheme);
+  const seen = { puts: 0, retries: 0, ironJob: handlers.ironJob ?? null };
+  await o.page.route("**/*", async (route: any) => {
+    const url = new URL(route.request().url());
+    const file = STATIC[url.pathname];
+    if (!file) return route.fallback();
+    return route.fulfill({ contentType: file[1], body: readFileSync(PUB + file[0], "utf8") });
+  });
+  await o.page.route("**/api/vault**", (route: any) => routeVault(route, o, seen, handlers));
+  return { ...o, seen };
+}
+let expectAccept = "";
+const stepStates = (page: any) =>
+  page
+    .locator("#vs-steps .ap-step")
+    .evaluateAll((n: HTMLElement[]) => n.map((x) => x.dataset.state));
+async function replaceOpenai(page: any, secret: string) {
+  await page.goto(`${BASE}/vault`);
+  await page.waitForSelector(".vrow");
+  await page.click("button[aria-label='Replace OPENAI_API_KEY']");
+  await page.fill("#value", secret);
+  await page.click("#edit-save");
+}
+
+for (const scheme of ["light", "dark"] as const) {
+  const phone = { width: 390, height: 844 };
+  {
+    const { ctx, page, errors } = await openIron(scheme, phone, { put: HAPPY });
+    await replaceOpenai(page, "sk-fake-happy");
+    await page.waitForSelector("#vs[open] #vs-close:not([disabled])");
+    check(
+      `steps ${scheme}: happy path, all four steps done`,
+      (await stepStates(page)).join() === "done,done,done,done",
+    );
+    check(
+      `steps ${scheme}: request asked for NDJSON`,
+      expectAccept.includes("application/x-ndjson"),
+    );
+    check(
+      `steps ${scheme}: no Retry, button reads Done`,
+      (await page.locator("#vs-retry").isHidden()) &&
+        (await page.locator("#vs-close").innerText()) === "Done",
+    );
+    check(
+      `steps ${scheme}: value input cleared after set ok`,
+      (await page.locator("#value").inputValue()) === "",
+    );
+    const box = await page.locator("#vs").boundingBox();
+    check(
+      `steps ${scheme}: 390px dialog is a full-width sheet`,
+      !!box && Math.abs(box.width - 390) < 2,
+      JSON.stringify(box),
+    );
+    check(
+      `steps ${scheme}: tap targets >= 44px`,
+      (await page.locator("#vs-close").boundingBox())!.height >= 44 &&
+        (await page.locator("#vs .ap-row").first().boundingBox())!.height >= 44,
+    );
+    await page.waitForTimeout(600);
+    await page.screenshot({ path: `/tmp/386-vault-ok-${scheme}.png` });
+    await page.click("#vs-close");
+    check(
+      `steps ${scheme}: Done closes the dialog`,
+      !(await page.locator("#vs").evaluate((d: HTMLDialogElement) => d.open)),
+    );
+    check(`steps ${scheme}: no page errors`, errors.length === 0, errors.join("|"));
+    await ctx.close();
+  }
+  {
+    const { ctx, page } = await openIron(scheme, phone, { put: CHECK_FAIL, retry: HAPPY });
+    await replaceOpenai(page, "sk-fake-check");
+    await page.waitForSelector("#vs-retry:not([hidden])");
+    check(
+      `steps ${scheme}: check fail shows the error and Retry`,
+      (await page.locator("#vs-steps .ap-step[data-state=failed]").innerText()).includes("502") &&
+        (await page.locator("#vs-err").isHidden()) &&
+        (await page.locator("#vs-retry").isVisible()),
+    );
+    check(
+      `steps ${scheme}: check fail leaves backup and drive pending`,
+      (await stepStates(page)).join() === "done,failed,pending,pending",
+    );
+    await page.waitForTimeout(600);
+    await page.screenshot({ path: `/tmp/386-vault-fail-${scheme}.png` });
+    await ctx.close();
+  }
+}
+{
+  const { ctx, page, seen } = await openIron(
+    "light",
+    { width: 390, height: 844 },
+    { put: DRIVE_FAIL, retry: HAPPY },
+  );
+  await replaceOpenai(page, "sk-fake-drive");
+  await page.waitForSelector("#vs-retry:not([hidden])");
+  check(
+    "steps: Drive fail shows failed drive step",
+    (await stepStates(page)).join() === "done,done,done,failed",
+  );
+  await page.click("#vs-retry");
+  await page.waitForFunction(() => document.getElementById("vs-close")!.textContent === "Done");
+  check(
+    "steps: Retry streams from job/retry and finishes ok",
+    seen.retries === 1 &&
+      seen.puts === 1 &&
+      (await stepStates(page)).join() === "done,done,done,done",
+  );
+  await ctx.close();
+}
+{
+  const { ctx, page, seen } = await openIron(
+    "light",
+    { width: 390, height: 844 },
+    { put: SET_FAIL },
+  );
+  await replaceOpenai(page, "sk-fake-keep");
+  await page.waitForSelector("#vs-retry:not([hidden])");
+  check(
+    "steps: set fail keeps the value in the form",
+    (await page.locator("#value").inputValue()) === "sk-fake-keep",
+  );
+  await page.click("#vs-retry");
+  check(
+    "steps: set retry closes the dialog, refocuses the value and sends nothing",
+    !(await page.locator("#vs").evaluate((d: HTMLDialogElement) => d.open)) &&
+      (await page.evaluate(() => document.activeElement?.id)) === "value" &&
+      seen.puts === 1 &&
+      seen.retries === 0,
+  );
+  await ctx.close();
+}
+{
+  const running = {
+    job: "j9",
+    steps: [
+      { id: "set", label: "Store the key", state: "ok" },
+      { id: "check", label: "Check the proxy", state: "running" },
+      { id: "backup", label: "Back up", state: "pending" },
+    ],
+  };
+  const { ctx, page } = await openIron("dark", { width: 390, height: 844 }, { ironJob: running });
+  await page.goto(`${BASE}/vault`);
+  await page.waitForSelector("#vs[open]");
+  check(
+    "steps: reload mid-job reopens the dialog from the snapshot",
+    (await stepStates(page)).join() === "done,active,pending" &&
+      (await page.locator("#vs-retry").isHidden()),
+  );
+  await ctx.close();
+}
+{
+  const failedJob = {
+    job: "j10",
+    done: true,
+    ok: false,
+    retry: "verify",
+    steps: [
+      { id: "set", label: "Store the key", state: "ok" },
+      { id: "check", label: "Check the proxy", state: "failed", error: "Proxy check failed" },
+    ],
+  };
+  const { ctx, page } = await openIron(
+    "light",
+    { width: 390, height: 844 },
+    { ironJob: failedJob },
+  );
+  await page.goto(`${BASE}/vault`);
+  await page.waitForSelector("#vs[open]");
+  check(
+    "steps: reload with a failed job shows error and Retry",
+    (await page.locator("#vs-steps .ap-step[data-state=failed]").innerText()).includes(
+      "Proxy check",
+    ) &&
+      (await page.locator("#vs-err").isHidden()) &&
+      (await page.locator("#vs-retry").isVisible()),
+  );
+  await page.click("#vs-close");
+  await page.reload();
+  await page.waitForSelector(".vrow");
+  check(
+    "steps: a dismissed failed job does not reopen",
+    !(await page.locator("#vs").evaluate((d: HTMLDialogElement) => d.open)),
+  );
+  await ctx.close();
+}
 await browser.close();
 if (failed) {
   console.log(`${failed} failed`);
