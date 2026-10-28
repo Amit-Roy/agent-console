@@ -495,6 +495,36 @@ const SET_FAIL = nd(
   { t: "done", ok: false, retry: "set" },
 );
 
+type IronSeen = { puts: number; retries: number; ironJob: any };
+const isKeyPut = (method: string, path: string) =>
+  method === "PUT" && /\/OPENAI_API_KEY$/.test(path);
+
+async function routeVault(route: any, harness: any, seen: IronSeen, handlers: any) {
+  const req = route.request();
+  const path = new URL(req.url()).pathname.replace("/api/vault", "") || "/";
+  const method = req.method();
+  if (method === "GET" && path === "/") {
+    const sources = GROUPS(harness.st.granted);
+    sources[0].entries[2] = { ...sources[0].entries[2], proxy: "proxied" } as any;
+    return route.fulfill(json({ sources, ironJob: seen.ironJob }));
+  }
+  const needsGrant = isKeyPut(method, path) || path === "/iron/job/retry";
+  if (needsGrant && !harness.st.granted)
+    return route.fulfill(
+      json({ error: "Confirm with your passkey first.", stepUp: true, enrolled: true }, 401),
+    );
+  if (isKeyPut(method, path)) {
+    seen.puts++;
+    expectAccept = req.headers().accept || "";
+    return route.fulfill(handlers.put);
+  }
+  if (path === "/iron/job/retry") {
+    seen.retries++;
+    return route.fulfill(handlers.retry);
+  }
+  return route.fallback();
+}
+
 async function openIron(
   scheme: "light" | "dark",
   viewport: { width: number; height: number },
@@ -508,31 +538,7 @@ async function openIron(
     if (!file) return route.fallback();
     return route.fulfill({ contentType: file[1], body: readFileSync(PUB + file[0], "utf8") });
   });
-  await o.page.route("**/api/vault**", async (route: any) => {
-    const req = route.request(),
-      p = new URL(req.url()).pathname.replace("/api/vault", "") || "/",
-      m = req.method();
-    if (m === "GET" && p === "/") {
-      const sources = GROUPS(o.st.granted);
-      sources[0].entries[2] = { ...sources[0].entries[2], proxy: "proxied" } as any;
-      return route.fulfill(json({ sources, ironJob: seen.ironJob }));
-    }
-    const needsGrant = (m === "PUT" && /\/OPENAI_API_KEY$/.test(p)) || p === "/iron/job/retry";
-    if (needsGrant && !o.st.granted)
-      return route.fulfill(
-        json({ error: "Confirm with your passkey first.", stepUp: true, enrolled: true }, 401),
-      );
-    if (m === "PUT" && /\/OPENAI_API_KEY$/.test(p)) {
-      seen.puts++;
-      expectAccept = req.headers().accept || "";
-      return route.fulfill(handlers.put);
-    }
-    if (p === "/iron/job/retry") {
-      seen.retries++;
-      return route.fulfill(handlers.retry);
-    }
-    return route.fallback();
-  });
+  await o.page.route("**/api/vault**", (route: any) => routeVault(route, o, seen, handlers));
   return { ...o, seen };
 }
 let expectAccept = "";

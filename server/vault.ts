@@ -998,6 +998,33 @@ export function revealSecret(id: string, key: string, c: Client) {
 }
 
 /* ---------- routes ---------- */
+// Asking for NDJSON streams the save steps; without it the old JSON answer stays as is.
+const live =
+  (handler: (req: express.Request, sink?: Sink) => Promise<any>): express.RequestHandler =>
+  async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    const wantsLive = String(req.headers.accept).includes("application/x-ndjson");
+    const stream = ndjsonStream(res);
+    try {
+      const out = await handler(req, wantsLive ? stream.sink : undefined);
+      if (!stream.started()) res.json(out);
+    } catch (caught: any) {
+      const known = caught instanceof VaultError;
+      if (stream.started())
+        stream.sink({ t: "error", error: known ? caught.message : ERR.setFailed });
+      else
+        res.status(known ? caught.status : 500).json({
+          error: known ? caught.message : "The vault is unavailable.",
+        });
+    }
+  };
+
+async function retryJobHandler(_req: express.Request, sink?: Sink) {
+  const outcome = resumeJob(sink ?? (() => {}));
+  if (outcome === "busy") throw new VaultError(409, "Another key save is still running.");
+  if (outcome === "none") throw new VaultError(409, "No key save to retry.");
+  return { ok: true, ironJob: ironJobSnapshot() };
+}
 const parseJson = express.json({ limit: "16kb" });
 export function mountVault(app: express.Express, sameOrigin: express.RequestHandler) {
   // Fixed messages only: a parser error can quote the body, which may hold a secret.
@@ -1019,25 +1046,6 @@ export function mountVault(app: express.Express, sameOrigin: express.RequestHand
         res.status(e instanceof VaultError ? e.status : 500).json({
           error: e instanceof VaultError ? e.message : "The vault is unavailable.",
         });
-      }
-    };
-  // Asking for NDJSON streams the save steps; without it the old JSON answer stays as is.
-  const live =
-    (fn: (req: express.Request, sink?: Sink) => Promise<any>): express.RequestHandler =>
-    async (req, res) => {
-      res.set("Cache-Control", "no-store");
-      const wantsLive = String(req.headers.accept).includes("application/x-ndjson");
-      const stream = ndjsonStream(res);
-      try {
-        const out = await fn(req, wantsLive ? stream.sink : undefined);
-        if (!stream.started()) res.json(out);
-      } catch (e: any) {
-        const known = e instanceof VaultError;
-        if (stream.started()) stream.sink({ t: "error", error: known ? e.message : ERR.setFailed });
-        else
-          res.status(known ? e.status : 500).json({
-            error: known ? e.message : "The vault is unavailable.",
-          });
       }
     };
   const client = (req: express.Request): Client => {
@@ -1088,17 +1096,7 @@ export function mountVault(app: express.Express, sameOrigin: express.RequestHand
       setSecret(req.params.source, req.params.key, req.body?.value, client(req), sink),
     ),
   );
-  app.post(
-    "/api/vault/iron/job/retry",
-    sameOrigin,
-    pk.requireGrant(false),
-    live(async (_req, sink) => {
-      const outcome = resumeJob(sink ?? (() => {}));
-      if (outcome === "busy") throw new VaultError(409, "Another key save is still running.");
-      if (outcome === "none") throw new VaultError(409, "No key save to retry.");
-      return { ok: true, ironJob: ironJobSnapshot() };
-    }),
-  );
+  app.post("/api/vault/iron/job/retry", sameOrigin, pk.requireGrant(false), live(retryJobHandler));
   app.post(
     "/api/vault/backup/retry",
     sameOrigin,

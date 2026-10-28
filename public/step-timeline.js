@@ -100,12 +100,16 @@ function appendStepLog(stepRow, message) {
   if (!stepRow.log.hidden) stepRow.log.scrollTop = stepRow.log.scrollHeight;
 }
 
+const ROW_HANDLERS = {
+  step: (ctx, row, message) => startStep(ctx, row, message),
+  log: (_ctx, row, message) => appendStepLog(row, message),
+  ok: (ctx, row, message) => finishStep(ctx, row, "done", message.at),
+  fail: (ctx, row, message) => failStep(ctx, row, message),
+  skip: (ctx, row) => skipStep(ctx, row),
+};
+
 function handleRowMessage(ctx, message, stepRow) {
-  if (message.t === "step") startStep(ctx, stepRow, message);
-  else if (message.t === "log") appendStepLog(stepRow, message);
-  else if (message.t === "ok") finishStep(ctx, stepRow, "done", message.at);
-  else if (message.t === "fail") failStep(ctx, stepRow, message);
-  else if (message.t === "skip") skipStep(ctx, stepRow);
+  ROW_HANDLERS[message.t]?.(ctx, stepRow, message);
 }
 
 /**

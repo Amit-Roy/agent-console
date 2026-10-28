@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { type ChildProcess, spawn } from "node:child_process";
 import readline from "node:readline";
 import { NAME } from "./vault-iron.ts";
 
@@ -69,6 +69,28 @@ function summarize(lines: DoctorCheckLine[], exitCode: number | null): DoctorRes
   return { proxy: summarizeProxy(byId, unexplained), check: summarizeCheck(byId, exitCode) };
 }
 
+function killGroup(child: ChildProcess) {
+  try {
+    if (child.pid) process.kill(-child.pid, "SIGKILL");
+  } catch {
+    /* already gone */
+  }
+}
+
+function collectLines(
+  child: ChildProcess,
+  lines: DoctorCheckLine[],
+  onCheck?: (line: DoctorCheckLine) => void,
+) {
+  if (!child.stdout) return;
+  readline.createInterface({ input: child.stdout }).on("line", (raw) => {
+    const entry = parseLine(raw);
+    if (!entry) return;
+    lines.push(entry);
+    onCheck?.(entry);
+  });
+}
+
 export function providerCheck(
   name: string,
   onCheck?: (line: DoctorCheckLine) => void,
@@ -92,21 +114,10 @@ export function providerCheck(
       resolve(result);
     };
     const timer = setTimeout(() => {
-      try {
-        if (child.pid) process.kill(-child.pid, "SIGKILL");
-      } catch {
-        /* already gone */
-      }
+      killGroup(child);
       finish(FAILED);
     }, Number(process.env.VAULT_DOCTOR_TIMEOUT_MS) || TIMEOUT_MS);
-    if (child.stdout) {
-      readline.createInterface({ input: child.stdout }).on("line", (raw) => {
-        const entry = parseLine(raw);
-        if (!entry) return;
-        lines.push(entry);
-        onCheck?.(entry);
-      });
-    }
+    collectLines(child, lines, onCheck);
     child.on("error", () => finish(FAILED));
     child.on("close", (code) => finish(summarize(lines, code)));
   });

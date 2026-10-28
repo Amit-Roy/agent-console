@@ -117,6 +117,35 @@ function killGroup(child: ReturnType<typeof spawn>) {
   }
 }
 
+type StepRun = { failedStep?: string; sawDone: boolean; timedOut: boolean };
+
+function handleStepLine(
+  run: StepRun,
+  logFd: number,
+  line: string,
+  onStep: (step: BackupStep) => void,
+) {
+  const step = parseStep(line);
+  if (!step) {
+    fs.appendFileSync(logFd, `${line}\n`);
+    return;
+  }
+  if (step.state === "failed") run.failedStep = step.step;
+  if (step.step === "backup" && step.state === "ok") run.sawDone = true;
+  onStep(step);
+}
+
+function settleRun(run: StepRun, code: number | null): BackupNowResult {
+  if (code === 0 && !run.failedStep && !run.timedOut && run.sawDone) {
+    writeStatus("ok");
+    return { ok: true };
+  }
+  const failed = run.timedOut ? "timeout" : (run.failedStep ?? "backup");
+  const drive = failed.startsWith("drive_") || (!run.failedStep && logMentionsDrive());
+  writeStatus("failed", drive ? "failed: drive" : "failed");
+  return { ok: false, failed };
+}
+
 // One run with contract lines on stdout; everything else goes to the log file only.
 function runSteps(onStep: (step: BackupStep) => void): Promise<BackupNowResult> {
   return new Promise((resolve) => {
@@ -124,44 +153,24 @@ function runSteps(onStep: (step: BackupStep) => void): Promise<BackupNowResult> 
     const logFd = fs.openSync(logFile(), "w", 0o600);
     const cmd = process.env.VAULT_BACKUP_CMD || "iron backup --json";
     writeStatus("running");
-    let failedStep: string | undefined;
-    let sawDone = false;
-    let timedOut = false;
+    const run: StepRun = { sawDone: false, timedOut: false };
     let finished = false;
     const child = spawn("setsid", ["-w", "sh", "-c", cmd], {
       stdio: ["ignore", "pipe", logFd],
       detached: true,
     });
     const timeout = setTimeout(() => {
-      timedOut = true;
+      run.timedOut = true;
       killGroup(child);
     }, Number(process.env.VAULT_BACKUP_NOW_TIMEOUT_MS) || NOW_TIMEOUT_MS);
     const lines = child.stdout ? readline.createInterface({ input: child.stdout }) : null;
-    lines?.on("line", (line) => {
-      const step = parseStep(line);
-      if (!step) {
-        fs.appendFileSync(logFd, `${line}\n`);
-        return;
-      }
-      if (step.state === "failed") failedStep = step.step;
-      if (step.step === "backup" && step.state === "ok") sawDone = true;
-      onStep(step);
-    });
+    lines?.on("line", (line) => handleStepLine(run, logFd, line, onStep));
     const done = (code: number | null) => {
       if (finished) return;
       finished = true;
       clearTimeout(timeout);
       fs.closeSync(logFd);
-      const ok = code === 0 && !failedStep && !timedOut && sawDone;
-      if (ok) {
-        writeStatus("ok");
-        resolve({ ok: true });
-        return;
-      }
-      const failed = timedOut ? "timeout" : (failedStep ?? "backup");
-      const drive = failed.startsWith("drive_") || (!failedStep && logMentionsDrive());
-      writeStatus("failed", drive ? "failed: drive" : "failed");
-      resolve({ ok: false, failed });
+      resolve(settleRun(run, code));
     };
     child.on("error", () => done(null));
     child.on("close", done);
