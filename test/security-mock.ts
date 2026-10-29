@@ -139,7 +139,7 @@ export const LATEST = {
       status: "clean",
       version: "7.95",
       durationSec: 38,
-      target: "206.51.227.101",
+      target: "203.0.113.10",
       openPorts: [
         { port: 22, proto: "tcp", service: "ssh", product: "OpenSSH 10.0", exposed: false },
         { port: 80, proto: "tcp", service: "http", product: "Caddy httpd", exposed: false },
@@ -205,7 +205,7 @@ export const LOG_LINES = [
   "2026-10-23T00:09:07Z clamav: started",
   "2026-10-23T00:09:08Z clamav: scanning /root /srv",
   "2026-10-23T00:40:01Z trivy: 2026-10-23T00:40:01Z INFO Detected OS family=debian version=12.8",
-  "2026-10-23T00:41:12Z nmap: Discovered open port 443/tcp on 206.51.227.101",
+  "2026-10-23T00:41:12Z nmap: Discovered open port 443/tcp on 203.0.113.10",
   "2026-10-23T00:42:00Z clamav: finished in 1234 s",
 ];
 export const logPage = (after: number, running = false) => ({

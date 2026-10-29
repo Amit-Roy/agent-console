@@ -157,7 +157,7 @@ def auth_files(home, data, codex_homes):
         home / name
         for name in (
             ".claude/.credentials.json",
-            ".claude-nefro/.credentials.json",
+            ".claude-secondary/.credentials.json",
             ".pi/agent/auth.json",
             ".pi/agent/mcp-auth.json",
             ".config/gh/hosts.yml",
@@ -241,7 +241,7 @@ def provider_roots(home, data):
     configured = Path(os.environ.get("CODEX_HOME", str(home / ".codex"))).expanduser()
     if configured_path(configured, home):
         codex_homes.append(configured)
-    providers = [(home / name, "claude") for name in (".claude", ".claude-nefro")]
+    providers = [(home / name, "claude") for name in (".claude", ".claude-secondary")]
     providers += [(home / name, "pi") for name in (".pi/agent", ".pi-agent", ".config/pi")]
     providers += [
         (path, path.name)

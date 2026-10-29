@@ -27,7 +27,7 @@ const history = jsonl(path.join(data, "usage-history.jsonl"));
 const preview = reconstructClaudeHistory({ rows: history, logs, threads }).rows;
 const claudeRows = preview.filter(
   (r) =>
-    r.provider === "claude" || r.provider === "claude:nefro" || r.provider === "claude:unknown",
+    r.provider === "claude" || r.provider === "claude:secondary" || r.provider === "claude:unknown",
 );
 const codexWindows = (r: any) =>
   [r?.primary, r?.secondary].filter(Boolean).flatMap((w) =>

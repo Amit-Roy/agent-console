@@ -1,8 +1,14 @@
 // Auto choice for a new thread. Five-hour subscription windows reset whether or not they were used, so prefer the window
 // that would waste the most allowance per remaining minute: 40% left with 30 min to go beats 60% left with 2 hours.
 export const AUTO_ROUTES = [
-  { key: "claude", provider: "claude", account: "sunny", model: "sonnet", effort: "medium" },
-  { key: "claude:nefro", provider: "claude", account: "nefro", model: "sonnet", effort: "medium" },
+  { key: "claude", provider: "claude", account: "primary", model: "sonnet", effort: "medium" },
+  {
+    key: "claude:secondary",
+    provider: "claude",
+    account: "secondary",
+    model: "sonnet",
+    effort: "medium",
+  },
   { key: "codex", provider: "codex", model: "gpt-6.1-sol", effort: "medium" },
 ];
 const FIVE_HOURS_MIN = 300;

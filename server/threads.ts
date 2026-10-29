@@ -658,7 +658,7 @@ function forkTarget(src: Thread, provider?: string): Provider | undefined {
 function forkAccount(src: Thread, target: Provider | undefined) {
   if (!target && src.provider === "claude")
     return { claudeAccount: normalizeClaudeAccount(src.claudeAccount) };
-  return target?.id === "claude" ? { claudeAccount: "sunny" as const } : {};
+  return target?.id === "claude" ? { claudeAccount: "primary" as const } : {};
 }
 
 // The fork before the caller's picks: another agent starts on its defaults, the same agent keeps the source's settings

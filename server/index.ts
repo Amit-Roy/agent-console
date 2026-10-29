@@ -805,7 +805,8 @@ app.post(
       validateSubscriptionFees(req.body?.fees);
     } catch {
       return void res.status(400).json({
-        error: "Enter nonnegative monthly fees in USD for Claude Sunny, Claude Nefro and Codex.",
+        error:
+          "Enter nonnegative monthly fees in USD for Claude Primary, Claude Secondary and Codex.",
       });
     }
     try {
@@ -921,7 +922,7 @@ function attachShare(
     ? threads.get(target)!
     : threads.create({
         provider: "claude",
-        claudeAccount: "sunny",
+        claudeAccount: "primary",
         cwd: path.join(os.homedir(), "repos"),
         title: shareTitle(link),
       });

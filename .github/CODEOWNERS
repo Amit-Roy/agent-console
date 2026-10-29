@@ -1,2 +1,2 @@
-# owner owns everything; code owner review is required on main.
-* @owner
+# Configure repository code owners before requiring code owner reviews.
+# Example: * @your-organization/maintainers

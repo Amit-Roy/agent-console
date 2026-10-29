@@ -79,8 +79,8 @@ const providers = [
     modes,
     defaultMode: "default",
     accounts: [
-      { id: "sunny", label: "Sunny", ready: true },
-      { id: "nefro", label: "Nefro", ready: true },
+      { id: "primary", label: "Primary", ready: true },
+      { id: "secondary", label: "Secondary", ready: true },
     ],
   },
   pi,
@@ -183,7 +183,7 @@ try {
         .locator("#usage .bar i")
         .first()
         .evaluate((e) => getComputedStyle(e).backgroundColor);
-    await selectUsage("Claude · Sunny");
+    await selectUsage("Claude · Primary");
     const red = await color();
     await selectUsage("Codex");
     const green = await color();
@@ -233,7 +233,7 @@ try {
         .getByRole("listbox", { name: "Usage account", exact: true })
         .locator(".m-label")
         .allTextContents(),
-      ["Claude · Sunny", "Claude · Nefro", "OpenRouter", "DeepSeek", "Codex"],
+      ["Claude · Primary", "Claude · Secondary", "OpenRouter", "DeepSeek", "Codex"],
     );
     await page.keyboard.press("Escape");
     await selectUsage("DeepSeek");

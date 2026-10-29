@@ -184,8 +184,8 @@ assert.deepEqual(
   "an exhausted 7-day window blocks",
 );
 assert.deepEqual(
-  resumeDue({ "claude:nefro": at([win(10, 60)]), pi: at([win(10, 60)]) }, now0, cfg),
-  ["claude:nefro"],
+  resumeDue({ "claude:secondary": at([win(10, 60)]), pi: at([win(10, 60)]) }, now0, cfg),
+  ["claude:secondary"],
   "premium usage keys only",
 );
 assert.deepEqual(

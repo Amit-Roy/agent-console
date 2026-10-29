@@ -165,31 +165,31 @@ try {
     "absent CLAUDE.md reported missing",
   );
   assert.ok(
-    !r6.providers.some((p) => p.id === "claude:nefro"),
-    "no nefro column without its config dir",
+    !r6.providers.some((p) => p.id === "claude:secondary"),
+    "no secondary column without its config dir",
   );
-  fs.mkdirSync(path.join(h6, ".claude-nefro"));
-  put(path.join(h6, ".claude-nefro", "CLAUDE.md"), "nefro\n");
+  fs.mkdirSync(path.join(h6, ".claude-secondary"));
+  put(path.join(h6, ".claude-secondary", "CLAUDE.md"), "secondary\n");
   assert.ok(
-    (await promptOverhead({ home: h6 })).providers.some((p) => p.id === "claude:nefro"),
-    "nefro column appears with its dir",
+    (await promptOverhead({ home: h6 })).providers.some((p) => p.id === "claude:secondary"),
+    "secondary column appears with its dir",
   );
   assert.equal(await promptOverhead({ home: h6 }), await promptOverhead({ home: h6 }), "cached");
   const r6b = await promptOverhead({ home: h6 });
   assert.equal(
     r6b.providers.find((p) => p.id === "claude")!.label,
     "Claude",
-    "differing nefro setup keeps both columns",
+    "differing secondary setup keeps both columns",
   );
 
-  // identical setups (nefro files symlinked into ~/.claude) collapse into one column naming both accounts
+  // identical setups (secondary files symlinked into ~/.claude) collapse into one column naming both accounts
   const h7 = newHome();
   put(path.join(h7, ".claude", "CLAUDE.md"), "shared\n");
   put(path.join(h7, ".claude", "skills", "s", "SKILL.md"), "---\nname: s\ndescription: d\n---\n");
   fs.mkdirSync(path.join(h7, ".claude", "agents"));
-  fs.mkdirSync(path.join(h7, ".claude-nefro"));
+  fs.mkdirSync(path.join(h7, ".claude-secondary"));
   for (const f of ["CLAUDE.md", "skills", "agents"])
-    fs.symlinkSync(path.join(h7, ".claude", f), path.join(h7, ".claude-nefro", f));
+    fs.symlinkSync(path.join(h7, ".claude", f), path.join(h7, ".claude-secondary", f));
   const r7 = await promptOverhead({ home: h7 });
   assert.deepEqual(
     r7.providers.map((p) => p.id),
@@ -197,16 +197,16 @@ try {
     "no second Claude column when identical",
   );
   assert.equal(claude(r7).label, "Claude (both accounts)");
-  fs.rmSync(path.join(h7, ".claude-nefro", "CLAUDE.md"));
-  put(path.join(h7, ".claude-nefro", "CLAUDE.md"), "own\n");
+  fs.rmSync(path.join(h7, ".claude-secondary", "CLAUDE.md"));
+  put(path.join(h7, ".claude-secondary", "CLAUDE.md"), "own\n");
   const r7b = await promptOverhead({ home: h7 });
   assert.deepEqual(
     r7b.providers.map((p) => p.id),
-    ["claude", "claude:nefro", "codex", "pi"],
+    ["claude", "claude:secondary", "codex", "pi"],
     "second column when instructions differ",
   );
   assert.equal(claude(r7b).label, "Claude");
-  console.log("PASS  overhead: agents, codex toml, missing files, nefro column, cache");
+  console.log("PASS  overhead: agents, codex toml, missing files, secondary column, cache");
 
   // the sentinel is planted in every seeded file above and must never reach a result
   const all = JSON.stringify([r1, r2, r3, r5, r5b, r6, s4]);

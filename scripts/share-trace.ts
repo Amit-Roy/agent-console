@@ -25,7 +25,7 @@ function configDirs(): string[] {
   const dirs = [
     process.env.CLAUDE_CONFIG_DIR,
     path.join(home, ".claude"),
-    path.join(home, ".claude-nefro"),
+    path.join(home, ".claude-secondary"),
   ];
   return [...new Set(dirs.filter((dir): dir is string => !!dir))];
 }

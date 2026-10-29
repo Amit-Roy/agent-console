@@ -7,14 +7,14 @@ import path from "node:path";
 import { reconstructClaudeHistory } from "../server/usage-repair.ts";
 
 const logs = {
-  sunny: [
+  primary: [
     { type: "user_input", ts: 1000 },
     {
       type: "rate_limit_event",
       rate_limit_info: { unifiedWindows: { five_hour: { utilization: 0.3 } } },
     },
   ],
-  nefro: [
+  secondary: [
     { type: "user_input", ts: 1000 },
     {
       type: "rate_limit_event",
@@ -26,8 +26,8 @@ const result = reconstructClaudeHistory({
   rows: [{ ts: 1000, provider: "claude", label: "5-hour", used: 30, limit: 100 }],
   logs,
   threads: [
-    { id: "sunny", claudeAccount: "sunny" },
-    { id: "nefro", claudeAccount: "nefro" },
+    { id: "primary", claudeAccount: "primary" },
+    { id: "secondary", claudeAccount: "secondary" },
   ],
 });
 assert.equal(result.rows.length, 1, "copied legacy events must not credit two accounts");
@@ -43,51 +43,51 @@ const forkEvent = (session_id: string, uuid: string, ts: number, utilization: nu
 const forked = reconstructClaudeHistory({
   rows: [],
   logs: {
-    sunnyOriginal: [forkEvent("native-sunny", "sunny-old", 1000, 0.3)],
-    nefroFork: [
-      forkEvent("native-sunny", "sunny-old", 1000, 0.3),
-      forkEvent("native-nefro", "nefro-new", 2000, 0.6),
+    primaryOriginal: [forkEvent("native-primary", "primary-old", 1000, 0.3)],
+    secondaryFork: [
+      forkEvent("native-primary", "primary-old", 1000, 0.3),
+      forkEvent("native-secondary", "secondary-new", 2000, 0.6),
     ],
   },
   threads: [
-    { id: "sunnyOriginal", claudeAccount: "sunny", createdAt: 900 },
-    { id: "nefroFork", claudeAccount: "nefro", createdAt: 1500 },
+    { id: "primaryOriginal", claudeAccount: "primary", createdAt: 900 },
+    { id: "secondaryFork", claudeAccount: "secondary", createdAt: 1500 },
   ],
 });
 assert.deepEqual(
   forked.rows.map((r) => [r.provider, r.ts, r.used]).sort(),
   [
     ["claude", 1000, 30],
-    ["claude:nefro", 2000, 60],
+    ["claude:secondary", 2000, 60],
   ],
   "fork copies retain original account; new fork events use fork account",
 );
-assert.equal(forked.rows.find((r) => r.ts === 1000)?.sourceSessionId, "native-sunny");
-assert.equal(forked.rows.find((r) => r.ts === 1000)?.sourceEventUuid, "sunny-old");
+assert.equal(forked.rows.find((r) => r.ts === 1000)?.sourceSessionId, "native-primary");
+assert.equal(forked.rows.find((r) => r.ts === 1000)?.sourceEventUuid, "primary-old");
 assert.equal(forked.rows.find((r) => r.ts === 1000)?.accountSource, "native-session");
 const reverseFork = reconstructClaudeHistory({
   rows: [],
   logs: {
-    nefroOriginal: [forkEvent("native-nefro", "nefro-old", 1100, 0.2)],
-    sunnyFork: [
-      forkEvent("native-nefro", "nefro-old", 1100, 0.2),
-      forkEvent("nested-sunny", "nested-new", 2100, 0.8),
+    secondaryOriginal: [forkEvent("native-secondary", "secondary-old", 1100, 0.2)],
+    primaryFork: [
+      forkEvent("native-secondary", "secondary-old", 1100, 0.2),
+      forkEvent("nested-primary", "nested-new", 2100, 0.8),
     ],
-    nestedSunnyFork: [
-      forkEvent("native-nefro", "nefro-old", 1100, 0.2),
-      forkEvent("nested-sunny", "nested-new", 2100, 0.8),
+    nestedPrimaryFork: [
+      forkEvent("native-secondary", "secondary-old", 1100, 0.2),
+      forkEvent("nested-primary", "nested-new", 2100, 0.8),
     ],
   },
   threads: [
-    { id: "nefroOriginal", claudeAccount: "nefro", createdAt: 1000 },
-    { id: "sunnyFork", claudeAccount: "sunny", createdAt: 1500 },
-    { id: "nestedSunnyFork", claudeAccount: "sunny", createdAt: 1800 },
+    { id: "secondaryOriginal", claudeAccount: "secondary", createdAt: 1000 },
+    { id: "primaryFork", claudeAccount: "primary", createdAt: 1500 },
+    { id: "nestedPrimaryFork", claudeAccount: "primary", createdAt: 1800 },
   ],
 });
 assert.deepEqual(
   reverseFork.rows.map((r) => [r.provider, r.ts, r.used]).sort(),
   [
-    ["claude:nefro", 1100, 20],
+    ["claude:secondary", 1100, 20],
     ["claude", 2100, 80],
   ].sort(),
   "nested forks preserve origin account and account new native sessions locally",
@@ -105,8 +105,8 @@ const sameAccountFork = reconstructClaudeHistory({
     ],
   },
   threads: [
-    { id: "original", claudeAccount: "sunny", createdAt: 2500 },
-    { id: "fork", claudeAccount: "sunny", createdAt: 2800 },
+    { id: "original", claudeAccount: "primary", createdAt: 2500 },
+    { id: "fork", claudeAccount: "primary", createdAt: 2800 },
   ],
 });
 assert.equal(
@@ -121,24 +121,24 @@ const ownerEvidence = reconstructClaudeHistory({
     copiedTarget: [forkEvent("native-recovered", "target-event", 4000, 0.5)],
   },
   threads: [
-    { id: "onlyRemainingSource", claudeAccount: "nefro", createdAt: 3800 },
-    { id: "copiedTarget", claudeAccount: "sunny", createdAt: 4050 },
+    { id: "onlyRemainingSource", claudeAccount: "secondary", createdAt: 3800 },
+    { id: "copiedTarget", claudeAccount: "primary", createdAt: 4050 },
   ],
 });
 assert.equal(
   ownerEvidence.rows.find((r) => r.ts === 4000)?.provider,
-  "claude:nefro",
+  "claude:secondary",
   "another eligible occurrence resolves source session when original target log is absent",
 );
 const conflict = reconstructClaudeHistory({
   rows: [],
   logs: {
-    sunnyOwner: [forkEvent("native-conflict", "sunny-event", 5000, 0.2)],
-    nefroOwner: [forkEvent("native-conflict", "nefro-event", 5100, 0.3)],
+    primaryOwner: [forkEvent("native-conflict", "primary-event", 5000, 0.2)],
+    secondaryOwner: [forkEvent("native-conflict", "secondary-event", 5100, 0.3)],
   },
   threads: [
-    { id: "sunnyOwner", claudeAccount: "sunny", createdAt: 4900 },
-    { id: "nefroOwner", claudeAccount: "nefro", createdAt: 4950 },
+    { id: "primaryOwner", claudeAccount: "primary", createdAt: 4900 },
+    { id: "secondaryOwner", claudeAccount: "secondary", createdAt: 4950 },
   ],
 });
 assert.ok(
@@ -159,10 +159,10 @@ const fallbackCopies = reconstructClaudeHistory({
     independentB: [{ type: "session_meta", marker: "independent-b" }, unidentifiedEvent],
   },
   threads: [
-    { id: "source", claudeAccount: "sunny", createdAt: 5900 },
-    { id: "fork", claudeAccount: "nefro", createdAt: 6100 },
-    { id: "independentA", claudeAccount: "sunny", createdAt: 5900 },
-    { id: "independentB", claudeAccount: "sunny", createdAt: 5900 },
+    { id: "source", claudeAccount: "primary", createdAt: 5900 },
+    { id: "fork", claudeAccount: "secondary", createdAt: 6100 },
+    { id: "independentA", claudeAccount: "primary", createdAt: 5900 },
+    { id: "independentB", claudeAccount: "primary", createdAt: 5900 },
   ],
 });
 assert.equal(
@@ -176,12 +176,15 @@ const unstampedProviderCopy = reconstructClaudeHistory({
   logs: {
     receiptOrigin: [forkEvent("native-receipt", "receipt-event", 7000, 0.5)],
     receiptFork: [
-      { ...forkEvent("native-receipt", "receipt-event", 7000, 0.5), usageProvider: "claude:nefro" },
+      {
+        ...forkEvent("native-receipt", "receipt-event", 7000, 0.5),
+        usageProvider: "claude:secondary",
+      },
     ],
   },
   threads: [
-    { id: "receiptOrigin", claudeAccount: "sunny", createdAt: 6900 },
-    { id: "receiptFork", claudeAccount: "nefro", createdAt: 7100 },
+    { id: "receiptOrigin", claudeAccount: "primary", createdAt: 6900 },
+    { id: "receiptFork", claudeAccount: "secondary", createdAt: 7100 },
   ],
 });
 assert.equal(
@@ -204,7 +207,7 @@ const receipts = reconstructClaudeHistory({
       {
         type: "rate_limit_event",
         observedAt: 900,
-        usageProvider: "claude:nefro",
+        usageProvider: "claude:secondary",
         rate_limit_info: { unifiedWindows: { five_hour: { utilization: 0.2 } } },
       },
     ],
@@ -225,8 +228,8 @@ const receipts = reconstructClaudeHistory({
     ],
   },
   threads: [
-    { id: "a", claudeAccount: "sunny" },
-    { id: "b", claudeAccount: "nefro" },
+    { id: "a", claudeAccount: "primary" },
+    { id: "b", claudeAccount: "secondary" },
     { id: "old" },
   ],
 });
@@ -238,7 +241,7 @@ assert.deepEqual(
   [
     ["claude", 900, 70],
     ["claude", 850, 10],
-    ["claude:nefro", 900, 20],
+    ["claude:secondary", 900, 20],
     ["claude:unknown", 850, 40],
   ].sort(),
 );
@@ -266,7 +269,7 @@ const receiptAliases = reconstructClaudeHistory({
       forkEvent("native-alias", "alias-b", 8000, 0.4),
     ],
   },
-  threads: [{ id: "native", claudeAccount: "sunny", createdAt: 7900 }],
+  threads: [{ id: "native", claudeAccount: "primary", createdAt: 7900 }],
 });
 assert.equal(
   receiptAliases.rows.length,
@@ -297,7 +300,7 @@ const fallbackReceiptAlias = reconstructClaudeHistory({
       },
     ],
   },
-  threads: [{ id: "fallback", claudeAccount: "sunny", createdAt: 8000 }],
+  threads: [{ id: "fallback", claudeAccount: "primary", createdAt: 8000 }],
 });
 assert.equal(
   fallbackReceiptAlias.rows.length,
@@ -317,14 +320,14 @@ const originalHistory =
     { ts: 1000, provider: "claude", label: "5-hour", used: 30, limit: 100 },
     {
       ts: 900,
-      provider: "claude:nefro",
+      provider: "claude:secondary",
       label: "5-hour",
       used: 12,
       limit: 100,
       schemaVersion: 2,
       provenance: "received",
       observedAt: 900,
-      usageProvider: "claude:nefro",
+      usageProvider: "claude:secondary",
     },
     { ts: 1200, provider: "claude", label: "7-day", used: 60, limit: 100 },
     { ts: 1100, provider: "pi", label: "Budget", used: 5, limit: 10 },
@@ -351,7 +354,7 @@ fs.writeFileSync(
       cost: 0,
       createdAt: 1,
       updatedAt: 1,
-      ...(id === "b" ? { claudeAccount: "nefro" } : {}),
+      ...(id === "b" ? { claudeAccount: "secondary" } : {}),
     })),
   ),
 );
@@ -405,7 +408,9 @@ try {
     ),
   );
   assert.ok(
-    repaired.some((r) => r.provider === "claude:nefro" && r.schemaVersion === 2 && r.ts === 900),
+    repaired.some(
+      (r) => r.provider === "claude:secondary" && r.schemaVersion === 2 && r.ts === 900,
+    ),
     "trustworthy versioned rows survive migration",
   );
   assert.equal(fs.readFileSync(`${historyPath}.repair-v2.original`, "utf8"), originalHistory);
@@ -464,7 +469,7 @@ try {
   const thread: any = {
     id: "held-event",
     provider: "claude",
-    claudeAccount: "nefro",
+    claudeAccount: "secondary",
     cwd: data,
     mode: "default",
     model: "fixture",
@@ -488,7 +493,7 @@ try {
     assert.ok(heldEvent.observedAt >= receivedBefore && heldEvent.observedAt <= Date.now());
     assert.equal(
       heldEvent.usageProvider,
-      "claude:nefro",
+      "claude:secondary",
       "warm-held event stamped before buffering",
     );
   } finally {

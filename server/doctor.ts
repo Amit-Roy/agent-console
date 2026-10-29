@@ -155,7 +155,7 @@ function cliChecks(ctx: DoctorContext): DoctorCheck[] {
 }
 
 function accountChecks(ctx: DoctorContext): DoctorCheck[] {
-  return (["sunny", "nefro"] as const).map((account) =>
+  return (["primary", "secondary"] as const).map((account) =>
     binaryCheck(
       `claude-${account}`,
       `Claude ${account} login`,

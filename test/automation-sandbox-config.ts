@@ -102,47 +102,50 @@ try {
   );
 
   fs.mkdirSync(path.join(home, ".claude"));
-  fs.mkdirSync(path.join(home, ".claude-nefro"));
-  fs.writeFileSync(path.join(home, ".claude", ".credentials.json"), "sunny-login");
-  fs.writeFileSync(path.join(home, ".claude.json"), "sunny-metadata");
-  fs.writeFileSync(path.join(home, ".claude-nefro", ".credentials.json"), "nefro-login");
-  fs.writeFileSync(path.join(home, ".claude-nefro", ".claude.json"), "nefro-metadata");
-  fs.writeFileSync(path.join(home, ".claude-nefro", "settings.json"), '{"permissions":{}}');
-  const sunny = automationSandboxConfig(
-    { ...t, provider: "claude", id: "sunny", issueRun: { role: "review" } },
+  fs.mkdirSync(path.join(home, ".claude-secondary"));
+  fs.writeFileSync(path.join(home, ".claude", ".credentials.json"), "primary-login");
+  fs.writeFileSync(path.join(home, ".claude.json"), "primary-metadata");
+  fs.writeFileSync(path.join(home, ".claude-secondary", ".credentials.json"), "secondary-login");
+  fs.writeFileSync(path.join(home, ".claude-secondary", ".claude.json"), "secondary-metadata");
+  fs.writeFileSync(path.join(home, ".claude-secondary", "settings.json"), '{"permissions":{}}');
+  const primary = automationSandboxConfig(
+    { ...t, provider: "claude", id: "primary", issueRun: { role: "review" } },
     env,
     options,
   );
   assert.equal(
-    fs.readFileSync(path.join(sunny.env.CLAUDE_CONFIG_DIR!, ".claude.json"), "utf8"),
-    "sunny-metadata",
+    fs.readFileSync(path.join(primary.env.CLAUDE_CONFIG_DIR!, ".claude.json"), "utf8"),
+    "primary-metadata",
   );
-  const nefro = automationSandboxConfig(
-    { ...t, provider: "claude", claudeAccount: "nefro", id: "nefro" },
+  const secondary = automationSandboxConfig(
+    { ...t, provider: "claude", claudeAccount: "secondary", id: "secondary" },
     env,
     options,
   );
   assert.equal(
-    fs.readFileSync(path.join(nefro.env.CLAUDE_CONFIG_DIR!, ".credentials.json"), "utf8"),
-    "nefro-login",
+    fs.readFileSync(path.join(secondary.env.CLAUDE_CONFIG_DIR!, ".credentials.json"), "utf8"),
+    "secondary-login",
   );
   assert.equal(
-    fs.readFileSync(path.join(nefro.env.CLAUDE_CONFIG_DIR!, ".claude.json"), "utf8"),
-    "nefro-metadata",
+    fs.readFileSync(path.join(secondary.env.CLAUDE_CONFIG_DIR!, ".claude.json"), "utf8"),
+    "secondary-metadata",
   );
   assert.equal(
-    fs.statSync(path.join(nefro.env.CLAUDE_CONFIG_DIR!, ".credentials.json")).mode & 0o777,
+    fs.statSync(path.join(secondary.env.CLAUDE_CONFIG_DIR!, ".credentials.json")).mode & 0o777,
     0o600,
   );
-  assert.deepEqual(nefro.writable, [cwd, path.join(dataDir, "auto-runtime", "nefro")]);
-  fs.writeFileSync(path.join(nefro.env.CLAUDE_CONFIG_DIR!, ".credentials.json"), "refreshed-login");
+  assert.deepEqual(secondary.writable, [cwd, path.join(dataDir, "auto-runtime", "secondary")]);
+  fs.writeFileSync(
+    path.join(secondary.env.CLAUDE_CONFIG_DIR!, ".credentials.json"),
+    "refreshed-login",
+  );
   automationSandboxConfig(
-    { ...t, provider: "claude", claudeAccount: "nefro", id: "nefro" },
+    { ...t, provider: "claude", claudeAccount: "secondary", id: "secondary" },
     env,
     options,
   );
   assert.equal(
-    fs.readFileSync(path.join(nefro.env.CLAUDE_CONFIG_DIR!, ".credentials.json"), "utf8"),
+    fs.readFileSync(path.join(secondary.env.CLAUDE_CONFIG_DIR!, ".credentials.json"), "utf8"),
     "refreshed-login",
   );
 

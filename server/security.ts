@@ -14,7 +14,7 @@ const ID = /^[0-9A-Za-z_-]{6,40}$/;
 const MODES = new Set(["quick", "full"]);
 const SCAN_ID = /^[0-9]{8}T[0-9]{6}Z$/;
 
-const target = () => process.env.SECSCAN_SSH_TARGET || "root@206.51.227.101";
+const target = () => process.env.SECSCAN_SSH_TARGET || "root@203.0.113.10";
 const keyFile = () => process.env.SECSCAN_SSH_KEY || path.join(os.homedir(), ".ssh", "id_secscan");
 const sshBin = () => process.env.SECSCAN_SSH_BIN || "ssh";
 

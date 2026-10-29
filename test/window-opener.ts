@@ -136,7 +136,7 @@ try {
     ...OPENER_ROUTES.claude,
   });
 
-  // each ready Claude account has its own window; Nefro opens on its own key and account
+  // each ready Claude account has its own window; Secondary opens on its own key and account
   {
     fs.rmSync(path.join(dir, "window-opener.jsonl"), { force: true });
     fs.writeFileSync(
@@ -147,7 +147,7 @@ try {
     let u3: any = { claude: w(t + 3_600_000) };
     const o3 = createOpener({
       usage: () => u3,
-      claudeAccounts: () => ["sunny", "nefro"],
+      claudeAccounts: () => ["primary", "secondary"],
       open: (p, _r, a) => {
         calls.push([p, a]);
       },
@@ -155,18 +155,18 @@ try {
       now: () => t,
     });
     t = night;
-    assert.deepEqual(await o3.tick(), ["claude:nefro"], "sunny live, nefro idle");
-    assert.deepEqual(calls, [["claude", "nefro"]]);
+    assert.deepEqual(await o3.tick(), ["claude:secondary"], "primary live, secondary idle");
+    assert.deepEqual(calls, [["claude", "secondary"]]);
     const row = JSON.parse(
       fs.readFileSync(path.join(dir, "window-opener.jsonl"), "utf8").trim().split("\n")[0],
     );
-    assert.equal(row.account, "nefro");
+    assert.equal(row.account, "secondary");
     t += 5 * 60_000;
     u3 = {};
-    assert.deepEqual(await o3.tick(), ["claude"], "nefro gap holds; sunny now idle");
+    assert.deepEqual(await o3.tick(), ["claude"], "secondary gap holds; primary now idle");
     const o4 = createOpener({
       usage: () => ({}),
-      claudeAccounts: () => ["sunny"],
+      claudeAccounts: () => ["primary"],
       open: () => {},
       dir,
       now: () => t,
@@ -174,7 +174,7 @@ try {
     assert.deepEqual(
       await o4.tick(),
       [],
-      "unsigned account is skipped; ledger gap holds for sunny",
+      "unsigned account is skipped; ledger gap holds for primary",
     );
   }
 

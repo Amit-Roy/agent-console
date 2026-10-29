@@ -21,26 +21,26 @@ const key = (usage: any, usable?: (r: any) => boolean) =>
 
 // The example from the request: 40% left in 30 min beats 60% left in 2 hours.
 assert.equal(
-  key({ claude: sample(60, 30), "claude:nefro": sample(40, 120), codex: sample(10, 290) }),
+  key({ claude: sample(60, 30), "claude:secondary": sample(40, 120), codex: sample(10, 290) }),
   "claude",
 );
 assert.equal(
-  key({ claude: sample(40, 120), "claude:nefro": sample(60, 30), codex: sample(10, 290) }),
-  "claude:nefro",
+  key({ claude: sample(40, 120), "claude:secondary": sample(60, 30), codex: sample(10, 290) }),
+  "claude:secondary",
 );
 // Codex wins when its window is the one about to expire.
 assert.equal(
-  key({ claude: sample(20, 200), "claude:nefro": sample(20, 200), codex: sample(50, 20) }),
+  key({ claude: sample(20, 200), "claude:secondary": sample(20, 200), codex: sample(50, 20) }),
   "codex",
 );
 // An exhausted five-hour or seven-day window is never picked, however soon it resets.
 assert.equal(
-  key({ claude: sample(98, 2), "claude:nefro": sample(50, 200), codex: sample(50, 250) }),
-  "claude:nefro",
+  key({ claude: sample(98, 2), "claude:secondary": sample(50, 200), codex: sample(50, 250) }),
+  "claude:secondary",
 );
 assert.equal(
-  key({ claude: sample(10, 10, 99), "claude:nefro": sample(50, 200), codex: sample(50, 250) }),
-  "claude:nefro",
+  key({ claude: sample(10, 10, 99), "claude:secondary": sample(50, 200), codex: sample(50, 250) }),
+  "claude:secondary",
 );
 // A passed reset counts as a full window.
 const passed = autoCandidates({ claude: sample(100, -5) }, now).find(
@@ -51,10 +51,10 @@ assert.equal(passed.blocked, undefined);
 // Unavailable routes (signed-out account, missing model) are skipped.
 assert.equal(
   key(
-    { claude: sample(60, 30), "claude:nefro": sample(40, 120), codex: sample(10, 290) },
+    { claude: sample(60, 30), "claude:secondary": sample(40, 120), codex: sample(10, 290) },
     (r) => r.key !== "claude",
   ),
-  "claude:nefro",
+  "claude:secondary",
 );
 assert.equal(
   key({}, () => false),

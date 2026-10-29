@@ -3,8 +3,8 @@ import path from "node:path";
 import type { ProviderUsage } from "./usage.ts";
 
 const accounts = [
-  { key: "claude", label: "Claude · Sunny" },
-  { key: "claude:nefro", label: "Claude · Nefro" },
+  { key: "claude", label: "Claude · Primary" },
+  { key: "claude:secondary", label: "Claude · Secondary" },
   { key: "codex", label: "Codex" },
 ];
 const nonnegative = (n: unknown): n is number =>

@@ -212,7 +212,7 @@ try {
           Origin: "https://other.example",
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ fees: { claude: 20, "claude:nefro": 20, codex: 20 } }),
+        body: JSON.stringify({ fees: { claude: 20, "claude:secondary": 20, codex: 20 } }),
       })
     ).status,
     403,

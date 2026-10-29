@@ -20,7 +20,7 @@ const PATH_CHARS = /^[A-Za-z0-9/_.*-]+$/;
 const PREFIX = /^[a-z0-9_-]{0,16}$/;
 export const HEADERS = ["Authorization", "X-Api-Key", "Api-Key", "X-Auth-Token"];
 const MAX = { aliases: 4, rules: 3, paths: 16 };
-const DENY_SUFFIX = ["internal", "ts.net", "nefro.dev", "duckdns.org"];
+const DENY_SUFFIX = ["internal", "ts.net", "example.com", "duckdns.org"];
 
 const preset = (
   label: string,
@@ -40,7 +40,7 @@ export const presets = (): IronPreset[] => [
   preset(
     "Cloudflare",
     "CLOUDFLARE_API_TOKEN",
-    ["CLOUDFLARE_API_TOKEN", "CF_API_TOKEN", "CLOUDFLARE_NEFRO_DEV"],
+    ["CLOUDFLARE_API_TOKEN", "CF_API_TOKEN"],
     "api.cloudflare.com",
     "/client/v4/*",
     "Authorization",

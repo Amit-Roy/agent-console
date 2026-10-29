@@ -606,7 +606,7 @@ try {
   assert.equal(mail.body.subject, "[Agent Console] ALERT: vault decoy revealed");
   assert.deepEqual(
     [mail.body.to, mail.body.cc],
-    [["sunny@example.com"], ["nefro@example.com"]],
+    [["primary@example.com"], ["secondary@example.com"]],
   );
   assert.match(
     mail.body.text,

@@ -756,14 +756,14 @@ function dialogEffort(model = menus.dModel.value, id = menus.dProv.value) {
 const prov = (id) => state.providers.get(id);
 const provLabel = (id) => prov(id)?.label || id || "";
 const claudeAccounts = () =>
-  prov("claude")?.accounts || [{ id: "sunny", label: "Sunny", ready: !!prov("claude")?.ok }];
+  prov("claude")?.accounts || [{ id: "primary", label: "Primary", ready: !!prov("claude")?.ok }];
 const threadUsageKey = (t) =>
-  t?.provider === "claude" && t.claudeAccount === "nefro"
-    ? "claude:nefro"
+  t?.provider === "claude" && t.claudeAccount === "secondary"
+    ? "claude:secondary"
     : t?.provider === "pi" && t.model?.startsWith("deepseek/")
       ? "pi:deepseek"
       : t?.provider || "claude";
-const claudeAccount = (id = "sunny") =>
+const claudeAccount = (id = "primary") =>
   claudeAccounts().find((a) => a.id === id) || { id, label: cap(id) };
 function syncDialogAccount() {
   const visible = menus.dProv.value === "claude" && dialogTask === null;
@@ -925,7 +925,7 @@ function fillDialog(id) {
   $("d-warn").hidden = p.defaultMode !== "bypassPermissions";
   $("d-note").hidden = !p.note;
   $("d-note").textContent = p.note || "";
-  menus.dAccount.setItems(accountItems(), menus.dAccount.value || "sunny");
+  menus.dAccount.setItems(accountItems(), menus.dAccount.value || "primary");
   syncDialogAccount();
 }
 const modeItems = (modes) =>
@@ -1241,7 +1241,7 @@ const menus = {
     trigger: $("d-account"),
     label: "Claude account",
     renderTrigger: fieldTrigger,
-    value: "sunny",
+    value: "primary",
     onSelect: () => queueMicrotask(syncDialogAccount),
   }),
   dContext: createMenu({
@@ -3772,7 +3772,7 @@ function onResult(event, ctx) {
   )
     (row ? foot : (state.into || $("chat")).lastElementChild).append(
       " ",
-      signInButton(thread.claudeAccount || "sunny"),
+      signInButton(thread.claudeAccount || "primary"),
     );
 }
 
@@ -3935,7 +3935,7 @@ let usagePicker;
 function usageProviderEntries(provider) {
   if (provider.id === "claude")
     return claudeAccounts().map((account) => ({
-      id: account.id === "sunny" ? "claude" : `claude:${account.id}`,
+      id: account.id === "primary" ? "claude" : `claude:${account.id}`,
       label: account.label,
       email: account.email,
       claude: true,
@@ -4878,7 +4878,7 @@ function syncForkContext() {
   const native =
     t &&
     menus.dProv.value === t.provider &&
-    (t.provider !== "claude" || menus.dAccount.value === (t.claudeAccount || "sunny"));
+    (t.provider !== "claude" || menus.dAccount.value === (t.claudeAccount || "primary"));
   menus.dContext.setItems(
     [
       {
@@ -4912,7 +4912,7 @@ function openForkDialog(id) {
   menus.dProv.setValue(pid);
   fillDialog(pid);
   if (pid === t.provider) {
-    menus.dAccount.setValue(t.claudeAccount || "sunny");
+    menus.dAccount.setValue(t.claudeAccount || "primary");
     if (menus.dModel.items().some((i) => i.value === t.model)) {
       menus.dModel.setValue(t.model);
       dialogEffort(t.model, pid);
@@ -5033,7 +5033,7 @@ function openNewDialog() {
   setNav(false);
   workflowBrief = null;
   setDialogKind(null);
-  menus.dAccount.setValue("sunny");
+  menus.dAccount.setValue("primary");
   syncDialogAccount();
   $("dlg").showModal();
 }
@@ -5335,7 +5335,7 @@ $("dform").addEventListener("submit", (e) => {
     mode: menus.dMode.value,
   };
   const account =
-    settings.provider === "claude" ? { claudeAccount: menus.dAccount.value || "sunny" } : {};
+    settings.provider === "claude" ? { claudeAccount: menus.dAccount.value || "primary" } : {};
   if (dialogAssignment) {
     e.preventDefault();
     return void submitPremiumAssignment(settings, account);
@@ -5354,7 +5354,9 @@ $("dform").addEventListener("submit", (e) => {
     return void send({
       t: "create",
       ...settings,
-      ...(settings.provider === "claude" ? { claudeAccount: menus.dAccount.value || "sunny" } : {}),
+      ...(settings.provider === "claude"
+        ? { claudeAccount: menus.dAccount.value || "primary" }
+        : {}),
     });
   send({
     t: "task_save",

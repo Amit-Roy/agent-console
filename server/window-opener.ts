@@ -97,7 +97,7 @@ type OpenerOptions = {
     route: { model: string; effort: string },
     account?: string,
   ) => Promise<void> | void;
-  claudeAccounts?: () => string[]; // signed-in Claude accounts; each has its own quota window. Default: Sunny only
+  claudeAccounts?: () => string[]; // signed-in Claude accounts; each has its own quota window. Default: Primary only
   dir?: string;
   now?: () => number;
   events?: EventLog;
@@ -121,12 +121,12 @@ function loadLedger(ledger: string, lastOpened: Map<string, number>) {
   } catch {}
 }
 
-// usage key per quota window: Claude fans out per account, Nefro's key is "claude:nefro"
+// usage key per quota window: Claude fans out per account, Secondary's key is "claude:secondary"
 function openerTargets(ctx: OpenerContext, providers: string[]) {
   return providers.flatMap((provider) =>
     provider === "claude"
-      ? (ctx.opts.claudeAccounts?.() ?? ["sunny"]).map((account) =>
-          account === "nefro" ? "claude:nefro" : "claude",
+      ? (ctx.opts.claudeAccounts?.() ?? ["primary"]).map((account) =>
+          account === "secondary" ? "claude:secondary" : "claude",
         )
       : [provider],
   );
