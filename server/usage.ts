@@ -200,11 +200,11 @@ function mergeClaudeSnapshots(snapshots: any, currentSnapshots: any) {
     ...snapshots,
     ...Object.fromEntries(
       Object.entries(currentSnapshots).filter(
-        ([key]) => key !== "claude" && key !== "claude:nefro",
+        ([key]) => key !== "claude" && key !== "claude:secondary",
       ),
     ),
   };
-  for (const key of ["claude", "claude:nefro"]) {
+  for (const key of ["claude", "claude:secondary"]) {
     const sample = currentSnapshots[key];
     if (
       Number.isFinite(sample?.observedAt) &&
@@ -213,7 +213,7 @@ function mergeClaudeSnapshots(snapshots: any, currentSnapshots: any) {
     )
       nextUsage[key] = sample;
   }
-  for (const key of ["claude", "claude:nefro"])
+  for (const key of ["claude", "claude:secondary"])
     if (!Number.isFinite(nextUsage[key]?.observedAt) || nextUsage[key]?.usageProvider !== key)
       delete nextUsage[key];
   return nextUsage;
@@ -257,7 +257,7 @@ function migrateUsageHistory() {
   if (!Array.isArray(threads)) throw Error("Malformed threads metadata");
   const logs = readClaudeThreadLogs(threads);
   const preservedCurrentRows = currentRows.filter(
-    (row) => !["claude", "claude:nefro"].includes(row.provider) || row.schemaVersion != null,
+    (row) => !["claude", "claude:secondary"].includes(row.provider) || row.schemaVersion != null,
   );
   const restored = reconstructClaudeHistory({
     rows: [...sourceRows, ...preservedCurrentRows],

@@ -216,7 +216,7 @@ export function buildContextAllocation(
 const locations = new Map<string, string>();
 async function sessionFile(thread: Thread): Promise<string | undefined> {
   if (!thread.sessionId || !/^[\w-]+$/.test(thread.sessionId)) return;
-  const key = `${thread.provider}:${thread.claudeAccount || "sunny"}:${thread.sessionId}`;
+  const key = `${thread.provider}:${thread.claudeAccount || "primary"}:${thread.sessionId}`;
   if (locations.has(key)) return locations.get(key);
   const root =
     thread.provider === "codex"

@@ -38,10 +38,10 @@ import {
 const MAX_VALUE = 8 * 1024;
 const ENV_KEY = /^[A-Z_][A-Z0-9_]*$/;
 const ENV_LINE = /^(\s*(?:export\s+)?)([A-Za-z_][A-Za-z0-9_]*)(\s*=\s*)(.*)$/;
-const DEFAULT_GH_REPOS = ["Amit-Roy/harden-vps"];
+const DEFAULT_GH_REPOS = ["example-owner/harden-vps"];
 const GH_TIMEOUT = 20_000;
-const DEFAULT_ALERT_TO = ["sunny.amit.roy@gmail.com"],
-  DEFAULT_ALERT_CC = ["nefro.amit.roy@gmail.com"];
+const DEFAULT_ALERT_TO = ["primary@example.com"],
+  DEFAULT_ALERT_CC = ["secondary@example.com"];
 
 const SECRETISH = /(KEY|TOKEN|SECRET|PASS|AUTH|CRED|PRIVATE|DSN|URL)/i; // env keys outside this are settings, not secrets: hidden unless showAllKeys
 type Source = {

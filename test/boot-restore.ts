@@ -41,7 +41,7 @@ try {
         id: "claude",
         title: "fixture",
         provider: "claude",
-        claudeAccount: "sunny",
+        claudeAccount: "primary",
         cwd: data,
         status: "idle",
         createdAt: 1,
@@ -51,7 +51,7 @@ try {
         id: "legacy",
         title: "legacy",
         provider: "claude",
-        claudeAccount: "nefro",
+        claudeAccount: "secondary",
         cwd: data,
         status: "idle",
         createdAt: 1,
@@ -75,7 +75,7 @@ try {
       "thread.updatedAt must not replace provider receipt time",
     );
     assert.equal(
-      usage.get("claude:nefro"),
+      usage.get("claude:secondary"),
       undefined,
       "unstamped legacy events are skipped during boot restore",
     );

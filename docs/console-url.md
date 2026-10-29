@@ -1,7 +1,7 @@
 # Console URL and Coder boundary
 
-The console URL is `https://console.nefro-dev-coder.duckdns.org/`.
-The Coder dashboard remains at `https://nefro-dev-coder.duckdns.org/`.
+The console URL is `https://console.coder.example.com/`.
+The Coder dashboard remains at `https://coder.example.com/`.
 
 ## Routing and authentication
 
@@ -16,7 +16,7 @@ credentials stay in the workspace. No Coder access URL, template, database, or w
 restart is required. The existing Coder login URL may still use its tunnel domain.
 
 Caddy presents the existing app hostname
-`7070--main--nefro-dev-ssdnodes--amit-roy.nefro-dev-coder.duckdns.org` in both `Host`
+`7070--main--workspace--example-owner.coder.example.com` in both `Host`
 and `X-Forwarded-Host` so Coder resolves the same workspace application. Only the exact
 short HTTPS `Origin` is translated to that app origin, preserving same-origin checks
 for writes and WebSocket connections. Other origins remain subject to Coder and Console
@@ -52,7 +52,7 @@ Old bookmarks and deep links redirect; the new origin does not copy local browse
    `Authorization`, and `Referer` request headers and `Set-Cookie` and `Location`
    response headers from that logger: the canonical redirect can carry the callback
    key in `Location`. Never print the DuckDNS environment file or log login URLs.
-4. Verify the acceptance checks below. Set `AGENT_CONSOLE_URL=https://console.nefro-dev-coder.duckdns.org/`
+4. Verify the acceptance checks below. Set `AGENT_CONSOLE_URL=https://console.coder.example.com/`
    in the Console environment file so `bin/agent-console url` prints the alias.
 5. Roll back by removing only the alias import and reloading Caddy; remove
    `AGENT_CONSOLE_URL`. The temporary redirect is not permanently cached. Existing

@@ -11,7 +11,7 @@
       "name": "claude-account",
       "path": "bin/claude-account",
       "description": "Set up, log in or check one of the two isolated Claude accounts.",
-      "usage": ["claude-account <sunny|nefro> [setup|login|status]"],
+      "usage": ["claude-account <primary|secondary> [setup|login|status]"],
       "tags": ["claude", "login", "account", "auth"]
     },
     {

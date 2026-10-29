@@ -16,12 +16,12 @@ for (const dir of [
   bin,
   path.join(home, "repos"),
   path.join(home, ".claude"),
-  path.join(home, ".claude-nefro"),
+  path.join(home, ".claude-secondary"),
 ])
   fs.mkdirSync(dir, { recursive: true });
 for (const [dir, email] of [
-  [".claude", "sunny.amit.roy@gmail.com"],
-  [".claude-nefro", "nefro.amit.roy@gmail.com"],
+  [".claude", "primary@example.com"],
+  [".claude-secondary", "secondary@example.com"],
 ]) {
   fs.writeFileSync(
     path.join(home, dir, ".credentials.json"),
@@ -66,8 +66,12 @@ const sample = (used: number, resetsIn: number) => ({
     { label: "7-day", used: 20, limit: 100, unit: "%" },
   ],
 });
-// Sunny: 40% left, 30 min. Nefro: 60% left, 2 hours. Codex: 90% left, 290 min. Sunny wastes the most per minute.
-const usage = { claude: sample(60, 30), "claude:nefro": sample(40, 120), codex: sample(10, 290) };
+// Primary: 40% left, 30 min. Secondary: 60% left, 2 hours. Codex: 90% left, 290 min. Primary wastes the most per minute.
+const usage = {
+  claude: sample(60, 30),
+  "claude:secondary": sample(40, 120),
+  codex: sample(10, 290),
+};
 async function fixture(page: Page) {
   let client: any;
   await page.routeWebSocket(/\/ws$/, (socket) => {
@@ -145,28 +149,28 @@ try {
     assert.match(await page.locator("#d-prov").innerText(), /Claude/);
     assert.match(
       await page.locator("#d-account").innerText(),
-      /Sunny/,
+      /Primary/,
       "40% left in 30 min beats 60% left in 2 hours.",
     );
     assert.match(await page.locator("#d-model").innerText(), /Sonnet/);
     assert.match(await page.locator("#d-effort").innerText(), /Medium/i);
     assert.match(
       await page.locator("#d-auto-note").innerText(),
-      /Claude · Sunny · Sonnet · medium\. 40% left, resets in 30m/,
+      /Claude · Primary · Sonnet · medium\. 40% left, resets in 30m/,
     );
 
     await page.locator("#d-auto-info").click();
     assert.equal(await page.locator("#d-auto-info").getAttribute("aria-expanded"), "true");
     const rows = page.locator("#d-auto-panel .auto-line:not(.hdr)");
     assert.equal(await rows.count(), 3);
-    assert.match(await rows.nth(0).innerText(), /Claude · Sunny[\s\S]*40% left[\s\S]*30m/);
-    assert.match(await rows.nth(1).innerText(), /Claude · Nefro[\s\S]*60% left[\s\S]*2h 0m/);
+    assert.match(await rows.nth(0).innerText(), /Claude · Primary[\s\S]*40% left[\s\S]*30m/);
+    assert.match(await rows.nth(1).innerText(), /Claude · Secondary[\s\S]*60% left[\s\S]*2h 0m/);
     assert.match(await rows.nth(2).innerText(), /Codex[\s\S]*90% left[\s\S]*4h 50m/);
     assert.equal(
       await page
         .locator("#d-auto-panel .best")
         .innerText()
-        .then((t) => t.startsWith("Claude · Sunny")),
+        .then((t) => t.startsWith("Claude · Primary")),
       true,
     );
     assert.equal(

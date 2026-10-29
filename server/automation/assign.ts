@@ -162,7 +162,7 @@ function assertProviderChoice(ctx: AssignerContext, req: AssignmentRequest) {
   if (
     req.provider === "claude" &&
     !provider.accounts?.some(
-      (account) => account.id === (req.claudeAccount ?? "sunny") && account.ready,
+      (account) => account.id === (req.claudeAccount ?? "primary") && account.ready,
     )
   )
     throw new Error("Selected Claude account is not signed in.");
@@ -313,7 +313,7 @@ function createSession(run: AssignRun, checkout: { cwd: string; base: string }, 
     model: req.model,
     effort: req.effort,
     mode: req.mode,
-    ...(req.provider === "claude" ? { claudeAccount: req.claudeAccount ?? "sunny" } : {}),
+    ...(req.provider === "claude" ? { claudeAccount: req.claudeAccount ?? "primary" } : {}),
     cwd: checkout.cwd,
     title: `${topicOf(repo)}:${req.number} premium`,
     issueRun: {

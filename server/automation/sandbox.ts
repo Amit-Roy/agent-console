@@ -197,7 +197,7 @@ function applyClaudeSandbox(
   const original = claudeConfigDir(thread.claudeAccount, env, home);
   for (const file of [".credentials.json", ".claude.json", "settings.json"])
     seedFile(path.join(original, file), path.join(config, file));
-  if ((!thread.claudeAccount || thread.claudeAccount === "sunny") && !env.CLAUDE_CONFIG_DIR)
+  if ((!thread.claudeAccount || thread.claudeAccount === "primary") && !env.CLAUDE_CONFIG_DIR)
     seedFile(path.join(home, ".claude.json"), path.join(config, ".claude.json"));
   result.CLAUDE_CONFIG_DIR = config;
   return original;

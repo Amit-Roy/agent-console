@@ -127,7 +127,7 @@ export class Notifications {
         try {
           await this.send(device.subscription, payload, {
             vapidDetails: {
-              subject: "https://github.com/Amit-Roy/agent-console",
+              subject: "https://github.com/example-owner/agent-console",
               publicKey: this.state.publicKey,
               privateKey: this.state.privateKey,
             },

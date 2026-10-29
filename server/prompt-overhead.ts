@@ -146,9 +146,9 @@ async function layout(home: string, cwd: string): Promise<Def[]> {
       : {}),
   });
   const defs = [claude("claude", "Claude")];
-  const nefro = claudeConfigDir("nefro", process.env, home);
-  if (fs.existsSync(nefro)) {
-    const second = claude("claude:nefro", "Claude (nefro)", "nefro");
+  const secondary = claudeConfigDir("secondary", process.env, home);
+  if (fs.existsSync(secondary)) {
+    const second = claude("claude:secondary", "Claude (secondary)", "secondary");
     // Same resolved instruction set (CLAUDE.md, skills dir, agents dir): one column naming both accounts.
     if (await sameSet(defs[0], second)) defs[0].label = "Claude (both accounts)";
     else defs.push(second);

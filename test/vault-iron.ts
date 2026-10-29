@@ -98,7 +98,7 @@ const status = (tokenSha: string) =>
     path.join(dir, "status"),
     JSON.stringify({
       name: "deepseek",
-      envVars: ["DEEPSEEK_API_KEY", "DEEPAEEK_API_KEY", "DEEPSEEK_NEFRO_DEV"],
+      envVars: ["DEEPSEEK_API_KEY", "DEEPAEEK_API_KEY", "DEEPSEEK_SECONDARY_DEV"],
       set: true,
       mtime: "2026-10-26T00:00:00Z",
       tokenSha,
@@ -112,7 +112,7 @@ fs.writeFileSync(
     sources: [{ type: "env", path: "~/.config/agent-console/env" }],
   }),
 );
-const initial = `DEEPSEEK_API_KEY=${REALKEY}\nDEEPAEEK_API_KEY=old-alias-FAKE-value-1\nDEEPSEEK_NEFRO_DEV=old-alias-FAKE-value-2\nOPENAI_API_KEY=${OTHER}\n`;
+const initial = `DEEPSEEK_API_KEY=${REALKEY}\nDEEPAEEK_API_KEY=old-alias-FAKE-value-1\nDEEPSEEK_SECONDARY_DEV=old-alias-FAKE-value-2\nOPENAI_API_KEY=${OTHER}\n`;
 fs.writeFileSync(envFile, initial, { mode: 0o600 });
 
 const { sources, listVault, checkValue, setSecret, deleteSecret, addIronProvider } = await import(
@@ -131,7 +131,7 @@ try {
   assert.ok(await ironStatus());
   assert.equal(await proxyOf("DEEPSEEK_API_KEY"), "real-key");
   assert.equal(
-    await proxyOf("DEEPSEEK_NEFRO_DEV"),
+    await proxyOf("DEEPSEEK_SECONDARY_DEV"),
     "real-key",
     "managed alias shows despite a non-secret name",
   );
@@ -205,7 +205,7 @@ try {
 
   // invalid specs and values never reach ssh
   for (const bad of [
-    { ...spec, rules: [{ host: "evil.nefro.dev", paths: ["/a"] }] },
+    { ...spec, rules: [{ host: "evil.example.com", paths: ["/a"] }] },
     { ...spec, name: "lower" },
     { ...spec, envVars: ["DEEPSEEK_API_KEY"] },
     { ...spec, rules: [{ host: "api.cloudflare.com", paths: ["/*"] }] },

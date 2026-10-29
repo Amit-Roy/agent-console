@@ -15,8 +15,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 ROOT = Path(__file__).resolve().parent.parent
-SHORT = "console.nefro-dev-coder.duckdns.org"
-LONG = "7070--main--nefro-dev-ssdnodes--amit-roy.nefro-dev-coder.duckdns.org"
+SHORT = "console.coder.example.com"
+LONG = "7070--main--workspace--example-owner.coder.example.com"
 
 
 class CoderFixture(BaseHTTPRequestHandler):
@@ -49,7 +49,7 @@ class CoderFixture(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header(
             "Set-Cookie",
-            "fixture=opaque; Domain=.nefro-dev-coder.duckdns.org; Secure; HttpOnly; Path=/",
+            "fixture=opaque; Domain=.coder.example.com; Secure; HttpOnly; Path=/",
         )
         self.end_headers()
         self.wfile.write(body)
@@ -104,7 +104,7 @@ class ConsoleRouting(unittest.TestCase):
                 "body": '{"fixture":true}',
             },
         )
-        self.assertIn("Domain=.nefro-dev-coder.duckdns.org", headers["set-cookie"])
+        self.assertIn("Domain=.coder.example.com", headers["set-cookie"])
 
     def test_foreign_origin_is_not_promoted_to_trusted_origin(self):
         for origin in [
@@ -117,7 +117,7 @@ class ConsoleRouting(unittest.TestCase):
             self.assertEqual(json.loads(body)["origin"], origin)
 
     def test_other_coder_hosts_use_existing_fallback(self):
-        for host in ["other.nefro-dev-coder.duckdns.org", "nefro-dev-coder.duckdns.org"]:
+        for host in ["other.coder.example.com", "coder.example.com"]:
             _, _, body = self.request(host=host)
             self.assertEqual(json.loads(body)["host"], host)
 

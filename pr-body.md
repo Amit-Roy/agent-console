@@ -20,15 +20,15 @@
 - Test first: `test/quota-resumption.ts` failed before the change (quotaPaused field didn't exist), now passes with 8 tests
 
 ## Architecture before
-- ![Architecture before](https://raw.githubusercontent.com/Amit-Roy/agent-console/issue-72-premium-models-across-providers-should-a-67d8b047/arch-evidence/output/before.png)
+- ![Architecture before](https://raw.githubusercontent.com/example-owner/agent-console/issue-72-premium-models-across-providers-should-a-67d8b047/arch-evidence/output/before.png)
 
 ## Architecture after
-- ![Architecture after](https://raw.githubusercontent.com/Amit-Roy/agent-console/issue-72-premium-models-across-providers-should-a-67d8b047/arch-evidence/output/after.png)
+- ![Architecture after](https://raw.githubusercontent.com/example-owner/agent-console/issue-72-premium-models-across-providers-should-a-67d8b047/arch-evidence/output/after.png)
 
 ## Screenshot evidence
 - Evidence type: static
 - Terminal validation: all 8 quota-resumption tests pass, confirming quota-pause marking, archived exclusion, resumption on window reset, duplicate handling, and multi-provider isolation
-- ![Test output](https://raw.githubusercontent.com/Amit-Roy/agent-console/issue-72-premium-models-across-providers-should-a-67d8b047/arch-evidence/test-output.png)
+- ![Test output](https://raw.githubusercontent.com/example-owner/agent-console/issue-72-premium-models-across-providers-should-a-67d8b047/arch-evidence/test-output.png)
 
 ## Self-review
 - Checked: quotaPaused field added to Thread interface, resumeQuotaPaused skips archived threads, usage module detects window resets, index.ts subscribes to reset notifications, duplicate notifications handled by clearing quotaPaused after first resume

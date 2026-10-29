@@ -36,8 +36,8 @@ const thread = (id: string, title: string, claudeAccount?: string) => ({
 fs.writeFileSync(
   path.join(data, "threads.json"),
   JSON.stringify([
-    thread("legacy-sunny", "Legacy Sunny"),
-    thread("fixture-nefro", "Nefro account", "nefro"),
+    thread("legacy-primary", "Legacy Primary"),
+    thread("fixture-secondary", "Secondary account", "secondary"),
   ]),
 );
 fs.writeFileSync(path.join(data, "queues.json"), "{}");
@@ -76,7 +76,7 @@ async function fixtureUsage(page: Page) {
             updatedAt: Date.now(),
             windows: [{ label: "5-hour", used: 21, limit: 100, unit: "%" }],
           },
-          "claude:nefro": {
+          "claude:secondary": {
             updatedAt: Date.now(),
             windows: [{ label: "5-hour", used: 63, limit: 100, unit: "%" }],
           },
@@ -122,14 +122,14 @@ try {
     const pushUsage = await fixtureUsage(page);
     await page.goto(base);
     await page.waitForFunction(
-      () => document.getElementById("ttl")?.textContent === "Legacy Sunny",
+      () => document.getElementById("ttl")?.textContent === "Legacy Primary",
     );
-    assert.match(await page.locator("#thread-account").innerText(), /Sunny/);
+    assert.match(await page.locator("#thread-account").innerText(), /Primary/);
     if (name === "phone") await page.locator("#menu").click();
     const selector = page.locator("#usage-provider");
     await selector.waitFor();
-    assert.equal(await selector.innerText(), "Claude · Sunny");
-    assert.equal(await selector.getAttribute("aria-label"), "Usage account: Claude · Sunny");
+    assert.equal(await selector.innerText(), "Claude · Primary");
+    assert.equal(await selector.getAttribute("aria-label"), "Usage account: Claude · Primary");
     assert.equal(await selector.getAttribute("aria-haspopup"), "listbox");
     assert.equal(
       await selector.evaluate((button) => button.scrollWidth <= button.clientWidth),
@@ -142,21 +142,21 @@ try {
     const usageMenu = page.getByRole("listbox", { name: "Usage account", exact: true });
     await usageMenu.waitFor();
     assert.deepEqual(await usageMenu.locator(".m-label").allTextContents(), [
-      "Claude · Sunny",
-      "Claude · Nefro",
+      "Claude · Primary",
+      "Claude · Secondary",
       "OpenRouter",
       "Codex",
     ]);
-    assert.match(await usageMenu.innerText(), /sunny\.amit\.roy@gmail\.com/);
-    assert.match(await usageMenu.innerText(), /nefro\.amit\.roy@gmail\.com/);
+    assert.match(await usageMenu.innerText(), /primary@example\.com/);
+    assert.match(await usageMenu.innerText(), /secondary@example\.com/);
     await page.screenshot({ path: path.join(out, `${name}-usage-open.png`), fullPage: true });
     if (name === "phone") {
       await page.emulateMedia({ colorScheme: "dark" });
       await page.screenshot({ path: path.join(out, "phone-usage-open-dark.png"), fullPage: true });
       await page.emulateMedia({ colorScheme: "light" });
     }
-    await usageMenu.getByRole("option", { name: /Claude · Nefro/ }).click();
-    assert.equal(await selector.innerText(), "Claude · Nefro");
+    await usageMenu.getByRole("option", { name: /Claude · Secondary/ }).click();
+    assert.equal(await selector.innerText(), "Claude · Secondary");
     assert.equal(
       await page.locator("#usage .pct").first().innerText(),
       "63%",
@@ -167,7 +167,7 @@ try {
     const menuNode = await usageMenu.elementHandle();
     pushUsage({
       t: "usage",
-      provider: "claude:nefro",
+      provider: "claude:secondary",
       usage: {
         updatedAt: Date.now(),
         windows: [{ label: "5-hour", used: 64, limit: 100, unit: "%" }],
@@ -200,16 +200,16 @@ try {
     await selector.press("ArrowDown");
     await page.keyboard.press("Home");
     await page.keyboard.press("Enter");
-    assert.equal(await selector.innerText(), "Claude · Sunny");
+    assert.equal(await selector.innerText(), "Claude · Primary");
     assert.equal(await page.locator("#usage .pct").first().innerText(), "21%");
     await page.locator("#new").evaluate((el: HTMLElement) => el.click());
     await page.locator("#dlg").waitFor({ state: "visible" });
     await page.locator("#d-prov").click();
     await page.getByRole("option", { name: /Claude Code/ }).click();
     assert.equal(await page.locator("#account-field").isVisible(), true);
-    assert.match(await page.locator("#d-account").innerText(), /Sunny/);
+    assert.match(await page.locator("#d-account").innerText(), /Primary/);
     await page.locator("#d-account").click();
-    await page.getByRole("option", { name: /Nefro/ }).click();
+    await page.getByRole("option", { name: /Secondary/ }).click();
     assert.equal(await page.locator("#d-ok").isDisabled(), true);
     assert.equal(
       await page.locator("#d-account-note").isVisible(),
@@ -246,21 +246,21 @@ try {
     await page.getByRole("option", { name: /Claude Code/ }).click();
     assert.match(
       await page.locator("#d-account").innerText(),
-      /Sunny/,
-      "Each new thread defaults to Sunny.",
+      /Primary/,
+      "Each new thread defaults to Primary.",
     );
     assert.deepEqual(pageErrors, []);
     await context.close();
   }
-  const nefro = path.join(home, ".claude-nefro");
-  fs.mkdirSync(nefro);
+  const secondary = path.join(home, ".claude-secondary");
+  fs.mkdirSync(secondary);
   fs.writeFileSync(
-    path.join(nefro, ".credentials.json"),
+    path.join(secondary, ".credentials.json"),
     JSON.stringify({ claudeAiOauth: { accessToken: "offline-fixture" } }),
   );
   fs.writeFileSync(
-    path.join(nefro, ".claude.json"),
-    JSON.stringify({ oauthAccount: { emailAddress: "nefro.amit.roy@gmail.com" } }),
+    path.join(secondary, ".claude.json"),
+    JSON.stringify({ oauthAccount: { emailAddress: "secondary@example.com" } }),
   );
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
   await context.addCookies([
@@ -274,28 +274,30 @@ try {
   ]);
   const page = await context.newPage();
   await page.goto(base);
-  await page.waitForFunction(() => document.getElementById("ttl")?.textContent === "Legacy Sunny");
+  await page.waitForFunction(
+    () => document.getElementById("ttl")?.textContent === "Legacy Primary",
+  );
   await page.locator("#new").evaluate((el: HTMLElement) => el.click());
   await page.locator("#d-prov").click();
   await page.getByRole("option", { name: /Claude Code/ }).click();
   await page.locator("#d-account").click();
-  await page.getByRole("option", { name: /Nefro/ }).click();
+  await page.getByRole("option", { name: /Secondary/ }).click();
   assert.equal(await page.locator("#d-ok").isEnabled(), true);
   await page.locator("#d-ok").click();
   await page.waitForFunction(
-    () => !!document.getElementById("thread-account")?.textContent?.includes("Nefro"),
+    () => !!document.getElementById("thread-account")?.textContent?.includes("Secondary"),
   );
   const created = JSON.parse(fs.readFileSync(path.join(data, "threads.json"), "utf8")).find(
-    (t: any) => !["legacy-sunny", "fixture-nefro"].includes(t.id),
+    (t: any) => !["legacy-primary", "fixture-secondary"].includes(t.id),
   );
-  assert.equal(created.claudeAccount, "nefro", "Create persists the selected account.");
+  assert.equal(created.claudeAccount, "secondary", "Create persists the selected account.");
   assert.equal(
     await page.locator("#usage-provider").innerText(),
-    "Claude · Nefro",
-    "Opening a Nefro thread selects its usage account.",
+    "Claude · Secondary",
+    "Opening a Secondary thread selects its usage account.",
   );
   assert.equal(created.sessionId, undefined, "Creating a thread does not start a prompt.");
-  await page.screenshot({ path: path.join(out, "desktop-nefro-thread.png"), fullPage: true });
+  await page.screenshot({ path: path.join(out, "desktop-secondary-thread.png"), fullPage: true });
   await context.close();
   const phone = await browser.newContext({
     viewport: { width: 390, height: 844 },
@@ -314,12 +316,15 @@ try {
   const phonePage = await phone.newPage();
   await phonePage.goto(base);
   await phonePage.waitForFunction(
-    () => !!document.getElementById("thread-account")?.textContent?.includes("Nefro"),
+    () => !!document.getElementById("thread-account")?.textContent?.includes("Secondary"),
   );
-  await phonePage.screenshot({ path: path.join(out, "phone-nefro-thread.png"), fullPage: true });
+  await phonePage.screenshot({
+    path: path.join(out, "phone-secondary-thread.png"),
+    fullPage: true,
+  });
   await phone.close();
   console.log(
-    `PASS Claude account UI: phone/desktop dropdown, separate meters, keyboard, Escape, telemetry stability, legacy Sunny, Nefro creation, account reset, provider isolation. Screenshots: ${out}`,
+    `PASS Claude account UI: phone/desktop dropdown, separate meters, keyboard, Escape, telemetry stability, legacy Primary, Secondary creation, account reset, provider isolation. Screenshots: ${out}`,
   );
 } finally {
   await browser?.close();

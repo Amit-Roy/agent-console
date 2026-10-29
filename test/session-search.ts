@@ -64,7 +64,10 @@ fs.appendFileSync(
     toolUse("t1", "gh pr list --json url"),
     toolResult("t1", "https://github.com/o/r/pull/7"),
     toolUse("t2", "cd ~/wt && gh pr create --title x"),
-    toolResult("t2", "Creating pull request\nhttps://github.com/Amit-Roy/agent-console/pull/28\n"),
+    toolResult(
+      "t2",
+      "Creating pull request\nhttps://github.com/example-owner/agent-console/pull/28\n",
+    ),
   ].join("\n") + "\n",
 );
 let search = new SessionSearch(root);
@@ -87,12 +90,12 @@ try {
   const raised = await search.prs({ thread: "pi-one" });
   assert.deepEqual(
     raised.prs.map((p) => `${p.repo}#${p.number}`),
-    ["Amit-Roy/agent-console#28"],
+    ["example-owner/agent-console#28"],
     "only gh pr create output counts",
   );
   for (const ref of [
-    "https://github.com/Amit-Roy/agent-console/pull/28#issuecomment-6272643047",
-    "Amit-Roy/agent-console#28",
+    "https://github.com/example-owner/agent-console/pull/28#issuecomment-6272643047",
+    "example-owner/agent-console#28",
     "28",
   ])
     assert.equal((await search.prs({ ref })).prs[0]?.thread, "pi-one", ref);

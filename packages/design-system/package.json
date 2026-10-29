@@ -19,16 +19,16 @@
     "ui",
     "agent-console"
   ],
-  "author": "Amit-Roy",
+  "author": "example-owner",
   "license": "MIT",
-  "homepage": "https://github.com/Amit-Roy/agent-console#readme",
+  "homepage": "https://github.com/example-owner/agent-console#readme",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Amit-Roy/agent-console.git",
+    "url": "https://github.com/example-owner/agent-console.git",
     "directory": "packages/design-system"
   },
   "bugs": {
-    "url": "https://github.com/Amit-Roy/agent-console/issues"
+    "url": "https://github.com/example-owner/agent-console/issues"
   },
   "dependencies": {},
   "publishConfig": {

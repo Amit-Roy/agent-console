@@ -2,18 +2,36 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-export type ClaudeAccount = "sunny" | "nefro";
+export type ClaudeAccount = "primary" | "secondary";
 
 export function normalizeClaudeAccount(value?: string): ClaudeAccount {
-  if (value === undefined || value === "sunny") return "sunny";
-  if (value === "nefro") return "nefro";
+  if (value === undefined || value === "primary") return "primary";
+  if (value === "secondary") return "secondary";
   throw new Error("Unknown Claude account.");
 }
 
 export function claudeConfigDir(account?: string, env = process.env, home = os.homedir()): string {
-  return normalizeClaudeAccount(account) === "nefro"
-    ? path.join(home, ".claude-nefro")
+  return normalizeClaudeAccount(account) === "secondary"
+    ? path.join(home, ".claude-secondary")
     : env.CLAUDE_CONFIG_DIR || path.join(home, ".claude");
+}
+
+function claudeAccountEmail(
+  account: ClaudeAccount,
+  env = process.env,
+  home = os.homedir(),
+): string {
+  try {
+    const metadata = path.join(claudeConfigDir(account, env, home), ".claude.json");
+    const legacy =
+      account === "primary" && !env.CLAUDE_CONFIG_DIR ? path.join(home, ".claude.json") : undefined;
+    const file = fs.existsSync(metadata) ? metadata : legacy;
+    if (!file) return "";
+    const email = JSON.parse(fs.readFileSync(file, "utf8")).oauthAccount?.emailAddress;
+    return typeof email === "string" ? email.trim() : "";
+  } catch {
+    return "";
+  }
 }
 
 export function claudeAccountReady(
@@ -28,18 +46,7 @@ export function claudeAccountReady(
       fs.readFileSync(path.join(config, ".credentials.json"), "utf8"),
     ).claudeAiOauth;
     if (typeof oauth?.accessToken !== "string" || !oauth.accessToken.length) return false;
-    const metadata = path.join(config, ".claude.json");
-    const legacy =
-      selected === "sunny" && !env.CLAUDE_CONFIG_DIR ? path.join(home, ".claude.json") : undefined;
-    const file = fs.existsSync(metadata) ? metadata : legacy;
-    const email =
-      file && fs.existsSync(file)
-        ? JSON.parse(fs.readFileSync(file, "utf8")).oauthAccount?.emailAddress
-        : undefined;
-    const expected = selected === "nefro" ? "nefro.amit.roy@gmail.com" : "sunny.amit.roy@gmail.com";
-    if (selected === "nefro" && typeof email !== "string") return false;
-    if (typeof email === "string" && email.toLowerCase() !== expected) return false;
-    return true;
+    return selected === "primary" || claudeAccountEmail(selected, env, home).length > 0;
   } catch {
     return false;
   }
@@ -47,29 +54,21 @@ export function claudeAccountReady(
 
 export function requireClaudeAccount(account?: string): ClaudeAccount {
   const selected = normalizeClaudeAccount(account);
-  if (selected === "nefro" && !claudeAccountReady(selected))
+  if (selected === "secondary" && !claudeAccountReady(selected))
     throw new Error(
-      "Nefro Claude account is not signed in. Complete its separate Claude login first.",
+      "Secondary Claude account is not signed in. Complete its separate Claude login first.",
     );
   return selected;
 }
 
 export const claudeUsageKey = (account?: string) =>
-  normalizeClaudeAccount(account) === "nefro" ? "claude:nefro" : "claude";
+  normalizeClaudeAccount(account) === "secondary" ? "claude:secondary" : "claude";
 
-export function claudeAccounts() {
-  return [
-    {
-      id: "sunny",
-      label: "Sunny",
-      email: "sunny.amit.roy@gmail.com",
-      ready: claudeAccountReady("sunny"),
-    },
-    {
-      id: "nefro",
-      label: "Nefro",
-      email: "nefro.amit.roy@gmail.com",
-      ready: claudeAccountReady("nefro"),
-    },
-  ];
+export function claudeAccounts(env = process.env, home = os.homedir()) {
+  return (["primary", "secondary"] as const).map((account) => ({
+    id: account,
+    label: account === "primary" ? "Primary" : "Secondary",
+    email: claudeAccountEmail(account, env, home),
+    ready: claudeAccountReady(account, env, home),
+  }));
 }

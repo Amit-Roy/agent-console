@@ -65,8 +65,8 @@ export const DEFAULTS: Config = {
   lowUsageLeadMinutes: 180,
   maxUsedPct: 90,
   perWindow: 2,
-  repos: ["Amit-Roy/agent-console"],
-  authors: ["Amit-Roy"],
+  repos: ["example-owner/agent-console"],
+  authors: ["example-owner"],
   routing: { mode: "shadow", bauOnPi: false },
 };
 

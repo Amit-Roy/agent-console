@@ -30,7 +30,7 @@ execFileSync("git", [
   "remote",
   "add",
   "origin",
-  "https://github.com/Amit-Roy/agent-console.git",
+  "https://github.com/example-owner/agent-console.git",
 ]);
 const bin = path.join(work, "bin");
 fs.mkdirSync(bin);
@@ -126,7 +126,7 @@ try {
     "pi title is shown for review",
   );
   assert.match(await page.inputValue("#issue-body"), /Crash above 5,000 lines/);
-  assert.match((await page.textContent("#issue-note")) || "", /Amit-Roy\/agent-console/);
+  assert.match((await page.textContent("#issue-note")) || "", /example-owner\/agent-console/);
   await page.fill("#issue-title", "Edited by owner");
 
   // Nothing opens before the owner confirms; the reviewed (edited) text is what GitHub receives.
@@ -139,7 +139,10 @@ try {
   const [popup] = await Promise.all([ctx.waitForEvent("page"), page.click("#issue-open")]);
   await popup.waitForLoadState();
   const url = new URL(opened[0] || popup.url());
-  assert.equal(url.origin + url.pathname, "https://github.com/Amit-Roy/agent-console/issues/new");
+  assert.equal(
+    url.origin + url.pathname,
+    "https://github.com/example-owner/agent-console/issues/new",
+  );
   assert.equal(url.searchParams.get("title"), "Edited by owner");
   assert.match(url.searchParams.get("body") || "", /Crash above 5,000 lines/);
   assert.equal(

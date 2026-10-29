@@ -835,7 +835,7 @@ document.addEventListener("visibilitychange", () => {
 });
 
 /* ---------- tools (tool-watch) ---------- */
-const TW_PR = "https://github.com/Amit-Roy/dotfiles/pull/";
+const TW_PR = "https://github.com/example-owner/dotfiles/pull/";
 function twRows(d) {
   const rows = new Map();
   for (const r of d.records || [])

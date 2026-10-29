@@ -112,7 +112,7 @@ export async function startDebug(req: DebugRequest, deps: DebugDeps): Promise<De
     await installPrOnlyHook(wt.cwd, wt.base, deps.git ?? defaultGit);
     const run: IssueRun = {
       key: "automation#debug",
-      repo: "Amit-Roy/agent-console",
+      repo: "example-owner/agent-console",
       number: 0,
       effort: "bau",
       role: "debug",

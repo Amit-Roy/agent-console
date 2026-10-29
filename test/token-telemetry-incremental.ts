@@ -7,7 +7,7 @@ import { accountingReplayer, accountingSamples } from "../server/accounting-log.
 import { raisedItems, raisedReplayer } from "../server/session-prs.ts";
 import { createTelemetryService } from "../server/token-telemetry.ts";
 
-const repo = "Amit-Roy/agent-console";
+const repo = "example-owner/agent-console";
 const turn = (startTs: number, text: string, inTok: number) =>
   [
     JSON.stringify({ type: "user_input", ts: startTs, text }),

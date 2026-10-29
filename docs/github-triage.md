@@ -72,7 +72,7 @@ The worker is a separate process on port 7077. The Console keeps its existing au
 npm ci
 uv venv --managed-python --python 3.13 ~/.local/share/agent-console/triage-venv
 uv pip install --python ~/.local/share/agent-console/triage-venv/bin/python -r requirements-triage.txt
-bin/github-triage configure Amit-Roy/agent-console https://github-webhook.nefro-dev-coder.duckdns.org/api/github/webhook
+bin/github-triage configure example-owner/agent-console https://github-webhook.coder.example.com/api/github/webhook
 bin/github-triage calibrate
 bin/github-triage start
 waitfor -t 15 port 7077
@@ -88,7 +88,7 @@ Issue #5 uses the existing Pi worker and subscription fallbacks. This keeps the 
 To cover all repositories owned by the authenticated personal account:
 
 ```sh
-bin/github-triage configure --owner Amit-Roy https://github-webhook.nefro-dev-coder.duckdns.org/api/github/webhook
+bin/github-triage configure --owner example-owner https://github-webhook.coder.example.com/api/github/webhook
 bin/github-triage sync
 bin/github-triage reconcile
 ```

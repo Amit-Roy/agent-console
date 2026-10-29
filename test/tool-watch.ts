@@ -65,7 +65,7 @@ function harness(
         body: args[args.indexOf("--body") + 1],
         headRefOid: "abc123def",
       });
-      return "https://github.com/Amit-Roy/dotfiles/pull/77\n";
+      return "https://github.com/example-owner/dotfiles/pull/77\n";
     }
     if (cmd === "gh" && sub === "pr view")
       return JSON.stringify(prs.find((p) => String(p.number) === args[2]) ?? { state: "OPEN" });
@@ -153,7 +153,7 @@ await t("open PR, dedupe by marker, approve merges once", async () => {
     create.filter((_, i) => create[i - 1] === "--label"),
     ["tool-update", "security"],
   );
-  assert.ok(create.includes("Amit-Roy/dotfiles"));
+  assert.ok(create.includes("example-owner/dotfiles"));
   assert.ok(h.prs[0].body.includes("<!-- tool-watch:uv:0.9.9 -->"));
   assert.ok(!h.prs[0].body.includes("IGNORE ALL RULES"), "untrusted text must not reach the PR");
   assert.equal(gh(h, "issue create").length, 0, "no GitHub issue");

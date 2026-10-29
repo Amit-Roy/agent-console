@@ -21,13 +21,13 @@ ${sprite}
 import { createAutoLane } from '/automation-lane.js';
 const now = Date.now();
 const make = (id, title, issueRun, extra = {}) => ({ id, title, issueRun, provider: 'codex', model: 'gpt-6.1-sol', status: 'idle', updatedAt: now, ...extra });
-const run = (role, extra = {}) => ({ key: 'Amit-Roy/agent-console#43', repo: 'Amit-Roy/agent-console', number: 43, effort: 'bau', role, ...extra });
+const run = (role, extra = {}) => ({ key: 'example-owner/agent-console#43', repo: 'example-owner/agent-console', number: 43, effort: 'bau', role, ...extra });
 const state = { current: null, threads: new Map([
   ['work', make('work', 'Fix issue #43 export', run('work'), { updatedAt: now - 1000 })],
-  ['review', make('review', 'Review PR #79 for issue #43', run('review', { key: 'old-review-key', repo: 'Amit-Roy/agent-console' }), { status: 'running' })],
-  ['retry', make('retry', 'Retry issue #43 export', run('work', { key: 'legacy-retry-key', repo: 'amit-roy/AGENT-CONSOLE' }), { updatedAt: now - 2000 })],
-  ['other', make('other', 'Other repository issue #43', run('work', { repo: 'Amit-Roy/other', key: 'Amit-Roy/other#43' }))],
-  ['debug', make('debug', 'Automation debug', run('debug', { repo: 'Amit-Roy/agent-console', number: 0, key: 'automation#debug' }))],
+  ['review', make('review', 'Review PR #79 for issue #43', run('review', { key: 'old-review-key', repo: 'example-owner/agent-console' }), { status: 'running' })],
+  ['retry', make('retry', 'Retry issue #43 export', run('work', { key: 'legacy-retry-key', repo: 'example-owner/AGENT-CONSOLE' }), { updatedAt: now - 2000 })],
+  ['other', make('other', 'Other repository issue #43', run('work', { repo: 'example-owner/other', key: 'example-owner/other#43' }))],
+  ['debug', make('debug', 'Automation debug', run('debug', { repo: 'example-owner/agent-console', number: 0, key: 'automation#debug' }))],
   ['archived', make('archived', 'Archived issue #43 work', run('work'), { archived: now })],
   ['plain', make('plain', 'Plain chat', undefined)],
 ]) };
@@ -90,7 +90,7 @@ try {
       page.on("pageerror", (error) => errors.push(error.message));
       await page.goto(base);
       await page.waitForSelector(".auto-group-toggle");
-      const group = page.locator('.auto-group[data-issue="amit-roy/agent-console#43"]');
+      const group = page.locator('.auto-group[data-issue="example-owner/agent-console#43"]');
       const toggle = group.locator(".auto-group-toggle");
       assert.equal(
         await page.locator(".auto-group").count(),
@@ -110,14 +110,17 @@ try {
         `${name}: mixed issue never duplicates into archive`,
       );
       assert.equal(await page.locator("#auto-archive").isVisible(), false);
-      assert.equal(await page.locator('.auto-group[data-issue="amit-roy/other#43"]').count(), 1);
+      assert.equal(
+        await page.locator('.auto-group[data-issue="example-owner/other#43"]').count(),
+        1,
+      );
       assert.ok(
         (await page.locator(".auto-group").allTextContents()).some((text) =>
           text.includes("automation#debug"),
         ),
         `${name}: debug fallback retained`,
       );
-      assert.equal(await toggle.locator(".k").textContent(), "Amit-Roy/agent-console#43");
+      assert.equal(await toggle.locator(".k").textContent(), "example-owner/agent-console#43");
       assert.equal(
         await toggle
           .locator(".k")
@@ -187,7 +190,13 @@ try {
       await page.getByRole("menuitem", { name: "Show issue", exact: true }).click();
       assert.deepEqual(
         await page.evaluate(() => (window as any).fixture.issueTabs),
-        [["https://github.com/Amit-Roy/agent-console/issues/43", "_blank", "noopener,noreferrer"]],
+        [
+          [
+            "https://github.com/example-owner/agent-console/issues/43",
+            "_blank",
+            "noopener,noreferrer",
+          ],
+        ],
         `${name}: action synchronously opens the canonical GitHub issue in a safe new tab`,
       );
       assert.deepEqual(
@@ -201,14 +210,14 @@ try {
       assert.equal(await toggle.getAttribute("aria-expanded"), "false");
       await page.waitForTimeout(700);
       const otherMore = page.locator(
-        '.auto-group[data-issue="amit-roy/other#43"] .auto-group-more',
+        '.auto-group[data-issue="example-owner/other#43"] .auto-group-more',
       );
       await otherMore.focus();
       await page.keyboard.press("Enter");
       await page.keyboard.press("Enter");
       assert.deepEqual(
         await page.evaluate(() => (window as any).fixture.issueTabs.at(-1)),
-        ["https://github.com/Amit-Roy/other/issues/43", "_blank", "noopener,noreferrer"],
+        ["https://github.com/example-owner/other/issues/43", "_blank", "noopener,noreferrer"],
         `${name}: separate repository opens its own issue`,
       );
       await page.screenshot({ path: path.join(out, `${name}-collapsed.png`) });
@@ -216,7 +225,7 @@ try {
       await page.getByRole("menuitem", { name: "Assign to premium", exact: true }).click();
       assert.deepEqual(
         await page.evaluate(() => (window as any).fixture.premiumAssignments),
-        [{ repo: "Amit-Roy/agent-console", number: 43 }],
+        [{ repo: "example-owner/agent-console", number: 43 }],
         `${name}: premium assignment uses canonical issue identity`,
       );
       assert.equal(
@@ -301,7 +310,7 @@ try {
         state.current = null;
         for (const thread of state.threads.values())
           if (
-            thread.issueRun?.repo?.toLowerCase() === "amit-roy/agent-console" &&
+            thread.issueRun?.repo?.toLowerCase() === "example-owner/agent-console" &&
             thread.issueRun.number === 43
           ) {
             thread.archived = Date.now();
@@ -310,12 +319,14 @@ try {
         lane.render();
       });
       assert.equal(
-        await page.locator('#autos .auto-group[data-issue="amit-roy/agent-console#43"]').count(),
+        await page
+          .locator('#autos .auto-group[data-issue="example-owner/agent-console#43"]')
+          .count(),
         0,
       );
       assert.equal(
         await page
-          .locator('#auto-archived .auto-group[data-issue="amit-roy/agent-console#43"]')
+          .locator('#auto-archived .auto-group[data-issue="example-owner/agent-console#43"]')
           .count(),
         1,
         `${name}: complete issue moves together`,
@@ -327,7 +338,7 @@ try {
       );
       await page.locator("#auto-archive-toggle").click();
       const archivedMore = page.locator(
-        '#auto-archived .auto-group[data-issue="amit-roy/agent-console#43"] .auto-group-more',
+        '#auto-archived .auto-group[data-issue="example-owner/agent-console#43"] .auto-group-more',
       );
       await archivedMore.click();
       await page.screenshot({ path: path.join(out, `${name}-archived-menu-open.png`) });
@@ -335,7 +346,11 @@ try {
       await page.getByRole("menuitem", { name: "Show issue", exact: true }).click();
       assert.deepEqual(
         await page.evaluate(() => (window as any).fixture.issueTabs.at(-1)),
-        ["https://github.com/Amit-Roy/agent-console/issues/43", "_blank", "noopener,noreferrer"],
+        [
+          "https://github.com/example-owner/agent-console/issues/43",
+          "_blank",
+          "noopener,noreferrer",
+        ],
         `${name}: archived issue also opens GitHub`,
       );
       await archivedMore.click();
@@ -391,12 +406,14 @@ try {
         lane.render();
       });
       assert.equal(
-        await page.locator('#autos .auto-group[data-issue="amit-roy/agent-console#43"]').count(),
+        await page
+          .locator('#autos .auto-group[data-issue="example-owner/agent-console#43"]')
+          .count(),
         0,
       );
       assert.equal(
         await page
-          .locator('#auto-archived .auto-group[data-issue="amit-roy/agent-console#43"]')
+          .locator('#auto-archived .auto-group[data-issue="example-owner/agent-console#43"]')
           .count(),
         1,
       );

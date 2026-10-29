@@ -455,7 +455,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const result = buildTriageHistory({
     dataDir: flag("--data", path.join(os.homedir(), ".config", "agent-console"))!,
     repoDir: flag("--repo-dir", path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."))!,
-    repo: flag("--repo", "Amit-Roy/agent-console")!,
+    repo: flag("--repo", "example-owner/agent-console")!,
   });
   fs.mkdirSync(path.dirname(output), { recursive: true, mode: 0o700 });
   // The output contains private prompts. Refuse permissive existing parent directories.

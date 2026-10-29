@@ -1,14 +1,14 @@
 # Import inside the existing wildcard HTTPS site, before its general reverse_proxy.
 # Keep Coder's owner-only app authentication in the request path.
-@consoleLegacy host 7070--main--nefro-dev-ssdnodes--amit-roy.nefro-dev-coder.duckdns.org
-redir @consoleLegacy https://console.nefro-dev-coder.duckdns.org{uri} 307
+@consoleLegacy host 7070--main--workspace--example-owner.coder.example.com
+redir @consoleLegacy https://console.coder.example.com{uri} 307
 
-@consoleAlias host console.nefro-dev-coder.duckdns.org
+@consoleAlias host console.coder.example.com
 handle @consoleAlias {
-    @consoleOrigin header Origin https://console.nefro-dev-coder.duckdns.org
-    request_header @consoleOrigin Origin https://7070--main--nefro-dev-ssdnodes--amit-roy.nefro-dev-coder.duckdns.org
+    @consoleOrigin header Origin https://console.coder.example.com
+    request_header @consoleOrigin Origin https://7070--main--workspace--example-owner.coder.example.com
     reverse_proxy 127.0.0.1:7080 {
-        header_up Host 7070--main--nefro-dev-ssdnodes--amit-roy.nefro-dev-coder.duckdns.org
-        header_up X-Forwarded-Host 7070--main--nefro-dev-ssdnodes--amit-roy.nefro-dev-coder.duckdns.org
+        header_up Host 7070--main--workspace--example-owner.coder.example.com
+        header_up X-Forwarded-Host 7070--main--workspace--example-owner.coder.example.com
     }
 }

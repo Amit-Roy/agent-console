@@ -6,24 +6,24 @@ import os from "node:os";
 import path from "node:path";
 
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "ac-account-cli-"));
-const sunny = path.join(home, ".claude"),
-  nefro = path.join(home, ".claude-nefro");
+const primary = path.join(home, ".claude"),
+  secondary = path.join(home, ".claude-secondary");
 const bin = path.join(home, "bin"),
   capture = path.join(home, "capture.json");
 const script = path.resolve("bin/claude-account");
-fs.mkdirSync(sunny);
+fs.mkdirSync(primary);
 fs.mkdirSync(bin);
 const shared = ["CLAUDE.md", "settings.json", "skills", "agents", "RTK.md"];
 for (const name of shared) {
-  if (["skills", "agents"].includes(name)) fs.mkdirSync(path.join(sunny, name));
+  if (["skills", "agents"].includes(name)) fs.mkdirSync(path.join(primary, name));
   else
     fs.writeFileSync(
-      path.join(sunny, name),
+      path.join(primary, name),
       name === "settings.json" ? "{}" : "Shared brain fixture.",
     );
 }
 for (const name of [".credentials.json", ".claude.json", "projects", "history.jsonl"])
-  fs.writeFileSync(path.join(sunny, name), "private fixture");
+  fs.writeFileSync(path.join(primary, name), "private fixture");
 fs.writeFileSync(
   path.join(bin, "claude"),
   `#!${process.execPath}\nimport fs from 'node:fs';\nfs.writeFileSync(process.env.CAPTURE, JSON.stringify({args:process.argv.slice(2),dir:process.env.CLAUDE_CONFIG_DIR,leaked:['ANTHROPIC_API_KEY','ANTHROPIC_AUTH_TOKEN','CLAUDE_CODE_OAUTH_TOKEN','CLAUDECODE'].filter(k=>process.env[k])}));\n`,
@@ -43,36 +43,36 @@ delete env.CLAUDE_CONFIG_DIR;
 const run = (...args: string[]) =>
   spawnSync(process.execPath, [script, ...args], { env, encoding: "utf8" });
 try {
-  assert.equal(run("nefro", "setup").status, 0);
+  assert.equal(run("secondary", "setup").status, 0);
   for (const name of shared)
-    assert.equal(fs.readlinkSync(path.join(nefro, name)), path.join(sunny, name));
+    assert.equal(fs.readlinkSync(path.join(secondary, name)), path.join(primary, name));
   for (const name of [".credentials.json", ".claude.json", "projects", "history.jsonl"])
-    assert.equal(fs.existsSync(path.join(nefro, name)), false, name + " must remain private");
-  assert.equal(fs.statSync(nefro).mode & 0o777, 0o700);
-  assert.equal(run("nefro", "setup").status, 0, "Setup is idempotent.");
-  assert.equal(run("nefro", "login").status, 0);
+    assert.equal(fs.existsSync(path.join(secondary, name)), false, name + " must remain private");
+  assert.equal(fs.statSync(secondary).mode & 0o777, 0o700);
+  assert.equal(run("secondary", "setup").status, 0, "Setup is idempotent.");
+  assert.equal(run("secondary", "login").status, 0);
   assert.deepEqual(JSON.parse(fs.readFileSync(capture, "utf8")), {
-    args: ["auth", "login", "--claudeai", "--email", "nefro.amit.roy@gmail.com"],
-    dir: nefro,
+    args: ["auth", "login", "--claudeai"],
+    dir: secondary,
     leaked: [],
   });
-  assert.equal(run("sunny", "status").status, 0);
+  assert.equal(run("primary", "status").status, 0);
   assert.deepEqual(
     JSON.parse(fs.readFileSync(capture, "utf8")),
     { args: ["auth", "status"], leaked: [] },
-    "Sunny preserves the legacy config lookup.",
+    "Primary preserves the legacy config lookup.",
   );
   assert.equal(
-    run("nefro", "login", "--resume", "private-session").status,
+    run("secondary", "login", "--resume", "private-session").status,
     2,
     "Arbitrary CLI arguments are rejected.",
   );
-  assert.equal(run("../sunny", "setup").status, 2);
-  fs.unlinkSync(path.join(nefro, "CLAUDE.md"));
-  fs.writeFileSync(path.join(nefro, "CLAUDE.md"), "Existing private instructions.");
-  assert.equal(run("nefro", "setup").status, 1, "Existing files are never overwritten.");
+  assert.equal(run("../primary", "setup").status, 2);
+  fs.unlinkSync(path.join(secondary, "CLAUDE.md"));
+  fs.writeFileSync(path.join(secondary, "CLAUDE.md"), "Existing private instructions.");
+  assert.equal(run("secondary", "setup").status, 1, "Existing files are never overwritten.");
   assert.equal(
-    fs.readFileSync(path.join(nefro, "CLAUDE.md"), "utf8"),
+    fs.readFileSync(path.join(secondary, "CLAUDE.md"), "utf8"),
     "Existing private instructions.",
   );
   console.log(

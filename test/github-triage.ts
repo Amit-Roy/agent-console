@@ -28,7 +28,7 @@ const fixtureQuote = quoteEffort(
 if (fixtureQuote.status !== "ready") throw Error("Invalid fixture pricing");
 
 const secret = "test-only-webhook-secret-never-used-live";
-const repo = "Amit-Roy/agent-console";
+const repo = "example-owner/agent-console";
 const directory = fs.mkdtempSync(path.join(os.tmpdir(), "ac-github-triage-"));
 let sequence = 0;
 const decision = {
@@ -334,8 +334,12 @@ try {
       403,
     );
     assert.equal(
-      (await fixture.post({ ...payload(), repository: { full_name: "amit-roy/agent-console" } }))
-        .status,
+      (
+        await fixture.post({
+          ...payload(),
+          repository: { full_name: "example-owner/agent-console" },
+        })
+      ).status,
       403,
     );
     assert.equal((await fixture.post(payload(-1))).status, 400);

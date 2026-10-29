@@ -12,7 +12,7 @@ import { addWorktree, defaultDirs } from "./window-dispatch.ts";
 // merges, and only when code checks agree. Untrusted text (OSV advisories) reaches nothing but the rendered review
 // prompt, wrapped by dotfiles/security/render_review.py. The only switch is `enabled` in tool-watch.json.
 
-export const REPO = "Amit-Roy/dotfiles";
+export const REPO = "example-owner/dotfiles";
 const SSH_TIMEOUT = 20_000;
 const LATEST_TTL = 30_000;
 const POLL_MS = 60 * 60_000;
@@ -194,7 +194,7 @@ export const defaultExec: Exec = (cmd, args, o = {}) =>
     if (o.input !== undefined) child.stdin?.end(o.input);
   });
 
-const target = () => process.env.TOOLWATCH_SSH_TARGET || "root@206.51.227.101";
+const target = () => process.env.TOOLWATCH_SSH_TARGET || "root@203.0.113.10";
 const keyFile = () =>
   process.env.TOOLWATCH_SSH_KEY || path.join(os.homedir(), ".ssh", "id_toolwatch");
 const sshBin = () => process.env.TOOLWATCH_SSH_BIN || "ssh";

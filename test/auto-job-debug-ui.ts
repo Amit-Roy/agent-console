@@ -10,7 +10,7 @@ const root = path.resolve(import.meta.dirname, "..");
 const out = process.env.OUT || "/tmp/auto-job-debug-ui";
 fs.mkdirSync(out, { recursive: true });
 const now = Date.now();
-const issue = { repo: "Amit-Roy/agent-console", number: 7 };
+const issue = { repo: "example-owner/agent-console", number: 7 };
 const thread = (id: string, title: string, provider = "codex", extra = {}) => ({
   id,
   title,
@@ -28,13 +28,25 @@ const thread = (id: string, title: string, provider = "codex", extra = {}) => ({
 const initialThreads = [
   thread("archived-worker", "Archived issue #8", "codex", {
     archived: true,
-    issueRun: { ...issue, number: 8, key: "Amit-Roy/agent-console#8", role: "work", effort: "bau" },
+    issueRun: {
+      ...issue,
+      number: 8,
+      key: "example-owner/agent-console#8",
+      role: "work",
+      effort: "bau",
+    },
   }),
   thread("failed-worker", "Issue #7 worker stopped", "codex", {
-    issueRun: { ...issue, key: "Amit-Roy/agent-console#7", role: "work", effort: "bau" },
+    issueRun: { ...issue, key: "example-owner/agent-console#7", role: "work", effort: "bau" },
   }),
   thread("failed-review", "Issue #7 review stopped", "claude", {
-    issueRun: { ...issue, key: "Amit-Roy/agent-console#7", role: "review", effort: "bau", pr: 95 },
+    issueRun: {
+      ...issue,
+      key: "example-owner/agent-console#7",
+      role: "review",
+      effort: "bau",
+      pr: 95,
+    },
   }),
 ];
 const provider = (id: string, label: string, model: string) => ({
@@ -57,8 +69,8 @@ const providers = [
   {
     ...provider("claude", "Claude Code", "opus"),
     accounts: [
-      { id: "sunny", label: "Sunny", ready: true },
-      { id: "nefro", label: "Nefro", ready: true },
+      { id: "primary", label: "Primary", ready: true },
+      { id: "secondary", label: "Secondary", ready: true },
     ],
   },
   provider("codex", "Codex", "gpt-6.1-sol"),
@@ -124,7 +136,7 @@ const diagnostic = (number = 7) =>
           ts: now - 9000,
           step: "worker",
           kind: "ok",
-          ref: `Amit-Roy/agent-console#${number}`,
+          ref: `example-owner/agent-console#${number}`,
           run: "work:failed-worker",
           msg: "Worker finished its turn.",
         },
@@ -133,7 +145,7 @@ const diagnostic = (number = 7) =>
           ts: now - 8000,
           step: "pr",
           kind: "ok",
-          ref: `Amit-Roy/agent-console#${number}`,
+          ref: `example-owner/agent-console#${number}`,
           msg: "Found open PR #95.",
         },
         {
@@ -141,7 +153,7 @@ const diagnostic = (number = 7) =>
           ts: now - 1000,
           step: "review",
           kind: "fail",
-          ref: `Amit-Roy/agent-console#${number}`,
+          ref: `example-owner/agent-console#${number}`,
           run: "review:failed-review",
           msg: "Review exited: quota exceeded <img src=x onerror=window.debugInjected=true>",
         },
@@ -155,7 +167,7 @@ async function openDebug(page: Page, mobile: boolean, number = 7) {
   if (number === 8 && !(await page.locator("#auto-archived").isVisible()))
     await page.locator("#auto-archive-toggle").click();
   await page
-    .locator(`.auto-group[data-issue="amit-roy/agent-console#${number}"] .auto-group-more`)
+    .locator(`.auto-group[data-issue="example-owner/agent-console#${number}"] .auto-group-more`)
     .click();
   await page.getByRole("menuitem", { name: "Debug", exact: true }).click();
   await page.locator("#auto-job-debug").waitFor({ state: "visible", timeout: 3000 });

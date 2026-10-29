@@ -9,7 +9,7 @@ import {
   validateSubscriptionFees,
 } from "../server/benchmark-subscriptions.ts";
 
-const fees = { claude: 20, "claude:nefro": 20, codex: 20 };
+const fees = { claude: 20, "claude:secondary": 20, codex: 20 };
 const now = 1_800_000_000_000;
 const sample = (used: number, resetsAt = now + 300_000, updatedAt = now) => ({
   updatedAt,
@@ -19,7 +19,7 @@ const sample = (used: number, resetsAt = now + 300_000, updatedAt = now) => ({
 test("three subscription fees are fixed monthly costs, separate from API usage", () => {
   const result = subscriptionView(
     fees,
-    { claude: sample(10), "claude:nefro": sample(20), codex: sample(30) },
+    { claude: sample(10), "claude:secondary": sample(20), codex: sample(30) },
     now,
   );
   assert.equal(result.totalMonthly, 60);
@@ -44,7 +44,7 @@ test("unconfigured fees and absent quota remain unknown", () => {
   );
   assert.equal(result.capacityStatus, "unknown");
   assert.equal(
-    subscriptionView({ claude: 0, "claude:nefro": 0, codex: 0 }, {}, now).totalMonthly,
+    subscriptionView({ claude: 0, "claude:secondary": 0, codex: 0 }, {}, now).totalMonthly,
     0,
   );
 });
@@ -54,7 +54,7 @@ test("expired and old quota snapshots retain observed percentages without restor
     fees,
     {
       claude: sample(90, now - 1),
-      "claude:nefro": sample(80, now + 300_000, now - 31 * 60_000),
+      "claude:secondary": sample(80, now + 300_000, now - 31 * 60_000),
       codex: sample(100),
     },
     now,

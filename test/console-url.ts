@@ -6,7 +6,7 @@ import path from "node:path";
 
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "console-url-"));
 const config = path.join(scratch, "env");
-const alias = "https://console.nefro-dev-coder.duckdns.org/";
+const alias = "https://console.coder.example.com/";
 const template = "https://{{port}}--main--workspace--owner.example.test/";
 const run = (overrides: NodeJS.ProcessEnv = {}) =>
   spawnSync("bash", ["bin/agent-console", "url"], {

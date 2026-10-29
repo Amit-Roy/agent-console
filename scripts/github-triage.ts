@@ -758,7 +758,7 @@ async function configureCommand() {
   if (fs.existsSync(CONFIG)) previous = config();
   const repos = owner
     ? [...new Set([...(previous?.repos ?? []), ...(await ownedRepos(owner))])]
-    : (process.argv[3] || "Amit-Roy/agent-console").split(",");
+    : (process.argv[3] || "example-owner/agent-console").split(",");
   const next = {
     port: 7077,
     host: "0.0.0.0",

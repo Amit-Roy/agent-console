@@ -1,9 +1,5 @@
 # agent-console
 
-[![Watch the Agent Console feature tour: laptop and Android workflows](docs/brag/brag.jpg)](https://youtu.be/JNqju6qvxvc)
-
-[Watch the 2-minute tour](https://youtu.be/JNqju6qvxvc) · Claude Code, Codex, and Pi, from your laptop or phone: auto-picked models, files, inline media, Acode, schedules, Auto mode from GitHub issues, triage, cross-agent forks, usage and host dashboards, search.
-
 Browser front end for Claude, Pi, and Codex agents running on this machine. No remote desktop. Installable as a PWA.
 
 **Personal use only** — never share this instance. Anthropic's terms restrict third-party products built on claude.ai login.
@@ -88,7 +84,7 @@ The benchmark dashboard shows your two Claude account fees and Codex fee separat
 
 Open the console URL in Chrome → address-bar install icon (or ⋮ → Cast, save and share → Install page as app; Android: ⋮ → Install app). Own window, launcher icon, maskable Android icon. Regenerate icons: `npm run icons`.
 
-This instance uses [console.nefro-dev-coder.duckdns.org](https://console.nefro-dev-coder.duckdns.org/).
+For example, configure `https://console.coder.example.com/` for your instance.
 Coder still provides GitHub SSO and workspace management. See [URL routing, rollout, and rollback](docs/console-url.md).
 Set `AGENT_CONSOLE_URL` in the environment or Console environment file to make the URL command print an authenticated alias; otherwise it uses `VSCODE_PROXY_URI`.
 
@@ -124,17 +120,17 @@ OpenRouter free tier: 50 requests/day (1000 after a one-off $10 credit). Use the
 
 ### Two Claude accounts, one brain
 
-Choose **Sunny** or **Nefro** in the new-thread dialog. Usage tabs keep quotas separate.
+Choose **Primary** or **Secondary** in the new-thread dialog. Usage tabs keep quotas separate.
 
-Set up Nefro:
+Set up Secondary:
 
 ```sh
-bin/claude-account nefro login
+bin/claude-account secondary login
 ```
 
-Complete the browser login with `nefro.amit.roy@gmail.com`, then reload the Console.
+Complete the browser login with your secondary account, then reload the Console.
 
-Check status: `bin/claude-account sunny status` or `bin/claude-account nefro status`.
+Check status: `bin/claude-account primary status` or `bin/claude-account secondary status`.
 
 Both profiles share instructions, settings, skills, and agents via symlinks. Credentials and sessions are never copied.
 

@@ -9,16 +9,16 @@ const before = { ...process.env };
 const data = path.join(home, "data"),
   bin = path.join(home, "bin"),
   capture = path.join(home, "capture.json");
-for (const dir of [data, bin, path.join(home, ".claude"), path.join(home, ".claude-nefro")])
+for (const dir of [data, bin, path.join(home, ".claude"), path.join(home, ".claude-secondary")])
   fs.mkdirSync(dir, { recursive: true });
-const nefro = path.join(home, ".claude-nefro");
+const secondary = path.join(home, ".claude-secondary");
 fs.writeFileSync(
-  path.join(nefro, ".credentials.json"),
+  path.join(secondary, ".credentials.json"),
   JSON.stringify({ claudeAiOauth: { accessToken: "offline-fixture" } }),
 );
 fs.writeFileSync(
-  path.join(nefro, ".claude.json"),
-  JSON.stringify({ oauthAccount: { emailAddress: "nefro.amit.roy@gmail.com" } }),
+  path.join(secondary, ".claude.json"),
+  JSON.stringify({ oauthAccount: { emailAddress: "secondary@example.com" } }),
 );
 fs.writeFileSync(
   path.join(bin, "claude"),
@@ -55,7 +55,11 @@ const row = (id: string, claudeAccount?: string) => ({
 });
 fs.writeFileSync(
   path.join(data, "threads.json"),
-  JSON.stringify([row("invalid", "unknown"), row("legacy"), row("persisted-nefro", "nefro")]),
+  JSON.stringify([
+    row("invalid", "unknown"),
+    row("legacy"),
+    row("persisted-secondary", "secondary"),
+  ]),
 );
 const { Threads } = await import("../server/threads.ts");
 const { claude } = await import("../server/providers/claude.ts");
@@ -67,25 +71,29 @@ try {
   assert.equal(threads.get("invalid"), undefined);
   assert.equal(
     threads.get("legacy")?.claudeAccount,
-    "sunny",
+    "primary",
     "An invalid row cannot hide following legacy threads.",
   );
-  assert.equal(threads.get("persisted-nefro")?.claudeAccount, "nefro");
-  const sunny = threads.create({ cwd: home, title: "Sunny fixture" });
-  const second = threads.create({ cwd: home, claudeAccount: "nefro", title: "Nefro fixture" });
-  assert.equal(sunny.claudeAccount, "sunny");
-  second.sessionId = "private-nefro-session";
-  assert.throws(() => threads.update(second.id, { claudeAccount: "sunny" }), /original account/);
-  assert.equal(second.claudeAccount, "nefro");
+  assert.equal(threads.get("persisted-secondary")?.claudeAccount, "secondary");
+  const primary = threads.create({ cwd: home, title: "Primary fixture" });
+  const second = threads.create({
+    cwd: home,
+    claudeAccount: "secondary",
+    title: "Secondary fixture",
+  });
+  assert.equal(primary.claudeAccount, "primary");
+  second.sessionId = "private-secondary-session";
+  assert.throws(() => threads.update(second.id, { claudeAccount: "primary" }), /original account/);
+  assert.equal(second.claudeAccount, "secondary");
   const fork = threads.fork(second.id);
-  assert.equal(fork.claudeAccount, "nefro");
+  assert.equal(fork.claudeAccount, "secondary");
   assert.equal(fork.forkFrom, second.sessionId);
-  assert.throws(() => threads.update(fork.id, { claudeAccount: "sunny" }), /original account/);
+  assert.throws(() => threads.update(fork.id, { claudeAccount: "primary" }), /original account/);
   const crossed = threads.fork(second.id, undefined, false, {
-    claudeAccount: "sunny",
+    claudeAccount: "primary",
     mode: "plan",
   });
-  assert.equal(crossed.claudeAccount, "sunny", "A fork can move to another account.");
+  assert.equal(crossed.claudeAccount, "primary", "A fork can move to another account.");
   assert.equal(
     crossed.forkFrom,
     undefined,
@@ -94,10 +102,10 @@ try {
   assert.equal(crossed.mode, "plan");
   threads.remove(crossed.id);
   assert.throws(
-    () => threads.create({ cwd: home, claudeAccount: "../sunny" }),
+    () => threads.create({ cwd: home, claudeAccount: "../primary" }),
     /Unknown Claude account/,
   );
-  for (const t of [sunny, second, fork]) {
+  for (const t of [primary, second, fork]) {
     await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => reject(Error("Recording CLI did not exit.")), 5000);
       claude.start(t, {
@@ -110,10 +118,10 @@ try {
       });
     });
     const call = JSON.parse(fs.readFileSync(capture, "utf8"));
-    assert.equal(call.dir, t.claudeAccount === "nefro" ? nefro : undefined);
+    assert.equal(call.dir, t.claudeAccount === "secondary" ? secondary : undefined);
     assert.deepEqual(call.leaked, []);
     const resume = call.args.indexOf("--resume");
-    assert.equal(resume >= 0, t !== sunny);
+    assert.equal(resume >= 0, t !== primary);
     if (resume >= 0) assert.equal(call.args[resume + 1], second.sessionId);
     assert.equal(call.args.includes("--fork-session"), t === fork);
   }
@@ -125,10 +133,10 @@ try {
       return { alive: true, send() {}, abort() {}, kill() {} };
     },
   });
-  threads.send(sunny.id, "Offline fixture.");
+  threads.send(primary.id, "Offline fixture.");
   threads.send(second.id, "Offline fixture.");
   for (const [t, utilization] of [
-    [sunny, 0.2],
+    [primary, 0.2],
     [second, 0.8],
   ] as const)
     contexts.get(t.id).event({
@@ -136,14 +144,14 @@ try {
       rate_limit_info: { unifiedWindows: { five_hour: { utilization } } },
     });
   assert.equal(usage.get("claude")?.windows[0].used, 20);
-  assert.equal(usage.get("claude:nefro")?.windows[0].used, 80);
+  assert.equal(usage.get("claude:secondary")?.windows[0].used, 80);
   for (const [account, text] of [
-    ["sunny", "abcd"],
-    ["nefro", "abcd".repeat(12)],
+    ["primary", "abcd"],
+    ["secondary", "abcd".repeat(12)],
   ] as const) {
     const project = path.join(
       home,
-      account === "sunny" ? ".claude" : ".claude-nefro",
+      account === "primary" ? ".claude" : ".claude-secondary",
       "projects",
       "fixture",
     );
@@ -163,10 +171,10 @@ try {
     );
   }
   const allocations = [];
-  for (const account of ["sunny", "nefro"])
+  for (const account of ["primary", "secondary"])
     allocations.push(
       await contextAllocation({
-        ...sunny,
+        ...primary,
         claudeAccount: account,
         sessionId: "same-session",
         context: { used: 100, max: 1000 },

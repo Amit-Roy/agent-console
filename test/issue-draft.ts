@@ -32,9 +32,15 @@ for (const bad of [
   assert.throws(() => parseIssueDraft(bad), /invalid/i, bad);
 
 for (const [url, want] of [
-  ["https://github.com/Amit-Roy/agent-console.git", { owner: "Amit-Roy", repo: "agent-console" }],
-  ["https://github.com/Amit-Roy/agent-console", { owner: "Amit-Roy", repo: "agent-console" }],
-  ["git@github.com:Amit-Roy/my.repo.git", { owner: "Amit-Roy", repo: "my.repo" }],
+  [
+    "https://github.com/example-owner/agent-console.git",
+    { owner: "example-owner", repo: "agent-console" },
+  ],
+  [
+    "https://github.com/example-owner/agent-console",
+    { owner: "example-owner", repo: "agent-console" },
+  ],
+  ["git@github.com:example-owner/my.repo.git", { owner: "example-owner", repo: "my.repo" }],
   ["ssh://git@github.com/o/r.git", { owner: "o", repo: "r" }],
   ["https://gitlab.com/o/r.git", undefined],
   ["https://github.com.evil.test/o/r", undefined],

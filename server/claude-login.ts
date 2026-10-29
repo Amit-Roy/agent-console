@@ -10,8 +10,8 @@ import {
 } from "./providers/claude-accounts.ts";
 
 // In-app Claude sign-in. `claude auth login` prints Anthropic's authorize URL and reads the code the callback page shows from stdin.
-// It runs in a throwaway profile, so a sign-in with the wrong Google account never replaces a working login: only a login whose
-// email matches the chosen account is copied into that account's profile.
+// It runs in a throwaway profile. Fresh profiles accept a signed-in identity; existing profiles
+// require the same email before replacing their working login.
 const SCRUBBED_ENV = [
   "ANTHROPIC_API_KEY",
   "ANTHROPIC_AUTH_TOKEN",
@@ -40,11 +40,13 @@ function close(account: ClaudeAccount) {
 
 export function startClaudeLogin(
   id: string,
-  opts: { command?: string; env?: NodeJS.ProcessEnv } = {},
+  opts: { command?: string; env?: NodeJS.ProcessEnv; home?: string } = {},
 ): Promise<{ url: string }> {
   const account = normalizeClaudeAccount(id);
   close(account);
-  const email = claudeAccounts().find((a) => a.id === account)!.email;
+  const email = claudeAccounts(opts.env ?? process.env, opts.home ?? os.homedir()).find(
+    (accountProfile) => accountProfile.id === account,
+  )!.email;
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "claude-login-"));
   const env: NodeJS.ProcessEnv = {
     ...(opts.env ?? process.env),
@@ -52,7 +54,8 @@ export function startClaudeLogin(
     BROWSER: "true",
   };
   for (const k of SCRUBBED_ENV) delete env[k];
-  const proc = spawn(opts.command ?? "claude", ["auth", "login", "--claudeai", "--email", email], {
+  const args = ["auth", "login", "--claudeai", ...(email ? ["--email", email] : [])];
+  const proc = spawn(opts.command ?? "claude", args, {
     env,
     stdio: "pipe",
   });
@@ -130,9 +133,13 @@ export function installClaudeLogin(
   const oauthAccount = JSON.parse(
     fs.readFileSync(path.join(from, ".claude.json"), "utf8"),
   ).oauthAccount;
-  const expected = claudeAccounts().find((a) => a.id === account)!.email;
-  const email = String(oauthAccount?.emailAddress ?? "");
-  if (email.toLowerCase() !== expected)
+  const expected = claudeAccounts(env, home).find(
+    (accountProfile) => accountProfile.id === account,
+  )!.email;
+  const email =
+    typeof oauthAccount?.emailAddress === "string" ? oauthAccount.emailAddress.trim() : "";
+  if (!email) throw new Error("Claude sign-in did not provide an account email.");
+  if (expected && email.toLowerCase() !== expected.toLowerCase())
     throw new Error(`That signed in as ${email || "an unknown account"}. Sign in as ${expected}.`);
   const config = claudeConfigDir(account, env, home);
   fs.mkdirSync(config, { recursive: true, mode: 0o700 });
@@ -140,10 +147,10 @@ export function installClaudeLogin(
     path.join(config, ".credentials.json"),
     fs.readFileSync(path.join(from, ".credentials.json"), "utf8"),
   );
-  // Sunny keeps its identity in the legacy ~/.claude.json when CLAUDE_CONFIG_DIR is unset (see claudeAccountReady).
+  // Primary keeps its identity in the legacy ~/.claude.json when CLAUDE_CONFIG_DIR is unset (see claudeAccountReady).
   const metadata = path.join(config, ".claude.json");
   const file =
-    fs.existsSync(metadata) || account === "nefro" || env.CLAUDE_CONFIG_DIR
+    fs.existsSync(metadata) || account === "secondary" || env.CLAUDE_CONFIG_DIR
       ? metadata
       : path.join(home, ".claude.json");
   const current = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : {};

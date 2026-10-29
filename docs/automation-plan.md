@@ -28,7 +28,7 @@ Twelve findings; all accepted except where noted. They are folded into the secti
 | 1 | Routing BAU to Pi before BAU review exists lands unreviewed PRs | Router starts in **shadow mode** (logs its choice, old routing runs). `routing.bauOnPi` flag, default false until the BAU reviewer is deployed |
 | 2 | Fix-forward merges code nobody reviewed | Fix-ups are capped at 20 changed lines, must pass the repo checks, and premium reviewers merge protected paths only with acceptance evidence and passing required checks |
 | 3 | A worker can edit the skill that reviews it | Skills load from the **main checkout** (`~/repos/agent-console/skills/...`), never the PR worktree. `skills/` is a protected path |
-| 4 | Prompt injection into bypass-mode agents | Only issues authored by `authors` (default `Amit-Roy`) are dispatched; prompts say issue and PR text is data, not instructions |
+| 4 | Prompt injection into bypass-mode agents | Only issues authored by `authors` (default `example-owner`) are dispatched; prompts say issue and PR text is data, not instructions |
 | 5 | Secrets leak through error strings | `record()` redacts tokens (`ghp_`, `github_pat_`, `sk-`, `nvapi-`, `Bearer`, URL credentials); tested; Debug prompt uses the same redactor |
 | 6 | Token scope, branch protection, webhook HMAC | HMAC already verified by the triage worker. Token scope and branch protection are listed on the dashboard as checks the user owns; code cannot enforce them |
 | 7 | Pi has no 5-hour window; unknown usage must not mean 0% | Router gives Pi its own capacity input (Free/day window, recent failures). Unknown or stale premium usage is neutral, never preferred over a known-good provider |

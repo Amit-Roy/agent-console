@@ -97,7 +97,7 @@
       sampled.textContent = `Sampled ${date(plan.updatedAt)}`;
       entry.append(sampled);
       $("subscription-plans").append(entry);
-      const id = { claude: "fee-claude", "claude:nefro": "fee-nefro", codex: "fee-codex" }[
+      const id = { claude: "fee-claude", "claude:secondary": "fee-secondary", codex: "fee-codex" }[
         plan.key
       ];
       if (id && !feesDirty) $(id).value = number(plan.monthly) === null ? "" : String(plan.monthly);
@@ -548,7 +548,7 @@
     if (pending || !data?.subscriptions || !$("subscription-fees").reportValidity()) return;
     const fees = {
       claude: validValue("fee-claude", 0, 100000),
-      "claude:nefro": validValue("fee-nefro", 0, 100000),
+      "claude:secondary": validValue("fee-secondary", 0, 100000),
       codex: validValue("fee-codex", 0, 100000),
     };
     pending = true;

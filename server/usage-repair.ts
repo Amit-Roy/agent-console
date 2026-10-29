@@ -19,7 +19,7 @@ export type UsageRepairRow = {
 };
 type Event = Record<string, any>;
 const accountKey = (v: unknown) =>
-  v === "nefro" ? "claude:nefro" : v === "sunny" ? "claude" : undefined;
+  v === "secondary" ? "claude:secondary" : v === "primary" ? "claude" : undefined;
 const winList = (ev: Event) => {
   const w = ev.rate_limit_info?.unifiedWindows;
   return [
@@ -59,7 +59,7 @@ type LoggedEvent = {
   prefix: string;
 };
 const isClaudeProvider = (provider: unknown) =>
-  provider === "claude" || provider === "claude:nefro";
+  provider === "claude" || provider === "claude:secondary";
 const hasNativeIds = (event: Event) =>
   typeof event.session_id === "string" &&
   event.session_id &&

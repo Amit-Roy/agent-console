@@ -245,13 +245,13 @@ assert.deepEqual(
 );
 
 // thread names: <repo>:<issue#> <short desc>, at most 20 characters (issue #11: Android width)
-assert.equal(topicOf("Amit-Roy/agent-console"), "ac");
+assert.equal(topicOf("example-owner/agent-console"), "ac");
 assert.equal(topicOf("o/brain"), "brain");
 assert.equal(topicOf("o/portfolio-lab"), "pl");
 assert.equal(topicOf("o/abcdefghijklmnop"), "abcdefghij");
 assert.equal(
   threadTitle({
-    repo: "Amit-Roy/agent-console",
+    repo: "example-owner/agent-console",
     number: 10,
     title: "Identify unused reset windows",
   }),
@@ -488,21 +488,21 @@ try {
     JSON.stringify({ enabled: true, leadMinutes: 9999, repos: ["../evil"] }),
   );
   const c = loadConfig(path.join(dir, "window-dispatch.json"));
-  assert.deepEqual(c.authors, ["Amit-Roy"]);
+  assert.deepEqual(c.authors, ["example-owner"]);
   assert.equal(c.enabled, true);
   assert.equal(c.dryRun, true);
   assert.equal(c.leadMinutes, 300);
-  assert.deepEqual(c.repos, ["Amit-Roy/agent-console"]);
+  assert.deepEqual(c.repos, ["example-owner/agent-console"]);
 
   // dispatcher: disabled does nothing; dry run logs once per window and starts nothing
   const github = async () => [
     {
       number: 1,
       title: "x",
-      user: { login: "Amit-Roy" },
+      user: { login: "example-owner" },
       labels: [{ name: "Eff: Deep" }, { name: "Pri: P1" }],
     },
-    { number: 2, pull_request: {}, user: { login: "Amit-Roy" }, labels: [] },
+    { number: 2, pull_request: {}, user: { login: "example-owner" }, labels: [] },
     {
       number: 3,
       title: "stranger",
@@ -567,13 +567,13 @@ try {
       {
         number: 1,
         title: "deep one",
-        user: { login: "Amit-Roy" },
+        user: { login: "example-owner" },
         labels: [{ name: "Eff: Deep" }, { name: "Pri: P1" }],
       },
       {
         number: 2,
         title: "bau one",
-        user: { login: "Amit-Roy" },
+        user: { login: "example-owner" },
         labels: [{ name: "Eff: BAU" }, { name: "Pri: P2" }],
       },
     ];
@@ -695,7 +695,7 @@ try {
       [2, 3, 4, 5].map((number) => ({
         number,
         title: "small",
-        user: { login: "Amit-Roy" },
+        user: { login: "example-owner" },
         labels: [{ name: number === 2 ? "Eff: BAU" : "Eff: Trivial" }],
       }));
     const limited = createDispatcher({

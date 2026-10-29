@@ -26,9 +26,9 @@ import time
 
 CONFIG = Path("/opt/coder/https/Caddyfile")
 SNIPPET = Path("/opt/coder/https/agent-console/github-triage.caddy")
-SITE = "*.nefro-dev-coder.duckdns.org {"
+SITE = "*.coder.example.com {"
 IMPORT = "\timport /opt/coder/https/agent-console/github-triage.caddy"
-CONTAINER = "coder-Amit-Roy-nefro-dev-ssdnodes"
+CONTAINER = "coder-example-owner-workspace"
 
 
 def atomic_write(path, content):
@@ -94,7 +94,7 @@ def refresh(upstream):
     route = (
         "# Managed by agent-console github-triage-caddy.py.\n"
         "@agentConsoleGitHubTriage {\n"
-        "    host github-webhook.nefro-dev-coder.duckdns.org\n"
+        "    host github-webhook.coder.example.com\n"
         "    path /api/github/webhook\n"
         "    method POST\n"
         "}\n"

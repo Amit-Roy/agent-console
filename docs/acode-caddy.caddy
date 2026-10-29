@@ -2,7 +2,7 @@
 # Coder v2.38's default template CORS policy strips application CORS headers.
 # Scope this exception to the capability-only bridge host and API paths.
 @acodeWebView {
-    host 7076--main--nefro-dev-ssdnodes--amit-roy.nefro-dev-coder.duckdns.org
+    host 7076--main--workspace--example-owner.coder.example.com
     path /api/acode/exchange /api/acode/file /api/acode/tree /api/acode/open
     header_regexp Origin "^(null|file://|https://localhost|http://localhost(:8080)?)$"
 }
@@ -14,7 +14,7 @@ header @acodeWebView {
     defer
 }
 @acodePreflight {
-    host 7076--main--nefro-dev-ssdnodes--amit-roy.nefro-dev-coder.duckdns.org
+    host 7076--main--workspace--example-owner.coder.example.com
     path /api/acode/exchange /api/acode/file /api/acode/tree /api/acode/open
     header_regexp Origin "^(null|file://|https://localhost|http://localhost(:8080)?)$"
     method OPTIONS

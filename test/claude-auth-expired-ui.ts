@@ -13,7 +13,7 @@ assert.match(port, /^707[1-5]$/, "use an isolated scratch port, 7071–7075");
 const base = `http://127.0.0.1:${port}`;
 const data = fs.mkdtempSync(path.join(os.tmpdir(), "ac-auth-data-"));
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "ac-auth-home-"));
-// Sunny looks signed in at page load, as it did before the CLI rejected its refresh token.
+// Primary looks signed in at page load, as it did before the CLI rejected its refresh token.
 fs.mkdirSync(path.join(home, ".claude"));
 fs.writeFileSync(
   path.join(home, ".claude", ".credentials.json"),
@@ -21,7 +21,7 @@ fs.writeFileSync(
 );
 fs.writeFileSync(
   path.join(home, ".claude.json"),
-  JSON.stringify({ oauthAccount: { emailAddress: "sunny.amit.roy@gmail.com" } }),
+  JSON.stringify({ oauthAccount: { emailAddress: "primary@example.com" } }),
 );
 const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "ac-auth-cwd-"));
 const id = "55555555-5555-4555-8555-555555555555";
@@ -32,7 +32,7 @@ fs.writeFileSync(
     {
       id,
       provider: "claude",
-      claudeAccount: "sunny",
+      claudeAccount: "primary",
       model: "claude-sonnet-5-5",
       effort: "medium",
       mode: "default",
@@ -130,7 +130,7 @@ try {
   page.on("pageerror", (e) => errors.push(e.message));
   await page.goto(base);
   const chat = page.locator("#chat");
-  const button = chat.locator("button", { hasText: "Sign in to Sunny" });
+  const button = chat.locator("button", { hasText: "Sign in to Primary" });
   await button.waitFor({ timeout: 10000 }).catch(async (e) => {
     console.log(
       errors,
@@ -161,10 +161,10 @@ try {
   assert.ok(await page.locator("#account-field").isVisible(), "account picker shows");
   assert.ok(
     await page.locator("#d-signin").isVisible(),
-    "Sign in button shows even though Sunny looked ready at page load",
+    "Sign in button shows even though Primary looked ready at page load",
   );
   assert.match((await page.locator("#d-account-note").textContent())!, /Sign in to this account/);
-  pass("button opens the dialog on Sunny with its Sign in action");
+  pass("button opens the dialog on Primary with its Sign in action");
   if (process.env.OUT) await page.screenshot({ path: path.join(process.env.OUT, "dialog.png") });
   assert.deepEqual(errors, []);
 } finally {

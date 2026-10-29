@@ -293,7 +293,7 @@ function claudeStartEnv(thread: ThreadSpec, account: ReturnType<typeof requireCl
   env.ENABLE_TOOL_SEARCH = "false"; // deferred tool loading changes the tools array mid-thread and busts the prompt cache
   const toolEnv = toolEnvFile();
   if (toolEnv && !env.CLAUDE_ENV_FILE) env.CLAUDE_ENV_FILE = toolEnv; // Bash commands start at the lower tool priority
-  if (account === "nefro") env.CLAUDE_CONFIG_DIR = claudeConfigDir(account);
+  if (account === "secondary") env.CLAUDE_CONFIG_DIR = claudeConfigDir(account);
   for (const name of SCRUBBED_ENV) delete env[name];
   return env;
 }

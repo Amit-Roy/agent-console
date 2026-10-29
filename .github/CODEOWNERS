@@ -1,2 +1,2 @@
-# Amit-Roy owns everything; code owner review is required on main.
-* @Amit-Roy
+# Configure repository code owners before requiring code owner reviews.
+# Example: * @your-organization/maintainers
