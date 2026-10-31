@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { type CamofoxDeps, defaultCamofoxDeps, runCamofoxFallback } from "./instagram-camofox.ts";
 import { galleryArgs, normalizeMeta, runGalleryDl } from "./gallerydl.ts";
 import { type Provider, ShareError, type ShareItem, type ShareLink } from "./types.ts";
 import {
@@ -206,6 +207,7 @@ async function downloadItems(
   link: InstagramLink,
   stage: string,
   opts: { signal?: AbortSignal; items?: number[] },
+  camofoxDeps: CamofoxDeps = defaultCamofoxDeps,
 ): Promise<{ missing: number[]; firstError: unknown }> {
   const errors: unknown[] = [];
   await runAttempt(link, stage, opts, opts.items, errors);
@@ -220,7 +222,12 @@ async function downloadItems(
   }
   const empty = !scanStage(stage).length;
   if (!empty && !missing.length) return { missing, firstError: first };
-  const wanted = empty ? (opts.items ?? []) : missing;
+  let wanted = empty ? (opts.items ?? []) : missing;
+  await runCamofoxFallback(link, stage, opts, wanted, camofoxDeps);
+  if (scanStage(stage).length) {
+    wanted = missingItems(stage, opts.items);
+    if (!wanted.length) return { missing: wanted, firstError: first };
+  }
   const galleryError = await runGalleryFallback(link, stage, opts, wanted);
   if (!scanStage(stage).length) return { missing: [], firstError: galleryError ?? first };
   return { missing: missingItems(stage, opts.items), firstError: first };
@@ -234,8 +241,9 @@ export async function fetchPost(
   link: InstagramLink,
   stage: string,
   opts: { signal?: AbortSignal; items?: number[] } = {},
+  camofoxDeps: CamofoxDeps = defaultCamofoxDeps,
 ): Promise<FetchedPost> {
-  const { missing, firstError } = await downloadItems(link, stage, opts);
+  const { missing, firstError } = await downloadItems(link, stage, opts, camofoxDeps);
   const found = scanStage(stage).filter((entry) => !opts.items || opts.items.includes(entry.index));
   if (!found.length)
     throw firstError instanceof Error ? firstError : new ShareError("Instagram download failed.");

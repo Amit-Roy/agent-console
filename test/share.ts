@@ -4,6 +4,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+process.env.AGENT_CONSOLE_CAMOFOX_URL = "off";
+
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "ac-insta-"));
 const dataDir = path.join(root, "data");
 const binDir = path.join(root, "bin");

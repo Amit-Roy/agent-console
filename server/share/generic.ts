@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { Defuddle } from "defuddle/node";
 import { parseHTML } from "linkedom";
+import { camofoxCall } from "./camofox.ts";
 import { assertPublicHost, BlockedAddressError, safeFetch } from "./safe-fetch.ts";
 import { type Provider, ShareError, type ShareItem, type ShareLink } from "./types.ts";
 import { buildArgs, MAX_TOTAL_BYTES, runYtDlp, scanStage } from "./ytdlp.ts";
@@ -22,7 +23,6 @@ const IMAGE_TYPES: Record<string, string> = {
   "image/gif": "gif",
   "image/avif": "avif",
 };
-const CAMOFOX_TIMEOUT_MS = 45_000;
 const CAMOFOX_USER = "agent-console-share";
 /** Item numbers reported in `missing`. */
 export const VIDEO_ITEM = 1;
@@ -134,22 +134,6 @@ function emptyMeta(): PageMeta {
     published: "",
     siteName: "",
   };
-}
-
-async function camofoxCall(
-  pathname: string,
-  init: RequestInit,
-  signal?: AbortSignal,
-): Promise<any> {
-  const base = process.env.AGENT_CONSOLE_CAMOFOX_URL || "http://127.0.0.1:9377";
-  const timeout = AbortSignal.timeout(CAMOFOX_TIMEOUT_MS);
-  const response = await fetch(new URL(pathname, base), {
-    ...init,
-    headers: { "content-type": "application/json" },
-    signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
-  });
-  if (!response.ok) throw new ShareError(`camofox ${pathname.split("?")[0]} ${response.status}`);
-  return response.json();
 }
 
 /** Renders the page in the local camofox browser and reads its Defuddle markdown. */
