@@ -228,7 +228,7 @@ try {
     if (watchConsole && m.type() === "error" && !unrelatedFetch(m))
       consoleErrors.push(`${m.text()} ${m.location().url}`);
   });
-  page.on("request", (r) => requests.push(new URL(r.url()).pathname));
+  page.on("request", (req) => requests.push(new URL(req.url()).pathname.replace(/^\/r\/[^/]+/, "")));
   await page.addInitScript(() =>
     document.addEventListener("securitypolicyviolation", (e) =>
       ((window as any).__csp ||= []).push(e.violatedDirective + " " + e.blockedURI),

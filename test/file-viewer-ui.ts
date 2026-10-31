@@ -273,7 +273,7 @@ try {
   const assets: string[] = [];
   page.on("request", (req) => {
     const p = new URL(req.url()).pathname;
-    if (/\/file-viewer\.(js|css)$/.test(p)) assets.push(p);
+    if (/\/file-viewer\.(js|css)$/.test(p)) assets.push(p.replace(/^\/r\/[^/]+/, ""));
   });
   await page.goto(base);
   await new Promise<void>((resolve, reject) => {
