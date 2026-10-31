@@ -101,6 +101,11 @@ const chatSearch = createChatSearch({
     state.stick = false;
   },
 });
+// Cold start: one sample per page load, skipped if the tab was ever hidden before the first history painted.
+const coldStart = { done: false, hidden: document.hidden };
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) coldStart.hidden = true;
+});
 let ws,
   retry = 0,
   reconnectTimer = 0,
@@ -124,6 +129,7 @@ function connect() {
     clearTimeout(bannerTimer);
     bannerTimer = 0;
     signedOut = false;
+    coldStart.wsOpen ??= Math.round(performance.now());
     questions.setConnected(true);
     banner("");
   };
@@ -482,6 +488,7 @@ function openInitialThread() {
 }
 
 function onHelloMessage(message) {
+  coldStart.hello ??= Math.round(performance.now());
   // the server was swapped for a new build (restart-when-idle): reload to match, unless that would lose a draft
   if (state.build && message.build && message.build !== state.build) {
     if (!$("input").value && !queueEditor && !outbox.length) return void location.reload();
@@ -1983,7 +1990,28 @@ function showDelta(m) {
   reconcileCards();
   historyDone(m, true, cachedMetrics);
 }
+function recordColdStart(thread) {
+  if (coldStart.done) return;
+  coldStart.done = true;
+  if (coldStart.hidden || document.hidden) return;
+  const nav = performance.getEntriesByType("navigation")[0],
+    resources = performance.getEntriesByType("resource");
+  latency.record({
+    kind: "cold",
+    thread,
+    total_ms: Math.round(performance.now()),
+    ttfb_ms: nav ? Math.round(nav.responseStart) : undefined,
+    dcl_ms: nav ? Math.round(nav.domContentLoadedEventEnd) : undefined,
+    ws_open_ms: coldStart.wsOpen,
+    hello_ms: coldStart.hello,
+    events: resources.length,
+    wire_bytes: Math.round(
+      resources.reduce((n, r) => n + (r.transferSize || 0), nav?.transferSize || 0),
+    ),
+  });
+}
 function historyDone(m, refreshing, cachedMetrics) {
+  recordColdStart(m.thread);
   questions.ensure(m.thread);
   updateWorking();
   const metrics = {
@@ -2607,6 +2635,7 @@ const SPEED = [
   ["cached", "Switch back"],
   ["refresh", "Check for new"],
   ["page", "Older messages"],
+  ["cold", "App start"],
 ];
 const speedWord = (ms) => (ms < 300 ? "fast" : ms < 1000 ? "ok" : "slow");
 // Nearest-rank percentile of times sorted fastest first: p% of loads took this long or less.
