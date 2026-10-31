@@ -24,8 +24,13 @@ const slide = (index: number) => ({ image_versions2: { candidates: candidates(in
 const carouselPage = (count: number, code = CODE) =>
   JSON.stringify({
     items: [
-      { code, caption: { text: "hello caption" }, user: { username: "someone" }, taken_at: 1700000000,
-        carousel_media: Array.from({ length: count }, (_entry, offset) => slide(offset + 1)) },
+      {
+        code,
+        caption: { text: "hello caption" },
+        user: { username: "someone" },
+        taken_at: 1700000000,
+        carousel_media: Array.from({ length: count }, (_entry, offset) => slide(offset + 1)),
+      },
       { code: "other", carousel_media: [slide(99), slide(98)] },
     ],
   });
@@ -38,16 +43,49 @@ assert.equal(picked.caption, "hello caption");
 assert.equal(picked.username, "someone");
 const byLargest = pickMedia([carouselPage(3, "zzz")], CODE)!;
 assert.equal(byLargest.items.length, 3, "no code match falls back to largest carousel");
-const preferred = pickMedia([JSON.stringify({ a: { code: CODE, carousel_media: [slide(1)] }, b: { carousel_media: [slide(5), slide(6)] } })], CODE)!;
+const preferred = pickMedia(
+  [
+    JSON.stringify({
+      a: { code: CODE, carousel_media: [slide(1)] },
+      b: { carousel_media: [slide(5), slide(6)] },
+    }),
+  ],
+  CODE,
+)!;
 assert.equal(preferred.items.length, 1, "matching code preferred over larger carousel");
-const single = pickMedia([JSON.stringify({ code: CODE, image_versions2: { candidates: [{ url: "https://a.cdninstagram.com/x.jpg" }, { url: "https://a.cdninstagram.com/y.jpg" }] } })], CODE)!;
-assert.deepEqual(single.items, [{ image: "https://a.cdninstagram.com/x.jpg", video: "" }], "no width: first candidate");
+const single = pickMedia(
+  [
+    JSON.stringify({
+      code: CODE,
+      image_versions2: {
+        candidates: [
+          { url: "https://a.cdninstagram.com/x.jpg" },
+          { url: "https://a.cdninstagram.com/y.jpg" },
+        ],
+      },
+    }),
+  ],
+  CODE,
+)!;
+assert.deepEqual(
+  single.items,
+  [{ image: "https://a.cdninstagram.com/x.jpg", video: "" }],
+  "no width: first candidate",
+);
 assert.equal(pickMedia(["not json", "{}"], CODE), null);
 
 // ---- url checks
 assert.ok(isCdnUrl("https://a.cdninstagram.com/x.jpg"));
 assert.ok(isCdnUrl("https://scontent.fbcdn.net/x.jpg"));
-for (const bad of ["http://a.cdninstagram.com/x", "https://evil.com/x", "https://a.cdninstagram.com:8443/x", "https://u:p@a.cdninstagram.com/x", "https://cdninstagram.com.evil.com/x", "https://xcdninstagram.com/x", "http://127.0.0.1/x"])
+for (const bad of [
+  "http://a.cdninstagram.com/x",
+  "https://evil.com/x",
+  "https://a.cdninstagram.com:8443/x",
+  "https://u:p@a.cdninstagram.com/x",
+  "https://cdninstagram.com.evil.com/x",
+  "https://xcdninstagram.com/x",
+  "http://127.0.0.1/x",
+])
   assert.equal(isCdnUrl(bad), false, bad);
 
 // ---- mock camofox
@@ -60,7 +98,8 @@ const server = http.createServer((req, res) => {
   req.on("end", () => {
     calls.push(`${req.method} ${req.url?.split("?")[0]}`);
     res.setHeader("content-type", "application/json");
-    if (req.method === "POST" && req.url === "/tabs") return void res.end(JSON.stringify({ tabId: "t1" }));
+    if (req.method === "POST" && req.url === "/tabs")
+      return void res.end(JSON.stringify({ tabId: "t1" }));
     if (req.method === "DELETE") return void res.end("{}");
     if (req.url === "/tabs/t1/wait") {
       mode = "ok";
@@ -72,7 +111,10 @@ const server = http.createServer((req, res) => {
         return void res.end("{}");
       }
       const expression = JSON.parse(body).expression as string;
-      const doc = { querySelectorAll: () => (mode === "empty-then-ok" ? [] : pageTexts.map((textContent) => ({ textContent }))) };
+      const doc = {
+        querySelectorAll: () =>
+          mode === "empty-then-ok" ? [] : pageTexts.map((textContent) => ({ textContent })),
+      };
       const result = new Function("document", `return ${expression}`)(doc);
       return void res.end(JSON.stringify({ ok: true, result }));
     }
@@ -85,7 +127,9 @@ const port = (server.address() as { port: number }).port;
 process.env.AGENT_CONSOLE_CAMOFOX_URL = `http://127.0.0.1:${port}`;
 
 const fetched: string[] = [];
-const makeDeps = (override: Record<string, { url?: string; body: Buffer; status?: number }> = {}) => ({
+const makeDeps = (
+  override: Record<string, { url?: string; body: Buffer; status?: number }> = {},
+) => ({
   call: camofoxCall,
   fetchMedia: async (url: string) => {
     fetched.push(url);
@@ -95,14 +139,24 @@ const makeDeps = (override: Record<string, { url?: string; body: Buffer; status?
 });
 const stageDir = () => fs.mkdtempSync(path.join(os.tmpdir(), "ig-camofox-"));
 const files = (dir: string) => fs.readdirSync(dir).sort();
-const reset = () => { calls.length = 0; fetched.length = 0; mode = "ok"; };
+const reset = () => {
+  calls.length = 0;
+  fetched.length = 0;
+  mode = "ok";
+};
 
 // assertPublicHost resolves www.instagram.com; skip network-dependent cases when offline
-const online = await import("node:dns").then((dns) => dns.promises.lookup("www.instagram.com").then(() => true, () => false));
+const online = await import("node:dns").then((dns) =>
+  dns.promises.lookup("www.instagram.com").then(
+    () => true,
+    () => false,
+  ),
+);
 if (!online) console.log("share-instagram-camofox: offline, skipping runCamofoxFallback cases");
 else {
   // 13-slide carousel
-  reset(); pageTexts = [carouselPage(13)];
+  reset();
+  pageTexts = [carouselPage(13)];
   let dir = stageDir();
   await runCamofoxFallback(link, dir, {}, [], makeDeps());
   const names = files(dir);
@@ -118,61 +172,127 @@ else {
   assert.ok(!calls.some((call) => call.includes("cookies")));
 
   // existing info.json kept
-  reset(); dir = stageDir();
+  reset();
+  dir = stageDir();
   fs.writeFileSync(path.join(dir, "1.info.json"), '{"description":"keep"}');
   await runCamofoxFallback(link, dir, {}, [1], makeDeps());
-  assert.equal(JSON.parse(fs.readFileSync(path.join(dir, "1.info.json"), "utf8")).description, "keep");
+  assert.equal(
+    JSON.parse(fs.readFileSync(path.join(dir, "1.info.json"), "utf8")).description,
+    "keep",
+  );
 
   // wanted subset
-  reset(); dir = stageDir();
+  reset();
+  dir = stageDir();
   await runCamofoxFallback(link, dir, {}, [2, 3], makeDeps());
-  assert.deepEqual(files(dir).filter((name) => name.endsWith(".jpg")), ["2.jpg", "3.jpg"]);
+  assert.deepEqual(
+    files(dir).filter((name) => name.endsWith(".jpg")),
+    ["2.jpg", "3.jpg"],
+  );
 
   // non matching code but only unrelated carousels: largest is used, tiny page ignored when nothing
-  reset(); pageTexts = ["{}"]; dir = stageDir();
+  reset();
+  pageTexts = ["{}"];
+  dir = stageDir();
   await runCamofoxFallback(link, dir, {}, [], makeDeps());
   assert.deepEqual(files(dir), [], "nothing found");
 
   // non-CDN urls never fetched or written
   reset();
-  pageTexts = [JSON.stringify({ code: CODE, carousel_media: [
-    { image_versions2: { candidates: [{ url: "http://127.0.0.1/a.jpg", width: 1 }] } },
-    { image_versions2: { candidates: [{ url: "https://evil.com/a.jpg", width: 1 }] } },
-    { image_versions2: { candidates: [{ url: "https://a.cdninstagram.com:8443/a.jpg", width: 1 }] } },
-    { image_versions2: { candidates: [{ url: "https://a.cdninstagram.com/redir.jpg", width: 1 }] } },
-    { image_versions2: { candidates: [{ url: "https://a.cdninstagram.com/html.jpg", width: 1 }] } },
-  ] })];
+  pageTexts = [
+    JSON.stringify({
+      code: CODE,
+      carousel_media: [
+        { image_versions2: { candidates: [{ url: "http://127.0.0.1/a.jpg", width: 1 }] } },
+        { image_versions2: { candidates: [{ url: "https://evil.com/a.jpg", width: 1 }] } },
+        {
+          image_versions2: {
+            candidates: [{ url: "https://a.cdninstagram.com:8443/a.jpg", width: 1 }],
+          },
+        },
+        {
+          image_versions2: {
+            candidates: [{ url: "https://a.cdninstagram.com/redir.jpg", width: 1 }],
+          },
+        },
+        {
+          image_versions2: {
+            candidates: [{ url: "https://a.cdninstagram.com/html.jpg", width: 1 }],
+          },
+        },
+      ],
+    }),
+  ];
   dir = stageDir();
-  await runCamofoxFallback(link, dir, {}, [], makeDeps({
-    "https://a.cdninstagram.com/redir.jpg": { url: "https://evil.com/final.jpg", body: JPEG },
-    "https://a.cdninstagram.com/html.jpg": { body: Buffer.from("<html>nope</html>") },
-  }));
+  await runCamofoxFallback(
+    link,
+    dir,
+    {},
+    [],
+    makeDeps({
+      "https://a.cdninstagram.com/redir.jpg": { url: "https://evil.com/final.jpg", body: JPEG },
+      "https://a.cdninstagram.com/html.jpg": { body: Buffer.from("<html>nope</html>") },
+    }),
+  );
   assert.deepEqual(files(dir), [], "no file written");
-  assert.deepEqual(fetched.sort(), ["https://a.cdninstagram.com/html.jpg", "https://a.cdninstagram.com/redir.jpg"]);
+  assert.deepEqual(fetched.sort(), [
+    "https://a.cdninstagram.com/html.jpg",
+    "https://a.cdninstagram.com/redir.jpg",
+  ]);
 
   // video
   reset();
-  pageTexts = [JSON.stringify({ code: CODE, carousel_media: [{ video_versions: [{ url: "https://v.cdninstagram.com/v.mp4" }], ...slide(1) }] })];
+  pageTexts = [
+    JSON.stringify({
+      code: CODE,
+      carousel_media: [
+        { video_versions: [{ url: "https://v.cdninstagram.com/v.mp4" }], ...slide(1) },
+      ],
+    }),
+  ];
   dir = stageDir();
-  await runCamofoxFallback(link, dir, {}, [], makeDeps({ "https://v.cdninstagram.com/v.mp4": { body: MP4 } }));
-  assert.deepEqual(files(dir).filter((name) => name.startsWith("1.") && !name.endsWith(".json")), ["1.mp4"]);
+  await runCamofoxFallback(
+    link,
+    dir,
+    {},
+    [],
+    makeDeps({ "https://v.cdninstagram.com/v.mp4": { body: MP4 } }),
+  );
+  assert.deepEqual(
+    files(dir).filter((name) => name.startsWith("1.") && !name.endsWith(".json")),
+    ["1.mp4"],
+  );
 
   // empty first evaluate, then wait, then ok
-  reset(); mode = "empty-then-ok"; pageTexts = [carouselPage(2)]; dir = stageDir();
+  reset();
+  mode = "empty-then-ok";
+  pageTexts = [carouselPage(2)];
+  dir = stageDir();
   await runCamofoxFallback(link, dir, {}, [], makeDeps());
   assert.ok(calls.includes("POST /tabs/t1/wait"));
-  assert.deepEqual(files(dir).filter((name) => name.endsWith(".jpg")), ["1.jpg", "2.jpg"]);
+  assert.deepEqual(
+    files(dir).filter((name) => name.endsWith(".jpg")),
+    ["1.jpg", "2.jpg"],
+  );
 
   // evaluate 500: quiet skip, tab deleted
-  reset(); mode = "evaluate500"; dir = stageDir();
+  reset();
+  mode = "evaluate500";
+  dir = stageDir();
   await runCamofoxFallback(link, dir, {}, [], makeDeps());
   assert.deepEqual(files(dir), []);
   await new Promise((resolve) => setTimeout(resolve, 50));
   assert.ok(calls.includes("DELETE /tabs/t1"), "DELETE after evaluate failure");
 
   // tabs timeout (simulated) and camofox down
-  reset(); dir = stageDir();
-  await runCamofoxFallback(link, dir, {}, [], { ...makeDeps(), call: async () => { throw new CamofoxUnavailableError("timeout"); } });
+  reset();
+  dir = stageDir();
+  await runCamofoxFallback(link, dir, {}, [], {
+    ...makeDeps(),
+    call: async () => {
+      throw new CamofoxUnavailableError("timeout");
+    },
+  });
   assert.deepEqual(files(dir), []);
   process.env.AGENT_CONSOLE_CAMOFOX_URL = "http://127.0.0.1:1";
   await runCamofoxFallback(link, dir, {}, [], defaultCamofoxDeps);

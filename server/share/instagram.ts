@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { type CamofoxDeps, defaultCamofoxDeps, runCamofoxFallback } from "./instagram-camofox.ts";
 import { galleryArgs, normalizeMeta, runGalleryDl } from "./gallerydl.ts";
+import { type CamofoxDeps, defaultCamofoxDeps, runCamofoxFallback } from "./instagram-camofox.ts";
 import { type Provider, ShareError, type ShareItem, type ShareLink } from "./types.ts";
 import {
   BLOCKED_MESSAGE,

@@ -100,7 +100,8 @@ function chooseNode(nodes: any[], code: string): any {
 function widestImage(media: any): string {
   const list = media?.image_versions2?.candidates;
   if (!Array.isArray(list) || !list.length) return "";
-  const wider = (left: any, right: any) => (Number(right?.width) > Number(left?.width) ? right : left);
+  const wider = (left: any, right: any) =>
+    Number(right?.width) > Number(left?.width) ? right : left;
   return String(list.reduce(wider)?.url ?? "");
 }
 
@@ -166,7 +167,10 @@ export function sniffMedia(body: Buffer): "jpg" | "png" | "webp" | "mp4" | null 
 }
 
 function stageBytes(stage: string): number {
-  return scanStage(stage).reduce((sum, entry) => sum + fs.statSync(path.join(stage, entry.name)).size, 0);
+  return scanStage(stage).reduce(
+    (sum, entry) => sum + fs.statSync(path.join(stage, entry.name)).size,
+    0,
+  );
 }
 
 async function evaluatePage(
@@ -240,7 +244,9 @@ async function downloadMedia(
 function writeInfo(stage: string, picked: PickedMedia, count: number): void {
   const file = path.join(stage, "1.info.json");
   if (fs.existsSync(file)) return;
-  const date = picked.takenAt ? new Date(picked.takenAt * 1000).toISOString().slice(0, 10).replaceAll("-", "") : "";
+  const date = picked.takenAt
+    ? new Date(picked.takenAt * 1000).toISOString().slice(0, 10).replaceAll("-", "")
+    : "";
   const info = {
     description: picked.caption.slice(0, CAPTION_MAX),
     uploader: picked.username,
@@ -267,7 +273,13 @@ async function saveItems(
     const isVideo = Boolean(slide.video);
     let got: Awaited<ReturnType<typeof downloadMedia>> = null;
     try {
-      got = await downloadMedia(deps, isVideo ? slide.video : slide.image, isVideo, remaining, signal);
+      got = await downloadMedia(
+        deps,
+        isVideo ? slide.video : slide.image,
+        isVideo,
+        remaining,
+        signal,
+      );
     } catch (error) {
       if (signal?.aborted) throw error;
     }
