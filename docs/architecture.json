@@ -1,5 +1,5 @@
 {
-  "title": "Thread archive pending input, dashboard savings and Vault iron providers",
+  "title": "Opener thread lifecycle, archive pending input, dashboard savings and Vault iron providers",
   "subtitle": "RTK command-output savings and Headroom input savings have separate scopes",
   "items": [
     {
@@ -297,6 +297,48 @@
           "icon": "rotate-cw"
         }
       ]
+    },
+    {
+      "group": "Opener thread lifecycle",
+      "icon": "app-window",
+      "items": [
+        {
+          "id": "opener",
+          "label": "Window opener",
+          "tech": "server/index.ts",
+          "desc": "Creates the thread with disposable: 1 instead of archiving it",
+          "icon": "app-window",
+          "status": "modified",
+          "step": 1
+        },
+        {
+          "id": "remove",
+          "label": "removeDisposable",
+          "tech": "server/threads.ts",
+          "desc": "Deletes it next tick after the turn result or on hung-turn expire",
+          "icon": "trash-2",
+          "status": "added",
+          "step": 2
+        },
+        {
+          "id": "purge",
+          "label": "purgeDisposable",
+          "tech": "server/threads.ts",
+          "desc": "At boot removes idle disposable threads and legacy archived Window opener threads",
+          "icon": "broom",
+          "status": "added",
+          "step": 3
+        },
+        {
+          "id": "hide",
+          "label": "visibleThreadList",
+          "tech": "public/app.js",
+          "desc": "Hides disposable threads from the list",
+          "icon": "eye-off",
+          "status": "modified",
+          "step": 4
+        }
+      ]
     }
   ],
   "edges": [
@@ -454,6 +496,24 @@
       "to": "idle",
       "label": "Expires hung turns",
       "status": "modified"
+    },
+    {
+      "from": "opener",
+      "to": "remove",
+      "label": "After turn result",
+      "status": "added"
+    },
+    {
+      "from": "purge",
+      "to": "remove",
+      "label": "Boot cleanup",
+      "status": "added"
+    },
+    {
+      "from": "opener",
+      "to": "hide",
+      "label": "Hidden while live",
+      "status": "added"
     }
   ]
 }

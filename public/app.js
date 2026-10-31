@@ -1339,7 +1339,10 @@ function visibleThreadList() {
   // automation-started runs (issue work, reviews) are listed in the Auto lane
   return [...state.threads.values()]
     .filter(
-      (thread) => !(thread.schedule && state.tasks.has(thread.schedule.task)) && !thread.issueRun,
+      (thread) =>
+        !(thread.schedule && state.tasks.has(thread.schedule.task)) &&
+        !thread.issueRun &&
+        !thread.disposable,
     )
     .sort((left, right) => right.updatedAt - left.updatedAt);
 }

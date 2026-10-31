@@ -537,9 +537,9 @@ if (process.env.AGENT_CONSOLE_MOCK !== "1") {
         cwd: path.join(os.homedir(), "repos"),
         mode: "bypassPermissions",
         title: `Window opener · ${provider}${account ? ":" + account : ""}`,
+        disposable: 1,
       });
       threads.send(t.id, "Reply with the single word: ok");
-      threads.archive(t.id, true);
     },
   });
   setInterval(() => {

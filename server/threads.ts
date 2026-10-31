@@ -120,6 +120,7 @@ export interface Thread {
   background?: number; // background subagents still working after the turn ended; their completion wakes the agent
   operation?: "compact";
   lastCompactedAt?: number;
+  disposable?: 1; // removed once its turn ends (window opener pings); hidden from the Threads lane meanwhile
   archived?: number; // when it was archived: it leaves the working list until unarchived or sent to again
   quotaPaused?: { provider: string; windowLabel: string; resetsAt: number }; // paused due to quota exhaustion; auto-resumes late in a later window (see resumeDue)
   schedule?: { task: string; run: string }; // a scheduled task's run: the sidebar files it under its task
@@ -367,6 +368,7 @@ type CreateOptions = {
   title?: string;
   schedule?: Thread["schedule"];
   issueRun?: Thread["issueRun"];
+  disposable?: 1;
 };
 
 type ThreadPatch = {
@@ -765,6 +767,18 @@ export class Threads {
     } catch {} // usage history from logs written before the dashboard existed
     this.loadCosts();
     this.loadQueues();
+    this.purgeDisposable();
+  }
+
+  // Boot safety net: a disposable thread outliving its turn (crash before removal) is dropped.
+  // Legacy: before `disposable` existed the window opener archived its pings under this title, so
+  // those archived leftovers are matched by title once.
+  private purgeDisposable() {
+    for (const t of [...this.threads.values()]) {
+      if (t.status !== "idle") continue;
+      if (t.disposable || (t.archived && t.title?.startsWith("Window opener · ")))
+        this.remove(t.id);
+    }
   }
 
   private loadCommands() {
@@ -1081,6 +1095,7 @@ export class Threads {
       effort: this.validEffort(prov, model, opts.effort),
       ...(opts.schedule ? { schedule: opts.schedule } : {}),
       ...(opts.issueRun ? { issueRun: opts.issueRun } : {}),
+      ...(opts.disposable ? { disposable: 1 as const } : {}),
       status: "idle",
       cost: 0,
       createdAt: now,
@@ -2072,6 +2087,15 @@ export class Threads {
           event.is_error ? { ...event, error: flow.issueError } : event,
         );
       } catch {}
+    this.removeDisposable(thread);
+  }
+
+  // A disposable thread is deleted on the next tick, after the hooks and emit above finish
+  private removeDisposable(thread: Thread) {
+    if (!thread.disposable || thread.status !== "idle") return;
+    setImmediate(() => {
+      if (this.threads.get(thread.id)?.status === "idle") this.remove(thread.id);
+    });
   }
 
   // Ask the labeler for a short label of each tool call that needs one
@@ -2999,6 +3023,7 @@ export class Threads {
     this.endTiming(t, { subtype: "stale", is_error: true });
     this.touch(t);
     this.drain(t.id);
+    this.removeDisposable(t);
   }
 
   shutdown() {
