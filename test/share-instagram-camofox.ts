@@ -1,4 +1,5 @@
 process.env.AGENT_CONSOLE_CAMOFOX_URL = "off";
+process.env.AGENT_CONSOLE_CAMOFOX_AUTOSTART = "0";
 
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -8,6 +9,9 @@ import path from "node:path";
 
 const { runCamofoxFallback, pickMedia, pageExpression, defaultCamofoxDeps, isCdnUrl } =
   await import("../server/share/instagram-camofox.ts");
+const { camofoxStartDeps, resetCamofoxStartState } = await import(
+  "../server/share/camofox-start.ts"
+);
 const { camofoxCall, CamofoxUnavailableError } = await import("../server/share/camofox.ts");
 
 const CODE = "DegFp34iI8Q";
@@ -306,6 +310,69 @@ await assert.rejects(camofoxCall("/nope", {}), CamofoxUnavailableError);
 process.env.AGENT_CONSOLE_CAMOFOX_URL = "off";
 await assert.rejects(camofoxCall("/tabs", {}), CamofoxUnavailableError);
 assert.match(pageExpression(CODE), /^\(\(\)=>\{function /);
+
+// ---- autostart
+{
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), "ig-camofox-repo-"));
+  fs.writeFileSync(path.join(repo, "server.js"), "");
+  const logFile = path.join(repo, "log", "server.log");
+  const probe = http.createServer();
+  await new Promise<void>((resolve) => probe.listen(0, "127.0.0.1", resolve));
+  const downPort = (probe.address() as { port: number }).port;
+  await new Promise((resolve) => probe.close(resolve));
+  const lateServer = http.createServer((_req, res) => {
+    res.setHeader("content-type", "application/json");
+    res.end(JSON.stringify({ tabId: "late" }));
+  });
+  const spawned: { command: string; args: string[]; options: any }[] = [];
+  const realDeps = { ...camofoxStartDeps };
+  Object.assign(camofoxStartDeps, {
+    repoDir: () => repo,
+    nodePath: () => "/fake/node",
+    logPath: () => logFile,
+    waitMs: 5000,
+    cooldownMs: 60_000,
+    spawn: (command: string, args: string[], options: any) => {
+      spawned.push({ command, args, options });
+      setTimeout(() => lateServer.listen(downPort, "127.0.0.1"), 300);
+      return { unref() {} };
+    },
+  });
+  const arm = (url: string, autostart = "1") => {
+    spawned.length = 0;
+    resetCamofoxStartState();
+    process.env.AGENT_CONSOLE_CAMOFOX_URL = url;
+    process.env.AGENT_CONSOLE_CAMOFOX_AUTOSTART = autostart;
+  };
+
+  arm(`http://127.0.0.1:${downPort}`);
+  const results = await Promise.all([camofoxCall("/tabs", {}), camofoxCall("/tabs", {})]);
+  assert.deepEqual(results, [{ tabId: "late" }, { tabId: "late" }]);
+  assert.equal(spawned.length, 1, "concurrent callers share one spawn");
+  assert.equal(spawned[0].command, "/fake/node");
+  assert.deepEqual(spawned[0].args, ["server.js"]);
+  assert.equal(spawned[0].options.cwd, repo);
+  assert.equal(spawned[0].options.env.CAMOFOX_PORT, String(downPort));
+  assert.equal(spawned[0].options.detached, true);
+  assert.ok(fs.existsSync(path.dirname(logFile)), "log dir created");
+  await new Promise((resolve) => lateServer.close(resolve));
+
+  arm("off");
+  await assert.rejects(camofoxCall("/tabs", {}), CamofoxUnavailableError);
+  assert.equal(spawned.length, 0, "off never spawns");
+  arm("http://192.0.2.1:9377");
+  await assert.rejects(camofoxCall("/tabs", {}, undefined, 500), CamofoxUnavailableError);
+  assert.equal(spawned.length, 0, "non-local url never spawns");
+  arm(`http://127.0.0.1:${downPort}`, "0");
+  await assert.rejects(camofoxCall("/tabs", {}), CamofoxUnavailableError);
+  assert.equal(spawned.length, 0, "AUTOSTART=0 never spawns");
+
+  Object.assign(camofoxStartDeps, realDeps);
+  resetCamofoxStartState();
+  process.env.AGENT_CONSOLE_CAMOFOX_AUTOSTART = "0";
+  process.env.AGENT_CONSOLE_CAMOFOX_URL = "off";
+  fs.rmSync(repo, { recursive: true, force: true });
+}
 
 server.close();
 console.log("share-instagram-camofox: ok");
