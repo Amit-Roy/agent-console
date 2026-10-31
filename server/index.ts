@@ -87,6 +87,7 @@ import { isSandboxedShareProvider, sharePrompt, shareTitle } from "./share/promp
 import { resolveShare } from "./share/registry.ts";
 import { downloadShare } from "./share/run.ts";
 import { ShareError } from "./share/types.ts";
+import { createStaticAssets } from "./static-assets.ts";
 import { safeId, Threads, turnTiming } from "./threads.ts";
 import { createTelemetryService } from "./token-telemetry.ts";
 import { startToolPriority } from "./tool-priority.ts";
@@ -126,7 +127,6 @@ import {
   startIssue,
 } from "./window-dispatch.ts";
 import { createOpener, loadOpenerConfig } from "./window-opener.ts";
-import { createStaticAssets } from "./static-assets.ts";
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PUBLIC_DIR = path.join(ROOT, "public");

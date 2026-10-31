@@ -5,6 +5,7 @@
 // path-scoped /api/file-image and /api/file-media routes, Chart.js is imported lazily on the first chart and /arch.js on the first
 // valid ```arch JSON spec (invalid or still-streaming specs stay plain code blocks).
 
+import { frontmatterToMarkdown } from "./frontmatter.js";
 import hljs from "./vendor/hljs/core.js";
 import bash from "./vendor/hljs/languages/bash.js";
 import css from "./vendor/hljs/languages/css.js";
@@ -21,7 +22,6 @@ import xml from "./vendor/hljs/languages/xml.js";
 import yaml from "./vendor/hljs/languages/yaml.js";
 import { Marked } from "./vendor/marked.js";
 import DOMPurify from "./vendor/purify.js";
-import { frontmatterToMarkdown } from "./frontmatter.js";
 
 for (const [n, l] of Object.entries({
   bash,
@@ -862,7 +862,7 @@ function codeTarget(t) {
   const ref = parseFileRef(t);
   return ref ? { local: t, ref } : null;
 }
-const HASH_REF = /(^|[\s(\[])#(\d{1,6})(?!\w)/g;
+const HASH_REF = /(^|[\s([])#(\d{1,6})(?!\w)/g;
 const HASH_SKIP = "pre, code, a, .md-media, .chart, .arch";
 function hashRefNodes(text) {
   const frag = document.createDocumentFragment();
