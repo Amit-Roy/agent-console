@@ -170,6 +170,10 @@ const BACKGROUND_STALE_MS = Number(
 // A running turn streams tokens, tool results or progress; a foreground tool call is capped at 10 minutes. A turn silent for longer
 // than this, with no blocking question waiting on the user, is hung and would block restart-when-idle forever: the sweep ends it.
 const TURN_STALE_MS = Number(process.env.AGENT_CONSOLE_TURN_STALE_MS ?? 30 * 60 * 1000);
+// A blocking question waits on the user this long before its turn counts as hung
+const QUESTION_STALE_MS = Number(
+  process.env.AGENT_CONSOLE_QUESTION_STALE_MS ?? 24 * 60 * 60 * 1000,
+);
 
 // First-party turn timing (metadata only, never sent anywhere). Unavailable storage must never affect a turn.
 let timing: TurnTimingStore | undefined;
@@ -1111,6 +1115,13 @@ export class Threads {
     this.emit({ t: "thread", thread: t });
   }
 
+  // Archiving leaves no pending input: a blocking question ends its turn, async ones are cancelled. A turn without questions keeps running.
+  private dropPendingInput(id: string) {
+    const pending = this.questions.list(id);
+    if (pending.some((q) => !q.async)) this.abort(id);
+    else if (pending.length) this.cancelQuestions(id, true);
+  }
+
   // Filing a thread away is not activity: updatedAt stays, so it keeps its place in either list
   archive(id: string, archived: boolean) {
     const t = this.threads.get(id);
@@ -1119,6 +1130,7 @@ export class Threads {
     else delete t.archived;
     // Clearing quotaPaused on archive prevents stale resume on unarchive
     if (archived) delete t.quotaPaused;
+    if (archived) this.dropPendingInput(id);
     if (archived && this.live.get(id)?.warm) this.kill(id, "archive");
     this.refreshIdleCompaction(t);
     this.persist();
@@ -1776,6 +1788,7 @@ export class Threads {
         });
         return true;
       }
+      if (thread.archived) delete thread.archived; // a new question puts the thread back in front of the user
       this.updateWaiting(thread.id);
       if (!flow.compacting && this.notificationTurns.has(thread.id))
         this.notify(thread, "needs_input");
@@ -2953,8 +2966,17 @@ export class Threads {
     if (!thread.operation) idle.push([threadId, lastActive]);
   }
 
+  // A fresh blocking question on a thread the user can see exempts the turn from the hung check
+  private waitingOnUser(threadId: string, thread: Thread) {
+    if (thread.archived) return false;
+    const now = Date.now();
+    return this.questions
+      .list(threadId)
+      .some((request) => !request.async && now - (request.ts ?? now) <= QUESTION_STALE_MS);
+  }
+
   private sweepRunning(threadId: string, live: Live, thread: Thread) {
-    if (this.questions.list(threadId).some((request) => !request.async)) live.heardAt = Date.now(); // waiting on the user is not silence
+    if (this.waitingOnUser(threadId, thread)) live.heardAt = Date.now(); // waiting on the user is not silence
     const lastSign = Math.max(
       live.heardAt ?? 0,
       live.spawnAt!,
