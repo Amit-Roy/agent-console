@@ -60,7 +60,7 @@ for (const flag of ["--ignore-config", "--no-cookies", "--no-progress", "--write
   assert.ok(args.includes(flag), flag);
 assert.ok(!args.includes("--no-playlist"), "carousels need the playlist");
 assert.equal(args[args.indexOf("--max-filesize") + 1], "100M");
-assert.equal(args[args.indexOf("--playlist-end") + 1], "10");
+assert.equal(args[args.indexOf("--playlist-end") + 1], "20");
 assert.deepEqual(buildArgs("https://x/", "/tmp/out", [1, 8]).slice(3, 5), [
   "--playlist-items",
   "1,8",
@@ -215,6 +215,25 @@ setMode("blocked");
 const cliBlocked = cli("https://www.instagram.com/p/CLIPOST1234/", "--out", path.join(root, "x"));
 assert.equal(cliBlocked.status, 1);
 assert.match(cliBlocked.stderr, /Instagram blocked the download/);
+const cliTooMany = cli("https://www.instagram.com/p/CLIPOST1234/", "--items", "21");
+assert.equal(cliTooMany.status, 1);
+assert.match(cliTooMany.stderr, /from 1 to 20/);
+const jailThread = "11111111-2222-4333-8444-555555555555";
+const jailEnv = { ...cliEnv, AGENT_CONSOLE_DATA: dataDir };
+const jailCli = (...cliArgs: string[]) =>
+  spawnSync(cliBin, cliArgs, { env: jailEnv, encoding: "utf8" });
+setMode("carousel");
+const jailOut = path.join(dataDir, "uploads", jailThread, "fetch-1");
+const jailRun = jailCli("https://www.instagram.com/p/CLIPOST1234/", "--out", jailOut);
+assert.equal(jailRun.status, 0, jailRun.stderr);
+assert.equal(fs.statSync(`${jailOut}.untrusted`).mode & 0o777, 0o600);
+const jailBad = jailCli(
+  "https://www.instagram.com/p/CLIPOST1234/",
+  "--out",
+  path.join(dataDir, "uploads", jailThread),
+);
+assert.equal(jailBad.status, 1);
+assert.match(jailBad.stderr, /uploads\/<thread-id>\/<name>/);
 const wrapper = spawnSync(
   path.join(process.cwd(), "bin", "instagram-fetch"),
   ["https://evil.com/p/CLIPOST1234/"],
@@ -369,7 +388,7 @@ assert.deepEqual(galleryOut.slice(0, 14), [
 assert.equal(galleryOut[galleryOut.indexOf("--retries") + 1], "0");
 assert.equal(galleryOut[galleryOut.indexOf("-D") + 1], "/tmp/stage");
 assert.equal(galleryOut[galleryOut.indexOf("-f") + 1], "{num}.{extension}");
-assert.equal(galleryOut[galleryOut.indexOf("--range") + 1], "1-10");
+assert.equal(galleryOut[galleryOut.indexOf("--range") + 1], "1-20");
 assert.equal(
   galleryArgs(galleryUrl, "/tmp/stage", "/tmp/cookies.txt", [2, 3])[
     galleryOut.indexOf("--range") + 1
