@@ -2005,7 +2005,9 @@ function recordColdStart(thread) {
     ws_open_ms: coldStart.wsOpen,
     hello_ms: coldStart.hello,
     events: resources.length,
-    wire_bytes: Math.round(resources.reduce((n, r) => n + (r.transferSize || 0), nav?.transferSize || 0)),
+    wire_bytes: Math.round(
+      resources.reduce((n, r) => n + (r.transferSize || 0), nav?.transferSize || 0),
+    ),
   });
 }
 function historyDone(m, refreshing, cachedMetrics) {

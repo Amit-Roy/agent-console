@@ -159,7 +159,17 @@ try {
   // Cold-start kind carries the page-load stage columns; out-of-range values are rejected.
   assert.equal(
     store.record(
-      [{ ...sample, kind: "cold", total_ms: 900, ttfb_ms: 40, dcl_ms: 300, ws_open_ms: 450, hello_ms: 520 }],
+      [
+        {
+          ...sample,
+          kind: "cold",
+          total_ms: 900,
+          ttfb_ms: 40,
+          dcl_ms: 300,
+          ws_open_ms: 450,
+          hello_ms: 520,
+        },
+      ],
       lookup,
     ),
     1,
