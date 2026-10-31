@@ -1,6 +1,6 @@
 {
-  "title": "Instagram share download chain",
-  "subtitle": "Camofox autostarts and stays warm when a share finds it down",
+  "title": "Agent Console architecture",
+  "subtitle": "Share download chain (unchanged) and the app load path: compression, SW navigation preload, cold-start metric",
   "items": [
     {
       "group": "Share entry points",
@@ -86,6 +86,59 @@
           "icon": "lock"
         }
       ]
+    },
+    {
+      "group": "Browser",
+      "icon": "smartphone",
+      "items": [
+        {
+          "id": "sw",
+          "label": "Service worker",
+          "tech": "public/sw.js",
+          "desc": "Navigation preload enabled on activate; navigate fetch awaits preloadResponse, keeps the 502/503/504 retry page",
+          "icon": "workflow",
+          "status": "modified"
+        },
+        {
+          "id": "app",
+          "label": "App client",
+          "tech": "public/app.js",
+          "desc": "Records one cold sample per page load when the first history paints; App start row in the speed panel",
+          "icon": "app-window",
+          "status": "modified"
+        }
+      ],
+      "status": "modified"
+    },
+    {
+      "group": "Server",
+      "icon": "server",
+      "items": [
+        {
+          "id": "compress",
+          "label": "Compression middleware",
+          "tech": "compression 1.8 in server/index.ts",
+          "desc": "Brotli or gzip for text; skips application/x-ndjson and text/event-stream",
+          "icon": "package",
+          "status": "added"
+        },
+        {
+          "id": "static",
+          "label": "Static assets and API",
+          "tech": "Express 5",
+          "desc": "index.html, JS modules, style.css, NDJSON assignment stream",
+          "icon": "files"
+        },
+        {
+          "id": "latency",
+          "label": "Latency store",
+          "tech": "server/latency.ts, SQLite",
+          "desc": "New kind cold with nullable ttfb_ms, dcl_ms, ws_open_ms, hello_ms columns",
+          "icon": "database",
+          "status": "modified"
+        }
+      ],
+      "status": "modified"
     }
   ],
   "edges": [
@@ -130,6 +183,23 @@
       "to": "camofox",
       "label": "spawn node server.js",
       "status": "added"
+    },
+    {
+      "from": "sw",
+      "to": "compress",
+      "label": "navigate + preload request"
+    },
+    {
+      "from": "compress",
+      "to": "static",
+      "label": "compress text responses",
+      "status": "added"
+    },
+    {
+      "from": "app",
+      "to": "latency",
+      "label": "telemetry over WebSocket (cold)",
+      "status": "modified"
     }
   ]
 }

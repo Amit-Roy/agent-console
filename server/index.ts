@@ -1,4 +1,5 @@
 import "./log-timestamps.ts";
+import compression from "compression";
 import {
   acquireModelRequest,
   reportModel429,
@@ -549,6 +550,16 @@ if (process.env.AGENT_CONSOLE_MOCK !== "1") {
 
 const app = express();
 app.disable("x-powered-by");
+// Compress text responses, but never the live streams: buffering would hold back NDJSON lines and SSE events.
+app.use(
+  compression({
+    filter: (req, res) => {
+      const type = String(res.getHeader("Content-Type") || "");
+      if (type.includes("application/x-ndjson") || type.includes("text/event-stream")) return false;
+      return compression.filter(req, res);
+    },
+  }),
+);
 app.use((_req, res, next) => {
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("Referrer-Policy", "no-referrer");

@@ -1,6 +1,8 @@
 // Minimal service worker: makes the app installable. Nothing is cached (live data only).
 self.addEventListener("install", () => self.skipWaiting());
-self.addEventListener("activate", (e) => e.waitUntil(self.clients.claim()));
+self.addEventListener("activate", (e) =>
+  e.waitUntil(Promise.all([self.clients.claim(), self.registration.navigationPreload?.enable()])),
+);
 
 // While the server restarts, the Coder proxy answers page loads with 502 (or the fetch fails outright).
 // Show a page that polls until the server answers, then reloads, instead of the proxy's error.
@@ -32,7 +34,7 @@ self.addEventListener("fetch", (event) => {
           headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
         });
       try {
-        const res = await fetch(event.request);
+        const res = (await event.preloadResponse) || (await fetch(event.request));
         return DOWN.has(res.status) ? retry() : res;
       } catch {
         return retry();

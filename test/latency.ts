@@ -156,6 +156,32 @@ try {
   );
   assert.equal(store.summary().groups["viewer_tree/workspace/mobile/visible"].count, 1);
   assert.ok(!JSON.stringify(store.summary()).includes("NEVER_STORE_WORKSPACE_PATH"));
+  // Cold-start kind carries the page-load stage columns; out-of-range values are rejected.
+  assert.equal(
+    store.record(
+      [
+        {
+          ...sample,
+          kind: "cold",
+          total_ms: 900,
+          ttfb_ms: 40,
+          dcl_ms: 300,
+          ws_open_ms: 450,
+          hello_ms: 520,
+        },
+      ],
+      lookup,
+    ),
+    1,
+  );
+  assert.equal(store.record([{ ...sample, kind: "cold", ttfb_ms: -1 }], lookup), 0);
+  assert.equal(store.record([{ ...sample, kind: "cold", hello_ms: "5" }], lookup), 0);
+  const cold = store.summary().recent.find((s: any) => s.kind === "cold");
+  assert.deepEqual(
+    [cold.ttfb_ms, cold.dcl_ms, cold.ws_open_ms, cold.hello_ms],
+    [40, 300, 450, 520],
+  );
+  assert.equal(store.summary().groups["cold/visible"].count, 1);
   // Upgrade an existing database without losing history or interpreting absent stage times as zero.
   const oldFile = path.join(dir, "old.sqlite"),
     old = new DatabaseSync(oldFile);
