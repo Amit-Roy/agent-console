@@ -41,12 +41,8 @@ PROVIDERS.set("async-fixture", {
       get alive() {
         return alive;
       },
-      send(text: string) {
-        
-      },
-      steer(text: string) {
-        
-      },
+      send(text: string) {},
+      steer(text: string) {},
       answer() {
         throw Error("Async metadata is not a blocking native request");
       },
@@ -68,7 +64,9 @@ const create = () => {
   threads.send(t.id, "original task");
   return t;
 };
-const questions = [{ id: "scope", question: "Which scope?", options: [{ label: "Quick" }, { label: "Full" }] }];
+const questions = [
+  { id: "scope", question: "Which scope?", options: [{ label: "Quick" }, { label: "Full" }] },
+];
 const ask = (t: any, id: string, async = true) =>
   contexts.get(t.id).event({ type: "question", id, questions, ...(async ? { async: true } : {}) });
 const durable = () => JSON.parse(fs.readFileSync(path.join(data, "questions.json"), "utf8"));

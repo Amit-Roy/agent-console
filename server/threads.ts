@@ -171,7 +171,9 @@ const BACKGROUND_STALE_MS = Number(
 // than this, with no blocking question waiting on the user, is hung and would block restart-when-idle forever: the sweep ends it.
 const TURN_STALE_MS = Number(process.env.AGENT_CONSOLE_TURN_STALE_MS ?? 30 * 60 * 1000);
 // A blocking question waits on the user this long before its turn counts as hung
-const QUESTION_STALE_MS = Number(process.env.AGENT_CONSOLE_QUESTION_STALE_MS ?? 24 * 60 * 60 * 1000);
+const QUESTION_STALE_MS = Number(
+  process.env.AGENT_CONSOLE_QUESTION_STALE_MS ?? 24 * 60 * 60 * 1000,
+);
 
 // First-party turn timing (metadata only, never sent anywhere). Unavailable storage must never affect a turn.
 let timing: TurnTimingStore | undefined;
