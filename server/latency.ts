@@ -12,6 +12,7 @@ const KINDS = new Set([
   "viewer_tree",
   "viewer_module",
   "first_token",
+  "cold",
 ]);
 const STAGES = [
   "server_ms",
@@ -21,6 +22,10 @@ const STAGES = [
   "roundtrip_ms",
   "decode_ms",
   "module_ms",
+  "ttfb_ms",
+  "dcl_ms",
+  "ws_open_ms",
+  "hello_ms",
 ];
 const duration = (n: unknown) =>
   typeof n === "number" && Number.isFinite(n) && n >= 0 && n <= 300_000;
@@ -70,6 +75,10 @@ function latencyRow(
     sample.roundtrip_ms ?? null,
     sample.decode_ms ?? null,
     sample.module_ms ?? null,
+    sample.ttfb_ms ?? null,
+    sample.dcl_ms ?? null,
+    sample.ws_open_ms ?? null,
+    sample.hello_ms ?? null,
     sample.width,
     sample.height,
     sample.touch === true ? 1 : 0,
@@ -102,7 +111,17 @@ export class LatencyStore {
         .all()
         .map((c: any) => c.name),
     );
-    for (const name of ["wire_bytes", "prepare_ms", "roundtrip_ms", "decode_ms", "module_ms"])
+    for (const name of [
+      "wire_bytes",
+      "prepare_ms",
+      "roundtrip_ms",
+      "decode_ms",
+      "module_ms",
+      "ttfb_ms",
+      "dcl_ms",
+      "ws_open_ms",
+      "hello_ms",
+    ])
       if (!columns.has(name)) this.db.exec(`ALTER TABLE latency ADD COLUMN ${name} REAL`);
     this.prune();
   }
@@ -119,7 +138,7 @@ export class LatencyStore {
     }
     if (!rows.length) return 0;
     const insert = this.db.prepare(
-      "INSERT INTO latency(at,thread,provider,kind,total_ms,server_ms,render_ms,wait_ms,events,bytes,wire_bytes,prepare_ms,roundtrip_ms,decode_ms,module_ms,width,height,touch,hidden) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+      "INSERT INTO latency(at,thread,provider,kind,total_ms,server_ms,render_ms,wait_ms,events,bytes,wire_bytes,prepare_ms,roundtrip_ms,decode_ms,module_ms,ttfb_ms,dcl_ms,ws_open_ms,hello_ms,width,height,touch,hidden) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
     );
     this.db.exec("BEGIN");
     try {
