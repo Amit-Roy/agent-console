@@ -142,7 +142,7 @@ export function setArchIcons(map) {
 
 function loadIcons() {
   if (iconMap) return Promise.resolve(iconMap);
-  iconLoad ||= fetch("/vendor/lucide/icons.json")
+  iconLoad ||= fetch(new URL("./vendor/lucide/icons.json", import.meta.url))
     .then((res) => (res.ok ? res.json() : {}))
     .catch(() => ({}))
     .then((map) => (iconMap = map));
@@ -326,7 +326,7 @@ export function buildArch(spec, container) {
 
 // ---------- routing: measured here, routed by libavoid in a module worker (public/arch-route-worker.js) ----------
 // libavoid's embind glue needs eval, which the page CSP forbids; the worker script carries its own CSP.
-const WORKER_URL = "/arch-route-worker.js";
+const WORKER_URL = new URL("./arch-route-worker.js", import.meta.url);
 const REROUTE_DELAY = 100;
 const ROUTE_TIMEOUT = 15000;
 let routeWorker = null;

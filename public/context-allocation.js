@@ -1,4 +1,4 @@
-import { el } from "/render.js";
+import { el } from "./render.js";
 
 const fmt = (n) =>
   new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 }).format(n);

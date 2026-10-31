@@ -1,7 +1,7 @@
 // Project file tree for the file viewer. All state lives on the shared `viewer` context.
 
-import { metricThread, paint, record, scopeParams } from "/file-viewer-render.js";
-import { el as createElement } from "/render.js";
+import { metricThread, paint, record, scopeParams } from "./file-viewer-render.js";
+import { el as createElement } from "./render.js";
 
 export function showTree(viewer) {
   viewer.sidebar.hidden = !viewer.treeShown;

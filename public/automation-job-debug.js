@@ -1,5 +1,5 @@
 // Read-only issue diagnostics. Each request owns its view so late responses cannot replace another job's evidence.
-import { el } from "/render.js";
+import { el } from "./render.js";
 
 let current;
 const when = (ts) => (Number.isFinite(ts) ? new Date(ts).toLocaleString() : "Time unavailable");

@@ -1,6 +1,6 @@
 // Loaded after the conversation is painted and the browser is idle, or when a file link is first opened.
 
-import { handleEditClick, prepareEdit, resetEdit } from "/file-viewer-edit.js";
+import { handleEditClick, prepareEdit, resetEdit } from "./file-viewer-edit.js";
 import {
   applyMeta,
   isStale,
@@ -14,16 +14,16 @@ import {
   scopeParams,
   stopMedia,
   updatePerformance,
-} from "/file-viewer-render.js";
-import { abortTreeRequests, ensureTree, resetTree, showTree } from "/file-viewer-tree.js";
-import { el as createElement, icon, iconButton, parseFileRef, wireCopy } from "/render.js";
+} from "./file-viewer-render.js";
+import { abortTreeRequests, ensureTree, resetTree, showTree } from "./file-viewer-tree.js";
+import { el as createElement, icon, iconButton, parseFileRef, wireCopy } from "./render.js";
 
 let style;
 export function prepare() {
   return (style ||= new Promise((resolve, reject) => {
     const link = document.createElement("link");
     link.rel = "stylesheet";
-    link.href = "/file-viewer.css";
+    link.href = new URL("./file-viewer.css", import.meta.url).href;
     link.onload = resolve;
     link.onerror = () => {
       link.remove();

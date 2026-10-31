@@ -1,6 +1,6 @@
-import { createContextAllocation } from "/context-allocation.js";
-import { forecastContext, forecastModel, recommendCompaction } from "/context-forecast.js";
-import { el, iconButton } from "/render.js";
+import { createContextAllocation } from "./context-allocation.js";
+import { forecastContext, forecastModel, recommendCompaction } from "./context-forecast.js";
+import { el, iconButton } from "./render.js";
 
 const tokens = (n) =>
   new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 }).format(n);
@@ -8,7 +8,7 @@ const usd = (n) => (n == null ? "Unknown" : `$${n.toFixed(n > 1 ? 2 : 4)}`);
 let activeDialog;
 let chartLibrary;
 const loadChart = () =>
-  (chartLibrary ||= import("/vendor/chart.umd.min.js")
+  (chartLibrary ||= import("./vendor/chart.umd.min.js")
     .then(() => globalThis.Chart)
     .catch((error) => {
       chartLibrary = null;

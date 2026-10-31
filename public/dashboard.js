@@ -182,7 +182,7 @@ async function load() {
     if (tab === "tokens") {
       const [cur, mod] = await Promise.all([
         fetchRange(range.from, range.to),
-        tokensMod || import("/dashboard-tokens.js"),
+        tokensMod || import("./dashboard-tokens.js"),
       ]);
       if (mine !== seq) return;
       tokensMod = mod;

@@ -1,6 +1,6 @@
 // Reusable step timeline: one expandable row per server step, driven by NDJSON messages
 // ({t:"plan"|"step"|"log"|"ok"|"fail"|"skip"}). Used by the assign dialog; mount it in any container.
-import { el } from "/render.js";
+import { el } from "./render.js";
 
 const R = 8,
   ARC = 2 * Math.PI * R;
