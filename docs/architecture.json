@@ -1,519 +1,120 @@
 {
-  "title": "Opener thread lifecycle, archive pending input, dashboard savings and Vault iron providers",
-  "subtitle": "RTK command-output savings and Headroom input savings have separate scopes",
-  "items": [
+ "title": "Instagram share download chain",
+ "subtitle": "Image carousels without cookies",
+ "items": [
+  {
+   "group": "Share entry points",
+   "icon": "share-2",
+   "items": [
     {
-      "group": "Local savings sources",
-      "icon": "database",
-      "items": [
-        {
-          "id": "rtk",
-          "label": "RTK command history",
-          "tech": "rtk gain -f json --daily",
-          "desc": "Recorded command-output reductions",
-          "icon": "terminal"
-        },
-        {
-          "id": "history",
-          "label": "Headroom savings ledger",
-          "tech": "GET /stats-history",
-          "desc": "Durable daily input-reduction history",
-          "icon": "database"
-        }
-      ]
+     "id": "intake",
+     "label": "Share intake",
+     "tech": "server/share/run.ts",
+     "desc": "Share-to-console from phone",
+     "icon": "smartphone"
     },
     {
-      "group": "Console collectors",
-      "icon": "server",
-      "items": [
-        {
-          "id": "rtk-collector",
-          "label": "RTK collector",
-          "tech": "analytics.ts",
-          "desc": "Share pending collection; cache successful results for 60 seconds",
-          "icon": "terminal"
-        },
-        {
-          "id": "history-collector",
-          "label": "History collector",
-          "tech": "headroom.ts",
-          "desc": "Independent of routing; eight-second timeout; share pending collection",
-          "icon": "activity"
-        },
-        {
-          "id": "api",
-          "label": "Dashboard API",
-          "tech": "GET /api/dashboard",
-          "desc": "Unavailable history is null; measured empty history is an empty array",
-          "icon": "route"
-        }
-      ]
-    },
-    {
-      "group": "Usage dashboard",
-      "icon": "chart-column",
-      "items": [
-        {
-          "id": "view",
-          "label": "Savings display",
-          "tech": "dashboard.js",
-          "desc": "Unavailable measurements show an em dash; measured zero stays zero",
-          "icon": "chart-column"
-        }
-      ]
-    },
-    {
-      "group": "Vault secrets path",
-      "icon": "key-round",
-      "color": "indigo",
-      "border": "solid",
-      "status": "added",
-      "items": [
-        {
-          "id": "vault-ui",
-          "label": "Vault UI",
-          "tech": "public/vault.js",
-          "desc": "Replace/Add key opens the step dialog; reload mid-job restores it from the ironJob snapshot",
-          "icon": "layout-dashboard",
-          "color": "indigo",
-          "status": "modified",
-          "step": 1
-        },
-        {
-          "id": "vault",
-          "label": "Vault guard",
-          "tech": "server/vault.ts",
-          "desc": "Validates the spec, streams save steps as NDJSON (Accept: application/x-ndjson), JSON otherwise; 502 if iron down",
-          "icon": "shield-check",
-          "color": "indigo",
-          "status": "modified",
-          "step": 2
-        },
-        {
-          "id": "iron-client",
-          "label": "Iron client",
-          "tech": "server/vault-iron.ts",
-          "desc": "Own SSH key, no multiplexing; status / set / token / provider-add / ca-pem",
-          "icon": "terminal",
-          "color": "slate",
-          "status": "modified",
-          "step": 3
-        },
-        {
-          "id": "backup",
-          "label": "Backup job",
-          "tech": "server/vault-backup.ts",
-          "desc": "30 s debounce, detached iron backup, status file, retry API",
-          "icon": "database-backup",
-          "color": "teal",
-          "status": "added"
-        },
-        {
-          "id": "egress",
-          "label": "Egress refresh",
-          "tech": "server/vault-egress.ts",
-          "desc": "Trust iron CA, append new hosts, run egress-pin",
-          "icon": "shield",
-          "color": "teal",
-          "status": "added",
-          "step": 5
-        },
-        {
-          "id": "save-job",
-          "label": "Vault save job",
-          "tech": "server/vault-save-job.ts",
-          "desc": "One job: set, check, backup, drive; resumable Retry; ironJob snapshot",
-          "icon": "list-checks",
-          "color": "indigo",
-          "status": "added"
-        },
-        {
-          "id": "doctor",
-          "label": "Vault doctor",
-          "tech": "server/vault-doctor.ts",
-          "desc": "Runs iron doctor for one provider, maps check lines to step results",
-          "icon": "stethoscope",
-          "color": "teal",
-          "status": "added"
-        },
-        {
-          "id": "timeline",
-          "label": "Step timeline",
-          "tech": "public/step-timeline.js, vault-steps.js",
-          "desc": "Live steps with durations, error text, Retry and Done buttons",
-          "icon": "list-todo",
-          "color": "indigo",
-          "status": "added"
-        }
-      ]
-    },
-    {
-      "group": "VPS",
-      "icon": "server",
-      "color": "slate",
-      "border": "solid",
-      "status": "added",
-      "items": [
-        {
-          "id": "iron-api",
-          "label": "iron-vault-api",
-          "tech": "SSH forced command",
-          "desc": "Accepts only status, set, token, provider-add (JSON on stdin), ca-pem",
-          "icon": "lock",
-          "color": "orange",
-          "status": "modified",
-          "step": 4
-        },
-        {
-          "id": "iron-key",
-          "label": "iron-key credstore",
-          "tech": "iron-proxy",
-          "desc": "Holds real keys and provider rules; hands workspace only a proxy token",
-          "icon": "vault",
-          "color": "purple",
-          "status": "modified",
-          "step": 4
-        }
-      ]
-    },
-    {
-      "group": "iron CLI (dotfiles)",
-      "icon": "terminal",
-      "color": "slate",
-      "border": "solid",
-      "status": "added",
-      "items": [
-        {
-          "id": "iron-doctor",
-          "label": "iron doctor",
-          "tech": "iron doctor --only NAME --json",
-          "desc": "JSON check lines for one provider",
-          "icon": "stethoscope",
-          "color": "orange",
-          "status": "added"
-        },
-        {
-          "id": "iron-backup",
-          "label": "iron backup",
-          "tech": "iron backup --json",
-          "desc": "JSON step lines: backup, Drive upload",
-          "icon": "database-backup",
-          "color": "orange",
-          "status": "added"
-        }
-      ]
-    },
-    {
-      "group": "User actions",
-      "icon": "user",
-      "items": [
-        {
-          "id": "archive-ui",
-          "label": "Archive button",
-          "tech": "public/app.js",
-          "desc": "Files a thread under Archived",
-          "icon": "archive"
-        },
-        {
-          "id": "agent-q",
-          "label": "Agent question",
-          "tech": "AskUserQuestion / async ask",
-          "desc": "Blocking questions pause the turn; async ones do not",
-          "icon": "message-circle-question"
-        }
-      ]
-    },
-    {
-      "group": "Thread store",
-      "icon": "server",
-      "items": [
-        {
-          "id": "archive",
-          "label": "Threads.archive",
-          "tech": "server/threads.ts",
-          "desc": "Calls dropPendingInput: blocking question aborts the turn, async questions are cancelled, a turn without questions keeps running",
-          "icon": "archive",
-          "status": "modified",
-          "step": 1
-        },
-        {
-          "id": "questions",
-          "label": "Question registry",
-          "tech": "server/threads.ts",
-          "desc": "Pending requests per thread, blocking or async",
-          "icon": "list-checks"
-        },
-        {
-          "id": "note-q",
-          "label": "noteQuestion",
-          "tech": "server/threads.ts",
-          "desc": "A new question unarchives the thread so the user sees it",
-          "icon": "message-circle-question",
-          "status": "modified",
-          "step": 2
-        }
-      ]
-    },
-    {
-      "group": "Watchdog",
-      "icon": "shield-check",
-      "items": [
-        {
-          "id": "sweep",
-          "label": "sweepRunning",
-          "tech": "server/threads.ts",
-          "desc": "Ends a turn silent for 30 min unless waitingOnUser",
-          "icon": "timer",
-          "status": "modified",
-          "step": 3
-        },
-        {
-          "id": "waiting",
-          "label": "waitingOnUser",
-          "tech": "server/threads.ts",
-          "desc": "False if archived or question older than 24 h",
-          "icon": "hourglass",
-          "status": "added",
-          "step": 4
-        }
-      ]
-    },
-    {
-      "group": "Visible state",
-      "icon": "layout-dashboard",
-      "items": [
-        {
-          "id": "lane",
-          "label": "Threads lane dot",
-          "tech": "public/app.js",
-          "desc": "Pulses only while a visible thread is waiting or running",
-          "icon": "circle-dot"
-        },
-        {
-          "id": "idle",
-          "label": "Idle restart",
-          "tech": "scripts/idle-restart.mjs",
-          "desc": "Counts running threads before deploy; hung archived turns no longer block it",
-          "icon": "rotate-cw"
-        }
-      ]
-    },
-    {
-      "group": "Opener thread lifecycle",
-      "icon": "app-window",
-      "items": [
-        {
-          "id": "opener",
-          "label": "Window opener",
-          "tech": "server/index.ts",
-          "desc": "Creates the thread with disposable: 1 instead of archiving it",
-          "icon": "app-window",
-          "status": "modified",
-          "step": 1
-        },
-        {
-          "id": "remove",
-          "label": "removeDisposable",
-          "tech": "server/threads.ts",
-          "desc": "Deletes it next tick after the turn result or on hung-turn expire",
-          "icon": "trash-2",
-          "status": "added",
-          "step": 2
-        },
-        {
-          "id": "purge",
-          "label": "purgeDisposable",
-          "tech": "server/threads.ts",
-          "desc": "At boot removes idle disposable threads and legacy archived Window opener threads",
-          "icon": "broom",
-          "status": "added",
-          "step": 3
-        },
-        {
-          "id": "hide",
-          "label": "visibleThreadList",
-          "tech": "public/app.js",
-          "desc": "Hides disposable threads from the list",
-          "icon": "eye-off",
-          "status": "modified",
-          "step": 4
-        }
-      ]
+     "id": "cli",
+     "label": "share-fetch CLI",
+     "tech": "scripts/share-fetch.ts",
+     "desc": "Agent download; --items 1 to 20 after (10 before)",
+     "icon": "terminal"
     }
-  ],
-  "edges": [
+   ]
+  },
+  {
+   "group": "Instagram fetchPost",
+   "icon": "image",
+   "items": [
     {
-      "from": "rtk",
-      "to": "rtk-collector",
-      "label": "CLI JSON"
+     "id": "ytdlp",
+     "label": "yt-dlp",
+     "tech": "ytdlp.ts",
+     "desc": "Anonymous; videos and reels; fails on image carousels",
+     "icon": "film"
     },
     {
-      "from": "history",
-      "to": "history-collector",
-      "label": "Full history JSON"
+     "id": "camofox-fb",
+     "label": "Camofox fallback",
+     "tech": "instagram-camofox.ts",
+     "desc": "Logged-out page JSON carousel_media; CDN host allowlist; magic-byte check",
+     "icon": "globe",
+     "status": "added"
     },
     {
-      "from": "rtk-collector",
-      "to": "api",
-      "label": "Daily RTK measurements"
-    },
-    {
-      "from": "history-collector",
-      "to": "api",
-      "label": "Daily proxy measurements"
-    },
-    {
-      "from": "api",
-      "to": "view",
-      "label": "Selected date range"
-    },
-    {
-      "from": "vault",
-      "to": "iron-client",
-      "label": "Managed set",
-      "status": "added"
-    },
-    {
-      "from": "iron-client",
-      "to": "iron-api",
-      "label": "SSH, value on stdin",
-      "status": "added"
-    },
-    {
-      "from": "iron-api",
-      "to": "iron-key",
-      "label": "Store real key",
-      "status": "added"
-    },
-    {
-      "from": "vault",
-      "to": "backup",
-      "label": "Schedule after set",
-      "status": "added"
-    },
-    {
-      "from": "backup",
-      "to": "iron-api",
-      "label": "iron backup",
-      "status": "added"
-    },
-    {
-      "from": "vault-ui",
-      "to": "vault",
-      "label": "POST provider spec",
-      "status": "added"
-    },
-    {
-      "from": "iron-client",
-      "to": "iron-api",
-      "label": "provider-add JSON / ca-pem",
-      "status": "added"
-    },
-    {
-      "from": "vault",
-      "to": "egress",
-      "label": "After provider add",
-      "status": "added"
-    },
-    {
-      "from": "vault",
-      "to": "save-job",
-      "label": "Run steps",
-      "status": "added"
-    },
-    {
-      "from": "save-job",
-      "to": "timeline",
-      "label": "Step events",
-      "status": "added"
-    },
-    {
-      "from": "save-job",
-      "to": "doctor",
-      "label": "Check the proxy",
-      "status": "added"
-    },
-    {
-      "from": "doctor",
-      "to": "iron-doctor",
-      "label": "iron doctor --only --json",
-      "status": "added"
-    },
-    {
-      "from": "save-job",
-      "to": "iron-backup",
-      "label": "iron backup --json",
-      "status": "added"
-    },
-    {
-      "from": "vault-ui",
-      "to": "timeline",
-      "label": "Opens dialog",
-      "status": "added"
-    },
-    {
-      "from": "archive-ui",
-      "to": "archive",
-      "label": "Archive"
-    },
-    {
-      "from": "archive",
-      "to": "questions",
-      "label": "Abort or cancel pending",
-      "status": "modified"
-    },
-    {
-      "from": "agent-q",
-      "to": "note-q",
-      "label": "New question"
-    },
-    {
-      "from": "note-q",
-      "to": "questions",
-      "label": "Unarchive",
-      "status": "modified"
-    },
-    {
-      "from": "sweep",
-      "to": "waiting",
-      "label": "Exempt?",
-      "status": "added"
-    },
-    {
-      "from": "waiting",
-      "to": "questions",
-      "label": "Read pending",
-      "status": "added"
-    },
-    {
-      "from": "archive",
-      "to": "lane",
-      "label": "Dot clears",
-      "status": "modified"
-    },
-    {
-      "from": "sweep",
-      "to": "idle",
-      "label": "Expires hung turns",
-      "status": "modified"
-    },
-    {
-      "from": "opener",
-      "to": "remove",
-      "label": "After turn result",
-      "status": "added"
-    },
-    {
-      "from": "purge",
-      "to": "remove",
-      "label": "Boot cleanup",
-      "status": "added"
-    },
-    {
-      "from": "opener",
-      "to": "hide",
-      "label": "Hidden while live",
-      "status": "added"
+     "id": "gallery",
+     "label": "Cookie gallery-dl",
+     "tech": "gallerydl.ts",
+     "desc": "Needs instagram-cookies.txt; last resort; 429 when rate limited",
+     "icon": "cookie"
     }
-  ]
+   ],
+   "status": "modified"
+  },
+  {
+   "group": "Local browser",
+   "icon": "server",
+   "status": "added",
+   "items": [
+    {
+     "id": "camofox",
+     "label": "Camofox REST",
+     "tech": "127.0.0.1:9377",
+     "desc": "Started at workspace boot; skipped quietly when down",
+     "icon": "app-window",
+     "status": "added"
+    }
+   ]
+  },
+  {
+   "group": "Share jail",
+   "icon": "shield-check",
+   "items": [
+    {
+     "id": "jail",
+     "label": "share-analyzer jail",
+     "tech": "share-jail-hook",
+     "desc": "Reads only dirs with a .untrusted marker; share-fetch writes it inside uploads",
+     "icon": "lock",
+     "status": "modified"
+    }
+   ]
+  }
+ ],
+ "edges": [
+  {
+   "from": "intake",
+   "to": "ytdlp",
+   "label": "fetchPost"
+  },
+  {
+   "from": "cli",
+   "to": "ytdlp",
+   "label": "fetchPost"
+  },
+  {
+   "from": "ytdlp",
+   "to": "camofox-fb",
+   "label": "missing items",
+   "status": "added"
+  },
+  {
+   "from": "camofox-fb",
+   "to": "camofox",
+   "label": "POST /tabs, evaluate",
+   "status": "added"
+  },
+  {
+   "from": "camofox-fb",
+   "to": "gallery",
+   "label": "still missing",
+   "status": "added"
+  },
+  {
+   "from": "cli",
+   "to": "jail",
+   "label": "--out uploads + marker",
+   "status": "added"
+  }
+ ]
 }

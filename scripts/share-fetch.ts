@@ -1,7 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
+import { DATA_DIR } from "../server/auth.ts";
 import { providerFor, resolveShare } from "../server/share/registry.ts";
 import { ShareError } from "../server/share/types.ts";
+import { MAX_ITEMS } from "../server/share/ytdlp.ts";
+import { isId, SAFE_NAME } from "../server/uploads.ts";
 
 // bin/share-fetch <url> [--out DIR] [--items 1,8]
 // Anonymous download of a shared link for agents; prints one "path size" line per file, note file last.
@@ -14,8 +17,8 @@ function fail(message: string): never {
 
 function parseItems(raw: string): number[] {
   const items = raw.split(",").map(Number);
-  if (!items.every((item) => Number.isInteger(item) && item >= 1 && item <= 10))
-    fail("--items takes comma-separated numbers from 1 to 10.");
+  if (!items.every((item) => Number.isInteger(item) && item >= 1 && item <= MAX_ITEMS))
+    fail(`--items takes comma-separated numbers from 1 to ${MAX_ITEMS}.`);
   return items;
 }
 
@@ -37,6 +40,29 @@ function safeSegment(value: string): string {
   return value.replace(/[^\w.-]+/g, "_").slice(0, 80) || "link";
 }
 
+// realpath of the deepest existing ancestor plus the not-yet-created tail, so symlinks cannot dodge the uploads check
+function realTarget(target: string): string {
+  const tail: string[] = [];
+  let head = target;
+  while (!fs.existsSync(head)) {
+    tail.unshift(path.basename(head));
+    head = path.dirname(head);
+  }
+  return path.join(fs.realpathSync(head), ...tail);
+}
+
+// Inside uploads the dir must be uploads/<thread>/<name> and gets the share-jail marker uploads/<thread>/<name>.untrusted.
+function markUploadsOut(outDir: string) {
+  const uploads = realTarget(path.join(DATA_DIR, "uploads"));
+  const rel = path.relative(uploads, realTarget(outDir));
+  if (rel === "" || rel.startsWith("..") || path.isAbsolute(rel)) return;
+  const [thread, name, ...extra] = rel.split(path.sep);
+  if (!isId(thread) || !name || extra.length || name.startsWith(".") || !SAFE_NAME.test(name))
+    fail("--out inside uploads must be exactly uploads/<thread-id>/<name>.");
+  fs.mkdirSync(path.dirname(outDir), { recursive: true });
+  fs.writeFileSync(`${outDir}.untrusted`, "", { mode: 0o600 });
+}
+
 async function main() {
   const { url, out, items } = parseArgs(process.argv.slice(2));
   if (!url) fail(USAGE);
@@ -45,6 +71,7 @@ async function main() {
   const outDir = path.resolve(
     out || path.join("/tmp/share-fetch", `${link.provider}-${safeSegment(link.id)}`),
   );
+  markUploadsOut(outDir);
   fs.mkdirSync(outDir, { recursive: true });
   const stage = fs.mkdtempSync(path.join(outDir, ".work-"));
   try {

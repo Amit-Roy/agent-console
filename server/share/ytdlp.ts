@@ -10,7 +10,7 @@ export const BLOCKED_MESSAGE = "Instagram blocked the download. Try again later.
 export const IMAGE_POST_MESSAGE =
   "Image posts need Instagram cookies. Add instagram-cookies.txt to the agent-console data folder.";
 const TIMEOUT_MS = 120_000;
-export const MAX_ITEMS = 10;
+export const MAX_ITEMS = 20;
 export const MAX_TOTAL_BYTES = 100 << 20;
 const MEDIA_RE = /^(\d+)\.(mp4|webm|mkv|mov|m4v|jpe?g|png|webp)$/i;
 
