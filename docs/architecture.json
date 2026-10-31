@@ -1,6 +1,6 @@
 {
   "title": "Agent Console architecture",
-  "subtitle": "Share download chain (unchanged) and the app load path: compression, SW navigation preload, cold-start metric",
+  "subtitle": "App load path: release-versioned immutable static assets and HTML rewrite with modulepreload on top of compression and SW navigation preload",
   "items": [
     {
       "group": "Share entry points",
@@ -38,16 +38,14 @@
           "label": "Camofox fallback",
           "tech": "instagram-camofox.ts",
           "desc": "Logged-out page JSON carousel_media; refused connection triggers autostart then one retry",
-          "icon": "globe",
-          "status": "modified"
+          "icon": "globe"
         },
         {
           "id": "autostart",
           "label": "Camofox autostart",
           "tech": "camofox-start.ts",
           "desc": "Local URL only; single-flight spawn; waits 45 s for port; 60 s cooldown on failure",
-          "icon": "power",
-          "status": "added"
+          "icon": "power"
         },
         {
           "id": "gallery",
@@ -56,8 +54,7 @@
           "desc": "Needs instagram-cookies.txt; last resort; 429 when rate limited",
           "icon": "cookie"
         }
-      ],
-      "status": "modified"
+      ]
     },
     {
       "group": "Local browser",
@@ -68,11 +65,9 @@
           "label": "Camofox REST",
           "tech": "127.0.0.1:9377",
           "desc": "Supervised by camofox-serve at boot; browser idle shutdown off (warm)",
-          "icon": "app-window",
-          "status": "modified"
+          "icon": "app-window"
         }
-      ],
-      "status": "modified"
+      ]
     },
     {
       "group": "Share jail",
@@ -96,19 +91,16 @@
           "label": "Service worker",
           "tech": "public/sw.js",
           "desc": "Navigation preload enabled on activate; navigate fetch awaits preloadResponse, keeps the 502/503/504 retry page",
-          "icon": "workflow",
-          "status": "modified"
+          "icon": "workflow"
         },
         {
           "id": "app",
           "label": "App client",
           "tech": "public/app.js",
           "desc": "Records one cold sample per page load when the first history paints; App start row in the speed panel",
-          "icon": "app-window",
-          "status": "modified"
+          "icon": "app-window"
         }
-      ],
-      "status": "modified"
+      ]
     },
     {
       "group": "Server",
@@ -119,8 +111,7 @@
           "label": "Compression middleware",
           "tech": "compression 1.8 in server/index.ts",
           "desc": "Brotli or gzip for text; skips application/x-ndjson and text/event-stream",
-          "icon": "package",
-          "status": "added"
+          "icon": "package"
         },
         {
           "id": "static",
@@ -130,12 +121,27 @@
           "icon": "files"
         },
         {
+          "id": "assets",
+          "label": "Versioned static assets",
+          "tech": "server/static-assets.ts",
+          "desc": "/r/<sha12>/ serves public/ with immutable one-year cache; older sha12 from sibling release dirs; dev tree uses /r/dev/ no-cache",
+          "icon": "package",
+          "status": "added"
+        },
+        {
+          "id": "pages",
+          "label": "HTML rewrite + modulepreload",
+          "tech": "server/static-assets.ts",
+          "desc": "At boot, app pages get /r/<sha12>/ asset URLs plus modulepreload for the static import graph; served from memory, no-cache + ETag",
+          "icon": "file-code",
+          "status": "added"
+        },
+        {
           "id": "latency",
           "label": "Latency store",
           "tech": "server/latency.ts, SQLite",
           "desc": "New kind cold with nullable ttfb_ms, dcl_ms, ws_open_ms, hello_ms columns",
-          "icon": "database",
-          "status": "modified"
+          "icon": "database"
         }
       ],
       "status": "modified"
@@ -175,14 +181,12 @@
     {
       "from": "camofox-fb",
       "to": "autostart",
-      "label": "ECONNREFUSED",
-      "status": "added"
+      "label": "ECONNREFUSED"
     },
     {
       "from": "autostart",
       "to": "camofox",
-      "label": "spawn node server.js",
-      "status": "added"
+      "label": "spawn node server.js"
     },
     {
       "from": "sw",
@@ -192,14 +196,30 @@
     {
       "from": "compress",
       "to": "static",
-      "label": "compress text responses",
-      "status": "added"
+      "label": "compress text responses"
     },
     {
       "from": "app",
       "to": "latency",
-      "label": "telemetry over WebSocket (cold)",
-      "status": "modified"
+      "label": "telemetry over WebSocket (cold)"
+    },
+    {
+      "from": "sw",
+      "to": "pages",
+      "label": "navigation gets prefixed HTML",
+      "status": "added"
+    },
+    {
+      "from": "pages",
+      "to": "assets",
+      "label": "modulepreload + prefixed URLs",
+      "status": "added"
+    },
+    {
+      "from": "assets",
+      "to": "static",
+      "label": "files from public/",
+      "status": "added"
     }
   ]
 }
