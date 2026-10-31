@@ -101,7 +101,7 @@ const server = http.createServer((req, res) => {
     res.end("{}");
     return;
   }
-  if (url.pathname === "/app.js" && baseline) {
+  if (url.pathname.endsWith("/app.js") && baseline) {
     res.setHeader("content-type", "application/javascript");
     res.end(baseline);
     return;

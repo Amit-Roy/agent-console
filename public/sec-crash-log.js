@@ -1,6 +1,6 @@
 // Process crash log for the "Process crashes (24 h)" security row. The server re-validates and redacts every field;
 // all text still goes in through textContent. Each request owns its view so late responses cannot replace newer ones.
-import { el } from "/render.js";
+import { el } from "./render.js";
 
 const REFRESH_MS = 10_000;
 let current;

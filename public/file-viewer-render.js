@@ -5,7 +5,7 @@ import {
   langFromPath,
   langLabel,
   renderMarkdown,
-} from "/render.js";
+} from "./render.js";
 
 export const metricThread = (request) =>
   request.scope === "repos" ? "viewer:repos" : request.thread;

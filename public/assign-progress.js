@@ -1,7 +1,7 @@
 // Premium assignment progress: a timeline of the server's preparation steps, read live from the NDJSON response of
 // POST /api/automation/assign (see server/automation/assign.ts ASSIGNMENT_STEPS). Each row expands to its command output.
-import { $ } from "/render.js";
-import { createStepTimeline, readNdjsonStream } from "/step-timeline.js";
+import { $ } from "./render.js";
+import { createStepTimeline, readNdjsonStream } from "./step-timeline.js";
 
 function handleMessage(ctx, message) {
   if (message.t === "done") ctx.thread = message.thread;

@@ -1,5 +1,5 @@
 // App ideas: list from index.md, add an idea (committed by the server), open an idea's markdown. Hash routes: "" list, "#/<slug>" one idea.
-import { $, el, renderMarkdown } from "/render.js";
+import { $, el, renderMarkdown } from "./render.js";
 
 let ideas = [];
 let current = ""; // slug of the open idea, "" on the list

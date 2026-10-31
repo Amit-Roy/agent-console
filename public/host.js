@@ -230,7 +230,7 @@ function renderMetrics(m) {
 let Chart = null;
 const charts = {};
 const loadChart = () =>
-  import("/vendor/chart.umd.min.js")
+  import("./vendor/chart.umd.min.js")
     .then(() => {
       Chart = globalThis.Chart;
       Chart.defaults.font.family = css("--font-mono");

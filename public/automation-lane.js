@@ -1,8 +1,8 @@
 // The Auto lane: threads the automation started (issue work, PR reviews, debugging), grouped by the issue they serve.
 // They are ordinary threads, so opening, replying and forking work as usual; they just do not crowd the Threads lane.
 
-import { createMenu } from "/menu.js";
-import { $, el, icon } from "/render.js";
+import { createMenu } from "./menu.js";
+import { $, el, icon } from "./render.js";
 
 const ROLE = { work: "work", review: "review", debug: "debug" };
 
