@@ -1,120 +1,135 @@
 {
- "title": "Instagram share download chain",
- "subtitle": "Image carousels without cookies",
- "items": [
-  {
-   "group": "Share entry points",
-   "icon": "share-2",
-   "items": [
+  "title": "Instagram share download chain",
+  "subtitle": "Camofox autostarts and stays warm when a share finds it down",
+  "items": [
     {
-     "id": "intake",
-     "label": "Share intake",
-     "tech": "server/share/run.ts",
-     "desc": "Share-to-console from phone",
-     "icon": "smartphone"
+      "group": "Share entry points",
+      "icon": "share-2",
+      "items": [
+        {
+          "id": "intake",
+          "label": "Share intake",
+          "tech": "server/share/run.ts",
+          "desc": "Share-to-console from phone",
+          "icon": "smartphone"
+        },
+        {
+          "id": "cli",
+          "label": "share-fetch CLI",
+          "tech": "scripts/share-fetch.ts",
+          "desc": "Agent download; --items 1 to 20 after (10 before)",
+          "icon": "terminal"
+        }
+      ]
     },
     {
-     "id": "cli",
-     "label": "share-fetch CLI",
-     "tech": "scripts/share-fetch.ts",
-     "desc": "Agent download; --items 1 to 20 after (10 before)",
-     "icon": "terminal"
-    }
-   ]
-  },
-  {
-   "group": "Instagram fetchPost",
-   "icon": "image",
-   "items": [
-    {
-     "id": "ytdlp",
-     "label": "yt-dlp",
-     "tech": "ytdlp.ts",
-     "desc": "Anonymous; videos and reels; fails on image carousels",
-     "icon": "film"
+      "group": "Instagram fetchPost",
+      "icon": "image",
+      "items": [
+        {
+          "id": "ytdlp",
+          "label": "yt-dlp",
+          "tech": "ytdlp.ts",
+          "desc": "Anonymous; videos and reels; fails on image carousels",
+          "icon": "film"
+        },
+        {
+          "id": "camofox-fb",
+          "label": "Camofox fallback",
+          "tech": "instagram-camofox.ts",
+          "desc": "Logged-out page JSON carousel_media; refused connection triggers autostart then one retry",
+          "icon": "globe",
+          "status": "modified"
+        },
+        {
+          "id": "autostart",
+          "label": "Camofox autostart",
+          "tech": "camofox-start.ts",
+          "desc": "Local URL only; single-flight spawn; waits 45 s for port; 60 s cooldown on failure",
+          "icon": "power",
+          "status": "added"
+        },
+        {
+          "id": "gallery",
+          "label": "Cookie gallery-dl",
+          "tech": "gallerydl.ts",
+          "desc": "Needs instagram-cookies.txt; last resort; 429 when rate limited",
+          "icon": "cookie"
+        }
+      ],
+      "status": "modified"
     },
     {
-     "id": "camofox-fb",
-     "label": "Camofox fallback",
-     "tech": "instagram-camofox.ts",
-     "desc": "Logged-out page JSON carousel_media; CDN host allowlist; magic-byte check",
-     "icon": "globe",
-     "status": "added"
+      "group": "Local browser",
+      "icon": "server",
+      "items": [
+        {
+          "id": "camofox",
+          "label": "Camofox REST",
+          "tech": "127.0.0.1:9377",
+          "desc": "Supervised by camofox-serve at boot; browser idle shutdown off (warm)",
+          "icon": "app-window",
+          "status": "modified"
+        }
+      ],
+      "status": "modified"
     },
     {
-     "id": "gallery",
-     "label": "Cookie gallery-dl",
-     "tech": "gallerydl.ts",
-     "desc": "Needs instagram-cookies.txt; last resort; 429 when rate limited",
-     "icon": "cookie"
+      "group": "Share jail",
+      "icon": "shield-check",
+      "items": [
+        {
+          "id": "jail",
+          "label": "share-analyzer jail",
+          "tech": "share-jail-hook",
+          "desc": "Reads only dirs with a .untrusted marker; share-fetch writes it inside uploads",
+          "icon": "lock"
+        }
+      ]
     }
-   ],
-   "status": "modified"
-  },
-  {
-   "group": "Local browser",
-   "icon": "server",
-   "status": "added",
-   "items": [
+  ],
+  "edges": [
     {
-     "id": "camofox",
-     "label": "Camofox REST",
-     "tech": "127.0.0.1:9377",
-     "desc": "Started at workspace boot; skipped quietly when down",
-     "icon": "app-window",
-     "status": "added"
-    }
-   ]
-  },
-  {
-   "group": "Share jail",
-   "icon": "shield-check",
-   "items": [
+      "from": "intake",
+      "to": "ytdlp",
+      "label": "fetchPost"
+    },
     {
-     "id": "jail",
-     "label": "share-analyzer jail",
-     "tech": "share-jail-hook",
-     "desc": "Reads only dirs with a .untrusted marker; share-fetch writes it inside uploads",
-     "icon": "lock",
-     "status": "modified"
+      "from": "cli",
+      "to": "ytdlp",
+      "label": "fetchPost"
+    },
+    {
+      "from": "ytdlp",
+      "to": "camofox-fb",
+      "label": "missing items"
+    },
+    {
+      "from": "camofox-fb",
+      "to": "camofox",
+      "label": "POST /tabs, evaluate"
+    },
+    {
+      "from": "camofox-fb",
+      "to": "gallery",
+      "label": "still missing"
+    },
+    {
+      "from": "cli",
+      "to": "jail",
+      "label": "--out uploads + marker"
+    },
+    {
+      "from": "camofox-fb",
+      "to": "autostart",
+      "label": "ECONNREFUSED",
+      "status": "added"
+    },
+    {
+      "from": "autostart",
+      "to": "camofox",
+      "label": "spawn node server.js",
+      "status": "added"
     }
-   ]
-  }
- ],
- "edges": [
-  {
-   "from": "intake",
-   "to": "ytdlp",
-   "label": "fetchPost"
-  },
-  {
-   "from": "cli",
-   "to": "ytdlp",
-   "label": "fetchPost"
-  },
-  {
-   "from": "ytdlp",
-   "to": "camofox-fb",
-   "label": "missing items",
-   "status": "added"
-  },
-  {
-   "from": "camofox-fb",
-   "to": "camofox",
-   "label": "POST /tabs, evaluate",
-   "status": "added"
-  },
-  {
-   "from": "camofox-fb",
-   "to": "gallery",
-   "label": "still missing",
-   "status": "added"
-  },
-  {
-   "from": "cli",
-   "to": "jail",
-   "label": "--out uploads + marker",
-   "status": "added"
-  }
- ]
+  ]
 }
