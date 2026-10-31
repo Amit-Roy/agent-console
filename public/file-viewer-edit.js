@@ -1,5 +1,5 @@
 // Acode edit-grant handling for the file viewer. All state lives on the shared `viewer` context.
-import { scopeParams } from "/file-viewer-render.js";
+import { scopeParams } from "./file-viewer-render.js";
 
 export function resetEdit(viewer) {
   clearTimeout(viewer.editTimer);

@@ -1,8 +1,8 @@
 // Brain graph screen: searchable list of wiki/ops pages and tags, plus a Cytoscape graph loaded only when the Graph view opens.
 // Hash routes: "" nothing open, "#/page/<slug>" page sheet, "#/tag/<name>" tag sheet. Everything comes from /api/brain/*.
 
-import { createMenu } from "/menu.js";
-import { $, el, renderMarkdown } from "/render.js";
+import { createMenu } from "./menu.js";
+import { $, el, renderMarkdown } from "./render.js";
 
 const PHONE = matchMedia("(max-width: 700px)");
 const store = {
@@ -308,7 +308,7 @@ function graphElements(pages, tags) {
   return { elements: [...nodes, ...edges] };
 }
 async function ensureCytoscape() {
-  cytoscapeLib ||= import("/vendor/cytoscape.esm.min.mjs").then((m) => m.default);
+  cytoscapeLib ||= import("./vendor/cytoscape.esm.min.mjs").then((m) => m.default);
   return cytoscapeLib;
 }
 function openNode(node) {

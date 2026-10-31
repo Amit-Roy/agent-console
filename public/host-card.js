@@ -1,4 +1,4 @@
-import { el, iconButton } from "/render.js";
+import { el, iconButton } from "./render.js";
 
 const RESOURCES = ["cpu", "mem", "disk"];
 const LABELS = { cpu: "CPU", mem: "RAM", disk: "Disk" };

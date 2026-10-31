@@ -1,6 +1,6 @@
 // Live step dialog for saving an iron-managed key. Drives the shared step timeline from an NDJSON stream
 // (or from an /api/vault `ironJob` snapshot after a reload) and owns the Retry / Close buttons.
-import { createStepTimeline } from "/step-timeline.js";
+import { createStepTimeline } from "./step-timeline.js";
 
 const $ = (id) => document.getElementById(id);
 const DISMISSED_KEY = "vault-steps-dismissed";

@@ -1,16 +1,16 @@
-import { showAssignmentProgress } from "/assign-progress.js";
-import { attachmentDraftStore } from "/attachment-drafts.js";
-import { autoCandidates, autoPick } from "/auto-pick.js";
-import { openJobDebug } from "/automation-job-debug.js";
-import { createAutoLane } from "/automation-lane.js";
-import { createChatSearch } from "/chat-search.js";
-import { composerField } from "/composer-field.js";
-import { openContextEconomics } from "/context-economics.js";
-import { createHostCard } from "/host-card.js";
-import { createMenu } from "/menu.js";
-import { setupNotifications } from "/notifications.js";
-import { createPromptImprove } from "/prompt-improve.js";
-import { createQuestions, find as findQuestionCard } from "/questions.js";
+import { showAssignmentProgress } from "./assign-progress.js";
+import { attachmentDraftStore } from "./attachment-drafts.js";
+import { autoCandidates, autoPick } from "./auto-pick.js";
+import { openJobDebug } from "./automation-job-debug.js";
+import { createAutoLane } from "./automation-lane.js";
+import { createChatSearch } from "./chat-search.js";
+import { composerField } from "./composer-field.js";
+import { openContextEconomics } from "./context-economics.js";
+import { createHostCard } from "./host-card.js";
+import { createMenu } from "./menu.js";
+import { setupNotifications } from "./notifications.js";
+import { createPromptImprove } from "./prompt-improve.js";
+import { createQuestions, find as findQuestionCard } from "./questions.js";
 import {
   $,
   el,
@@ -24,11 +24,11 @@ import {
   renderMarkdown,
   setFileScope,
   wireCopy,
-} from "/render.js";
-import { createSchedules, DAY_ITEMS, REPEAT_ITEMS } from "/schedules.js";
-import { createLatencyReporter } from "/telemetry.js";
-import { toolName, toolSummary } from "/tool-display.js";
-import { closeBreakdown, openBreakdown } from "/turn-breakdown.js";
+} from "./render.js";
+import { createSchedules, DAY_ITEMS, REPEAT_ITEMS } from "./schedules.js";
+import { createLatencyReporter } from "./telemetry.js";
+import { toolName, toolSummary } from "./tool-display.js";
+import { closeBreakdown, openBreakdown } from "./turn-breakdown.js";
 
 composerField($("input"));
 const hostCard = createHostCard($("composer").querySelector(".cwrap"));
@@ -325,7 +325,7 @@ let fileViewer,
   fileWarmupScheduled = false;
 function loadFileViewer(metricThread = state.current) {
   const at = performance.now();
-  return (fileViewerLoad ||= import("/file-viewer.js")
+  return (fileViewerLoad ||= import("./file-viewer.js")
     .then(async (module) => {
       await module.prepare();
       const viewer = (fileViewer ||= module.createFileViewer(apiFetch, (sample) =>

@@ -1,6 +1,6 @@
 // Run details > Full breakdown: where one turn's time went, segment by segment. A sub-view inside the Run details sheet
 // (one sheet at a time; Back returns to the summary). Every number is written as text; bars only repeat what the text says.
-import { $, el, icon } from "/render.js";
+import { $, el, icon } from "./render.js";
 
 const ROWS = 40,
   STEPS = 10;

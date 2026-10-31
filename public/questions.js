@@ -1,4 +1,4 @@
-import { el, icon } from "/render.js";
+import { el, icon } from "./render.js";
 
 // Question drafts belong to the request, so thread refreshes and socket reconnects cannot erase them.
 // Secret answers stay in memory only and are never included in transcript summaries.

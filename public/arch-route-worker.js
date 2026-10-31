@@ -2,11 +2,11 @@
 // libavoid's embind glue needs eval, so it runs here under this script's own CSP (server/index.ts), never in the page.
 // Ported from brain/tools/pr-architecture/capture.mjs without its side-choice search: each edge takes its preferred
 // sides. Request {requestId, boxes: Map id -> box, headers, edges}; reply {requestId, routes, labels} or {requestId, error}.
-import { AvoidLib } from "/vendor/libavoid/index.js";
+import { AvoidLib } from "./vendor/libavoid/index.js";
 
 // Served as application/wasm by express.static, so Emscripten uses instantiateStreaming; it falls back to
 // ArrayBuffer instantiation by itself when streaming fails.
-const WASM_URL = "/vendor/libavoid/libavoid.wasm";
+const WASM_URL = new URL("./vendor/libavoid/libavoid.wasm", import.meta.url).href;
 const avoidReady = AvoidLib.load(WASM_URL).then(() => AvoidLib.getInstance());
 
 // Facing sides on the separated axis (capture.mjs candidates()[0]).

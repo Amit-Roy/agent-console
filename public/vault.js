@@ -9,8 +9,8 @@ const el = (tag, cls, text) => {
   return n;
 };
 
-import { readNdjsonStream } from "/step-timeline.js";
-import { createVaultSteps } from "/vault-steps.js";
+import { readNdjsonStream } from "./step-timeline.js";
+import { createVaultSteps } from "./vault-steps.js";
 
 const state = {
   backup: null,

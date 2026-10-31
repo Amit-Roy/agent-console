@@ -5,22 +5,22 @@
 // path-scoped /api/file-image and /api/file-media routes, Chart.js is imported lazily on the first chart and /arch.js on the first
 // valid ```arch JSON spec (invalid or still-streaming specs stay plain code blocks).
 
-import hljs from "/vendor/hljs/core.js";
-import bash from "/vendor/hljs/languages/bash.js";
-import css from "/vendor/hljs/languages/css.js";
-import diff from "/vendor/hljs/languages/diff.js";
-import go from "/vendor/hljs/languages/go.js";
-import javascript from "/vendor/hljs/languages/javascript.js";
-import json from "/vendor/hljs/languages/json.js";
-import markdown from "/vendor/hljs/languages/markdown.js";
-import python from "/vendor/hljs/languages/python.js";
-import rust from "/vendor/hljs/languages/rust.js";
-import sql from "/vendor/hljs/languages/sql.js";
-import typescript from "/vendor/hljs/languages/typescript.js";
-import xml from "/vendor/hljs/languages/xml.js";
-import yaml from "/vendor/hljs/languages/yaml.js";
-import { Marked } from "/vendor/marked.js";
-import DOMPurify from "/vendor/purify.js";
+import hljs from "./vendor/hljs/core.js";
+import bash from "./vendor/hljs/languages/bash.js";
+import css from "./vendor/hljs/languages/css.js";
+import diff from "./vendor/hljs/languages/diff.js";
+import go from "./vendor/hljs/languages/go.js";
+import javascript from "./vendor/hljs/languages/javascript.js";
+import json from "./vendor/hljs/languages/json.js";
+import markdown from "./vendor/hljs/languages/markdown.js";
+import python from "./vendor/hljs/languages/python.js";
+import rust from "./vendor/hljs/languages/rust.js";
+import sql from "./vendor/hljs/languages/sql.js";
+import typescript from "./vendor/hljs/languages/typescript.js";
+import xml from "./vendor/hljs/languages/xml.js";
+import yaml from "./vendor/hljs/languages/yaml.js";
+import { Marked } from "./vendor/marked.js";
+import DOMPurify from "./vendor/purify.js";
 import { frontmatterToMarkdown } from "./frontmatter.js";
 
 for (const [n, l] of Object.entries({
@@ -591,7 +591,7 @@ function parseArch(src) {
 let archLib;
 function archFigure(key) {
   const box = el("div", "arch");
-  (archLib ||= import("/arch.js").catch((err) => {
+  (archLib ||= import("./arch.js").catch((err) => {
     archLib = null;
     throw err;
   }))
@@ -616,7 +616,7 @@ function archFigure(key) {
 
 let chartLib;
 const loadChart = () =>
-  (chartLib ||= import("/vendor/chart.umd.min.js")
+  (chartLib ||= import("./vendor/chart.umd.min.js")
     .then(() => {
       if (!globalThis.Chart) throw new Error("Chart.js did not load");
       return globalThis.Chart;

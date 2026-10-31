@@ -126,12 +126,17 @@ import {
   startIssue,
 } from "./window-dispatch.ts";
 import { createOpener, loadOpenerConfig } from "./window-opener.ts";
+import { createStaticAssets } from "./static-assets.ts";
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PUBLIC_DIR = path.join(ROOT, "public");
 // Without `root`, send() applies its dotfiles check to the whole absolute path, so a release dir under a dot segment (~/.local/share) 404s. Names here are constants.
+// App pages come from memory with release-prefixed asset URLs (server/static-assets.ts); login.html stays on the root paths.
+const staticAssets = createStaticAssets({ root: ROOT, publicDir: PUBLIC_DIR });
 const sendPublic = (res: express.Response, name: string) =>
-  res.sendFile(name, { root: PUBLIC_DIR });
+  staticAssets.pages.has(name)
+    ? staticAssets.sendPage(res.req, res, name)
+    : res.sendFile(name, { root: PUBLIC_DIR });
 const PORT = Number(process.env.PORT || 7070);
 const HOST = "127.0.0.1"; // never listen publicly; Coder's port proxy is the only way in
 const HOME = os.homedir();
@@ -1495,13 +1500,14 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
 // imports) gets a CSP allowing it; Chromium applies a dedicated worker's own response CSP, the page CSP stays strict.
 const ARCH_WORKER_SCRIPTS = new Set(["/arch-route-worker.js", "/vendor/libavoid/index.js"]);
 app.use((req, res, next) => {
-  if (ARCH_WORKER_SCRIPTS.has(req.path))
+  if (ARCH_WORKER_SCRIPTS.has(staticAssets.unprefixed(req.path)))
     res.setHeader(
       "Content-Security-Policy",
       "default-src 'none'; script-src 'self' 'unsafe-eval' 'wasm-unsafe-eval'; connect-src 'self'",
     );
   next();
 });
+app.use(staticAssets.middleware); // /r/<sha12>/ assets + rewritten pages, before the legacy root paths below
 app.use(express.static(path.join(ROOT, "public"), { index: "index.html", extensions: ["html"] }));
 
 boot.mark("routes");

@@ -1,8 +1,8 @@
 // Automation page: a sidebar of workflows, the selected workflow's phases and steps, its triggers and failures, and a
 // drawer with one step's log. Everything comes from GET /api/automation (see server/automation/contracts.ts); security
 // rows come from GET /api/security/automations. The page holds no state beyond the selected workflow.
-import { createMenu } from "/menu.js";
-import { openCrashLog } from "/sec-crash-log.js";
+import { createMenu } from "./menu.js";
+import { openCrashLog } from "./sec-crash-log.js";
 
 const $ = (id) => document.getElementById(id);
 const el = (tag, cls, text) => {
