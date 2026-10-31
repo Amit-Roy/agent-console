@@ -27,7 +27,7 @@ export const camofoxStartDeps: CamofoxStartDeps = {
     return fs.existsSync(preferred) ? preferred : process.execPath;
   },
   logPath: () => path.join(os.homedir(), ".cache", "camofox", "server.log"),
-  waitMs: 20_000,
+  waitMs: 45_000,
   cooldownMs: 60_000,
 };
 
