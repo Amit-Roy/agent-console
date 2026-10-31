@@ -83,7 +83,7 @@ async function startServer(port: number, deps: CamofoxStartDeps): Promise<boolea
     try {
       const child = deps.spawn(deps.nodePath(), ["server.js"], {
         cwd: repo,
-        env: { ...process.env, CAMOFOX_PORT: String(port) },
+        env: { ...process.env, CAMOFOX_PORT: String(port), BROWSER_IDLE_TIMEOUT_MS: "0" },
         detached: true,
         stdio: ["ignore", logFd, logFd],
       });
