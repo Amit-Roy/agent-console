@@ -11,6 +11,8 @@ RUN="${AGENT_CONSOLE_RUN:-$HOME/.cache/agent-console}"; mkdir -p "$RUN"; export 
 export PATH="$HOME/.local/bin:$PATH"
 # claude.ai connectors attach per account and change a thread's tool list mid-life; every child Claude inherits this off switch.
 export ENABLE_CLAUDEAI_MCP_SERVERS=false
+# iron-proxy intercepts TLS to model APIs; a server started outside a login shell must still trust its CA.
+EGRESS_CA="$HOME/.config/agent-console/egress-ca.pem"; [ -z "${NODE_EXTRA_CA_CERTS:-}" ] && [ -f "$EGRESS_CA" ] && export NODE_EXTRA_CA_CERTS="$EGRESS_CA"
 # PMG (SafeDep) shims go first so every agent's npm/pip/uv/bun install is checked for known malware before it runs.
 PMG_SHIMS="$HOME/.local/share/safedep/pmg/bin"; [ -x "$PMG_SHIMS/npm" ] && export PATH="$PMG_SHIMS:$PATH"
 # A restart issued from a Nefro thread inherits its profile; Sunny must keep the default Claude login.
