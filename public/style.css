@@ -3926,6 +3926,11 @@ body.login {
     animation-iteration-count: 1 !important;
     transition-duration: 0.001ms !important;
   }
+  /* opacity-only status pulse; no motion, so exempt */
+  .dot.running {
+    animation-duration: 1.4s !important;
+    animation-iteration-count: infinite !important;
+  }
   .spin {
     animation: none;
     border-top-color: var(--accent);
