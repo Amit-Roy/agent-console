@@ -97,7 +97,7 @@
           "id": "app",
           "label": "App client",
           "tech": "public/app.js",
-          "desc": "Records one cold sample per page load when the first history paints; App start row in the speed panel; three-dots menu gets Map a repo (PAGE_LINKS maps-link)",
+          "desc": "Records one cold sample per page load when the first history paints; App start row in the speed panel; three-dots menu gets Map a repo (PAGE_LINKS maps-link); context panels and turn breakdown load by dynamic import; running dot pulse kept under reduced motion",
           "icon": "app-window",
           "status": "modified"
         },
@@ -107,6 +107,38 @@
           "tech": "maps.js, arch.js",
           "desc": "Dashboard of map cards, overview, module drill-down and flow tabs drawn with the shared arch renderer",
           "icon": "map",
+          "status": "added"
+        },
+        {
+          "id": "render",
+          "label": "Render module",
+          "tech": "public/render.js",
+          "desc": "highlight.js core and 13 languages load by dynamic import (ensureLanguage, highlightIdle); file viewer draws plain rows then swaps in highlighted rows",
+          "icon": "file-code",
+          "status": "modified"
+        },
+        {
+          "id": "lazy-chunks",
+          "label": "Lazy chunks",
+          "tech": "vendor/hljs/*, context-economics.js, context-allocation.js, context-forecast.js, turn-breakdown.js",
+          "desc": "Fetched on first use instead of at cold load; dynamic imports from render.js and app.js",
+          "icon": "package",
+          "status": "added"
+        },
+        {
+          "id": "fonts",
+          "label": "Web fonts",
+          "tech": "public/fonts/*.woff2",
+          "desc": "Instanced to narrower variable axes; Newsreader 129 KB to 52 KB",
+          "icon": "type",
+          "status": "modified"
+        },
+        {
+          "id": "build-fonts",
+          "label": "Font build script",
+          "tech": "scripts/build-fonts.py, fonts-src/",
+          "desc": "Instances the master fonts to the woff2 files in public/fonts",
+          "icon": "hammer",
           "status": "added"
         }
       ],
@@ -361,6 +393,29 @@
       "from": "console-cli",
       "to": "cm-api",
       "label": "map_* tools",
+      "status": "added"
+    },
+    {
+      "from": "app",
+      "to": "lazy-chunks",
+      "label": "dynamic import on first use",
+      "status": "added"
+    },
+    {
+      "from": "app",
+      "to": "render",
+      "label": "render markdown and code"
+    },
+    {
+      "from": "render",
+      "to": "lazy-chunks",
+      "label": "ensureLanguage, highlightIdle",
+      "status": "added"
+    },
+    {
+      "from": "build-fonts",
+      "to": "fonts",
+      "label": "instance masters to woff2",
       "status": "added"
     }
   ]
