@@ -1,0 +1,312 @@
+/* Code maps: a card dashboard plus a map view hosting the shared arch.js diagram. Controls are at least 44px; spacing follows --sp-*. */
+body.maps {
+  overflow: auto;
+  height: auto;
+  min-height: 100%;
+}
+.maps .btn {
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0 var(--sp-4);
+}
+.maps .back {
+  padding-inline-start: var(--sp-2);
+}
+#mp {
+  background: transparent;
+  box-shadow: none;
+  border: 0;
+  border-radius: 0;
+  width: min(80rem, 100%);
+  margin: 0 auto;
+  padding: var(--sp-5) max(var(--sp-4), env(safe-area-inset-left)) var(--sp-8);
+}
+#listView,
+#mapView {
+  display: grid;
+  gap: var(--sp-4);
+  min-width: 0;
+}
+#listView[hidden],
+#mapView[hidden] {
+  display: none;
+}
+#mp .muted {
+  margin: 0;
+}
+.sheet {
+  display: grid;
+  gap: var(--sp-2);
+  padding: var(--sp-4);
+  background: var(--s1);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-card);
+}
+.sheet label {
+  color: var(--t2);
+  font: var(--fw-med) var(--f-sm);
+}
+.sheet .row {
+  display: flex;
+  gap: var(--sp-2);
+}
+.sheet input {
+  flex: 1;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0 var(--sp-3);
+  border: 1px solid var(--edge-strong);
+  border-radius: var(--r-sm);
+  background: var(--s2);
+  color: var(--t1);
+  font: var(--fw-reg) var(--f-md);
+}
+.sheet input:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+.sheet .err,
+.mp-err {
+  margin: 0;
+  color: var(--bad);
+  font: var(--fw-reg) var(--f-sm);
+  overflow-wrap: anywhere;
+}
+.cards {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: var(--sp-3);
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 20rem), 1fr));
+}
+.mp-card {
+  display: grid;
+  gap: var(--sp-2);
+  align-content: start;
+  min-width: 0;
+  padding: var(--sp-4);
+  background: var(--s1);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-card);
+}
+.mp-top {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+.mp-name {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  color: var(--t1);
+  font: var(--fw-semi) var(--f-md);
+  letter-spacing: var(--ls-md);
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+a.mp-name:hover {
+  color: var(--accent);
+}
+a.mp-name:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: var(--r-xs);
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: 2px var(--sp-2);
+  border-radius: var(--r-full);
+  background: var(--s3);
+  color: var(--t2);
+  font: var(--fw-med) var(--f-xs);
+  white-space: nowrap;
+}
+.chip.ready {
+  background: var(--accent-tint);
+  color: var(--ok);
+}
+.chip.failed {
+  background: var(--bad-tint);
+  color: var(--bad);
+}
+.chip.run {
+  background: var(--warn-tint);
+  color: var(--warn);
+}
+.chip .spin {
+  width: 0.75rem;
+  height: 0.75rem;
+  min-width: 0.75rem;
+  box-sizing: border-box;
+}
+.mp-meta {
+  margin: 0;
+  color: var(--t2);
+  font: var(--fw-reg) var(--f-sm);
+}
+.mp-hint {
+  margin: 0;
+  color: var(--t3);
+  font: var(--fw-reg) var(--f-xs);
+}
+.mp-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+  margin-top: var(--sp-1);
+}
+.mp-actions .btn {
+  flex: 1;
+  padding: 0 var(--sp-3);
+}
+.mp-actions .danger {
+  color: var(--bad);
+}
+.crumbs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 var(--sp-1);
+  font: var(--fw-med) var(--f-sm);
+}
+.crumbs a,
+.crumbs span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 var(--sp-2);
+  border-radius: var(--r-xs);
+  color: var(--accent);
+  text-decoration: none;
+}
+.crumbs a:hover {
+  background: var(--hover);
+}
+.crumbs span {
+  color: var(--t1);
+  font-weight: var(--fw-semi);
+}
+.crumbs .sep {
+  padding: 0;
+  color: var(--t3);
+  font-weight: var(--fw-reg);
+}
+.tabs {
+  display: flex;
+  gap: var(--sp-1);
+  padding: var(--sp-1);
+  overflow-x: auto;
+  background: var(--s2);
+  border-radius: var(--r-md);
+  scrollbar-width: none;
+}
+.tabs a {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 var(--sp-4);
+  border-radius: var(--r-sm);
+  color: var(--t2);
+  font: var(--fw-med) var(--f-sm);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.tabs a[aria-selected="true"] {
+  background: var(--s1);
+  color: var(--t1);
+  box-shadow: var(--shadow-card);
+}
+.tabs a:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+.diagram {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.diagram .arch {
+  width: max-content;
+  min-width: 100%;
+}
+.diagram [data-id].drill {
+  cursor: pointer;
+  transition: filter var(--dur-1) var(--ease);
+}
+.diagram [data-id].drill:hover {
+  filter: brightness(1.06) drop-shadow(0 2px 8px var(--accent-tint));
+}
+.diagram [data-id].drill:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+.panel {
+  display: grid;
+  gap: var(--sp-2);
+  padding: var(--sp-4);
+  background: var(--s1);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-card);
+  min-width: 0;
+}
+.panel h2 {
+  margin: 0;
+  font: var(--fw-semi) var(--f-lg);
+  letter-spacing: var(--ls-lg);
+  overflow-wrap: anywhere;
+}
+.panel p {
+  margin: 0;
+  color: var(--t2);
+  font: var(--fw-reg) var(--f-md);
+  overflow-wrap: anywhere;
+}
+.panel summary {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  cursor: pointer;
+  color: var(--t1);
+  font: var(--fw-med) var(--f-sm);
+}
+.files {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.files li {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding: var(--sp-2) 0;
+  border-top: 1px solid var(--edge);
+  font: var(--fw-reg) var(--f-sm);
+}
+.files .path {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  color: var(--t1);
+}
+.files .loc {
+  flex: none;
+  color: var(--t3);
+}
+.mp-empty {
+  padding: var(--sp-6) var(--sp-4);
+  text-align: center;
+}
+
+@media (max-width: 30rem) {
+  .sheet .row {
+    flex-direction: column;
+  }
+}
