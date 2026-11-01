@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { Cron } from "croner";
 import { DATA_DIR } from "./auth.ts";
-import { PROVIDERS } from "./providers/index.ts";
+import { PROVIDERS, startEffort } from "./providers/index.ts";
 import type { Mode, Thread, Threads } from "./threads.ts";
 
 // Scheduled tasks: a saved prompt that runs on a timer. Every run is an ordinary thread (reply in it to follow up, fork it like any
@@ -203,7 +203,9 @@ function resolveAgent(input: TaskInput, base?: Task) {
   const effort =
     effortIn && effortIn !== "default" && prov.modelDetails?.()[model]?.efforts.includes(effortIn)
       ? effortIn
-      : "default";
+      : input.effort === undefined && effortIn === undefined
+        ? startEffort(prov, model)
+        : "default";
   return { prov, model, mode, effort };
 }
 

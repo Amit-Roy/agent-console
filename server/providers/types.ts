@@ -130,6 +130,8 @@ export interface Provider {
     { label: string; description?: string; efforts: string[]; defaultEffort?: string }
   >;
   defaultModel(): string;
+  // Effort new threads and the picker start on; applies only when the chosen model lists it, else "default" (inherit).
+  defaultEffort?: string;
   // Cheap, synchronous readiness check shown in the UI. Never touches the network.
   status(): { ok: boolean; hint?: string };
   start(t: ThreadSpec, ctx: AgentCtx): Agent;
