@@ -137,14 +137,19 @@ try {
 
   // list returns the checkpoint events
   let listed: any[] = [];
+  const checkpointEvents = () =>
+    inbox.filter(
+      (message) =>
+        message.t === "event" && message.event?.type === "checkpoint" && message.thread === alpha,
+    );
   await settle(
-    async () => ((listed = await (await api(base)).json()), listed.length >= 2),
-    "two checkpoints",
+    async () => (
+      (listed = await (await api(base)).json()),
+      listed.length >= 2 && checkpointEvents().length === listed.length
+    ),
+    "two checkpoints delivered over the socket",
   );
-  const events = inbox.filter(
-    (message) =>
-      message.t === "event" && message.event?.type === "checkpoint" && message.thread === alpha,
-  );
+  const events = checkpointEvents();
   assert.deepEqual(
     listed.map((item) => item.commit),
     events.map((message) => message.event.commit),

@@ -121,6 +121,7 @@ export interface Thread {
   };
   sessionId?: string;
   forkFrom?: string; // forked from a Claude session: the first run continues a copy of it (cleared once the fork has its own session id)
+  forkAt?: string; // with forkFrom: the assistant event uuid where the copied session stops (checkpoint fork)
   context?: { used?: number; max?: number; source?: string }; // tokens in the agent's context now, and the model's window when the harness reports it
   replay?: boolean; // forked from an agent with no native fork: the first message carries the earlier conversation as text
   replayLimit?: number; // explicit short handoff instead of native session or full text replay
@@ -655,6 +656,7 @@ function startSpec(thread: Thread): ThreadSpec {
     claudeAccount: thread.claudeAccount,
     sessionId: thread.sessionId,
     forkFrom: thread.sessionId ? undefined : thread.forkFrom,
+    forkAt: thread.sessionId ? undefined : thread.forkAt,
     issueRun: thread.issueRun,
     schedule: thread.schedule,
   };
@@ -701,10 +703,33 @@ function forkedThread(src: Thread, target: Provider | undefined, recent: boolean
   };
 }
 
-// Copy the history and uploads so the fork reads whole. True when there was history to copy.
-function copyForkFiles(src: Thread, child: Thread): boolean {
+// The source log up to and including the checkpoint line `atSeq`, plus the last assistant uuid before the cut.
+// Null when the log holds no such checkpoint event.
+function cutLogAt(file: string, atSeq: number): { text: string; uuid?: string } | null {
+  if (!fs.existsSync(file)) return null;
+  const kept: string[] = [];
+  let uuid: string | undefined;
+  for (const line of fs.readFileSync(file, "utf8").split("\n")) {
+    if (!line.trim()) continue;
+    kept.push(line);
+    let event: any;
+    try {
+      event = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (event?.type === "checkpoint" && event.seq === atSeq)
+      return { text: `${kept.join("\n")}\n`, uuid };
+    if (event?.type === "assistant" && typeof event.uuid === "string") uuid = event.uuid;
+  }
+  return null;
+}
+
+// Copy the history (cut at a checkpoint when `cut` is set) and uploads so the fork reads whole. True when there was history to copy.
+function copyForkFiles(src: Thread, child: Thread, cut?: { text: string }): boolean {
   const hasHistory = fs.existsSync(logFile(src.id));
-  if (hasHistory) fs.copyFileSync(logFile(src.id), logFile(child.id));
+  if (cut) fs.writeFileSync(logFile(child.id), cut.text);
+  else if (hasHistory) fs.copyFileSync(logFile(src.id), logFile(child.id));
   if (fs.existsSync(threadDir(src.id)))
     fs.cpSync(threadDir(src.id), threadDir(child.id), { recursive: true });
   return hasHistory;
@@ -714,7 +739,7 @@ function copyForkFiles(src: Thread, child: Thread): boolean {
 function carryForkSession(
   src: Thread,
   child: Thread,
-  how: { recent: boolean; replayAll: boolean; hasHistory: boolean },
+  how: { recent: boolean; replayAll: boolean; hasHistory: boolean; forkAt?: string },
 ) {
   if (how.recent) {
     if (how.hasHistory) {
@@ -725,6 +750,7 @@ function carryForkSession(
   }
   if (!how.replayAll && src.provider === "claude") {
     if (src.sessionId) child.forkFrom = src.sessionId;
+    if (src.sessionId && how.forkAt) child.forkAt = how.forkAt;
     return;
   }
   if (!how.replayAll && src.provider === "pi") {
@@ -1443,12 +1469,23 @@ export class Threads {
   // With `provider` set to another agent the fork switches harness: its native session cannot carry over, so it always replays text.
   // The same holds for another Claude account, whose profile cannot read this account's sessions. `pick` sets the fork's model,
   // effort, permission mode and Claude account; anything left out keeps the source's choice.
-  fork(sourceId: string, provider?: string, recent = false, pick: ForkPick = {}): Thread {
+  // With `atSeq` the fork's transcript stops at that checkpoint; Claude also resumes its session at the last assistant event before it,
+  // every other case replays the cut history as text. Unknown checkpoint throws an error with status 404. Files are never restored.
+  fork(
+    sourceId: string,
+    provider?: string,
+    recent = false,
+    pick: ForkPick = {},
+    atSeq?: number,
+  ): Thread {
     const src = this.threads.get(sourceId);
     if (!src) throw new Error("Unknown thread");
     const target = forkTarget(src, provider);
     if (src.status === "running")
       throw new Error("Wait for the current turn to finish before forking.");
+    const cut = atSeq === undefined ? undefined : cutLogAt(logFile(src.id), atSeq);
+    if (atSeq !== undefined && !cut)
+      throw Object.assign(new Error("Unknown checkpoint."), { status: 404 });
     const child = forkedThread(src, target, recent);
     this.applyForkPick(child, src, target ?? PROVIDERS.get(src.provider), pick);
     const otherAccount =
@@ -1456,8 +1493,15 @@ export class Threads {
       src.provider === "claude" &&
       child.claudeAccount !== normalizeClaudeAccount(src.claudeAccount);
     if (otherAccount) child.context = undefined;
-    const hasHistory = copyForkFiles(src, child);
-    carryForkSession(src, child, { recent, replayAll: !!target || otherAccount, hasHistory });
+    const hasHistory = copyForkFiles(src, child, cut ?? undefined);
+    const nativeCut = src.provider === "claude" && !!src.sessionId && !!cut?.uuid;
+    const replayCut = !!cut && !nativeCut;
+    carryForkSession(src, child, {
+      recent,
+      replayAll: !!target || otherAccount || replayCut,
+      hasHistory,
+      forkAt: cut?.uuid,
+    });
     this.threads.set(child.id, child);
     this.persist();
     this.emit({ t: "thread", thread: child });
@@ -2122,6 +2166,7 @@ export class Threads {
     if (thread.forkFrom) this.accounting.seedFork(event.session_id, thread.forkFrom);
     thread.sessionId = event.session_id;
     delete thread.forkFrom; // the fork now has its own session
+    delete thread.forkAt;
     this.persist();
   }
 

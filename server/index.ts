@@ -1238,6 +1238,34 @@ app.post(
     }
   },
 );
+app.post(
+  "/api/threads/:id/checkpoints/:seq/fork",
+  sameOrigin,
+  express.json({ limit: "4kb" }),
+  (req, res) => {
+    const seq = checkpointSeq(req.params.seq);
+    if (!seq) return void res.status(404).json({ error: "Unknown checkpoint." });
+    const body = req.body ?? {};
+    const pick = Object.fromEntries(
+      ["model", "effort", "mode", "claudeAccount"]
+        .filter((key) => typeof body.pick?.[key] === "string")
+        .map((key) => [key, body.pick[key]]),
+    );
+    try {
+      const thread = threads.fork(
+        req.params.id,
+        typeof body.provider === "string" ? body.provider : undefined,
+        false,
+        pick,
+        seq,
+      );
+      res.json({ id: thread.id });
+    } catch (error: any) {
+      const status = error?.status === 404 || error?.message === "Unknown thread." ? 404 : 400;
+      res.status(status).json({ error: String(error?.message ?? error) });
+    }
+  },
+);
 app.get("/api/automation", (req, res) => {
   res.setHeader("Cache-Control", "no-store");
   try {
