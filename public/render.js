@@ -6,39 +6,134 @@
 // valid ```arch JSON spec (invalid or still-streaming specs stay plain code blocks).
 
 import { frontmatterToMarkdown } from "./frontmatter.js";
-import hljs from "./vendor/hljs/core.js";
-import bash from "./vendor/hljs/languages/bash.js";
-import css from "./vendor/hljs/languages/css.js";
-import diff from "./vendor/hljs/languages/diff.js";
-import go from "./vendor/hljs/languages/go.js";
-import javascript from "./vendor/hljs/languages/javascript.js";
-import json from "./vendor/hljs/languages/json.js";
-import markdown from "./vendor/hljs/languages/markdown.js";
-import python from "./vendor/hljs/languages/python.js";
-import rust from "./vendor/hljs/languages/rust.js";
-import sql from "./vendor/hljs/languages/sql.js";
-import typescript from "./vendor/hljs/languages/typescript.js";
-import xml from "./vendor/hljs/languages/xml.js";
-import yaml from "./vendor/hljs/languages/yaml.js";
 import { Marked } from "./vendor/marked.js";
 import DOMPurify from "./vendor/purify.js";
 
-for (const [n, l] of Object.entries({
-  bash,
-  javascript,
-  typescript,
-  json,
-  python,
-  css,
-  xml,
-  markdown,
-  diff,
-  yaml,
-  sql,
-  go,
-  rust,
-}))
-  hljs.registerLanguage(n, l);
+// highlight.js (core and languages) loads lazily on the first block that names a known language. Literal import paths keep the
+// static-imports test and the release prefix working. ALIASES maps every name and alias to its canonical language (test/hljs-lazy.ts).
+const LANGS = {
+  bash: () => import("./vendor/hljs/languages/bash.js"),
+  css: () => import("./vendor/hljs/languages/css.js"),
+  diff: () => import("./vendor/hljs/languages/diff.js"),
+  go: () => import("./vendor/hljs/languages/go.js"),
+  javascript: () => import("./vendor/hljs/languages/javascript.js"),
+  json: () => import("./vendor/hljs/languages/json.js"),
+  markdown: () => import("./vendor/hljs/languages/markdown.js"),
+  python: () => import("./vendor/hljs/languages/python.js"),
+  rust: () => import("./vendor/hljs/languages/rust.js"),
+  sql: () => import("./vendor/hljs/languages/sql.js"),
+  typescript: () => import("./vendor/hljs/languages/typescript.js"),
+  xml: () => import("./vendor/hljs/languages/xml.js"),
+  yaml: () => import("./vendor/hljs/languages/yaml.js"),
+};
+const ALIASES = {
+  __proto__: null,
+  bash: "bash",
+  css: "css",
+  diff: "diff",
+  go: "go",
+  javascript: "javascript",
+  json: "json",
+  markdown: "markdown",
+  python: "python",
+  rust: "rust",
+  sql: "sql",
+  typescript: "typescript",
+  xml: "xml",
+  yaml: "yaml",
+  sh: "bash",
+  zsh: "bash",
+  patch: "diff",
+  golang: "go",
+  js: "javascript",
+  jsx: "javascript",
+  mjs: "javascript",
+  cjs: "javascript",
+  jsonc: "json",
+  json5: "json",
+  md: "markdown",
+  mkdown: "markdown",
+  mkd: "markdown",
+  py: "python",
+  gyp: "python",
+  ipython: "python",
+  rs: "rust",
+  ts: "typescript",
+  tsx: "typescript",
+  mts: "typescript",
+  cts: "typescript",
+  html: "xml",
+  xhtml: "xml",
+  rss: "xml",
+  atom: "xml",
+  xjb: "xml",
+  xsd: "xml",
+  xsl: "xml",
+  plist: "xml",
+  wsf: "xml",
+  svg: "xml",
+  yml: "yaml",
+};
+let hljs = null;
+let coreLoad = null;
+const loaded = new Set();
+const loads = new Map();
+const inflight = new Set();
+const pendingNodes = new Set();
+
+function loadCore() {
+  coreLoad ??= import("./vendor/hljs/core.js").catch((err) => {
+    coreLoad = null;
+    throw err;
+  });
+  return coreLoad;
+}
+function rehighlightPending(name) {
+  for (const node of [...pendingNodes]) {
+    if (node.dataset.hl !== name) continue;
+    pendingNodes.delete(node);
+    if (!node.isConnected) continue;
+    node.innerHTML = DOMPurify.sanitize(highlight(node.textContent, name));
+    node.removeAttribute("data-hl");
+  }
+}
+function loadLang(name) {
+  let load = loads.get(name);
+  if (load) return load;
+  load = Promise.all([loadCore(), LANGS[name]()])
+    .then(([core, mod]) => {
+      hljs = core.default;
+      if (!hljs.getLanguage(name)) hljs.registerLanguage(name, mod.default);
+      loaded.add(name);
+      rehighlightPending(name);
+    })
+    .catch(() => {
+      loads.delete(name);
+    })
+    .finally(() => inflight.delete(load));
+  loads.set(name, load);
+  inflight.add(load);
+  return load;
+}
+/** Canonical language name when `lang` is known but its module is not loaded yet (the block needs a later re-highlight), else null. */
+const pendingLang = (lang) => {
+  const name = ALIASES[String(lang || "").toLowerCase()];
+  return name && !loaded.has(name) ? name : null;
+};
+/** Loads core plus the language for `lang`. Resolves true when a load was needed, false when it was already loaded or the language is unknown/empty. */
+export async function ensureLanguage(lang) {
+  const name = pendingLang(lang);
+  if (!name) return false;
+  await loadLang(name);
+  return loaded.has(name);
+}
+/** Resolves once every pending highlight.js load (and its re-highlight) has settled. */
+export async function highlightIdle() {
+  while (inflight.size) await Promise.all([...inflight]);
+}
+function trackPending(root) {
+  for (const node of root.querySelectorAll("code[data-hl]")) pendingNodes.add(node);
+}
 
 // Raw <video>/<source> from message HTML may only point at http(s) or the media route; nothing else is a valid media source.
 const SAFE_MEDIA_SRC = /^(?:https?:\/\/|\/api\/file-media\?)/i;
@@ -220,9 +315,13 @@ export function highlight(text, lang) {
   const key = `${lang}\0${text}`;
   let html = cache.get(key);
   if (html != null) return html;
+  const name = ALIASES[String(lang || "").toLowerCase()];
+  if (name && !loaded.has(name)) {
+    loadLang(name);
+    return esc(text);
+  }
   try {
-    if (lang && hljs.getLanguage(lang))
-      html = hljs.highlight(text, { language: lang, ignoreIllegals: true }).value;
+    if (name) html = hljs.highlight(text, { language: name, ignoreIllegals: true }).value;
   } catch {}
   html ??= esc(text);
   if (cache.size > 300) cache.delete(cache.keys().next().value);
@@ -296,7 +395,9 @@ const md = new Marked({
         const key = archKey(text);
         if (key) return `<div class="arch" data-arch="${key}"></div>\n`;
       }
-      return `<pre><code class="hljs${l ? ` language-${l}` : ""}">${highlight(text, l)}</code></pre>\n`;
+      const waiting = pendingLang(l);
+      const body = highlight(text, l);
+      return `<pre><code class="hljs${l ? ` language-${l}` : ""}"${waiting ? ` data-hl="${waiting}"` : ""}>${body}</code></pre>\n`;
     },
   },
 });
@@ -799,7 +900,7 @@ function chartFigure(key) {
       fig.removeAttribute("aria-busy");
       const pre = document.createElement("pre"),
         code = el("code");
-      code.innerHTML = DOMPurify.sanitize(highlight(src, "json"));
+      highlightInto(code, src, "json");
       pre.append(code);
       stage.replaceWith(el("p", "chart-note", "Chart unavailable. Showing the data instead."));
       data.open = true;
@@ -998,6 +1099,7 @@ function mountMedia(root, mounts) {
 }
 /** Post-sanitise structure: code headers, scrollable tables, media, linked paths. Operates on already-sanitised DOM (or a fragment of it). */
 export function enhance(root, mounts = []) {
+  trackPending(root);
   for (const pre of root.querySelectorAll("pre")) if (!pre.closest(".code")) codeBlock(pre);
   for (const t of root.querySelectorAll("table")) {
     if (t.parentElement?.classList.contains("table-wrap")) continue;
@@ -1043,7 +1145,11 @@ export function renderMarkdown(src, target) {
 /** Highlight plain code into an existing <code> element (used for tool-card bodies). */
 export function highlightInto(codeEl, text, lang) {
   codeEl.className = `hljs${lang ? ` language-${lang}` : ""}`;
+  const waiting = pendingLang(lang);
   codeEl.innerHTML = DOMPurify.sanitize(highlight(text, lang));
+  if (!waiting) return codeEl.removeAttribute("data-hl");
+  codeEl.dataset.hl = waiting;
+  pendingNodes.add(codeEl);
 }
 export const langFromPath = (p, content = "") => {
   const ext = /\.([A-Za-z0-9]+)$/.exec(String(p || ""))?.[1]?.toLowerCase();

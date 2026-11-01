@@ -425,6 +425,10 @@ try {
 
   await open(page, "Bash helper");
   assert.match((await page.locator("#file-viewer-status").textContent()) || "", /Bash/);
+  await page
+    .locator("#file-viewer-code .hljs-keyword, #file-viewer-code .hljs-built_in")
+    .first()
+    .waitFor();
   assert.ok(
     (await page
       .locator("#file-viewer-code .hljs-keyword, #file-viewer-code .hljs-built_in")
@@ -544,6 +548,7 @@ try {
     await page.locator("#file-viewer-code table tbody td").first().textContent(),
     "Mock",
   );
+  await page.locator("#file-viewer-code .hljs-built_in").first().waitFor();
   assert.ok(
     (await page.locator("#file-viewer-code .hljs-built_in").count()) > 0,
     "rendered Markdown code blocks remain highlighted",

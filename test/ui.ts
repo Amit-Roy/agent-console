@@ -393,6 +393,7 @@ for (const scheme of ["dark", "light"] as const) {
     r.renderMarkdown(src, p);
     (window as any).__src = src;
   });
+  await page.locator("#chat .hljs-keyword").first().waitFor();
   const q = await page.evaluate(() => ({
     blocks: document.querySelectorAll("#chat .code").length,
     langs: [...document.querySelectorAll("#chat .code-head .lang")].map((e) => e.textContent),

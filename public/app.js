@@ -5,7 +5,6 @@ import { openJobDebug } from "./automation-job-debug.js";
 import { createAutoLane } from "./automation-lane.js";
 import { createChatSearch } from "./chat-search.js";
 import { composerField } from "./composer-field.js";
-import { openContextEconomics } from "./context-economics.js";
 import { createHostCard } from "./host-card.js";
 import { createMenu } from "./menu.js";
 import { setupNotifications } from "./notifications.js";
@@ -28,7 +27,6 @@ import {
 import { createSchedules, DAY_ITEMS, REPEAT_ITEMS } from "./schedules.js";
 import { createLatencyReporter } from "./telemetry.js";
 import { toolName, toolSummary } from "./tool-display.js";
-import { closeBreakdown, openBreakdown } from "./turn-breakdown.js";
 
 composerField($("input"));
 const hostCard = createHostCard($("composer").querySelector(".cwrap"));
@@ -1076,6 +1074,14 @@ const THREAD_ACTIONS = [
   { value: "delete", label: "Delete thread", icon: "trash", tone: "danger" },
 ];
 let toastTimer;
+let contextEconomicsModule = null;
+function loadContextEconomics() {
+  return import("./context-economics.js").then((mod) => (contextEconomicsModule = mod));
+}
+let breakdownModule = null;
+function loadBreakdown() {
+  return import("./turn-breakdown.js").then((mod) => (breakdownModule = mod));
+}
 function toast(msg) {
   const t = $("toast");
   t.textContent = msg;
@@ -1122,7 +1128,7 @@ function economyThreadAction(id, thread) {
 }
 function detailsThreadAction(id) {
   openThreadForAction(id);
-  closeBreakdown(false);
+  breakdownModule?.closeBreakdown(false);
   $("run-details").showModal();
   void loadLatencySummary();
 }
@@ -2588,7 +2594,11 @@ function timingFullButton() {
   const full = el("button", "btn block tb-open");
   full.type = "button";
   full.append(el("span", "", "Full breakdown"), icon("chev-right"));
-  full.onclick = () => state.current && openBreakdown(state.current, full);
+  full.onclick = () =>
+    state.current &&
+    loadBreakdown()
+      .then((mod) => mod.openBreakdown(state.current, full))
+      .catch((error) => toast(error.message || "Could not load this breakdown. Try again."));
   return full;
 }
 function renderTurnTiming(x, phoneMs) {
@@ -2626,10 +2636,10 @@ function renderTurnTiming(x, phoneMs) {
 $("run-details").addEventListener("cancel", (e) => {
   if ($("run-details").dataset.view === "breakdown") {
     e.preventDefault();
-    closeBreakdown();
+    breakdownModule?.closeBreakdown();
   }
 });
-$("run-details").addEventListener("close", () => closeBreakdown(false));
+$("run-details").addEventListener("close", () => breakdownModule?.closeBreakdown(false));
 function showLoad(main, detail) {
   $("diagnostics").replaceChildren(
     el("p", "lead", main),
@@ -2800,7 +2810,15 @@ function renderCtx() {
   const b = $("ctx");
   const threadId = state.current;
   b.onclick = () =>
-    openContextEconomics({ getThread: () => state.threads.get(threadId), send, trigger: b });
+    loadContextEconomics()
+      .then((mod) =>
+        mod.openContextEconomics({
+          getThread: () => state.threads.get(threadId),
+          send,
+          trigger: b,
+        }),
+      )
+      .catch((error) => toast(error.message || "Could not load this panel. Try again."));
   const c = cur()?.context;
   if (c?.used == null && cur()?.lastCompactedAt) {
     b.hidden = false;
@@ -4121,7 +4139,11 @@ function usageContextGroup(thread) {
   info.setAttribute("aria-haspopup", "dialog");
   info.title = "Compare continuing versus compacting";
   const openForecast = (trigger) =>
-    openContextEconomics({ getThread: () => state.threads.get(thread?.id), send, trigger });
+    loadContextEconomics()
+      .then((mod) =>
+        mod.openContextEconomics({ getThread: () => state.threads.get(thread?.id), send, trigger }),
+      )
+      .catch((error) => toast(error.message || "Could not load this panel. Try again."));
   info.onclick = () => openForecast(info);
   ctxRow.setAttribute("role", "button");
   ctxRow.tabIndex = 0;
