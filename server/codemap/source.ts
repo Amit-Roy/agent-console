@@ -82,9 +82,7 @@ export function resolveLocal(source: CodemapSource, root: string = defaultRoot()
 
 export function slugFor(source: CodemapSource): string {
   const raw =
-    source.kind === "local"
-      ? path.basename(source.path)
-      : `gh-${source.owner}-${source.repo}`;
+    source.kind === "local" ? path.basename(source.path) : `gh-${source.owner}-${source.repo}`;
   const slug = raw
     .toLowerCase()
     .replace(/[^a-z0-9-]+/g, "-")
@@ -157,7 +155,8 @@ function hardening(source: CodemapSource, opts: CloneOpts): string[] {
     source.kind === "github" &&
     !!opts.authUser &&
     opts.authUser.toLowerCase() === source.owner.toLowerCase();
-  if (owned) args.push("-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential");
+  if (owned)
+    args.push("-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential");
   return args;
 }
 

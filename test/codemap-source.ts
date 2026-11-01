@@ -11,13 +11,29 @@ const src = await import("../server/codemap/source.ts");
 const store = await import("../server/codemap/store.ts");
 
 // parseSource rejects
-for (const bad of ["ssh://git@github.com/a/b", "file:///tmp/x", "git@github.com:a/b.git", "https://gitlab.com/a/b", "https://evil.com/a/b", "a/b/c", "-x/y", "own er/repo", "a/..", "../x"]) {
+for (const bad of [
+  "ssh://git@github.com/a/b",
+  "file:///tmp/x",
+  "git@github.com:a/b.git",
+  "https://gitlab.com/a/b",
+  "https://evil.com/a/b",
+  "a/b/c",
+  "-x/y",
+  "own er/repo",
+  "a/..",
+  "../x",
+]) {
   assert.throws(() => src.parseSource(bad), undefined, `rejects ${bad}`);
 }
 // parseSource github forms
 const want = { kind: "github", owner: "Amit-Roy", repo: "agent-console" };
-for (const ok of ["Amit-Roy/agent-console", "https://github.com/Amit-Roy/agent-console", "https://github.com/Amit-Roy/agent-console.git", "github.com/Amit-Roy/agent-console"]) {
-  assert.deepEqual(src.parseSource(ok), want, ok);
+for (const validInput of [
+  "Amit-Roy/agent-console",
+  "https://github.com/Amit-Roy/agent-console",
+  "https://github.com/Amit-Roy/agent-console.git",
+  "github.com/Amit-Roy/agent-console",
+]) {
+  assert.deepEqual(src.parseSource(validInput), want, validInput);
 }
 assert.equal(src.slugFor(want), "gh-amit-roy-agent-console");
 assert.deepEqual(src.parseSource("/etc"), { kind: "local", path: "/etc" });
@@ -37,7 +53,10 @@ assert.equal(src.slugFor({ kind: "local", path: "/x/My_Repo.v2" }), "my-repo-v2"
 
 // clone fixture from a local bare repo
 const git = (cwd: string, ...args: string[]) =>
-  execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", ...args], { cwd, encoding: "utf8" });
+  execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", ...args], {
+    cwd,
+    encoding: "utf8",
+  });
 const work = path.join(tmp, "work");
 fs.mkdirSync(work);
 git(work, "init", "-q", "-b", "main");
@@ -59,13 +78,23 @@ const big = path.join(tmp, "clone-big");
 await assert.rejects(src.cloneGithub(fixture, big, { urlBase: bases, maxFiles: 2 }), /limits/);
 assert.equal(fs.existsSync(big), false, "oversized clone removed");
 const bigBytes = path.join(tmp, "clone-bytes");
-await assert.rejects(src.cloneGithub(fixture, bigBytes, { urlBase: bases, maxBytes: 10 }), /limits/);
+await assert.rejects(
+  src.cloneGithub(fixture, bigBytes, { urlBase: bases, maxBytes: 10 }),
+  /limits/,
+);
 assert.equal(fs.existsSync(bigBytes), false);
 
 // store
 const data = process.env.AGENT_CONSOLE_DATA;
 assert.equal(store.mapsDir(), path.join(data, "maps"));
-const meta = (slug: string, updatedAt = 1) => ({ slug, label: slug, source: { kind: "local" as const, ref: slug }, status: "queued" as const, createdAt: 1, updatedAt });
+const meta = (slug: string, updatedAt = 1) => ({
+  slug,
+  label: slug,
+  source: { kind: "local" as const, ref: slug },
+  status: "queued" as const,
+  createdAt: 1,
+  updatedAt,
+});
 assert.deepEqual(store.listMaps(), []);
 store.writeMeta(meta("alpha"));
 store.writeMeta({ ...meta("alpha"), status: "ready", updatedAt: 2 });

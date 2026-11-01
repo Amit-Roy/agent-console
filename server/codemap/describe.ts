@@ -122,12 +122,15 @@ function headerLines(files: ScanFile[], repoRoot: string): string[] {
 
 function routeLines(scan: ScanData): string[] {
   const seen = new Set<string>();
-  for (const route of scan.routes ?? []) seen.add(`${route.method ?? "?"} ${route.path ?? ""} (${route.file ?? ""})`);
+  for (const route of scan.routes ?? [])
+    seen.add(`${route.method ?? "?"} ${route.path ?? ""} (${route.file ?? ""})`);
   return [...seen].slice(0, ROUTE_LINES);
 }
 
 function hostLines(scan: ScanData): string[] {
-  return [...new Set((scan.hosts ?? []).map((entry) => entry.host ?? ""))].filter(Boolean).slice(0, HOST_LINES);
+  return [...new Set((scan.hosts ?? []).map((entry) => entry.host ?? ""))]
+    .filter(Boolean)
+    .slice(0, HOST_LINES);
 }
 
 function externalLines(scan: ScanData): string[] {
@@ -164,7 +167,11 @@ function stripFences(text: string): string {
   return (fenced ? fenced[1] : text).trim();
 }
 
-function parseAndValidate(raw: string, files: string[], validate: ValidateFn): { arch?: Architecture; errors: string[] } {
+function parseAndValidate(
+  raw: string,
+  files: string[],
+  validate: ValidateFn,
+): { arch?: Architecture; errors: string[] } {
   let arch: Architecture;
   try {
     arch = JSON.parse(stripFences(raw));
