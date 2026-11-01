@@ -66,6 +66,8 @@ Task selectors accept an id or an exact case-insensitive title; duplicate titles
 
 **[Automatic GitHub triage](docs/github-triage.md).** Labels issues and PRs by effort and priority via a signed webhook. Token telemetry comments per issue/PR; the `telemetry-comment` CI check fails a PR without one. Backfill with `bin/token-telemetry backfill`.
 
+**[Codemap](docs/codemap.md).** Architecture maps of a local or GitHub repo. More (⋯) → **Map a repo**, or `/maps`. CLI: `bin/codemap add|list|show|spec`. Scanner vendored from floorplan (MIT).
+
 **Usage & savings** (`/dashboard`). Today / 7 / 30 / 90 days, previous-period comparison. Turns, tokens, API-equivalent cost, RTK and Headroom savings, per-day charts, model/tool/thread breakdowns, weekday-by-hour heatmap.
 
 **Model benchmarks** (`/benchmarks`, also in the sidebar menu). Compare Artificial Analysis intelligence, coding and agentic scores against your last seven days of measured token usage. Set a quality floor and budget, then compare weekly and monthly API costs at 16 hours per day, seven days per week. Cached views make no external requests. Weekly refresh runs Mondays at 08:00 UTC while the server is running; manual refresh has a one-hour cooldown. The server follows quota headers, respects `Retry-After`, keeps ten requests in reserve and replaces the snapshot only after all pages succeed.
