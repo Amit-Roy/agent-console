@@ -756,7 +756,13 @@ function fillEffort(menu, p, model, value = "default") {
 function dialogEffort(model = menus.dModel.value, id = menus.dProv.value) {
   const p = prov(id);
   $("effort-field").hidden = !p?.modelDetails;
-  fillEffort(menus.dEffort, p, model);
+  const want = p?.defaultEffort;
+  fillEffort(
+    menus.dEffort,
+    p,
+    model,
+    want && p.modelDetails?.[model]?.efforts?.includes(want) ? want : "default",
+  );
 }
 const prov = (id) => state.providers.get(id);
 const provLabel = (id) => prov(id)?.label || id || "";
