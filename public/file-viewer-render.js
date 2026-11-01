@@ -1,5 +1,5 @@
 // Rendering and metrics helpers for the file viewer. All state lives on the shared `viewer` context.
-import { attachImageZoom, syncZoomControls } from "./file-viewer-zoom.js";
+import { attachImageZoom, detachImageZoom, syncZoomControls } from "./file-viewer-zoom.js";
 import {
   el as createElement,
   ensureLanguage,
@@ -154,11 +154,52 @@ function setHeading(viewer, file) {
   viewer.path.title = file.path;
 }
 
-function syncSourceButton(viewer, markdown) {
+function syncSourceButton(viewer, label) {
   const { source } = viewer;
-  source.hidden = !markdown;
+  source.hidden = !label;
   source.setAttribute("aria-pressed", String(viewer.markdownSource));
-  source.title = viewer.markdownSource ? "Show rendered Markdown" : "Show Markdown source";
+  source.title = viewer.markdownSource ? `Show rendered ${label}` : `Show ${label} source`;
+}
+
+const SVG_PREVIEW_LIMIT = 5 * 1024 * 1024;
+const isSvgFile = (file) =>
+  /\.svg$/i.test(file.path || "") && file.content.length < SVG_PREVIEW_LIMIT;
+
+// The SVG is only ever loaded through <img>, which runs no script and fetches no subresources.
+async function showSvgImage(viewer, file, token) {
+  const blob = new Blob([file.content], { type: "image/svg+xml" });
+  const url = URL.createObjectURL(blob);
+  viewer.imageObjectUrl = url;
+  const image = createElement("img", "file-viewer-image is-svg");
+  image.alt = file.path.split("/").pop();
+  image.src = url;
+  await image.decode();
+  if (isStale(viewer, token) || viewer.imageObjectUrl !== url) return;
+  const stage = createElement("div", "file-viewer-zoom-stage");
+  stage.append(image);
+  viewer.body.classList.add("is-image");
+  viewer.body.append(stage);
+  await attachImageZoom(viewer, image);
+  if (isStale(viewer, token) || viewer.imageObjectUrl !== url) return;
+  const size = image.naturalWidth && image.naturalHeight;
+  viewer.status.textContent = size
+    ? `${image.naturalWidth.toLocaleString()} × ${image.naturalHeight.toLocaleString()} · SVG`
+    : "SVG";
+}
+
+function renderSvgBody(viewer, file, ref, token) {
+  viewer.status.textContent = "Loading SVG…";
+  viewer.position.textContent = "";
+  viewer.copy.disabled = false;
+  viewer.wrap.disabled = true;
+  showSvgImage(viewer, file, token)
+    .catch(() => {
+      // Undecodable SVG: show its code instead.
+      if (isStale(viewer, token) || viewer.content !== file.content) return;
+      viewer.markdownSource = true;
+      renderFile(viewer, file, ref, token);
+    })
+    .finally(() => syncZoomControls(viewer));
 }
 
 function renderMarkdownBody(viewer, count) {
@@ -253,6 +294,8 @@ export function renderFile(viewer, file, ref, token) {
   const { body } = viewer;
   body.replaceChildren();
   body.classList.remove("is-plain", "is-image", "is-markdown");
+  revokeImage(viewer);
+  detachImageZoom(viewer);
   viewer.content = file.content;
   setHeading(viewer, file);
   const lines = viewer.content.split("\n");
@@ -262,7 +305,13 @@ export function renderFile(viewer, file, ref, token) {
   // Bound highlighting work and element count; very large files stay available as plain text.
   const plain = viewer.content.length > 128 * 1024 || count > 2000;
   const markdown = lang === "markdown" && !plain;
-  syncSourceButton(viewer, markdown);
+  const svg = isSvgFile(file);
+  syncSourceButton(viewer, markdown ? "Markdown" : svg ? "SVG" : "");
+  if (svg && !viewer.markdownSource) {
+    renderSvgBody(viewer, file, ref, token);
+    syncZoomControls(viewer);
+    return;
+  }
   if (markdown && !viewer.markdownSource) {
     renderMarkdownBody(viewer, count);
     syncZoomControls(viewer);

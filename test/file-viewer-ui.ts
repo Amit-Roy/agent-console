@@ -41,6 +41,16 @@ const png = await sharp({ create: { width: 320, height: 200, channels: 4, backgr
   .toBuffer();
 fs.writeFileSync(path.join(cwd, "preview.png"), png);
 fs.writeFileSync(path.join(fixture, "workspace.png"), png);
+const svgShape = '<rect width="40" height="20" fill="#7e8bd6"/>';
+fs.writeFileSync(
+  path.join(cwd, "viewbox.svg"),
+  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 20">${svgShape}</svg>`,
+);
+fs.writeFileSync(
+  path.join(cwd, "active.svg"),
+  `<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20" onload="window.__svgRan=1">${svgShape}<script>window.__svgRan=1</script></svg>`,
+);
+fs.writeFileSync(path.join(cwd, "broken.svg"), "<svg><unclosed");
 // Playable media over the 1 MB text preview limit: a 6 s stereo 16-bit WAV, and a VP8 WebM when ffmpeg exists.
 const wavRate = 48000,
   wavFrames = wavRate * 6,
@@ -98,6 +108,9 @@ const links = [
   "[Bash helper](./codex-code-mode-host)",
   "[Nested reference](./scripts/nested.ts)",
   "[Project image](./preview.png)",
+  "[SVG viewbox](./viewbox.svg)",
+  "[SVG active](./active.svg)",
+  "[SVG broken](./broken.svg)",
   "[Project audio](./music.wav)",
   "[Project video](./clip.webm)",
   "[Markdown report](./scripts/report.md)",
@@ -528,6 +541,38 @@ try {
     (await page.locator("#file-viewer-status").textContent()) || "image missing",
   );
   await close(page);
+  await open(page, "SVG viewbox");
+  assert.equal(await page.locator("#file-viewer-code.is-image .file-viewer-image").count(), 1);
+  assert.match((await page.locator("#file-viewer-status").textContent()) || "", /SVG/);
+  const svgBox = (await page.locator(".file-viewer-image").boundingBox())!;
+  assert.ok(svgBox.width > 100 && svgBox.height > 50, "viewBox-only SVG has a visible size");
+  assert.equal(await page.locator(".file-viewer-zoom").isVisible(), true, "zoom group on SVG");
+  const svgToggle = page.locator("#file-viewer button[title*='SVG']");
+  assert.equal(await svgToggle.getAttribute("title"), "Show SVG source");
+  await svgToggle.click();
+  await page.locator("#file-viewer-code .file-line").first().waitFor();
+  assert.equal(await page.locator(".file-viewer-image").count(), 0, "SVG source has no image");
+  assert.equal(await svgToggle.getAttribute("title"), "Show rendered SVG");
+  await svgToggle.click();
+  await page.locator(".file-viewer-image").waitFor();
+  await close(page);
+  await open(page, "SVG active");
+  await page.locator(".file-viewer-image").waitFor();
+  await page.waitForTimeout(300);
+  assert.equal(
+    await page.evaluate(() => (window as any).__svgRan),
+    undefined,
+    "SVG scripts never run",
+  );
+  await close(page);
+  await open(page, "SVG broken");
+  await page.locator("#file-viewer-code .file-line").first().waitFor();
+  assert.equal(
+    await page.locator(".file-viewer-image").count(),
+    0,
+    "invalid SVG falls back to code",
+  );
+  await close(page);
   await open(page, "Project image");
   assert.equal(await page.locator(".file-viewer-zoom").isVisible(), true, "zoom group on image");
   assert.equal(await imageScale(page), 1, "image opens at 1x");
@@ -872,6 +917,10 @@ try {
   for (let press = 0; press < 5; press++) await mobile.keyboard.press("Control+=");
   await zoomShot(mobile, "phone-code-150-dark.png");
   await mobile.keyboard.press("Control+0");
+  await close(mobile);
+  await open(mobile, "SVG viewbox");
+  await mobile.locator(".file-viewer-image").waitFor();
+  await screenshot(mobile, "after.png");
   await close(mobile);
   await open(mobile, "Project image");
   assert.equal(await noToolbarOverflow(mobile), true, "image toolbar fits 390px");
