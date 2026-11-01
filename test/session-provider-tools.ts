@@ -59,6 +59,10 @@ try {
       "mcp__agent_console__cli_search",
       "mcp__agent_console__thread_list",
       "mcp__agent_console__thread_send",
+      "mcp__agent_console__todo_list",
+      "mcp__agent_console__todo_add",
+      "mcp__agent_console__todo_complete",
+      "mcp__agent_console__todo_remove",
     ];
     for (const name of [
       ...allowed,
@@ -163,7 +167,11 @@ try {
   const list = await request("tools/list");
   assert.deepEqual(
     list.result.tools.map((t: any) => t.name),
-    ["thread_list", "thread_send"],
+    ["thread_list", "thread_send", "todo_list", "todo_add", "todo_complete", "todo_remove"],
+  );
+  assert.deepEqual(
+    list.result.tools.filter((t: any) => t.annotations.readOnlyHint).map((t: any) => t.name),
+    ["thread_list", "todo_list"],
   );
   assert.equal(
     list.result.tools.find((t: any) => t.name === "thread_list").annotations.readOnlyHint,

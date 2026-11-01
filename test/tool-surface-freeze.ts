@@ -5,8 +5,8 @@ import { createHash } from "node:crypto";
 import { handleMcp } from "../server/providers/console-mcp.mjs";
 import consoleTools from "../server/providers/console-tools.mjs";
 
-const MCP_TOOLS_LIST_SHA256 = "223bba49a7ee01a77d2eb996c3905866b8f64b0199a3bceb681ee3ed5a5eb0d4";
-const PI_CONSOLE_TOOLS_SHA256 = "9701d8565d550ed452d832edfe1da69e3b8bd0250c780dfaa5ef75b122e0e44e";
+const MCP_TOOLS_LIST_SHA256 = "9c6286cd62bb1b7473819a50b29a7af29955934ee4ef34a76056019317080f03";
+const PI_CONSOLE_TOOLS_SHA256 = "26a90190ba799db64d31591e527b613ac76dd3bddb2e8f4d9127f2e6899dfddc";
 const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
 const MESSAGE = "tool change breaks every live thread's prompt cache; update the hash deliberately";
 

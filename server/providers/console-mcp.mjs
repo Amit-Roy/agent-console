@@ -7,11 +7,14 @@ export const SESSION_INSTRUCTIONS = [
   "# Agent Console",
   "When you need a decision or input from the user, use your structured question tool (AskUserQuestion, request_user_input or ask_user) instead of asking in chat. It shows an answer card in Agent Console. Use plain chat only for open-ended discussion or when no such tool exists.",
   "Use thread_list and thread_send to contact other Agent Console threads.",
+  "Use todo_list, todo_add, todo_complete and todo_remove for this thread's checklist, which the user sees in the todo panel.",
   "Session history, CLI lookup, Pi research, transcript redaction: skill `agent-console-tools` (CLI `console-tool`).",
 ].join("\n");
 
 // The tool surface is frozen for a thread's whole life: any change busts every live thread's prompt cache (test/tool-surface-freeze.ts).
-const exposed = (name) => name === "thread_list" || name === "thread_send";
+const exposed = (name) =>
+  name === "thread_list" || name === "thread_send" || name.startsWith("todo_");
+const READ_ONLY_TOOLS = ["thread_list", "todo_list"];
 
 export function consoleMcpServer() {
   if (!process.env.AGENT_CONSOLE_TOOL_URL || !process.env.AGENT_CONSOLE_TOOL_TOKEN)
@@ -54,7 +57,7 @@ export async function handleMcp(request) {
           description: t.description,
           inputSchema: t.parameters,
           annotations: {
-            readOnlyHint: t.name !== "thread_send",
+            readOnlyHint: READ_ONLY_TOOLS.includes(t.name),
             destructiveHint: false,
           },
         })),
