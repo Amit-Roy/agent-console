@@ -4,6 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
+    "test:formal": "cd formal/queue && lake build",
     "test:share": "node test/share.ts && for f in test/share-*.ts; do node $f || exit 1; done",
     "test:review-takeover": "node test/review-takeover.ts",
     "test:benchmarks": "node --test test/benchmarks.ts test/benchmark-subscriptions.ts",
