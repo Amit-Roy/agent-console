@@ -57,6 +57,8 @@ import { createBootTiming } from "./boot-timing.ts";
 import { BrainGraph, BrainGraphError } from "./brain-graph.ts";
 import { cancelClaudeLogin, finishClaudeLogin, startClaudeLogin } from "./claude-login.ts";
 import { CliSearch } from "./cli-search.ts";
+import { mountMaps } from "./codemap/http.ts";
+import { createMapsService } from "./codemap/service.ts";
 import { consoleCliTool, isConsoleCliTool } from "./console-cli-tools.ts";
 import { contextAllocation } from "./context-allocation.ts";
 import { createDoctor } from "./doctor.ts";
@@ -214,6 +216,7 @@ boot.mark("threads");
 const schedules = new Schedules(threads, broadcast);
 boot.mark("schedules");
 const ideas = new Ideas();
+const mapsService = createMapsService({ base: DATA_DIR });
 const brainGraph = new BrainGraph();
 const sessionSearch = new SessionSearch(DATA_DIR);
 const transcriptRedaction = new TranscriptRedaction({
@@ -695,6 +698,7 @@ app.post("/api/agent-tools/:name", express.json({ limit: "1mb" }), async (req, r
                 : isConsoleCliTool(req.params.name)
                   ? await consoleCliTool(req.params.name, input, {
                       ideas,
+                      maps: mapsService,
                       schedules,
                       sessionSearch,
                     })
@@ -1398,6 +1402,8 @@ mountSecurity(app, sameOrigin, toolWatch);
 mountVault(app, sameOrigin);
 // Improve prompt: Haiku rewrite + before/after effort quotes (same-origin only; capped Haiku spend).
 mountPromptImprove(app, sameOrigin);
+// Codemap: in-house architecture maps of local/GitHub repos (server/codemap).
+mountMaps(app, sameOrigin, mapsService);
 // App ideas: index.md + one markdown file per idea in a private git repo (server/ideas.ts). Adding commits, so same-origin only.
 const ideaError = (res: express.Response, e: any) =>
   res

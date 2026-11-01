@@ -1,0 +1,38 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>Code maps · Agent Console</title>
+<link rel="icon" href="/icon.svg"><link rel="apple-touch-icon" href="/icon-192.png">
+<meta name="theme-color" content="#eeeef2" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0b0b0d" media="(prefers-color-scheme: dark)">
+<link rel="preload" href="/fonts/inter-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/dashboard.css"><link rel="stylesheet" href="/maps.css"></head>
+<body class="maps">
+<header class="dh">
+  <a class="btn ghost back" id="back" href="/" aria-label="Back to the console"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M10 3.5 5.5 8l4.5 4.5"/></svg><span id="backLabel">Console</span></a>
+  <h1 id="title">Code maps</h1>
+</header>
+<main id="mp" aria-busy="true">
+  <section id="listView" aria-labelledby="title">
+    <form id="addForm" class="sheet" autocomplete="off">
+      <label for="source">Add a codebase</label>
+      <div class="row">
+        <input id="source" name="source" maxlength="300" required placeholder="~/repos/name, owner/repo or GitHub URL" spellcheck="false" autocapitalize="none">
+        <button type="submit" class="btn primary" id="addBtn">Map it</button>
+      </div>
+      <p class="err" id="addErr" role="alert" hidden></p>
+    </form>
+    <p class="muted" id="status" aria-live="polite">Loading maps…</p>
+    <ul class="cards" id="cards"></ul>
+  </section>
+  <section id="mapView" hidden>
+    <nav id="crumbs" class="crumbs" aria-label="Breadcrumb"></nav>
+    <div id="tabs" class="tabs" role="tablist" aria-label="Views"></div>
+    <p class="muted" id="viewStatus" aria-live="polite"></p>
+    <div id="diagram" class="diagram" tabindex="-1"></div>
+    <article id="details" class="panel"></article>
+  </section>
+</main>
+<div id="toast" role="status" aria-live="polite" hidden></div>
+<script type="module" src="/maps.js"></script>
+</body></html>
