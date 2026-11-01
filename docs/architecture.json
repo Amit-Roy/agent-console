@@ -118,6 +118,30 @@
           "status": "modified"
         },
         {
+          "id": "file-viewer",
+          "label": "File viewer",
+          "tech": "public/file-viewer.js",
+          "desc": "Modal for files linked in chat; toolbar gets a zoom group (minus, percent, plus) and routes ctrl/cmd +, -, 0 and ctrl+wheel to the zoom module",
+          "icon": "file-code",
+          "status": "modified"
+        },
+        {
+          "id": "fv-zoom",
+          "label": "File viewer zoom",
+          "tech": "public/file-viewer-zoom.js",
+          "desc": "Images: pinch, wheel, double-tap and pan. Text: --file-zoom font scale 0.7 to 2.0 saved in localStorage file-viewer-zoom",
+          "icon": "zoom-in",
+          "status": "added"
+        },
+        {
+          "id": "panzoom",
+          "label": "Panzoom",
+          "tech": "@panzoom/panzoom (vendored)",
+          "desc": "Vendored, lazy-loaded on first image open; does the transform, touch pinch and bounds",
+          "icon": "package",
+          "status": "added"
+        },
+        {
           "id": "lazy-chunks",
           "label": "Lazy chunks",
           "tech": "vendor/hljs/*, context-economics.js, context-allocation.js, context-forecast.js, turn-breakdown.js",
@@ -416,6 +440,18 @@
       "from": "build-fonts",
       "to": "fonts",
       "label": "instance masters to woff2",
+      "status": "added"
+    },
+    {
+      "from": "file-viewer",
+      "to": "fv-zoom",
+      "label": "zoom",
+      "status": "added"
+    },
+    {
+      "from": "fv-zoom",
+      "to": "panzoom",
+      "label": "import() on image",
       "status": "added"
     }
   ]
