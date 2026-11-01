@@ -310,3 +310,8 @@ a.mp-name:focus-visible {
     flex-direction: column;
   }
 }
+
+/* Change-status legend is meaningful for PR diagrams only; maps are always "unchanged". */
+.diagram .legend {
+  display: none;
+}
