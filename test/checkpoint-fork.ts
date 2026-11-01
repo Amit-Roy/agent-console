@@ -154,7 +154,9 @@ try {
   const spec = { id: "t1", cwd: "/tmp", mode: "bypassPermissions", model: "opus" } as any;
   const withAt = claudeStartArgs({ ...spec, forkFrom: "sid-1", forkAt: "uuid-9" });
   const flagIndex = withAt.indexOf("--resume-session-at");
-  assert.ok(flagIndex > 0 && withAt[flagIndex + 1] === "uuid-9" && withAt.includes("--fork-session"));
+  assert.ok(
+    flagIndex > 0 && withAt[flagIndex + 1] === "uuid-9" && withAt.includes("--fork-session"),
+  );
   assert.equal(withAt[withAt.indexOf("--resume") + 1], "sid-1");
   const plain = claudeStartArgs({ ...spec, forkFrom: "sid-1" });
   assert.ok(plain.includes("--fork-session") && !plain.includes("--resume-session-at"));
