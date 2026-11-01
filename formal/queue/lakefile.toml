@@ -1,0 +1,10 @@
+name = "queue"
+version = "0.1.0"
+defaultTargets = ["Queue", "ProofAudit"]
+[leanOptions]
+warningAsError = true
+[[lean_lib]]
+name = "Queue"
+
+[[lean_lib]]
+name = "ProofAudit"
