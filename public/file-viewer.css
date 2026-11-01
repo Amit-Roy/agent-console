@@ -76,7 +76,8 @@
   overscroll-behavior: contain;
   tab-size: 4;
   background: var(--code-bg);
-  font: var(--fw-reg) calc(0.8125rem * var(--file-zoom, 1)) / var(--file-line-height) var(--font-mono);
+  font:
+    var(--fw-reg) calc(0.8125rem * var(--file-zoom, 1)) / var(--file-line-height) var(--font-mono);
   font-variant-ligatures: none;
   padding: var(--sp-2) 0;
 }

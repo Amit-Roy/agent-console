@@ -10,8 +10,7 @@ const TEXT_MIN = 0.7,
 let panzoomModule;
 const loadPanzoom = () => (panzoomModule ||= import("./vendor/panzoom.js").then((m) => m.default));
 
-const clampText = (value) =>
-  Math.min(TEXT_MAX, Math.max(TEXT_MIN, Math.round(value * 10) / 10));
+const clampText = (value) => Math.min(TEXT_MAX, Math.max(TEXT_MIN, Math.round(value * 10) / 10));
 
 function zoomMode(viewer) {
   if (viewer.panzoom) return "image";

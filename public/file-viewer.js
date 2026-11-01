@@ -15,6 +15,7 @@ import {
   stopMedia,
   updatePerformance,
 } from "./file-viewer-render.js";
+import { abortTreeRequests, ensureTree, resetTree, showTree } from "./file-viewer-tree.js";
 import {
   detachImageZoom,
   handleZoomKey,
@@ -24,7 +25,6 @@ import {
   stepZoom,
   syncZoomControls,
 } from "./file-viewer-zoom.js";
-import { abortTreeRequests, ensureTree, resetTree, showTree } from "./file-viewer-tree.js";
 import { el as createElement, icon, iconButton, parseFileRef, wireCopy } from "./render.js";
 
 let style;
