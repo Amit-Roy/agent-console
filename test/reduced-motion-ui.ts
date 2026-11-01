@@ -1,4 +1,4 @@
-// Browser check: the running-thread dot keeps its opacity-only pulse under prefers-reduced-motion.
+// Browser check: the running-thread dot and .spin spinners keep their opacity-only pulse under prefers-reduced-motion (no rotation).
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
@@ -11,14 +11,23 @@ try {
   const context = await browser.newContext({ reducedMotion: "reduce" });
   const page = await context.newPage();
   await page.setContent(
-    `<!doctype html><html><head><style>${css}</style></head><body><span class="dot running"></span></body></html>`,
+    `<!doctype html><html><head><style>${css}</style></head><body><span class="dot running"></span><i class="spin"></i></body></html>`,
   );
-  const style = await page.locator(".dot.running").evaluate((dotElement) => {
-    const computed = getComputedStyle(dotElement);
-    return { iterations: computed.animationIterationCount, name: computed.animationName };
-  });
-  assert.equal(style.iterations, "infinite", "running dot pulse repeats under reduced motion");
-  assert.equal(style.name, "pulse", "running dot pulse animation is not disabled");
+  const readAnimation = (selector: string) =>
+    page.locator(selector).evaluate((element) => {
+      const computed = getComputedStyle(element);
+      return { iterations: computed.animationIterationCount, name: computed.animationName };
+    });
+  const dotStyle = await readAnimation(".dot.running");
+  assert.equal(dotStyle.iterations, "infinite", "running dot pulse repeats under reduced motion");
+  assert.equal(dotStyle.name, "pulse", "running dot pulse animation is not disabled");
+  const spinStyle = await readAnimation(".spin");
+  assert.equal(spinStyle.iterations, "infinite", "spinner pulse repeats under reduced motion");
+  assert.equal(
+    spinStyle.name,
+    "pulse",
+    "spinner is not rotating and is pulsing under reduced motion",
+  );
   console.log("reduced-motion ok");
   await context.close();
 } finally {
