@@ -287,7 +287,11 @@ export function claudeStartArgs(thread: ThreadSpec): string[] {
   if (style) args.push("--append-system-prompt", style); // brain index arrives via the user hook
   fs.mkdirSync(threadDir(thread.id), { recursive: true, mode: 0o700 });
   if (thread.sessionId) args.push("--resume", thread.sessionId);
-  else if (thread.forkFrom) args.push("--resume", thread.forkFrom, "--fork-session"); // a forked thread: continue a copy of the parent session
+  else if (thread.forkFrom) {
+    args.push("--resume", thread.forkFrom);
+    if (thread.forkAt) args.push("--resume-session-at", thread.forkAt); // hidden flag (CLI 2.1.310): stop the copied session at this assistant uuid
+    args.push("--fork-session"); // a forked thread: continue a copy of the parent session
+  }
   return args;
 }
 

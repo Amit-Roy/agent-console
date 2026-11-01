@@ -26,6 +26,7 @@ import {
 } from "./render.js";
 import { createSchedules, DAY_ITEMS, REPEAT_ITEMS } from "./schedules.js";
 import { createLatencyReporter } from "./telemetry.js";
+import { createTimeTravel } from "./time-travel.js";
 import { createTodos } from "./todos.js";
 import { toolName, toolSummary } from "./tool-display.js";
 
@@ -260,6 +261,14 @@ const send = (o) => {
   return true;
 };
 const todos = createTodos({ send, current: () => state.current });
+const timeTravel = createTimeTravel({
+  apiFetch,
+  current: () => state.current,
+  titleOf: (id) => state.threads.get(id)?.title || id,
+  toast: (text) => toast(text),
+  openThread: (id) => openThread(id),
+  openFile: (path, opener) => openCheckpointFile(path, opener),
+});
 const questions = createQuestions({
   send,
   root: () => $("chat"),
@@ -684,6 +693,7 @@ const MESSAGE_HANDLERS = {
   removed: onRemovedMessage,
   todos: onTodosMessage,
   todo_error: onTodoErrorMessage,
+  rewound: (message) => timeTravel.onRewound(message),
   created: onCreatedMessage,
   tasks: onTasksMessage,
   task_saved: onTaskSavedMessage,
@@ -2310,6 +2320,7 @@ function renderHead() {
   $("more").disabled = !thread;
   $("chat-search-toggle").disabled = !thread;
   todos.renderBadge(thread);
+  timeTravel.renderButton(thread);
   $("state").hidden = !running && !thread?.background && !questions.count(state.current);
   $("input").disabled = !thread;
   $("attach").disabled = !thread;
@@ -3151,6 +3162,52 @@ function fileView(name, input) {
   a.append(icon("eye"));
   return [a];
 }
+const CHECKPOINT_TOOLS = new Set(["Edit", "MultiEdit", "Write", "NotebookEdit"]);
+// Small chip on a file-editing card; it shows once that call's checkpoint arrives and opens History there.
+function checkpointChip(block) {
+  if (!CHECKPOINT_TOOLS.has(block.name) || !block.id) return [];
+  const chip = el("button", "tt-chip");
+  chip.type = "button";
+  chip.hidden = true;
+  chip.dataset.toolUse = block.id;
+  chip.title = "Files at this point";
+  chip.setAttribute("aria-label", "Files at this point");
+  chip.append(icon("clock"), "Files");
+  return [chip];
+}
+function onCheckpointChipClick(event) {
+  const chip = event.target.closest?.(".tt-chip");
+  if (!chip || !$("chat").contains(chip)) return;
+  event.preventDefault();
+  timeTravel.open({ toolUseId: chip.dataset.toolUse, opener: chip });
+}
+$("chat").addEventListener("click", onCheckpointChipClick);
+function onCheckpointEvent(event, ctx) {
+  timeTravel.record(event);
+  state.cards.get(event.toolUseId)?.querySelector(".tt-chip")?.removeAttribute("hidden");
+  push(timeTravel.row(event), ctx.live);
+}
+function onRewoundEvent(event, ctx) {
+  push(timeTravel.rewoundRow(event), ctx.live);
+}
+// History lists paths relative to the thread's folder; the file viewer shows the file as it is now.
+function openCheckpointFile(path, opener) {
+  const thread = state.current;
+  const cwd = cur()?.cwd;
+  if (!thread || !cwd) return;
+  loadFileViewer()
+    .then((viewer) => {
+      if (state.current === thread)
+        viewer.open({
+          thread,
+          ref: { path: `${cwd.replace(/\/$/, "")}/${path}` },
+          opener,
+          openedAt: performance.now(),
+          module_ms: 0,
+        });
+    })
+    .catch((error) => toast(error.message || "Could not load the file viewer. Try again."));
+}
 // A shell command is cryptic; when the agent said what it is for, show that and keep the command in the card body and on hover.
 const describedAs = (name, input) =>
   (name === "Bash" && typeof input?.description === "string" && input.description.trim()) || "";
@@ -3709,6 +3766,7 @@ function toolCardSummary(block) {
     el("span", "name", toolName(block.name, block.input)),
     el("span", why ? "sum human" : "sum", why || summarize(block.name, block.input)),
     ...fileView(block.name, block.input),
+    ...checkpointChip(block),
     status,
     icon("chev-right", "chev"),
   );
@@ -3918,6 +3976,8 @@ const EVENT_HANDLERS = {
   console_error: onConsoleError,
   schedule_report: onScheduleReport,
   rate_limit_event: onRateLimitEvent,
+  checkpoint: onCheckpointEvent,
+  rewound: onRewoundEvent,
 };
 
 function onEvent(event, live) {

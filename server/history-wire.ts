@@ -51,6 +51,20 @@ export function historyWireEvent(event: any) {
         view.result = event.result.slice(0, 500);
       return view;
     }
+    case "checkpoint": {
+      const view = fields(event, [
+        "type",
+        "ts",
+        "seq",
+        "kind",
+        "toolUseId",
+        "commit",
+        "head",
+        "skipped",
+      ]);
+      const files = Array.isArray(event.files) ? event.files : [];
+      return { ...view, files: files.slice(0, 200), filesTotal: files.length };
+    }
     case "system":
       return fields(
         event,
