@@ -20,7 +20,10 @@ const fresh = threads.create({ provider: "claude", cwd: data });
 assert.deepEqual([fresh.model, fresh.mode, fresh.effort], ["opus", "bypassPermissions", "medium"]);
 console.log("PASS  create with no effort: opus/bypassPermissions/medium");
 
-assert.equal(threads.create({ provider: "claude", cwd: data, effort: "default" }).effort, "default");
+assert.equal(
+  threads.create({ provider: "claude", cwd: data, effort: "default" }).effort,
+  "default",
+);
 console.log("PASS  explicit default effort stays default");
 
 assert.equal(threads.create({ provider: "claude", cwd: data, model: "haiku" }).effort, "default");
