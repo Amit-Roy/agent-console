@@ -44,6 +44,7 @@ import {
   type Mode,
   PROVIDERS,
   type Provider,
+  startEffort,
   type ThreadSpec,
 } from "./providers/index.ts";
 import {
@@ -677,7 +678,7 @@ function forkedThread(src: Thread, target: Provider | undefined, recent: boolean
     cwd: src.cwd,
     mode: target ? (target.modes.includes(src.mode) ? src.mode : target.defaultMode) : src.mode,
     model: target ? target.defaultModel() : src.model,
-    effort: target ? "default" : src.effort,
+    effort: target ? startEffort(target, target.defaultModel()) : src.effort,
     advisor: target ? undefined : src.advisor,
     ...forkAccount(src, target),
     context: target || recent ? undefined : src.context,
@@ -1105,6 +1106,7 @@ export class Threads {
   }
 
   private validEffort(prov: any, model: string, effort?: string): string {
+    if (effort === undefined) return startEffort(prov, model);
     if (!effort || effort === "default") return "default";
     if (!prov?.modelDetails?.()[model]?.efforts.includes(effort))
       throw new Error("Unsupported effort for this model.");
