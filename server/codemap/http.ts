@@ -19,7 +19,11 @@ export function mountMaps(
   sameOrigin: express.RequestHandler,
   service: MapsService,
 ): void {
-  const json = express.json({ limit: "4kb" });
+  const parse = express.json({ limit: "4kb" });
+  const json: express.RequestHandler = (req, res, next) =>
+    parse(req, res, (err?: unknown) =>
+      err ? fail(res, { message: "invalid JSON body" }) : next(),
+    );
   const route =
     (fn: (req: express.Request, res: express.Response) => Promise<void>): express.RequestHandler =>
     async (req, res) => {

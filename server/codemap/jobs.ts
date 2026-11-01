@@ -207,9 +207,11 @@ export class MapJobs {
       this.publish(slug, scan, kept, commit, true);
       return;
     }
-    const heuristic = heuristicArchitecture(scan, scan.rootName || meta.label);
-    this.publish(slug, scan, heuristic, commit, false, "describing");
-    await this.describeStep(slug, root, scan, files, commit);
+    const keepOld = !!meta.described && !!kept;
+    const placeholder =
+      keepOld && kept ? kept : heuristicArchitecture(scan, scan.rootName || meta.label);
+    this.publish(slug, scan, placeholder, commit, keepOld, "describing");
+    await this.describeStep(slug, root, scan, files, commit, keepOld);
   }
 
   private async describeStep(
@@ -218,6 +220,7 @@ export class MapJobs {
     scan: Scan,
     files: string[],
     commit: string | null,
+    keptDescribed: boolean,
   ): Promise<void> {
     try {
       const arch = await this.deps.describe({
@@ -229,7 +232,11 @@ export class MapJobs {
       this.publish(slug, scan, arch, commit, true);
     } catch (err: any) {
       const note = `AI description failed: ${String(err?.message || err).split("\n")[0]}`;
-      this.patch(slug, { status: "ready", error: note.slice(0, 500), described: 0 });
+      this.patch(slug, {
+        status: "ready",
+        error: note.slice(0, 500),
+        described: keptDescribed ? 1 : 0,
+      });
     }
   }
 

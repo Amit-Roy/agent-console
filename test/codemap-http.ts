@@ -156,18 +156,41 @@ try {
   await ready("fixture");
   assert.equal(describeCalls, 2, "describe:true re-describes");
 
-  // Describe failure keeps the heuristic map viewable and ready with an error note.
+  // Describe failure keeps the previous described map, ready with an error note.
   describeFails = true;
   await call("POST", "/api/maps/fixture/refresh", { describe: true });
   const failed = await ready("fixture");
   assert.equal(failed.status, "ready");
-  assert.equal(failed.described, false);
+  assert.equal(failed.described, true);
   assert.match(failed.error, /^AI description failed: model offline/);
   assert.deepEqual(
     validateArch(((await call("GET", "/api/maps/fixture/view")).json as MapView).spec),
     [],
   );
   describeFails = false;
+
+  // A failed re-describe must not replace a described map with the heuristic one.
+  await call("POST", "/api/maps/fixture/refresh", { describe: true });
+  await ready("fixture");
+  describeFails = true;
+  await call("POST", "/api/maps/fixture/refresh", { describe: true });
+  const kept = await ready("fixture");
+  assert.equal(kept.status, "ready");
+  assert.equal(kept.described, true);
+  assert.match(kept.error, /^AI description failed/);
+  assert.match((await call("GET", "/api/maps/fixture/brief")).raw, /^fixture: Fake described/);
+  describeFails = false;
+
+  // Invalid JSON bodies -> 400 {error}.
+  for (const url of ["/api/maps", "/api/maps/fixture/refresh"]) {
+    const res = await fetch(base + url, {
+      method: "POST",
+      headers: { cookie: "auth=ok", origin: base, "content-type": "application/json" },
+      body: "{nope",
+    });
+    assert.equal(res.status, 400);
+    assert.ok(typeof (await res.json()).error === "string");
+  }
 
   // Interrupted jobs are marked failed on service start.
   const metaFile = path.join(dataDir, "maps", "fixture", "meta.json");
