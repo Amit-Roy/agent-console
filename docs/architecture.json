@@ -445,7 +445,7 @@
     {
       "from": "file-viewer",
       "to": "fv-zoom",
-      "label": "attach, keys, wheel",
+      "label": "zoom",
       "status": "added"
     },
     {
