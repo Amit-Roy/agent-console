@@ -1,0 +1,298 @@
+{
+  "project": {
+    "name": "Agent Console",
+    "summary": "Self-hosted web console that runs Claude Code, Codex and Pi agent CLIs as chat threads. An Express + WebSocket server spawns provider processes, streams events to a vanilla-JS PWA, and runs GitHub issue automation, share intake, a secrets vault and usage accounting."
+  },
+  "nodes": [
+    {
+      "id": "web",
+      "label": "Web app (PWA)",
+      "kind": "system",
+      "summary": "Vanilla-JS single-page app: chat threads, composer, dashboards, file viewer.",
+      "paths": []
+    },
+    {
+      "id": "web.chat",
+      "parent": "web",
+      "label": "Chat UI",
+      "kind": "feature",
+      "summary": "Thread list, transcript rendering, composer, questions, notifications, service worker.",
+      "paths": [
+        "public/{app,render,composer-field,questions,menu,notifications,tool-display,step-timeline,chat-search,attachment-drafts,prompt-improve,sw,frontmatter,login,schedules}.{js,html,css}",
+        "public/index.html",
+        "public/style.css",
+        "public/login.html"
+      ]
+    },
+    {
+      "id": "web.files",
+      "parent": "web",
+      "label": "File viewer",
+      "kind": "feature",
+      "summary": "In-app file tree, renderer and editor; arch diagram renderer.",
+      "paths": ["public/file-viewer*", "public/arch*.js"]
+    },
+    {
+      "id": "web.automation",
+      "parent": "web",
+      "label": "Automation page",
+      "kind": "feature",
+      "summary": "Issue lanes, auto-pick, assignment progress, job debug.",
+      "paths": ["public/automation*", "public/auto-pick.js", "public/assign-progress.js"]
+    },
+    {
+      "id": "web.dash",
+      "parent": "web",
+      "label": "Dashboards",
+      "kind": "feature",
+      "summary": "Token/context dashboards, benchmarks, doctor, host, security, brain, ideas, session search.",
+      "paths": [
+        "public/{dashboard,dashboard-tokens,benchmarks,doctor,host,host-card,security,sec-crash-log,brain,ideas,session-search,context-allocation,context-economics,context-forecast,turn-breakdown,telemetry}.{js,html,css}",
+        "public/sessions.html"
+      ]
+    },
+    {
+      "id": "web.vault",
+      "parent": "web",
+      "label": "Vault UI",
+      "kind": "feature",
+      "summary": "Secrets vault and passkey setup screens.",
+      "paths": ["public/vault*"]
+    },
+    {
+      "id": "server",
+      "label": "Console server",
+      "kind": "system",
+      "summary": "Express + ws server (server/index.ts): REST API, live event stream, thread lifecycle.",
+      "paths": []
+    },
+    {
+      "id": "server.core",
+      "parent": "server",
+      "label": "Threads & API core",
+      "kind": "feature",
+      "summary": "HTTP/WS entry, auth, thread state, history, uploads, files, commands, questions, notifications.",
+      "paths": [
+        "server/{index,auth,threads,history,history-wire,commands,questions,notifications,uploads,files,export,cwd-hints,idle-compaction,claude-login,ideas,prompt-improve,review-context,issue-draft,log-stamp,log-timestamps}.ts"
+      ]
+    },
+    {
+      "id": "server.providers",
+      "parent": "server",
+      "label": "Provider adapters",
+      "kind": "feature",
+      "summary": "Spawns and drives Claude Code, Codex (app-server RPC) and Pi; rate limits, titles, triage effort models.",
+      "paths": ["server/providers"]
+    },
+    {
+      "id": "server.automation",
+      "parent": "server",
+      "label": "Issue automation",
+      "kind": "service",
+      "summary": "GitHub triage queue, job runner, review sweeps, scheduled tasks, auto-continue.",
+      "paths": [
+        "server/automation",
+        "server/{triage-*,review-launch,review-recovery,review-sweep,review-verdict,issue-review,github-triage,gh-refs,session-prs,schedules,auto-continue,sec-automations}.ts"
+      ]
+    },
+    {
+      "id": "server.share",
+      "parent": "server",
+      "label": "Share intake",
+      "kind": "feature",
+      "summary": "Fetches Instagram/X/Reddit/YouTube shares via camofox, yt-dlp and gallery-dl for sandboxed analysis.",
+      "paths": ["server/share", "server/instagram.ts"]
+    },
+    {
+      "id": "server.vault",
+      "parent": "server",
+      "label": "Vault & privacy",
+      "kind": "feature",
+      "summary": "Encrypted secrets vault, passkeys, iron-proxy egress, transcript redaction.",
+      "paths": ["server/{vault*,iron-spec,privacy,transcript-redaction}.ts"]
+    },
+    {
+      "id": "server.usage",
+      "parent": "server",
+      "label": "Usage & telemetry",
+      "kind": "feature",
+      "summary": "Token accounting, pricing, latency/turn timing, headroom and context budgeting, benchmarks.",
+      "paths": [
+        "server/{accounting*,usage*,analytics,api-pricing,token-telemetry,latency,turn-timing,boot-timing,benchmark*,context-allocation,prompt-overhead,headroom*,tool-priority,tool-token,monitor*}.ts",
+        "server/headroom-profile"
+      ]
+    },
+    {
+      "id": "server.host",
+      "parent": "server",
+      "label": "Host & ops",
+      "kind": "feature",
+      "summary": "Host metrics worker, doctor checks, security events, crash log, brain graph.",
+      "paths": ["server/{host*,doctor,security,sec-crashes,brain-graph}.ts"]
+    },
+    {
+      "id": "server.tools",
+      "parent": "server",
+      "label": "Agent tools bridge",
+      "kind": "feature",
+      "summary": "console-tool CLI backends, session search, cross-thread tool auth, window dispatch, Pi subagents.",
+      "paths": [
+        "server/{console-cli-*,cli-search,thread-tool-auth,tool-watch,window-*,session-search,pi-subagent-worker}.ts"
+      ]
+    },
+    {
+      "id": "server.acode",
+      "parent": "server",
+      "label": "Acode bridge",
+      "kind": "feature",
+      "summary": "HTTP bridge for the Acode Android editor plugin.",
+      "paths": ["server/acode*.ts"]
+    },
+    {
+      "id": "acode",
+      "label": "Acode plugin",
+      "kind": "feature",
+      "summary": "Android Acode editor plugin that talks to the console.",
+      "paths": ["acode-plugin"]
+    },
+    {
+      "id": "design",
+      "label": "Design system",
+      "kind": "feature",
+      "summary": "Shared CSS tokens and helpers.",
+      "paths": ["packages"]
+    },
+    {
+      "id": "scripts",
+      "label": "Ops scripts & CLIs",
+      "kind": "tooling",
+      "summary": "console-tool CLI, release/deploy, triage data pipelines, telemetry backfills.",
+      "paths": ["scripts"]
+    },
+    {
+      "id": "tests",
+      "label": "Tests",
+      "kind": "tests",
+      "summary": "Node test suite plus Playwright UI tests.",
+      "paths": ["test"]
+    },
+    {
+      "id": "ext.cli",
+      "label": "Agent CLIs",
+      "kind": "external",
+      "summary": "claude, codex, pi processes spawned per thread.",
+      "paths": []
+    },
+    {
+      "id": "ext.github",
+      "label": "GitHub",
+      "kind": "external",
+      "summary": "Issues, PRs, webhooks, gh CLI.",
+      "paths": []
+    },
+    {
+      "id": "ext.llm",
+      "label": "LLM APIs",
+      "kind": "external",
+      "summary": "OpenRouter, NVIDIA NIM, DeepSeek, Hugging Face.",
+      "paths": []
+    },
+    {
+      "id": "ext.social",
+      "label": "Social sites",
+      "kind": "external",
+      "summary": "Share sources fetched by intake.",
+      "paths": []
+    },
+    {
+      "id": "ext.push",
+      "label": "Web Push / FCM",
+      "kind": "external",
+      "summary": "Browser push notifications.",
+      "paths": []
+    },
+    {
+      "id": "ext.browser",
+      "label": "Playwright",
+      "kind": "external",
+      "summary": "Headless browser for UI tests and share capture.",
+      "paths": []
+    }
+  ],
+  "flows": [
+    {
+      "id": "turn",
+      "title": "A chat turn",
+      "steps": [
+        {
+          "node": "web.chat",
+          "note": "User sends a prompt from the composer"
+        },
+        {
+          "node": "server.core",
+          "note": "API stores the message and starts a turn on the thread"
+        },
+        {
+          "node": "server.providers",
+          "note": "Provider adapter spawns claude/codex/pi"
+        },
+        {
+          "node": "ext.cli",
+          "note": "CLI streams JSON events back"
+        },
+        {
+          "node": "server.usage",
+          "note": "Tokens and latency are accounted"
+        },
+        {
+          "node": "web.chat",
+          "note": "Events pushed over WebSocket and rendered"
+        }
+      ]
+    },
+    {
+      "id": "issue",
+      "title": "GitHub issue automation",
+      "steps": [
+        {
+          "node": "ext.github",
+          "note": "Webhook: new issue or comment"
+        },
+        {
+          "node": "server.automation",
+          "note": "Triage scores and queues the issue, job runner picks it"
+        },
+        {
+          "node": "server.providers",
+          "note": "Launches an agent thread to work the issue"
+        },
+        {
+          "node": "web.automation",
+          "note": "Lanes show progress"
+        }
+      ]
+    },
+    {
+      "id": "share",
+      "title": "Share intake",
+      "steps": [
+        {
+          "node": "web.chat",
+          "note": "A shared link arrives via the PWA share target"
+        },
+        {
+          "node": "server.share",
+          "note": "Fetcher downloads media and captions"
+        },
+        {
+          "node": "ext.social",
+          "note": "Instagram / X / Reddit / YouTube"
+        },
+        {
+          "node": "server.providers",
+          "note": "Sandboxed analyzer thread reads the assets"
+        }
+      ]
+    }
+  ]
+}
