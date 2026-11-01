@@ -136,7 +136,7 @@
         {
           "id": "panzoom",
           "label": "Panzoom",
-          "tech": "public/vendor/panzoom.js (@panzoom/panzoom, MIT)",
+          "tech": "@panzoom/panzoom (vendored)",
           "desc": "Vendored, lazy-loaded on first image open; does the transform, touch pinch and bounds",
           "icon": "package",
           "status": "added"
