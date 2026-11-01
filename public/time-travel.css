@@ -1,0 +1,583 @@
+/* Time travel: History panel (desktop side panel, phone bottom sheet), transcript anchors, rewind dialogs. */
+
+/* Status tones: colour always travels with a letter, never alone. */
+.tt-panel,
+.tt-confirm,
+.tt-diff-dialog,
+.tt-row {
+  --tt-add: var(--ok);
+  --tt-mod: var(--warn);
+  --tt-del: var(--bad);
+  --tt-mixed: var(--accent);
+}
+
+/* ---------- panel ---------- */
+.tt-panel {
+  flex: none;
+  width: min(25rem, 38vw);
+  min-width: 20rem;
+  margin: var(--sp-2) var(--sp-2) var(--sp-2) 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--s1);
+  border-radius: var(--r-xl);
+  box-shadow: inset 0 0 0 1px var(--edge);
+  overflow: hidden;
+}
+.tt-panel[hidden] {
+  display: none;
+}
+.tt-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-3) var(--sp-2) var(--sp-4);
+}
+.tt-head h2 {
+  font: var(--fw-semi) var(--f-lg);
+  letter-spacing: var(--ls-lg);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tt-empty,
+.tt-note {
+  padding: var(--sp-2) var(--sp-4);
+  color: var(--t2);
+  font: var(--fw-reg) var(--f-md);
+  letter-spacing: var(--ls-md);
+}
+.tt-empty[hidden],
+.tt-note[hidden],
+#tt-scrub[hidden],
+#tt-detail[hidden],
+#tt-actions[hidden] {
+  display: none;
+}
+
+/* ---------- scrubber ---------- */
+.tt-scrub {
+  padding: 0 var(--sp-3) var(--sp-2);
+  border-bottom: 1px solid var(--edge);
+}
+.tt-steps {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+.tt-track {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 3.25rem;
+  padding: 0 var(--sp-1);
+  overflow-x: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+  scrollbar-width: thin;
+  scrollbar-color: var(--s3) transparent;
+  border-radius: var(--r-sm);
+  background: var(--s2);
+}
+.tt-tick {
+  flex: 1 0 1.25rem;
+  max-width: 2.25rem;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-xs);
+  background: transparent;
+  color: var(--t3);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 2px;
+  cursor: pointer;
+  font: var(--fw-semi) 0.6875rem / 1 var(--font-mono);
+}
+.tt-tick:hover {
+  background: var(--hover);
+}
+.tt-tick:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+.tt-tick .tt-bar {
+  display: block;
+  width: 0.25rem;
+  height: 1.125rem;
+  margin-bottom: var(--sp-1);
+  border-radius: var(--r-full);
+  background: var(--edge-strong);
+  transition:
+    transform var(--dur-1) var(--ease),
+    background var(--dur-1) var(--ease);
+}
+.tt-tick.big .tt-bar {
+  width: 0.375rem;
+  height: 1.75rem;
+}
+.tt-tick .tt-letter {
+  min-height: 0.6875rem;
+  font-weight: var(--fw-semi);
+}
+.tt-tick[data-tone="add"] {
+  color: var(--tt-add);
+}
+.tt-tick[data-tone="add"] .tt-bar {
+  background: var(--tt-add);
+}
+.tt-tick[data-tone="mod"] {
+  color: var(--tt-mod);
+}
+.tt-tick[data-tone="mod"] .tt-bar {
+  background: var(--tt-mod);
+}
+.tt-tick[data-tone="del"] {
+  color: var(--tt-del);
+}
+.tt-tick[data-tone="del"] .tt-bar {
+  background: var(--tt-del);
+}
+.tt-tick[data-tone="mixed"] {
+  color: var(--tt-mixed);
+}
+.tt-tick[data-tone="mixed"] .tt-bar {
+  background: var(--tt-mixed);
+}
+.tt-tick[aria-pressed="true"] {
+  background: var(--accent-tint);
+  box-shadow: inset 0 0 0 1.5px var(--accent);
+}
+.tt-tick[aria-pressed="true"] .tt-bar {
+  transform: scaleX(1.5);
+}
+.tt-range {
+  display: none;
+  width: 100%;
+  height: 2.75rem;
+  margin: 0;
+  accent-color: var(--accent);
+}
+.tt-position {
+  margin-top: var(--sp-1);
+  color: var(--t2);
+  font: var(--fw-med) var(--f-sm);
+  letter-spacing: var(--ls-sm);
+}
+.tt-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-3);
+  margin-top: var(--sp-1);
+  color: var(--t3);
+  font: var(--fw-reg) var(--f-xs);
+  letter-spacing: var(--ls-xs);
+}
+.tt-legend b {
+  font-family: var(--font-mono);
+  font-weight: var(--fw-semi);
+}
+.tt-count b,
+.tt-badge {
+  font-family: var(--font-mono);
+  font-weight: var(--fw-semi);
+}
+.tt-legend [data-s="A"] b {
+  color: var(--tt-add);
+}
+.tt-legend [data-s="M"] b {
+  color: var(--tt-mod);
+}
+.tt-legend [data-s="D"] b {
+  color: var(--tt-del);
+}
+.tt-legend [data-s="X"] b {
+  color: var(--tt-mixed);
+}
+
+/* ---------- detail ---------- */
+.tt-detail {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: var(--sp-3) var(--sp-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  scrollbar-width: thin;
+  scrollbar-color: var(--s3) transparent;
+}
+.tt-summary {
+  font: var(--fw-med) var(--f-md);
+  letter-spacing: var(--ls-md);
+}
+.tt-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+.tt-count {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: var(--sp-1) var(--sp-2);
+  border-radius: var(--r-full);
+  background: var(--s2);
+  color: var(--t2);
+  font: var(--fw-med) var(--f-xs);
+  letter-spacing: var(--ls-xs);
+}
+.tt-count[data-s="A"] b {
+  color: var(--tt-add);
+}
+.tt-count[data-s="M"] b {
+  color: var(--tt-mod);
+}
+.tt-count[data-s="D"] b {
+  color: var(--tt-del);
+}
+.tt-base {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  color: var(--t2);
+  font: var(--fw-med) var(--f-sm);
+  letter-spacing: var(--ls-sm);
+}
+.tt-files-wrap > summary {
+  display: flex;
+  align-items: center;
+  min-height: var(--ctl-h);
+  color: var(--t2);
+  font: var(--fw-med) var(--f-sm);
+  letter-spacing: var(--ls-sm);
+  cursor: pointer;
+}
+.tt-files {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+.tt-detail[aria-busy="true"] .tt-files {
+  opacity: 0.55;
+}
+.tt-scroll {
+  max-height: 14rem;
+  overflow: auto;
+  margin: var(--sp-3) 0;
+}
+.tt-file > summary,
+.tt-plain {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: var(--item-h);
+  padding: 0 var(--sp-2);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  list-style: none;
+}
+.tt-plain {
+  min-height: 0;
+  padding: var(--sp-1) var(--sp-2);
+  cursor: default;
+}
+.tt-file > summary::-webkit-details-marker {
+  display: none;
+}
+.tt-file > summary:hover {
+  background: var(--hover);
+}
+.tt-file > summary:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+.tt-badge {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 1.375rem;
+  height: 1.375rem;
+  border-radius: var(--r-xs);
+  background: var(--s2);
+  font-size: var(--f-xs);
+}
+.tt-badge[data-s="A"] {
+  color: var(--tt-add);
+}
+.tt-badge[data-s="M"] {
+  color: var(--tt-mod);
+}
+.tt-badge[data-s="D"] {
+  color: var(--tt-del);
+}
+.tt-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+  font: var(--fw-reg) var(--fm-xs) var(--font-mono);
+  color: var(--t1);
+}
+.tt-stats {
+  flex: none;
+  display: inline-flex;
+  gap: var(--sp-1);
+  font: var(--fw-reg) var(--fm-xs) var(--font-mono);
+}
+.tt-stats .plus {
+  color: var(--ok);
+}
+.tt-stats .minus {
+  color: var(--bad);
+}
+.tt-diff {
+  margin: var(--sp-1) 0 var(--sp-2);
+  padding: var(--sp-3);
+  max-height: 22rem;
+  overflow: auto;
+  border-radius: var(--r-sm);
+  background: var(--code-bg);
+  font: var(--fw-reg) var(--fm-xs) var(--font-mono);
+  tab-size: 2;
+}
+.tt-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4);
+  border-top: 1px solid var(--edge);
+}
+.tt-actions .btn {
+  flex: 1;
+  justify-content: center;
+}
+
+/* ---------- transcript anchors ---------- */
+.tt-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: 1.25rem;
+  margin: 0;
+  color: var(--t3);
+  font: var(--fw-reg) var(--f-xs);
+  letter-spacing: var(--ls-xs);
+  scroll-margin: var(--sp-6);
+}
+.tt-row::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--edge);
+}
+.tt-row-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: 0 var(--sp-1);
+  border: 0;
+  border-radius: var(--r-xs);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  cursor: pointer;
+}
+.tt-row-btn:hover,
+.tt-row-btn:focus-visible {
+  color: var(--t1);
+  background: var(--hover);
+}
+.tt-row.tt-active {
+  color: var(--accent);
+}
+.tt-row.tt-active::after {
+  height: 2px;
+  background: var(--accent);
+}
+.tt-row.rewound {
+  color: var(--warn);
+}
+.tt-row.rewound::after {
+  background: var(--warn);
+  opacity: 0.4;
+}
+@media (pointer: coarse) {
+  .tt-row-btn {
+    min-height: 2rem;
+  }
+}
+
+/* chip on Edit/Write tool cards */
+.card .tt-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  flex: none;
+  padding: 1px var(--sp-2);
+  border-radius: var(--r-full);
+  background: var(--s3);
+  color: var(--t2);
+  font: var(--fw-med) var(--f-xs);
+  letter-spacing: var(--ls-xs);
+  border: 0;
+  cursor: pointer;
+}
+.card .tt-chip[hidden] {
+  display: none;
+}
+.card .tt-chip:hover,
+.card .tt-chip:focus-visible {
+  color: var(--accent);
+}
+@media (pointer: coarse) {
+  .card .tt-chip {
+    min-height: 2rem;
+  }
+}
+
+/* ---------- dialogs ---------- */
+.tt-confirm {
+  width: min(30rem, calc(100vw - var(--sp-8)));
+}
+#tt-confirm-counts {
+  margin-top: var(--sp-3);
+}
+#tt-confirm-error {
+  color: var(--bad);
+  font: var(--fw-med) var(--f-md);
+  min-height: 0;
+}
+#tt-confirm-error:empty {
+  display: none;
+}
+.tt-diff-dialog {
+  width: 100vw;
+  max-width: none;
+  height: 100dvh;
+  max-height: none;
+  inset: 0;
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3) calc(var(--sp-3) + env(safe-area-inset-bottom));
+  border-radius: 0;
+  flex-direction: column;
+}
+.tt-diff-dialog[open] {
+  display: flex;
+}
+.tt-diff-dialog .tt-head {
+  padding: 0;
+}
+.tt-diff-dialog .tt-diff {
+  flex: 1;
+  max-height: none;
+}
+
+/* ---------- undo toast ---------- */
+.tt-toast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(var(--sp-6) + env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  z-index: 95;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  max-width: min(28rem, calc(100vw - var(--sp-6)));
+  padding: var(--sp-2) var(--sp-2) var(--sp-2) var(--sp-4);
+  border-radius: var(--r-md);
+  background: var(--pop);
+  color: var(--t1);
+  font: var(--fw-med) var(--f-md);
+  letter-spacing: var(--ls-md);
+  box-shadow:
+    inset 0 0 0 1px var(--edge-strong),
+    var(--shadow-pop);
+  animation: pop var(--dur-2) var(--ease);
+}
+.tt-toast[hidden] {
+  display: none;
+}
+
+/* ---------- phone: bottom sheet ---------- */
+@media (max-width: 700px), (pointer: coarse) {
+  .tt-panel {
+    position: fixed;
+    inset: auto 0 0 0;
+    z-index: 40;
+    width: auto;
+    min-width: 0;
+    max-height: min(74dvh, 40rem);
+    margin: 0;
+    border-radius: var(--r-xl) var(--r-xl) 0 0;
+    background: var(--pop);
+    box-shadow: var(--shadow-pop);
+    padding-bottom: env(safe-area-inset-bottom);
+    animation: tt-sheet var(--dur-3) var(--ease);
+  }
+  .tt-range {
+    display: block;
+  }
+  .tt-steps .btn {
+    width: 2.75rem;
+    height: 2.75rem;
+    flex: none;
+  }
+  .tt-track {
+    height: 2.75rem;
+  }
+  .tt-tick .tt-bar {
+    height: 0.75rem;
+    margin-bottom: 0.125rem;
+  }
+  .tt-tick.big .tt-bar {
+    height: 1.25rem;
+  }
+  .tt-actions .btn {
+    min-height: 2.75rem;
+  }
+  .tt-legend {
+    display: none;
+  }
+  .tt-files-wrap:not([open]) > .tt-files {
+    display: none;
+  }
+  .tt-toast {
+    bottom: calc(var(--sp-4) + env(safe-area-inset-bottom) + min(74dvh, 40rem));
+  }
+  body:not(.tt-open) .tt-toast {
+    bottom: calc(var(--sp-6) + env(safe-area-inset-bottom));
+  }
+  .tt-undo {
+    min-height: 2.75rem;
+  }
+}
+@keyframes tt-sheet {
+  from {
+    transform: translateY(1rem);
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tt-panel,
+  .tt-toast {
+    animation: none;
+  }
+  .tt-tick .tt-bar {
+    transition: none;
+  }
+}

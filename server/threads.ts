@@ -15,6 +15,14 @@ import { DATA_DIR } from "./auth.ts";
 import { AUTO_CONTINUE_PROMPT, autoContinueEnabled } from "./auto-continue.ts";
 import { redact } from "./automation/events.ts";
 import { assertAutomationSandbox } from "./automation/sandbox.ts";
+import {
+  type CheckpointKind,
+  deleteThread,
+  list as listCheckpoints,
+  preview as previewRewind,
+  restore as restoreCheckpoint,
+  snapshot,
+} from "./checkpoints.ts";
 import { CONSOLE_COMMANDS, commandList, parseCommand } from "./commands.ts";
 import { recentPreamble, replayPreamble } from "./export.ts";
 import { headroom } from "./headroom.ts";
@@ -114,10 +122,12 @@ export interface Thread {
   };
   sessionId?: string;
   forkFrom?: string; // forked from a Claude session: the first run continues a copy of it (cleared once the fork has its own session id)
+  forkAt?: string; // with forkFrom: the assistant event uuid where the copied session stops (checkpoint fork)
   context?: { used?: number; max?: number; source?: string }; // tokens in the agent's context now, and the model's window when the harness reports it
   replay?: boolean; // forked from an agent with no native fork: the first message carries the earlier conversation as text
   replayLimit?: number; // explicit short handoff instead of native session or full text replay
   status: "idle" | "running";
+  checkpoints?: "on" | "off" | "too_big"; // shadow-git snapshots during turns; absent means on, too_big stops them for this thread
   todoOpen?: number; // unchecked items on the thread's todo list (badge count; the list itself lives in todos.json)
   waiting?: number; // unanswered blocking requests or persistent async questions
   background?: number; // background subagents still working after the turn ended; their completion wakes the agent
@@ -383,6 +393,7 @@ type ThreadPatch = {
   advisor?: string;
   title?: string;
   idleCompaction?: boolean;
+  checkpoints?: "on" | "off";
 };
 
 // The attachment fields a transcript event carries.
@@ -440,6 +451,8 @@ function sanitizePatch(prov: ReturnType<typeof PROVIDERS.get>, patch: ThreadPatc
   if (patch.model && !prov?.models().includes(patch.model)) patch.model = undefined;
   if (patch.advisor && patch.advisor !== "default" && !prov?.advisors?.includes(patch.advisor))
     patch.advisor = undefined;
+  if (patch.checkpoints && !["on", "off"].includes(patch.checkpoints))
+    patch.checkpoints = undefined;
 }
 
 // Tool output in replayed history is clipped to what the card shows.
@@ -647,6 +660,7 @@ function startSpec(thread: Thread): ThreadSpec {
     claudeAccount: thread.claudeAccount,
     sessionId: thread.sessionId,
     forkFrom: thread.sessionId ? undefined : thread.forkFrom,
+    forkAt: thread.sessionId ? undefined : thread.forkAt,
     issueRun: thread.issueRun,
     schedule: thread.schedule,
   };
@@ -693,10 +707,33 @@ function forkedThread(src: Thread, target: Provider | undefined, recent: boolean
   };
 }
 
-// Copy the history and uploads so the fork reads whole. True when there was history to copy.
-function copyForkFiles(src: Thread, child: Thread): boolean {
+// The source log up to and including the checkpoint line `atSeq`, plus the last assistant uuid before the cut.
+// Null when the log holds no such checkpoint event.
+function cutLogAt(file: string, atSeq: number): { text: string; uuid?: string } | null {
+  if (!fs.existsSync(file)) return null;
+  const kept: string[] = [];
+  let uuid: string | undefined;
+  for (const line of fs.readFileSync(file, "utf8").split("\n")) {
+    if (!line.trim()) continue;
+    kept.push(line);
+    let event: any;
+    try {
+      event = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (event?.type === "checkpoint" && event.seq === atSeq)
+      return { text: `${kept.join("\n")}\n`, uuid };
+    if (event?.type === "assistant" && typeof event.uuid === "string") uuid = event.uuid;
+  }
+  return null;
+}
+
+// Copy the history (cut at a checkpoint when `cut` is set) and uploads so the fork reads whole. True when there was history to copy.
+function copyForkFiles(src: Thread, child: Thread, cut?: { text: string }): boolean {
   const hasHistory = fs.existsSync(logFile(src.id));
-  if (hasHistory) fs.copyFileSync(logFile(src.id), logFile(child.id));
+  if (cut) fs.writeFileSync(logFile(child.id), cut.text);
+  else if (hasHistory) fs.copyFileSync(logFile(src.id), logFile(child.id));
   if (fs.existsSync(threadDir(src.id)))
     fs.cpSync(threadDir(src.id), threadDir(child.id), { recursive: true });
   return hasHistory;
@@ -706,7 +743,7 @@ function copyForkFiles(src: Thread, child: Thread): boolean {
 function carryForkSession(
   src: Thread,
   child: Thread,
-  how: { recent: boolean; replayAll: boolean; hasHistory: boolean },
+  how: { recent: boolean; replayAll: boolean; hasHistory: boolean; forkAt?: string },
 ) {
   if (how.recent) {
     if (how.hasHistory) {
@@ -717,6 +754,7 @@ function carryForkSession(
   }
   if (!how.replayAll && src.provider === "claude") {
     if (src.sessionId) child.forkFrom = src.sessionId;
+    if (src.sessionId && how.forkAt) child.forkAt = how.forkAt;
     return;
   }
   if (!how.replayAll && src.provider === "pi") {
@@ -726,6 +764,111 @@ function carryForkSession(
     return;
   }
   if (how.hasHistory) child.replay = true;
+}
+
+const CHECKPOINT_TOOLS = new Set(["Edit", "Write", "NotebookEdit", "MultiEdit", "Bash"]);
+const CHECKPOINT_DEBOUNCE_MS = 500;
+
+// Takes shadow-git snapshots around a thread's turns and records each as a transcript event.
+// Snapshots of one thread run strictly in the order requested; a failure is logged, never thrown.
+class TurnCheckpoints {
+  private chain = new Map<string, Promise<void>>();
+  private pending = new Map<string, { timer: NodeJS.Timeout; toolUseId: string }>();
+  private toolNames = new Map<string, Set<string>>(); // thread -> ids of file-changing tool calls awaiting a result
+
+  private readonly lookup: (threadId: string) => Thread | undefined;
+  private readonly record: (threadId: string, entry: any) => void;
+  private readonly save: (thread: Thread) => void;
+
+  constructor(
+    lookup: (threadId: string) => Thread | undefined,
+    record: (threadId: string, entry: any) => void,
+    save: (thread: Thread) => void,
+  ) {
+    this.lookup = lookup;
+    this.record = record;
+    this.save = save;
+  }
+
+  private enabled(thread: Thread) {
+    return !thread.checkpoints || thread.checkpoints === "on";
+  }
+
+  private queue(thread: Thread, kind: CheckpointKind, toolUseId?: string): Promise<void> {
+    const prev = this.chain.get(thread.id) ?? Promise.resolve();
+    const next = prev.then(() => this.take(thread, kind, toolUseId));
+    this.chain.set(thread.id, next);
+    return next;
+  }
+
+  private async take(thread: Thread, kind: CheckpointKind, toolUseId?: string) {
+    if (!this.enabled(thread) || this.lookup(thread.id) !== thread) return;
+    try {
+      const out = await snapshot({ cwd: thread.cwd, threadId: thread.id, kind, toolUseId });
+      if (!out || this.lookup(thread.id) !== thread) return;
+      if ("status" in out) {
+        thread.checkpoints = "too_big";
+        this.save(thread);
+        return;
+      }
+      this.record(thread.id, { type: "checkpoint", ...out });
+    } catch (error) {
+      console.error(`checkpoint ${kind} failed for ${thread.id}:`, error);
+    }
+  }
+
+  // Fire and forget: queued first, so it runs ahead of any tool snapshot of the turn.
+  start(thread: Thread) {
+    if (this.enabled(thread)) void this.queue(thread, "turn_start");
+  }
+
+  private flush(thread: Thread) {
+    const entry = this.pending.get(thread.id);
+    if (!entry) return;
+    clearTimeout(entry.timer);
+    this.pending.delete(thread.id);
+    void this.queue(thread, "tool", entry.toolUseId);
+  }
+
+  private later(thread: Thread, toolUseId: string) {
+    clearTimeout(this.pending.get(thread.id)?.timer);
+    const timer = setTimeout(() => this.flush(thread), CHECKPOINT_DEBOUNCE_MS);
+    timer.unref();
+    this.pending.set(thread.id, { timer, toolUseId });
+  }
+
+  private end(thread: Thread) {
+    this.flush(thread);
+    this.toolNames.delete(thread.id);
+    void this.queue(thread, "turn_end");
+  }
+
+  // Watches canonical events: file-changing tool calls, their results, and the end of a turn.
+  observe(thread: Thread, event: any) {
+    if (!this.enabled(thread)) return;
+    if (event.type === "result" && !event.parent_tool_use_id) return this.end(thread);
+    const content = event.message?.content;
+    if (!Array.isArray(content)) return;
+    for (const block of content) {
+      if (block?.type === "tool_use" && CHECKPOINT_TOOLS.has(block.name)) {
+        const ids = this.toolNames.get(thread.id) ?? new Set<string>();
+        ids.add(block.id);
+        this.toolNames.set(thread.id, ids);
+      } else if (
+        block?.type === "tool_result" &&
+        this.toolNames.get(thread.id)?.delete(block.tool_use_id)
+      ) {
+        this.later(thread, block.tool_use_id);
+      }
+    }
+  }
+
+  drop(threadId: string) {
+    clearTimeout(this.pending.get(threadId)?.timer);
+    this.pending.delete(threadId);
+    this.toolNames.delete(threadId);
+    this.chain.delete(threadId);
+  }
 }
 
 export class Threads {
@@ -751,6 +894,11 @@ export class Threads {
   private queues = new Map<string, Queued[]>(); // messages to send, in order, once the running turn ends
   private emit: Emit;
   private notificationTurns = new Set<string>();
+  private checkpoints = new TurnCheckpoints(
+    (threadId) => this.threads.get(threadId),
+    (threadId, entry) => this.publish(threadId, entry),
+    (thread) => this.touch(thread),
+  );
   private onNotification?: (notice: ThreadNotice) => void;
   private labeler: Labeler; // plain-English labels for shell commands that arrive without a description
   private commands: Record<string, Command[]> = {}; // per provider: each harness has its own slash commands and skills
@@ -938,6 +1086,59 @@ export class Threads {
   }
   get(id: string) {
     return this.threads.get(id);
+  }
+
+  private rewindNotes = new Map<string, string>(); // one-shot prefix for the next prompt after a rewind
+
+  private realFolder(cwd: string) {
+    try {
+      return fs.realpathSync(cwd);
+    } catch {
+      return cwd;
+    }
+  }
+
+  /** Ids of running threads that share this thread's folder (a rewind would pull files from under them). */
+  runningInFolder(thread: Thread): string[] {
+    const folder = this.realFolder(thread.cwd);
+    return this.list()
+      .filter((other) => other.status === "running" && this.realFolder(other.cwd) === folder)
+      .map((other) => other.id);
+  }
+
+  /** Rewind a thread's folder to checkpoint `seq`; dryRun only reports what would change. */
+  async rewind(
+    threadId: string,
+    seq: number,
+    opts: { dryRun?: boolean; expectCommit?: string } = {},
+  ) {
+    const thread = this.threads.get(threadId);
+    if (!thread) return { code: 404, body: { error: "Unknown thread." } };
+    const busy = this.runningInFolder(thread);
+    if (busy.length) return { code: 409, body: { error: "busy", threads: busy } };
+    const all = await listCheckpoints(threadId, thread.cwd);
+    const target = all.find((entry) => entry.seq === seq);
+    if (!target) return { code: 404, body: { error: "Unknown checkpoint." } };
+    const latest = all[all.length - 1];
+    if (opts.expectCommit && opts.expectCommit !== latest.commit)
+      return { code: 409, body: { error: "stale" } };
+    if (opts.dryRun)
+      return {
+        code: 200,
+        body: await previewRewind(thread.cwd, threadId, target.commit, latest.commit),
+      };
+    const before = await snapshot({ cwd: thread.cwd, threadId, kind: "pre_rewind" });
+    if (before && "status" in before) return { code: 409, body: { error: "too_big" } };
+    if (before) this.publish(threadId, { type: "checkpoint", ...before });
+    const preRewindSeq = before ? before.seq : latest.seq;
+    await restoreCheckpoint(thread.cwd, threadId, target.commit);
+    this.publish(threadId, { type: "rewound", seq, preRewindSeq });
+    this.emit({ t: "rewound", thread: threadId, seq, preRewindSeq });
+    this.rewindNotes.set(
+      threadId,
+      `[Files rewound to checkpoint ${seq}; re-read files before editing.]\n\n`,
+    );
+    return { code: 200, body: { preRewindSeq } };
   }
   /** Snapshot only transcript-derived catalog text for the private cleanup pipe. */
   redactionCatalog() {
@@ -1231,6 +1432,7 @@ export class Threads {
     thread.effort = effort;
     if (patch.advisor) thread.advisor = patch.advisor;
     if (typeof patch.idleCompaction === "boolean") thread.idleCompaction = patch.idleCompaction;
+    if (patch.checkpoints) thread.checkpoints = patch.checkpoints;
     if (!patch.title) return;
     thread.title = patch.title.slice(0, 80);
     thread.autoTitle = false;
@@ -1272,12 +1474,23 @@ export class Threads {
   // With `provider` set to another agent the fork switches harness: its native session cannot carry over, so it always replays text.
   // The same holds for another Claude account, whose profile cannot read this account's sessions. `pick` sets the fork's model,
   // effort, permission mode and Claude account; anything left out keeps the source's choice.
-  fork(sourceId: string, provider?: string, recent = false, pick: ForkPick = {}): Thread {
+  // With `atSeq` the fork's transcript stops at that checkpoint; Claude also resumes its session at the last assistant event before it,
+  // every other case replays the cut history as text. Unknown checkpoint throws an error with status 404. Files are never restored.
+  fork(
+    sourceId: string,
+    provider?: string,
+    recent = false,
+    pick: ForkPick = {},
+    atSeq?: number,
+  ): Thread {
     const src = this.threads.get(sourceId);
     if (!src) throw new Error("Unknown thread");
     const target = forkTarget(src, provider);
     if (src.status === "running")
       throw new Error("Wait for the current turn to finish before forking.");
+    const cut = atSeq === undefined ? undefined : cutLogAt(logFile(src.id), atSeq);
+    if (atSeq !== undefined && !cut)
+      throw Object.assign(new Error("Unknown checkpoint."), { status: 404 });
     const child = forkedThread(src, target, recent);
     this.applyForkPick(child, src, target ?? PROVIDERS.get(src.provider), pick);
     const otherAccount =
@@ -1285,8 +1498,15 @@ export class Threads {
       src.provider === "claude" &&
       child.claudeAccount !== normalizeClaudeAccount(src.claudeAccount);
     if (otherAccount) child.context = undefined;
-    const hasHistory = copyForkFiles(src, child);
-    carryForkSession(src, child, { recent, replayAll: !!target || otherAccount, hasHistory });
+    const hasHistory = copyForkFiles(src, child, cut ?? undefined);
+    const nativeCut = src.provider === "claude" && !!src.sessionId && !!cut?.uuid;
+    const replayCut = !!cut && !nativeCut;
+    carryForkSession(src, child, {
+      recent,
+      replayAll: !!target || otherAccount || replayCut,
+      hasHistory,
+      forkAt: cut?.uuid,
+    });
     this.threads.set(child.id, child);
     this.persist();
     this.emit({ t: "thread", thread: child });
@@ -1359,6 +1579,8 @@ export class Threads {
     this.emitQueue(id);
     this.idleCompactionTimers.cancel(id);
     this.todos.dropThread(id);
+    this.checkpoints.drop(id);
+    deleteThread(id).catch(console.error);
     this.threads.delete(id);
     this.titling.delete(id);
     this.persist();
@@ -1665,6 +1887,7 @@ export class Threads {
     if (event.type === "result" && !event.parent_tool_use_id) this.threadToolAuth.clear(thread.id);
     const flow: EventFlow = { event, compacting: thread.operation === "compact" };
     this.noteWorkState(thread, event);
+    this.checkpoints.observe(thread, event);
     if (this.noteBackgroundTasks(thread, event)) return;
     this.noteConsoleError(thread, event);
     if (event.type === "subagent_wake") return this.wake(thread, String(event.text || ""));
@@ -1949,6 +2172,7 @@ export class Threads {
     if (thread.forkFrom) this.accounting.seedFork(event.session_id, thread.forkFrom);
     thread.sessionId = event.session_id;
     delete thread.forkFrom; // the fork now has its own session
+    delete thread.forkAt;
     this.persist();
   }
 
@@ -2421,6 +2645,7 @@ export class Threads {
     if (live.held) this.release(thread, live); // a warm agent's start-up events, after the message as on a cold start
     if (opts.auto) this.notificationTurns.delete(threadId);
     else this.notificationTurns.add(threadId);
+    this.checkpoints.start(thread);
     try {
       live.agent.send(
         prompt,
@@ -2549,8 +2774,12 @@ export class Threads {
     opts: SendOptions,
     attachments: ReturnType<typeof resolveAttachments>,
   ): string {
+    const note = this.rewindNotes.get(thread.id) ?? "";
+    this.rewindNotes.delete(thread.id);
     const prompt =
-      withFileList(text, attachments) + (opts.instructions ? `\n\n---\n${opts.instructions}` : "");
+      note +
+      withFileList(text, attachments) +
+      (opts.instructions ? `\n\n---\n${opts.instructions}` : "");
     if (!thread.replay || opts.auto) return prompt;
     const preamble =
       thread.replayLimit === 6000
