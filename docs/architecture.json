@@ -289,6 +289,45 @@
           "status": "modified"
         }
       ]
+    },
+    {
+      "group": "Thread todos",
+      "icon": "list-checks",
+      "status": "added",
+      "items": [
+        {
+          "id": "todo-ui",
+          "label": "Todos side sheet",
+          "tech": "public/todos.js",
+          "desc": "Header badge opens a per-thread checklist; add, check, remove over WebSocket",
+          "icon": "list-checks",
+          "status": "added"
+        },
+        {
+          "id": "todo-ws",
+          "label": "Todo WS and tool route",
+          "tech": "server/index.ts",
+          "desc": "todos_get, todo_add, todo_set, todo_remove messages; todo_* tool calls route to Threads.todoTool",
+          "icon": "route",
+          "status": "added"
+        },
+        {
+          "id": "todo-store",
+          "label": "Todo store",
+          "tech": "server/todos.ts",
+          "desc": "Per-thread todo items persisted with the thread",
+          "icon": "database",
+          "status": "added"
+        },
+        {
+          "id": "todo-tools",
+          "label": "Agent todo tools",
+          "tech": "console-mcp.mjs, console-tools.mjs",
+          "desc": "todo_add, todo_complete, todo_remove, todo_list; issue-run threads may only todo_list",
+          "icon": "wrench",
+          "status": "added"
+        }
+      ]
     }
   ],
   "edges": [
@@ -452,6 +491,30 @@
       "from": "fv-zoom",
       "to": "panzoom",
       "label": "import() on image",
+      "status": "added"
+    },
+    {
+      "from": "app",
+      "to": "todo-ui",
+      "label": "header badge opens sheet",
+      "status": "added"
+    },
+    {
+      "from": "todo-ui",
+      "to": "todo-ws",
+      "label": "WebSocket todo_*",
+      "status": "added"
+    },
+    {
+      "from": "todo-ws",
+      "to": "todo-store",
+      "label": "Threads.todo",
+      "status": "added"
+    },
+    {
+      "from": "todo-tools",
+      "to": "todo-ws",
+      "label": "todo_* tool call",
       "status": "added"
     }
   ]

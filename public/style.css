@@ -5739,3 +5739,95 @@ body.sharing .row-more {
 #pi-error[hidden] {
   display: none;
 }
+
+/* ---------- todos ---------- */
+#todo-toggle {
+  position: relative;
+}
+.todo-badge {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  min-width: 1rem;
+  height: 1rem;
+  padding: 0 4px;
+  border-radius: var(--r-full);
+  background: var(--fill);
+  color: var(--on-fill);
+  font: var(--fw-semi) var(--f-xs);
+  font-variant-numeric: tabular-nums;
+  line-height: 1rem;
+  text-align: center;
+}
+.todo-badge[hidden] {
+  display: none;
+}
+#todos {
+  width: min(26.25rem, calc(100vw - var(--sp-8)));
+  max-height: calc(var(--viewport-height, 100dvh) - var(--sp-4));
+  overflow-y: auto;
+}
+.todo-add {
+  display: flex;
+  gap: var(--sp-2);
+  margin-top: var(--sp-4);
+}
+.todo-add .input {
+  flex: 1;
+  min-width: 0;
+  min-height: 44px;
+}
+.todo-add .btn {
+  min-height: 44px;
+}
+#todo-error {
+  margin-top: var(--sp-2);
+  font: var(--fw-reg) var(--f-sm);
+  color: var(--bad);
+}
+.todo-list {
+  list-style: none;
+  margin: var(--sp-3) 0 0;
+  padding: 0;
+}
+.todo-list li {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: 44px;
+}
+.todo-list label {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  min-width: 0;
+  min-height: 44px;
+  cursor: pointer;
+}
+.todo-list input[type="checkbox"] {
+  width: 1.25rem;
+  height: 1.25rem;
+  flex: none;
+}
+.todo-list .todo-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.todo-list li.done .todo-text {
+  color: var(--t3);
+  text-decoration: line-through;
+}
+.todo-list .btn {
+  min-width: 44px;
+  min-height: 44px;
+}
+#todos .row {
+  margin-top: var(--sp-4);
+}
+@media (max-width: 760px) {
+  #todos {
+    width: 100%;
+    max-height: 80dvh;
+  }
+}

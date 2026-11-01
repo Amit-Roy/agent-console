@@ -4,6 +4,7 @@ import type { Agent, AgentCtx, Attachment, Provider, QuestionReply, ThreadSpec }
 // Deterministic fake agent for tests and UI work: no network, no quota. Enabled with AGENT_CONSOLE_MOCK=1.
 //   "slow ..."   streams for ~10s (to test Stop)      "fail ..."  ends the turn with an error
 //   "tool ..."   runs a fake Bash tool call            "agent ..." runs a background subagent with nested activity (~1.6s)
+//   "todo ..."   adds a todo through the agent tool endpoint, as an agent would
 //   "ctx N ..."  reports the context N% full           anything else is echoed back
 interface MockRun {
   thread: ThreadSpec;
@@ -248,6 +249,27 @@ function mockToolScript(run: MockRun, reply: string) {
   });
 }
 
+async function mockAddTodo(thread: string, text: string) {
+  await fetch(`${process.env.AGENT_CONSOLE_TOOL_URL}/todo_add`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-agent-console-tool": process.env.AGENT_CONSOLE_TOOL_TOKEN || "",
+      "x-agent-console-thread": thread,
+    },
+    body: JSON.stringify({ items: [text] }),
+  });
+}
+
+function mockTodoScript(run: MockRun, reply: string) {
+  const text = reply.replace(/^.*?: todo\s*/, "").trim() || "Mock agent todo";
+  mockAt(run, 10, () => void mockAddTodo(run.thread.id, text).catch(() => {}));
+  mockAt(run, 60, () => {
+    mockAssistantText(run, "Added a todo.");
+    mockDone(run);
+  });
+}
+
 function mockEchoScript(run: MockRun, reply: string) {
   mockAt(run, 10, () => mockDelta(run, reply.slice(0, 12)));
   mockAt(run, 30, () => mockDelta(run, reply.slice(12)));
@@ -270,6 +292,7 @@ const MOCK_SCRIPTS: [string, (run: MockRun, reply: string) => void][] = [
   ["slow", (run) => mockSlowScript(run)],
   ["fail", (run) => mockFailScript(run)],
   ["agent", (run) => mockAgentScript(run)],
+  ["todo", mockTodoScript],
   ["tool", mockToolScript],
 ];
 

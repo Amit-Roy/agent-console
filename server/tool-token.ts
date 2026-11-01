@@ -41,6 +41,7 @@ const READ_ONLY_TOOLS = [
   "map_status",
   "map_show",
   "map_spec",
+  "todo_list",
 ];
 
 /** Gate for one agent-tool call. Derived tokens always get issue-run limits, whatever the header says. */

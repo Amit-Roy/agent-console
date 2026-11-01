@@ -685,24 +685,26 @@ app.post("/api/agent-tools/:name", express.json({ limit: "1mb" }), async (req, r
     const input = req.body ?? {};
     const result = ["thread_list", "thread_send"].includes(req.params.name)
       ? await threads.threadTool(req.params.name, thread, input)
-      : req.params.name === "session_redact"
-        ? transcriptRedaction.tool(input, thread ? threads.get(thread) : undefined)
-        : req.params.name === "cli_search"
-          ? cliSearch.search(input)
-          : req.params.name === "session_search"
-            ? await sessionSearch.search(input)
-            : req.params.name === "session_read"
-              ? await sessionSearch.read(input)
-              : req.params.name === "pi_research"
-                ? await piResearch(input, thread)
-                : isConsoleCliTool(req.params.name)
-                  ? await consoleCliTool(req.params.name, input, {
-                      ideas,
-                      maps: mapsService,
-                      schedules,
-                      sessionSearch,
-                    })
-                  : schedules.tool(req.params.name, thread, input);
+      : req.params.name.startsWith("todo_")
+        ? threads.todoTool(req.params.name, thread, input)
+        : req.params.name === "session_redact"
+          ? transcriptRedaction.tool(input, thread ? threads.get(thread) : undefined)
+          : req.params.name === "cli_search"
+            ? cliSearch.search(input)
+            : req.params.name === "session_search"
+              ? await sessionSearch.search(input)
+              : req.params.name === "session_read"
+                ? await sessionSearch.read(input)
+                : req.params.name === "pi_research"
+                  ? await piResearch(input, thread)
+                  : isConsoleCliTool(req.params.name)
+                    ? await consoleCliTool(req.params.name, input, {
+                        ideas,
+                        maps: mapsService,
+                        schedules,
+                        sessionSearch,
+                      })
+                    : schedules.tool(req.params.name, thread, input);
     res.setHeader("Cache-Control", "no-store");
     res.json(result);
   } catch (e: any) {
@@ -1645,6 +1647,27 @@ wss.on("connection", (ws) => {
         case "refresh_usage":
           void refreshUsage();
           return;
+        case "todos_get":
+        case "todo_add":
+        case "todo_set":
+        case "todo_remove": {
+          try {
+            const op = {
+              todos_get: "get",
+              todo_add: "add",
+              todo_set: "set",
+              todo_remove: "remove",
+            }[m.t as string] as "get" | "add" | "set" | "remove";
+            const todos = threads.todo(op, m.thread, { items: m.text, id: m.id, done: m.done });
+            return op === "get" && reply({ t: "todos", thread: m.thread, todos });
+          } catch (e: any) {
+            return reply({
+              t: "todo_error",
+              thread: m.thread,
+              message: e?.message || "Todo failed.",
+            });
+          }
+        }
         case "answer": {
           try {
             threads.answer(m.thread, m.id, m.answers, m.skip === true);

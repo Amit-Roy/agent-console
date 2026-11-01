@@ -34,6 +34,7 @@
   <symbol id="i-refresh" viewBox="0 0 16 16"><path d="M13 8a5 5 0 1 1-1.6-3.7M13 2.5v3h-3"/></symbol>
   <symbol id="i-more" viewBox="0 0 16 16"><circle cx="3.5" cy="8" r="1.1" fill="currentColor" stroke="none"/><circle cx="8" cy="8" r="1.1" fill="currentColor" stroke="none"/><circle cx="12.5" cy="8" r="1.1" fill="currentColor" stroke="none"/></symbol>
   <symbol id="i-archive" viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="3" rx="1"/><path d="M3.25 6v6.25a1 1 0 0 0 1 1h7.5a1 1 0 0 0 1-1V6M6.5 8.75h3"/></symbol>
+  <symbol id="i-list-checks" viewBox="0 0 24 24"><path d="m3 17 2 2 4-4M3 7l2 2 4-4M13 6h8M13 12h8M13 18h8"/></symbol>
   <symbol id="i-trash" viewBox="0 0 16 16"><path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8a1 1 0 0 0 1 .9h3.8a1 1 0 0 0 1-.9l.6-8M6.75 7v4M9.25 7v4"/></symbol>
   <symbol id="i-pencil" viewBox="0 0 16 16"><path d="M10.5 3 13 5.5 6 12.5l-3.25.75L3.5 10z"/></symbol>
   <symbol id="i-eye" viewBox="0 0 16 16"><path d="M1.75 8s2.25-4.5 6.25-4.5S14.25 8 14.25 8s-2.25 4.5-6.25 4.5S1.75 8 1.75 8z"/><circle cx="8" cy="8" r="1.75"/></symbol>
@@ -134,6 +135,10 @@
       <button id="chat-search-toggle" class="btn icon ghost" type="button" title="Search in chat (Ctrl+F)" aria-label="Search in chat" aria-expanded="false" aria-controls="chat-search" disabled>
         <svg class="ico" aria-hidden="true"><use href="#i-search"/></svg>
       </button>
+      <button id="todo-toggle" class="btn icon ghost" type="button" title="Todos" aria-label="Todos" aria-controls="todos" aria-haspopup="dialog" disabled>
+        <svg class="ico" aria-hidden="true"><use href="#i-list-checks"/></svg>
+        <span id="todo-badge" class="todo-badge" hidden></span>
+      </button>
       <button id="more" class="btn icon ghost" type="button" title="Thread actions" aria-label="Thread actions" disabled>
         <svg class="ico" aria-hidden="true"><use href="#i-more"/></svg>
       </button>
@@ -212,6 +217,18 @@
   <p id="issue-error" role="alert"></p>
   <div class="row"><button id="issue-cancel" class="btn" type="button">Cancel</button><button id="issue-open" class="btn primary" type="submit">Open GitHub</button></div>
 </form></dialog>
+<dialog id="todos" aria-labelledby="todos-heading">
+  <h2 id="todos-heading">Todos</h2>
+  <form id="todo-form" class="todo-add">
+    <label class="sr-only" for="todo-input">New todo</label>
+    <input id="todo-input" class="input" maxlength="500" autocomplete="off" placeholder="Add a todo" enterkeyhint="done">
+    <button id="todo-add" class="btn primary" type="submit">Add</button>
+  </form>
+  <p id="todo-error" role="alert"></p>
+  <ul id="todo-list" class="todo-list" aria-label="Todos"></ul>
+  <p id="todo-empty" class="sub" hidden>Nothing to do yet.</p>
+  <div class="row"><button id="todo-close" class="btn" type="button">Close</button></div>
+</dialog>
 <dialog id="queue-editor" aria-labelledby="queue-edit-title"><form id="queue-edit-form">
   <h2 id="queue-edit-title">Edit queued message</h2>
   <p id="queue-edit-note" class="sub"></p>
