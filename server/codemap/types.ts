@@ -54,3 +54,29 @@ export interface MapView {
   details: { title: string; summary: string; files: Array<{ path: string; loc: number }> };
   flows: Array<{ id: string; title: string }>;
 }
+
+// Service shared by HTTP routes (server/codemap/http.ts) and console CLI tools (map_*).
+// Implemented in server/codemap/service.ts.
+export interface MapSummary {
+  slug: string;
+  label: string;
+  source: { kind: "local" | "github"; ref: string };
+  status: "queued" | "cloning" | "scanning" | "describing" | "ready" | "failed";
+  error?: string;
+  files?: number;
+  modules?: number;
+  loc?: number;
+  commit?: string;
+  described?: boolean;
+  updatedAt: string; // ISO
+}
+
+export interface MapsService {
+  list(): Promise<MapSummary[]>;
+  status(slug: string): Promise<MapSummary>; // throws Error("not found") when missing
+  add(input: string): Promise<MapSummary>; // parse + resolve + enqueue; existing slug -> refresh
+  refresh(slug: string, opts?: { describe?: boolean }): Promise<MapSummary>;
+  remove(slug: string): Promise<void>;
+  view(slug: string, opts?: { node?: string; flow?: string }): Promise<MapView>;
+  brief(slug: string, opts?: { node?: string }): Promise<string>; // compact text for agents, <= 60 lines
+}
