@@ -627,11 +627,11 @@ if (hello.providers.some((p: any) => p.id === "mock")) {
   ws.send(JSON.stringify({ t: "fork", thread: id, provider: "claude" }));
   const xf = await waitFor((m) => m.t === "created" || m.t === "error", 3000);
   check(
-    "fork: into another agent switches harness, resets model/effort, replays text",
+    "fork: into another agent switches harness, starts on its default model/effort, replays text",
     xf?.thread?.provider === "claude" &&
       xf.thread.replay === true &&
       !xf.thread.forkFrom &&
-      xf.thread.effort === "default" &&
+      xf.thread.effort === "medium" &&
       xf.thread.model !== "mock" &&
       xf.thread.id !== id,
     JSON.stringify(xf).slice(0, 160),

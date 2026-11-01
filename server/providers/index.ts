@@ -17,6 +17,12 @@ const all: Provider[] = [
 export const PROVIDERS = new Map(all.map((p) => [p.id, p]));
 export const DEFAULT_PROVIDER = "claude";
 
+// Effort a fresh thread starts on: the provider's default when the model lists it, else "default" (inherit)
+export function startEffort(prov: Provider, model: string): string {
+  const want = prov.defaultEffort;
+  return want && prov.modelDetails?.()[model]?.efforts.includes(want) ? want : "default";
+}
+
 export const providerInfo = () =>
   all.map((p) => ({
     id: p.id,
@@ -29,6 +35,7 @@ export const providerInfo = () =>
     models: p.models(),
     modelDetails: p.modelDetails?.(),
     defaultModel: p.defaultModel(),
+    defaultEffort: p.defaultEffort,
     ...(p.id === "claude" ? { accounts: claudeAccounts() } : {}),
     ...p.status(),
   }));

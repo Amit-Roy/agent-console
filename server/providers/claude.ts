@@ -393,11 +393,12 @@ export const claude: Provider = {
   id: "claude",
   label: "Claude Code",
   modes: ["plan", "acceptEdits", "bypassPermissions"],
-  defaultMode: "acceptEdits",
+  defaultMode: "bypassPermissions",
   advisors: ["off", "opus", "fable"],
   steer: true,
   models: () => ["sonnet", "opus", "haiku"],
-  defaultModel: () => "sonnet",
+  defaultModel: () => "opus",
+  defaultEffort: "medium",
   modelDetails: () =>
     Object.fromEntries(
       ["sonnet", "opus", "haiku"].map((id) => [
