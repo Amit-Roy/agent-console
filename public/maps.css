@@ -236,6 +236,8 @@ a.mp-name:focus-visible {
 .diagram .arch {
   width: max-content;
   min-width: 100%;
+  /* Room for edge labels routed below the lowest node (legend is hidden). */
+  padding-bottom: 48px;
 }
 .diagram [data-id].drill {
   cursor: pointer;
