@@ -5297,6 +5297,17 @@ $("archive-toggle").onclick = () => {
   renderThreads();
 };
 $("reload").onclick = () => location.reload();
+// More-menu page items -> hidden link element (index.html) that holds the target href
+const PAGE_LINKS = {
+  dashboard: "dash-link",
+  benchmarks: "benchmarks-link",
+  automation: "auto-link",
+  host: "host-link",
+  vault: "vault-link",
+  ideas: "ideas-link",
+  brain: "brain-link",
+  maps: "maps-link",
+};
 // sidebar More: rare console actions behind one button; each item drives the element that owns its behaviour
 createMenu({
   trigger: $("side-more"),
@@ -5323,6 +5334,7 @@ createMenu({
     { value: "doctor", label: "Doctor", desc: "Check and repair the setup", icon: "alert" },
     { value: "ideas", label: "App ideas", icon: "sparkle" },
     { value: "brain", label: "Brain", desc: "Search the shared memory", icon: "search" },
+    { value: "maps", label: "Map a repo", desc: "Local or GitHub", icon: "globe" },
     { value: "reload", label: "Reload page", icon: "refresh" },
     {
       value: "restart",
@@ -5332,14 +5344,8 @@ createMenu({
     },
   ],
   onSelect: (v) => {
-    if (v === "dashboard") location.href = $("dash-link").href;
-    else if (v === "benchmarks") location.href = $("benchmarks-link").href;
-    else if (v === "automation") location.href = $("auto-link").href;
-    else if (v === "host") location.href = $("host-link").href;
-    else if (v === "vault") location.href = $("vault-link").href;
+    if (PAGE_LINKS[v]) location.href = $(PAGE_LINKS[v]).href;
     else if (v === "doctor") location.href = "/doctor";
-    else if (v === "ideas") location.href = $("ideas-link").href;
-    else if (v === "brain") location.href = $("brain-link").href;
     else if (v === "task") {
       setLane("tasks");
       openTaskDialog();

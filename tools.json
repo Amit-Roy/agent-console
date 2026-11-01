@@ -68,6 +68,29 @@
       "tags": ["app", "ideas", "fetch", "features", "read", "brainstorm"]
     },
     {
+      "name": "codemap",
+      "path": "bin/codemap",
+      "description": "Floorplan a repo: add a local path, owner/repo or GitHub URL to the codemap dashboard, then read its module map brief or diagram spec. Text output inside Agent Console sessions.",
+      "usage": [
+        "codemap add <path|owner/repo|github-url> [--wait]",
+        "codemap list | status <slug> | rm <slug>",
+        "codemap show <slug> [--module ID]",
+        "codemap spec <slug> [--module ID] [--flow ID]",
+        "codemap refresh <slug> [--describe]"
+      ],
+      "tags": [
+        "codemap",
+        "map",
+        "floorplan",
+        "architecture",
+        "modules",
+        "repo",
+        "diagram",
+        "dashboard",
+        "overview"
+      ]
+    },
+    {
       "name": "scheduled-tasks",
       "path": "bin/scheduled-tasks",
       "description": "Fetch scheduled task config, runs, saved reports and paginated transcripts; update one task configuration. JSON output inside Agent Console sessions.",

@@ -89,3 +89,55 @@ function readPatch(values: Record<string, unknown>) {
   }
   return configPatch(patch);
 }
+
+export const CODEMAP_USAGE = [
+  "codemap add <path|owner/repo|github-url> [--wait] | list | status <slug> | rm <slug>",
+  "codemap show <slug> [--module ID] | spec <slug> [--module ID] [--flow ID] | refresh <slug> [--describe]",
+  "Then open https://<console>/maps#/<slug> to view (requires an Agent Console session)",
+].join("\n");
+const SLUG_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+const MAP_OPERATIONS: Record<string, string> = {
+  add: "map_add",
+  list: "map_list",
+  status: "map_status",
+  show: "map_show",
+  spec: "map_spec",
+  refresh: "map_refresh",
+  rm: "map_remove",
+};
+const MAP_FLAGS: Record<string, string[]> = {
+  add: ["wait"],
+  show: ["module"],
+  spec: ["module", "flow"],
+  refresh: ["describe"],
+};
+
+export function parseCodemapArgs(args: string[]) {
+  const { positionals, values } = parseArgs({
+    args,
+    options: {
+      help: { type: "boolean", short: "h" },
+      wait: { type: "boolean" },
+      describe: { type: "boolean" },
+      module: { type: "string" },
+      flow: { type: "string" },
+    },
+    allowPositionals: true,
+  });
+  if (values.help || args.length === 0) return;
+  const [command, target] = positionals;
+  if (!Object.hasOwn(MAP_OPERATIONS, command)) throw new Error(CODEMAP_USAGE);
+  const expected = command === "list" ? 1 : 2;
+  const given = Object.keys(values).filter((flag) => values[flag as keyof typeof values] != null);
+  const allowed = MAP_FLAGS[command] ?? [];
+  if (positionals.length !== expected || given.some((flag) => !allowed.includes(flag)))
+    throw new Error(CODEMAP_USAGE);
+  if (command === "list") return { operation: "map_list", input: {}, wait: false };
+  if (!target.trim() || (command !== "add" && !SLUG_PATTERN.test(target)))
+    throw new Error(CODEMAP_USAGE);
+  const input: Record<string, unknown> = command === "add" ? { input: target } : { slug: target };
+  if (values.module) input.node = values.module;
+  if (values.flow) input.flow = values.flow;
+  if (values.describe) input.describe = true;
+  return { operation: MAP_OPERATIONS[command], input, wait: !!values.wait };
+}

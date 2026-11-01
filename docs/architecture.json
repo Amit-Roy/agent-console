@@ -97,10 +97,20 @@
           "id": "app",
           "label": "App client",
           "tech": "public/app.js",
-          "desc": "Records one cold sample per page load when the first history paints; App start row in the speed panel",
-          "icon": "app-window"
+          "desc": "Records one cold sample per page load when the first history paints; App start row in the speed panel; three-dots menu gets Map a repo (PAGE_LINKS maps-link)",
+          "icon": "app-window",
+          "status": "modified"
+        },
+        {
+          "id": "maps-ui",
+          "label": "Maps page",
+          "tech": "maps.js, arch.js",
+          "desc": "Dashboard of map cards, overview, module drill-down and flow tabs drawn with the shared arch renderer",
+          "icon": "map",
+          "status": "added"
         }
-      ]
+      ],
+      "status": "modified"
     },
     {
       "group": "Server",
@@ -145,6 +155,84 @@
         }
       ],
       "status": "modified"
+    },
+    {
+      "group": "Codemap",
+      "icon": "map",
+      "status": "added",
+      "items": [
+        {
+          "id": "cm-api",
+          "label": "Maps API and queue",
+          "tech": "codemap/http.ts, jobs.ts",
+          "desc": "/api/maps routes behind the auth gate, same-origin writes; one build at a time",
+          "icon": "route",
+          "status": "added"
+        },
+        {
+          "id": "cm-source",
+          "label": "Source resolver",
+          "tech": "codemap/source.ts",
+          "desc": "Local path under ~/repos or hardened shallow GitHub clone: no hooks, no symlinks, size limits",
+          "icon": "git-branch",
+          "status": "added"
+        },
+        {
+          "id": "cm-scan",
+          "label": "Floorplan scanner",
+          "tech": "vendor/floorplan (MIT)",
+          "desc": "Vendored scan.mjs runs as a child Node process; never writes into the repo",
+          "icon": "scan-search",
+          "status": "added"
+        },
+        {
+          "id": "cm-assemble",
+          "label": "Map assembly",
+          "tech": "assemble.ts, spec.ts",
+          "desc": "Heuristic quick map, then overview, module and flow views as PR-style architecture JSON",
+          "icon": "layout-dashboard",
+          "status": "added"
+        },
+        {
+          "id": "cm-describe",
+          "label": "Naming pass",
+          "tech": "describe.ts, Sonnet",
+          "desc": "One call on a bounded untrusted digest; output validated, quick map kept on failure",
+          "icon": "sparkles",
+          "status": "added"
+        },
+        {
+          "id": "cm-store",
+          "label": "Map store",
+          "tech": "DATA_DIR/maps/<slug>",
+          "desc": "meta, scan, architecture and map JSON; clone/ for GitHub sources; up to 30 maps",
+          "icon": "database",
+          "status": "added"
+        }
+      ]
+    },
+    {
+      "group": "Agent access",
+      "icon": "terminal",
+      "status": "modified",
+      "items": [
+        {
+          "id": "cm-cli",
+          "label": "codemap CLI",
+          "tech": "bin/codemap",
+          "desc": "add, list, status, show, spec, refresh, rm; show prints a compact text brief for agents",
+          "icon": "square-terminal",
+          "status": "added"
+        },
+        {
+          "id": "console-cli",
+          "label": "console-cli tools",
+          "tech": "console-cli-tools.ts",
+          "desc": "New map_* tools; read-only ones allowed for issue-run tokens",
+          "icon": "wrench",
+          "status": "modified"
+        }
+      ]
     }
   ],
   "edges": [
@@ -219,6 +307,60 @@
       "from": "assets",
       "to": "static",
       "label": "files from public/",
+      "status": "added"
+    },
+    {
+      "from": "app",
+      "to": "maps-ui",
+      "label": "Map a repo menu entry",
+      "status": "added"
+    },
+    {
+      "from": "maps-ui",
+      "to": "cm-api",
+      "label": "/api/maps",
+      "status": "added"
+    },
+    {
+      "from": "cm-api",
+      "to": "cm-source",
+      "label": "resolve source",
+      "status": "added"
+    },
+    {
+      "from": "cm-source",
+      "to": "cm-scan",
+      "label": "repo files",
+      "status": "added"
+    },
+    {
+      "from": "cm-scan",
+      "to": "cm-assemble",
+      "label": "scan.json",
+      "status": "added"
+    },
+    {
+      "from": "cm-assemble",
+      "to": "cm-describe",
+      "label": "digest",
+      "status": "added"
+    },
+    {
+      "from": "cm-assemble",
+      "to": "cm-store",
+      "label": "map.json",
+      "status": "added"
+    },
+    {
+      "from": "cm-cli",
+      "to": "cm-api",
+      "label": "HTTP",
+      "status": "added"
+    },
+    {
+      "from": "console-cli",
+      "to": "cm-api",
+      "label": "map_* tools",
       "status": "added"
     }
   ]

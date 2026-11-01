@@ -122,7 +122,27 @@ export async function createConsoleCliFixture() {
     outputs,
     catchUp: false,
   });
+  const fakeMap = {
+    slug: "demo",
+    label: "Demo",
+    source: { kind: "local" as const, ref: "/tmp/demo" },
+    status: "ready" as const,
+    files: 12,
+    modules: 3,
+    described: true,
+    updatedAt: "2026-01-01T00:00:00Z",
+  };
+  const maps = {
+    list: async () => [fakeMap],
+    status: async () => fakeMap,
+    add: async () => fakeMap,
+    refresh: async () => fakeMap,
+    remove: async () => {},
+    view: async () => ({ spec: { title: "Demo" } }) as never,
+    brief: async () => Array.from({ length: 60 }, (_, index) => `line ${index}`).join("\n"),
+  };
   const services = {
+    maps,
     ideas: new Ideas({ dir: ideasDirectory }),
     schedules,
     sessionSearch: new SessionSearch(directory),

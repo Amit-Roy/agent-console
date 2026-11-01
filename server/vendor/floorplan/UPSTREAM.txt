@@ -1,0 +1,26 @@
+Vendored: floorplan codebase scanner
+Source: https://github.com/haydenschmitty/floorplan
+Commit: cec1075 (cec107540da3910c6d7a5fa6400fc9851bf4c15e)
+Upstream commit date: 2026-10-31
+License: MIT (see LICENSE in this directory, Copyright (c) 2026 Hayden Smith)
+
+Copied files (from skills/floorplan/scripts/ upstream):
+- scan.mjs
+- lib/common.mjs
+- lib/extract.mjs
+- lib/health.mjs
+- lib/screens.mjs
+- lib/resolve.mjs
+- lib/routes.mjs
+- LICENSE (repo root)
+
+Local patch (only deviation from upstream):
+- scan.mjs, directory walk (~line 66): fs.statSync(abs) replaced by fs.lstatSync(abs),
+  and entries where st.isSymbolicLink() is true are skipped with `continue`.
+  Purpose: do not follow symlinks out of the scanned tree (e.g. links to /etc/hostname).
+  Upstream lines:  try { st = fs.statSync(abs); } catch { continue; }
+  Patched lines:   try { st = fs.lstatSync(abs); } catch { continue; }
+                   if (st.isSymbolicLink()) continue;
+
+Not copied: build.mjs, describe.mjs, open.mjs, plan.mjs, recent.mjs, refresh.mjs,
+status.mjs, agent.mjs, blueprint.mjs, claudemd.mjs, names.mjs, and any other upstream files.
