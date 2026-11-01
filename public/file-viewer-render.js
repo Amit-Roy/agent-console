@@ -1,4 +1,5 @@
 // Rendering and metrics helpers for the file viewer. All state lives on the shared `viewer` context.
+import { attachImageZoom, syncZoomControls } from "./file-viewer-zoom.js";
 import {
   el as createElement,
   ensureLanguage,
@@ -264,6 +265,7 @@ export function renderFile(viewer, file, ref, token) {
   syncSourceButton(viewer, markdown);
   if (markdown && !viewer.markdownSource) {
     renderMarkdownBody(viewer, count);
+    syncZoomControls(viewer);
     return;
   }
   viewer.status.textContent = statusText(count, plain, lang);
@@ -274,6 +276,7 @@ export function renderFile(viewer, file, ref, token) {
   else renderCode(viewer, lang, ref, range, token);
   viewer.copy.disabled = false;
   viewer.wrap.disabled = plain;
+  syncZoomControls(viewer);
 }
 
 function checkedUrl(url, allowed, message) {
@@ -301,8 +304,12 @@ export async function renderImage(viewer, url, name, token, signal) {
   await image.decode();
   if (isStale(viewer, token)) return {};
   const readyAt = performance.now();
+  const stage = createElement("div", "file-viewer-zoom-stage");
+  stage.append(image);
   viewer.body.classList.add("is-image");
-  viewer.body.append(image);
+  viewer.body.append(stage);
+  await attachImageZoom(viewer, image);
+  if (isStale(viewer, token)) return {};
   viewer.status.textContent = `${image.naturalWidth.toLocaleString()} × ${image.naturalHeight.toLocaleString()} · Image`;
   return {
     bytes: blob.size,
@@ -352,5 +359,6 @@ export async function renderMedia(viewer, file, token, signal) {
   if (isStale(viewer, token)) return {};
   const readyAt = performance.now();
   viewer.status.textContent = mediaStatus(media, video);
+  syncZoomControls(viewer);
   return { bytes: file.bytes, imageNetwork: readyAt - startedAt, readyAt, receivedAt: readyAt };
 }
