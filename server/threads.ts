@@ -17,6 +17,7 @@ import { redact } from "./automation/events.ts";
 import { assertAutomationSandbox } from "./automation/sandbox.ts";
 import {
   type CheckpointKind,
+  deleteThread,
   list as listCheckpoints,
   preview as previewRewind,
   restore as restoreCheckpoint,
@@ -392,6 +393,7 @@ type ThreadPatch = {
   advisor?: string;
   title?: string;
   idleCompaction?: boolean;
+  checkpoints?: "on" | "off";
 };
 
 // The attachment fields a transcript event carries.
@@ -449,6 +451,8 @@ function sanitizePatch(prov: ReturnType<typeof PROVIDERS.get>, patch: ThreadPatc
   if (patch.model && !prov?.models().includes(patch.model)) patch.model = undefined;
   if (patch.advisor && patch.advisor !== "default" && !prov?.advisors?.includes(patch.advisor))
     patch.advisor = undefined;
+  if (patch.checkpoints && !["on", "off"].includes(patch.checkpoints))
+    patch.checkpoints = undefined;
 }
 
 // Tool output in replayed history is clipped to what the card shows.
@@ -1428,6 +1432,7 @@ export class Threads {
     thread.effort = effort;
     if (patch.advisor) thread.advisor = patch.advisor;
     if (typeof patch.idleCompaction === "boolean") thread.idleCompaction = patch.idleCompaction;
+    if (patch.checkpoints) thread.checkpoints = patch.checkpoints;
     if (!patch.title) return;
     thread.title = patch.title.slice(0, 80);
     thread.autoTitle = false;
@@ -1575,6 +1580,7 @@ export class Threads {
     this.idleCompactionTimers.cancel(id);
     this.todos.dropThread(id);
     this.checkpoints.drop(id);
+    deleteThread(id).catch(console.error);
     this.threads.delete(id);
     this.titling.delete(id);
     this.persist();

@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { list, prune, restore, snapshot } from "../server/checkpoints.ts";
+import { deleteThread, list, prune, restore, snapshot } from "../server/checkpoints.ts";
 
 const workRoot = fs.mkdtempSync(path.join(os.tmpdir(), "checkpoints-"));
 const dataDir = path.join(workRoot, "data");
@@ -132,6 +132,28 @@ assert.match(
   /refs\/ac\/t1/,
   "recent refs survive",
 );
+
+// deleteThread drops only that thread's refs, in every shadow repo.
+put(repo, "keep.txt", "keep\n");
+const other = await snapshot({ cwd: repo, threadId: "t2", kind: "tool", dataDir });
+assert.ok(other && "seq" in other, "t2 snapshot created");
+const allRefs = () =>
+  repos
+    .map((name) =>
+      execFileSync(
+        "git",
+        [`--git-dir=${path.join(shadow, name)}`, "for-each-ref", "--format=%(refname)"],
+        {
+          encoding: "utf8",
+        },
+      ),
+    )
+    .join("");
+assert.match(allRefs(), /refs\/ac\/t1\//);
+assert.match(allRefs(), /refs\/ac\/t2\//);
+await deleteThread("t1", dataDir);
+assert.doesNotMatch(allRefs(), /refs\/ac\/t1\//, "t1 refs removed");
+assert.match(allRefs(), /refs\/ac\/t2\//, "t2 refs survive");
 
 fs.rmSync(workRoot, { recursive: true, force: true });
 console.log("checkpoints ok");

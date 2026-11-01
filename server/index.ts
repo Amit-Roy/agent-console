@@ -61,6 +61,7 @@ import {
   EMPTY_TREE,
   fileAt as fileAtCheckpoint,
   list as listCheckpoints,
+  prune as pruneCheckpoints,
 } from "./checkpoints.ts";
 import { cancelClaudeLogin, finishClaudeLogin, startClaudeLogin } from "./claude-login.ts";
 import { CliSearch } from "./cli-search.ts";
@@ -192,6 +193,9 @@ server.on("upgrade", (req, socket, head) => {
 });
 await new Promise<void>((resolve) => server.listen(PORT, HOST, resolve));
 boot.mark("bound");
+const pruneOld = () => pruneCheckpoints(30).catch(console.error);
+pruneOld();
+setInterval(pruneOld, 24 * 60 * 60 * 1000).unref();
 
 const clients = new Set<WebSocket>();
 const subscriptions = new WeakMap<WebSocket, string>();
