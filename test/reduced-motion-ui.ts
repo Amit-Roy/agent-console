@@ -23,7 +23,11 @@ try {
   assert.equal(dotStyle.name, "pulse", "running dot pulse animation is not disabled");
   const spinStyle = await readAnimation(".spin");
   assert.equal(spinStyle.iterations, "infinite", "spinner pulse repeats under reduced motion");
-  assert.equal(spinStyle.name, "pulse", "spinner is not rotating and is pulsing under reduced motion");
+  assert.equal(
+    spinStyle.name,
+    "pulse",
+    "spinner is not rotating and is pulsing under reduced motion",
+  );
   console.log("reduced-motion ok");
   await context.close();
 } finally {
