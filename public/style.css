@@ -10,7 +10,7 @@
 @font-face {
   font-family: "Inter";
   font-style: normal;
-  font-weight: 100 900;
+  font-weight: 400 700;
   font-display: swap;
   src: url("./fonts/inter-latin-wght-normal.woff2") format("woff2");
   unicode-range:
@@ -19,7 +19,7 @@
 @font-face {
   font-family: "Inter";
   font-style: normal;
-  font-weight: 100 900;
+  font-weight: 400 700;
   font-display: swap;
   src: url("./fonts/inter-latin-ext-wght-normal.woff2") format("woff2");
   unicode-range:
@@ -28,7 +28,7 @@
 @font-face {
   font-family: "Inter";
   font-style: italic;
-  font-weight: 100 900;
+  font-weight: 400 700;
   font-display: swap;
   src: url("./fonts/inter-latin-wght-italic.woff2") format("woff2");
   unicode-range:
@@ -37,7 +37,7 @@
 @font-face {
   font-family: "JetBrains Mono";
   font-style: normal;
-  font-weight: 100 800;
+  font-weight: 400 700;
   font-display: swap;
   src: url("./fonts/jetbrains-mono-latin-wght-normal.woff2") format("woff2");
   unicode-range:
@@ -46,7 +46,7 @@
 @font-face {
   font-family: "JetBrains Mono";
   font-style: normal;
-  font-weight: 100 800;
+  font-weight: 400 700;
   font-display: swap;
   src: url("./fonts/jetbrains-mono-latin-ext-wght-normal.woff2") format("woff2");
   unicode-range:
@@ -55,7 +55,7 @@
 @font-face {
   font-family: "JetBrains Mono";
   font-style: italic;
-  font-weight: 100 800;
+  font-weight: 400 700;
   font-display: swap;
   src: url("./fonts/jetbrains-mono-latin-wght-italic.woff2") format("woff2");
   unicode-range:
@@ -64,7 +64,7 @@
 @font-face {
   font-family: "JetBrains Mono";
   font-style: italic;
-  font-weight: 100 800;
+  font-weight: 400 700;
   font-display: swap;
   src: url("./fonts/jetbrains-mono-latin-ext-wght-italic.woff2") format("woff2");
   unicode-range:
@@ -74,7 +74,7 @@
 @font-face {
   font-family: "Newsreader";
   font-style: normal;
-  font-weight: 200 800;
+  font-weight: 300 700;
   font-display: swap;
   src: url("./fonts/newsreader-latin-standard-normal.woff2") format("woff2");
   unicode-range:
@@ -83,7 +83,7 @@
 @font-face {
   font-family: "Newsreader";
   font-style: normal;
-  font-weight: 200 800;
+  font-weight: 300 700;
   font-display: swap;
   src: url("./fonts/newsreader-latin-ext-standard-normal.woff2") format("woff2");
   unicode-range:
@@ -92,7 +92,7 @@
 @font-face {
   font-family: "Newsreader";
   font-style: italic;
-  font-weight: 200 800;
+  font-weight: 300 700;
   font-display: swap;
   src: url("./fonts/newsreader-latin-standard-italic.woff2") format("woff2");
   unicode-range:
@@ -101,7 +101,7 @@
 @font-face {
   font-family: "Newsreader";
   font-style: italic;
-  font-weight: 200 800;
+  font-weight: 300 700;
   font-display: swap;
   src: url("./fonts/newsreader-latin-ext-standard-italic.woff2") format("woff2");
   unicode-range:
@@ -3926,12 +3926,16 @@ body.login {
     animation-iteration-count: 1 !important;
     transition-duration: 0.001ms !important;
   }
+  /* opacity-only status pulse; no motion, so exempt */
+  .dot.running {
+    animation-duration: 1.4s !important;
+    animation-iteration-count: infinite !important;
+  }
   .spin {
     animation: none;
     border-top-color: var(--accent);
     border-right-color: var(--accent);
   }
-  .dot.running,
   .think.live .ico {
     animation: none;
   }
