@@ -18,6 +18,18 @@ permissions:
   actions: read
 
 jobs:
+  formal-queue:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned Lean toolchain
+        run: |
+          curl --proto "=https" --tlsv1.2 -sSf https://raw.githubusercontent.com/leanprover/elan/v4.1.2/elan-init.sh -o "$RUNNER_TEMP/elan-init.sh"
+          sh "$RUNNER_TEMP/elan-init.sh" -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+      - name: Check queue proofs
+        run: npm run test:formal
   # Required check: every PR carries the one token-telemetry comment (the server posts it, even if only
   # "No agent usage recorded."). Add "telemetry-comment" to the branch protection required checks.
   telemetry-comment:

@@ -10,6 +10,7 @@
       "!!**/.git",
       "!!**/.codegraph",
       "!!**/.bundle",
+      "!!**/.lake",
       "!!**/vendor",
       "!!**/.impeccable",
       "!!**/test/tmp",

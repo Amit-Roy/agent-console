@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { mock } from "node:test";
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ac-queue-edit-"));
 process.env.AGENT_CONSOLE_DATA = dir;
@@ -12,7 +13,9 @@ const { PROVIDERS } = await import("../server/providers/index.ts");
 const { saveUpload } = await import("../server/uploads.ts");
 let ctx: any;
 const sent: string[] = [];
-const sleep = () => new Promise((r) => setTimeout(r, 350));
+// Advance the production drain timer, including negative delivery assertions.
+mock.timers.enable({ apis: ["setTimeout"] });
+const drainTimers = () => mock.timers.tick(250);
 PROVIDERS.set("fixture", {
   id: "fixture",
   label: "Fixture",
@@ -47,12 +50,12 @@ try {
   assert.equal(editing.text, original);
   assert.equal(editing.attachments, 1);
   ctx.event({ type: "result", subtype: "success" });
-  await sleep();
+  drainTimers();
   assert.equal(sent.length, 1, "held head blocks the whole queue");
   assert.throws(() => threads.saveQueued(t.id, head.id, 0, "x".repeat(100001)), /100,000/);
   threads.saveQueued(t.id, head.id, 0, "updated");
   assert.throws(() => threads.saveQueued(t.id, head.id, 0, "stale"), /changed/);
-  await sleep();
+  drainTimers();
   assert.ok(
     sent[1].includes("updated") && sent[1].includes("notes.txt"),
     "text changes retain attachments",
@@ -63,29 +66,46 @@ try {
   const following = threads.getQueues()[t.id][0];
   threads.editQueued(t.id, following.id);
   ctx.event({ type: "result", subtype: "success" });
-  await sleep();
+  drainTimers();
   assert.equal(sent.length, 2);
   threads.cancelQueuedEdit(t.id, following.id, 0);
-  await sleep();
+  drainTimers();
   assert.equal(sent[2], "second", "Cancel sends the unchanged original");
   threads.send(t.id, "attachment only", { mode: "queue", attachments: [{ id: upload.id }] });
   const attachmentOnly = threads.getQueues()[t.id][0];
   threads.editQueued(t.id, attachmentOnly.id);
   threads.saveQueued(t.id, attachmentOnly.id, 0, "");
   ctx.event({ type: "result", subtype: "success" });
-  await sleep();
+  drainTimers();
   assert.ok(sent.at(-1)!.includes("notes.txt"));
   const beforeRestart = sent.length;
   threads.send(t.id, "persist across restart", { mode: "queue" });
   const held = threads.getQueues()[t.id][0];
   threads.editQueued(t.id, held.id);
+  threads.saveQueued(t.id, held.id, 0, "revision one");
+  threads.editQueued(t.id, held.id);
+  const persistedHeld = threads.getQueues()[t.id][0];
+  assert.equal(persistedHeld.revision, 1);
   threads.shutdown();
   threads = new Threads(() => {});
-  await sleep();
-  assert.equal(threads.getQueues()[t.id][0].editing, true);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  drainTimers();
+  assert.deepEqual(
+    threads.getQueues()[t.id][0],
+    persistedHeld,
+    "restart preserves the held entry and revision",
+  );
+  assert.throws(() => threads.saveQueued(t.id, held.id, 0, "stale restart edit"), /changed/);
+  threads.cancelQueuedEdit(t.id, held.id, 0);
+  drainTimers();
+  assert.deepEqual(
+    threads.getQueues()[t.id][0],
+    persistedHeld,
+    "stale cancel leaves the hold intact",
+  );
   assert.equal(sent.length, beforeRestart);
-  threads.saveQueued(t.id, held.id, 0, "resumed edit");
-  await sleep();
+  threads.saveQueued(t.id, held.id, 1, "resumed edit");
+  drainTimers();
   assert.equal(sent.at(-1), "resumed edit");
   threads.send(t.id, "removed", { mode: "queue" });
   const gone = threads.getQueues()[t.id][0];
@@ -99,7 +119,7 @@ try {
   threads.send(t.id, "three", { mode: "queue" });
   const n = sent.length;
   ctx.event({ type: "result", subtype: "success" });
-  await sleep();
+  drainTimers();
   assert.equal(sent.length, n + 1);
   assert.ok(
     sent.at(-1)!.startsWith("one\n\ntwo [Image #1]"),
@@ -114,13 +134,33 @@ try {
   ctx.event({ type: "result", subtype: "success" });
   threads.send(r.id, "newer");
   assert.equal(sent.length, m, "newer waits for the queue");
-  await sleep();
+  drainTimers();
   assert.equal(sent.length, m + 1);
   assert.equal(sent.at(-1), "older\n\nnewer", "queued first, then the late message, as one prompt");
+  const stopped = threads.create({ provider: "fixture", cwd: dir, title: "Stop durability" });
+  threads.send(stopped.id, "running before stop");
+  threads.send(stopped.id, "cancelled pending prompt", { mode: "queue" });
+  assert.equal(threads.getQueues()[stopped.id][0].editing, false);
+  const beforeStop = sent.length;
+  threads.abort(stopped.id);
+  assert.equal(threads.getQueues()[stopped.id], undefined);
+  const durable = JSON.parse(fs.readFileSync(path.join(dir, "queues.json"), "utf8"));
+  assert.equal(durable[stopped.id], undefined, "stop persists queue removal before restart");
+  drainTimers();
+  assert.equal(sent.length, beforeStop);
+  threads.shutdown();
+  threads = new Threads(() => {});
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  drainTimers();
+  assert.equal(threads.getQueues()[stopped.id], undefined);
+  assert.ok(!sent.some((text) => text.includes("cancelled pending prompt")));
+  threads.send(stopped.id, "fresh after stop");
+  assert.equal(sent.at(-1), "fresh after stop");
   console.log(
-    "PASS queue edits: full text, delivery hold/order, attachment preservation, validation, stale writes, cancel, restart persistence, removed-message race and late-message ordering",
+    "PASS queue edits: full text, delivery hold/order, attachment preservation, validation, stale writes, cancel, restart revision persistence, stale cancellation, durable stop/restart cancellation, removed-message race and late-message ordering",
   );
 } finally {
   threads.shutdown();
+  mock.timers.reset();
   fs.rmSync(dir, { recursive: true, force: true });
 }
