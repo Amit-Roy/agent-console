@@ -15,6 +15,15 @@ import {
   stopMedia,
   updatePerformance,
 } from "./file-viewer-render.js";
+import {
+  detachImageZoom,
+  handleZoomKey,
+  handleZoomWheel,
+  resetZoom,
+  restoreTextZoom,
+  stepZoom,
+  syncZoomControls,
+} from "./file-viewer-zoom.js";
 import { abortTreeRequests, ensureTree, resetTree, showTree } from "./file-viewer-tree.js";
 import { el as createElement, icon, iconButton, parseFileRef, wireCopy } from "./render.js";
 
@@ -87,7 +96,22 @@ function buildDom() {
   edit.hidden = true;
   edit.title = "Edit in Acode";
   edit.setAttribute("aria-label", "Edit");
-  toolbar.append(files, edit, source, wrap, copy, timings, position);
+  const zoomGroup = createElement("span", "file-viewer-zoom");
+  zoomGroup.setAttribute("role", "group");
+  zoomGroup.setAttribute("aria-label", "Zoom");
+  zoomGroup.hidden = true;
+  const zoomOut = createElement("button", "btn sm ghost", "\u2212");
+  zoomOut.type = "button";
+  zoomOut.setAttribute("aria-label", "Zoom out");
+  const zoomLevel = createElement("button", "btn sm ghost file-viewer-zoom-level", "100%");
+  zoomLevel.type = "button";
+  zoomLevel.setAttribute("aria-label", "Reset zoom");
+  zoomLevel.title = "Reset zoom";
+  const zoomIn = createElement("button", "btn sm ghost", "+");
+  zoomIn.type = "button";
+  zoomIn.setAttribute("aria-label", "Zoom in");
+  zoomGroup.append(zoomOut, zoomLevel, zoomIn);
+  toolbar.append(files, edit, source, wrap, zoomGroup, copy, timings, position);
   const performanceDetails = createElement("div", "file-viewer-performance");
   performanceDetails.id = "file-viewer-performance";
   performanceDetails.hidden = true;
@@ -137,6 +161,10 @@ function buildDom() {
     copyPath,
     close,
     wrap,
+    zoomGroup,
+    zoomOut,
+    zoomLevel,
+    zoomIn,
     copy,
     position,
     source,
@@ -170,6 +198,10 @@ function newViewer(apiFetch, report) {
     restoreFocus: undefined,
     generation: 0,
     imageObjectUrl: undefined,
+    panzoom: undefined,
+    zoomCleanup: undefined,
+    imageScale: 1,
+    textZoom: 1,
     currentTextFile: undefined,
     markdownSource: false,
     editTicket: undefined,
@@ -268,6 +300,7 @@ function onDialogClose(viewer) {
   viewer.treeGeneration++;
   abortTreeRequests(viewer);
   revokeImage(viewer);
+  detachImageZoom(viewer);
   stopMedia(viewer);
   if (viewer.restoreFocus?.isConnected) viewer.restoreFocus.focus({ preventScroll: true });
 }
@@ -286,9 +319,11 @@ function resetForLoad(viewer, request) {
   const token = ++viewer.generation,
     startedAt = request.openedAt || performance.now();
   revokeImage(viewer);
+  detachImageZoom(viewer);
   stopMedia(viewer);
   viewer.content = "";
   viewer.currentTextFile = null;
+  syncZoomControls(viewer);
   viewer.source.hidden = true;
   viewer.copy.disabled = true;
   viewer.wrap.disabled = true;
@@ -450,9 +485,11 @@ function openWorkspace(viewer, { opener, openedAt, module_ms }) {
   viewer.treeTitle.textContent = "repos";
   viewer.treeTitle.title = "~/repos";
   revokeImage(viewer);
+  detachImageZoom(viewer);
   viewer.current = { scope: "repos", ref: { path: "" } };
   viewer.content = "";
   viewer.currentTextFile = null;
+  syncZoomControls(viewer);
   viewer.markdownSource = false;
   viewer.title.textContent = "Files";
   path.textContent = "~/repos";
@@ -530,7 +567,14 @@ export function createFileViewer(apiFetch, report = () => {}) {
     if (localStorage.getItem("file-viewer-wrap") === "1") setWrapped(viewer, true);
   } catch {}
   viewer.close.onclick = () => dialog.close();
-  dialog.addEventListener("keydown", (event) => trapTab(viewer, event));
+  restoreTextZoom(viewer);
+  viewer.zoomOut.onclick = () => stepZoom(viewer, -1);
+  viewer.zoomIn.onclick = () => stepZoom(viewer, 1);
+  viewer.zoomLevel.onclick = () => resetZoom(viewer);
+  body.addEventListener("wheel", (event) => handleZoomWheel(viewer, event), { passive: false });
+  dialog.addEventListener("keydown", (event) => {
+    if (!handleZoomKey(viewer, event)) trapTab(viewer, event);
+  });
   dialog.addEventListener("click", (event) => closeOnBackdrop(viewer, event));
   dialog.addEventListener("close", () => onDialogClose(viewer));
   viewer.retry.onclick = () => {

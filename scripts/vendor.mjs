@@ -8,6 +8,7 @@
 //   lucide:      icons.json, a name -> inner SVG markup map built from lucide-static, used by arch.js (ISC)
 //   marked:      markdown parser ES module, imported by render.js as /vendor/marked.js (MIT)
 //   purify:      DOMPurify ES module, imported by render.js as /vendor/purify.js (MPL-2.0 OR Apache-2.0)
+//   panzoom:     image pan/pinch zoom ES module, lazy-loaded by file-viewer-zoom.js (MIT)
 //   simplewebauthn-browser: UMD bundle loaded by vault.html for passkeys (MIT)
 import fs from "node:fs";
 import path from "node:path";
@@ -82,6 +83,8 @@ copy(nm("libavoid-js/dist/libavoid.wasm"), out("vendor/libavoid/libavoid.wasm"))
 copy(nm("libavoid-js/LICENSE"), out("vendor/libavoid/LICENSE.txt"));
 copy(nm("marked/lib/marked.esm.js"), out("vendor/marked.js"));
 copy(nm("marked/LICENSE"), out("vendor/marked.LICENSE.txt"));
+copy(nm("@panzoom/panzoom/dist/panzoom.es.js"), out("vendor/panzoom.js"));
+copy(nm("@panzoom/panzoom/MIT-License.txt"), out("vendor/panzoom.LICENSE.txt"));
 copy(nm("dompurify/dist/purify.es.mjs"), out("vendor/purify.js"));
 copy(nm("dompurify/LICENSE"), out("vendor/purify.LICENSE.txt"));
 copy(nm("dompurify/LICENSE-MPL"), out("vendor/purify.LICENSE-MPL.txt"));

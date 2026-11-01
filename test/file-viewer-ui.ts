@@ -192,6 +192,41 @@ const open = async (page: Page, label: string) => {
   await page.locator("#file-viewer[open]").waitFor();
   await settled(page);
 };
+const zoomShots = "/tmp/zoom-408";
+const zoomShot = async (page: Page, name: string) => {
+  fs.mkdirSync(zoomShots, { recursive: true });
+  await page.screenshot({ path: path.join(zoomShots, name) });
+};
+const imageScale = (page: Page) =>
+  page
+    .locator(".file-viewer-image")
+    .evaluate((img) => new DOMMatrix(getComputedStyle(img).transform).a);
+const waitScale = async (page: Page, test: (scale: number) => boolean, label: string) => {
+  let scale = 0;
+  for (let attempt = 0; attempt < 40; attempt++) {
+    scale = await imageScale(page);
+    if (test(scale)) return;
+    await page.waitForTimeout(100);
+  }
+  throw new Error(`${label}: scale was ${scale}`);
+};
+const codeFont = (page: Page) =>
+  page
+    .locator(".file-line-text")
+    .first()
+    .evaluate((node) => parseFloat(getComputedStyle(node).fontSize));
+const noToolbarOverflow = (page: Page) =>
+  page.evaluate(() => {
+    const toolbar = document.querySelector(".file-viewer-toolbar") as HTMLElement;
+    const group = document.querySelector(".file-viewer-zoom") as HTMLElement;
+    const rect = group.getBoundingClientRect();
+    return (
+      toolbar.scrollWidth <= toolbar.clientWidth &&
+      rect.left >= 0 &&
+      rect.right <= innerWidth &&
+      rect.width > 0
+    );
+  });
 const close = async (page: Page) => {
   await page.keyboard.press("Escape");
   await page.locator("#file-viewer[open]").waitFor({ state: "hidden" });
@@ -493,6 +528,57 @@ try {
     (await page.locator("#file-viewer-status").textContent()) || "image missing",
   );
   await close(page);
+  await open(page, "Project image");
+  assert.equal(await page.locator(".file-viewer-zoom").isVisible(), true, "zoom group on image");
+  assert.equal(await imageScale(page), 1, "image opens at 1x");
+  const box = (await page.locator(".file-viewer-zoom-stage").boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.keyboard.down("Control");
+  await page.mouse.wheel(0, -400);
+  await page.keyboard.up("Control");
+  await waitScale(page, (scale) => scale > 1.1, "ctrl+wheel zooms image");
+  assert.equal((await page.locator(".file-viewer-zoom-level").textContent()) !== "100%", true);
+  await page.getByRole("button", { name: "Reset zoom", exact: true }).click();
+  await waitScale(page, (scale) => scale === 1, "% button resets");
+  await page.locator(".file-viewer-zoom-stage").dblclick();
+  await waitScale(page, (scale) => scale > 2.4, "dblclick zooms to 2.5x");
+  await zoomShot(page, "desktop-image-zoomed-dark.png");
+  await page.locator(".file-viewer-zoom-stage").dblclick();
+  await waitScale(page, (scale) => scale === 1, "dblclick returns to 1x");
+  await page.getByRole("button", { name: "Zoom in", exact: true }).click();
+  await waitScale(page, (scale) => scale > 1, "+ button zooms image");
+  await close(page);
+  await open(page, "Project image");
+  assert.equal(await imageScale(page), 1, "reopened image is 1x");
+  await close(page);
+  await open(page, "Relative reference");
+  const baseFont = await codeFont(page);
+  await page.keyboard.press("Control+=");
+  assert.ok((await codeFont(page)) > baseFont, "ctrl+= raises code font size");
+  await page.reload();
+  await ref(page, "Relative reference").waitFor();
+  await open(page, "Relative reference");
+  assert.ok((await codeFont(page)) > baseFont, "zoom persists across reload");
+  await page.keyboard.press("Control+0");
+  assert.equal(await codeFont(page), baseFont, "ctrl+0 resets code zoom");
+  for (let press = 0; press < 5; press++) await page.keyboard.press("Control+=");
+  assert.equal(await page.locator(".file-viewer-zoom-level").textContent(), "150%");
+  await zoomShot(page, "desktop-code-150-dark.png");
+  await page.emulateMedia({ colorScheme: "light" });
+  await zoomShot(page, "desktop-code-150-light.png");
+  await page.emulateMedia({ colorScheme: "dark" });
+  await page.keyboard.press("Control+0");
+  await close(page);
+  await open(page, "Project image");
+  await page.emulateMedia({ colorScheme: "light" });
+  await page.locator(".file-viewer-zoom-stage").dblclick();
+  await waitScale(page, (scale) => scale > 2.4, "light dblclick zoom");
+  await zoomShot(page, "desktop-image-zoomed-light.png");
+  await page.emulateMedia({ colorScheme: "dark" });
+  await close(page);
+  console.log(
+    "PASS file viewer zoom: image wheel/dblclick/reset/reopen, code ctrl+=/persist/ctrl+0",
+  );
   await open(page, "Project audio");
   const audio = page.locator("#file-viewer-code audio.file-viewer-media");
   assert.equal(
@@ -776,6 +862,43 @@ try {
   console.log(
     "PASS file viewer: mobile modal fits, tree toggles, close is reachable, no page overflow",
   );
+  const touch = await context.newCDPSession(mobile);
+  await touch.send("Emulation.setTouchEmulationEnabled", {
+    enabled: true,
+    maxTouchPoints: 2,
+  });
+  await open(mobile, "Relative reference");
+  assert.equal(await noToolbarOverflow(mobile), true, "code toolbar fits 390px");
+  for (let press = 0; press < 5; press++) await mobile.keyboard.press("Control+=");
+  await zoomShot(mobile, "phone-code-150-dark.png");
+  await mobile.keyboard.press("Control+0");
+  await close(mobile);
+  await open(mobile, "Project image");
+  assert.equal(await noToolbarOverflow(mobile), true, "image toolbar fits 390px");
+  const stageBox = (await mobile.locator(".file-viewer-zoom-stage").boundingBox())!;
+  const midX = stageBox.x + stageBox.width / 2,
+    midY = stageBox.y + stageBox.height / 2;
+  const points = (spread: number) => [
+    { x: midX - spread, y: midY, id: 1 },
+    { x: midX + spread, y: midY, id: 2 },
+  ];
+  await touch.send("Input.dispatchTouchEvent", {
+    type: "touchStart",
+    touchPoints: points(30),
+  });
+  for (const spread of [50, 80, 110, 140])
+    await touch.send("Input.dispatchTouchEvent", {
+      type: "touchMove",
+      touchPoints: points(spread),
+    });
+  await touch.send("Input.dispatchTouchEvent", {
+    type: "touchEnd",
+    touchPoints: [],
+  });
+  await waitScale(mobile, (scale) => scale > 1.5, "two-finger pinch zooms image");
+  await zoomShot(mobile, "phone-image-zoomed-dark.png");
+  await close(mobile);
+  console.log("PASS file viewer zoom: phone pinch zooms image, toolbar fits 390px");
   await mobile.locator("#menu").click();
   await screenshot(mobile, "sidebar-files-mobile.png");
   await openWorkspace(mobile);

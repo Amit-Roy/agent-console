@@ -8,7 +8,7 @@
   overflow: hidden;
   border-radius: var(--r-lg);
   background: var(--s1);
-  --file-line-height: 1.5rem;
+  --file-line-height: calc(1.5rem * var(--file-zoom, 1));
 }
 #file-viewer[open] {
   display: flex;
@@ -76,7 +76,7 @@
   overscroll-behavior: contain;
   tab-size: 4;
   background: var(--code-bg);
-  font: var(--fw-reg) 0.8125rem / var(--file-line-height) var(--font-mono);
+  font: var(--fw-reg) calc(0.8125rem * var(--file-zoom, 1)) / var(--file-line-height) var(--font-mono);
   font-variant-ligatures: none;
   padding: var(--sp-2) 0;
 }
@@ -272,11 +272,32 @@
   justify-content: center;
   padding: var(--sp-4);
 }
+.file-viewer-code.is-image {
+  overflow: hidden;
+}
+.file-viewer-zoom-stage {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  touch-action: none;
+  cursor: grab;
+}
 .file-viewer-image {
   display: block;
-  max-width: 100%;
-  max-height: 100%;
+  width: 100%;
+  height: 100%;
   object-fit: contain;
+  -webkit-user-drag: none;
+  user-select: none;
+}
+.file-viewer-zoom {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+}
+.file-viewer-zoom-level {
+  min-width: 3.5rem;
+  font-variant-numeric: tabular-nums;
 }
 video.file-viewer-media {
   display: block;
@@ -303,6 +324,7 @@ audio.file-viewer-media {
   font: var(--fw-text) var(--f-text);
 }
 .file-markdown {
+  font-size: calc(1em * var(--file-zoom, 1));
   max-width: var(--col);
   margin-inline: auto;
   overflow-wrap: anywhere;
