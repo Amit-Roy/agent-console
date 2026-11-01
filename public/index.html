@@ -10,7 +10,7 @@
 <link rel="preload" href="/fonts/inter-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="/fonts/newsreader-latin-standard-normal.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="/fonts/jetbrains-mono-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="/style.css"></head>
+<link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/time-travel.css"></head>
 <body>
 <!-- icon sprite: 16px grid, 1.5 stroke, round caps (stroke/fill come from .ico in style.css) -->
 <svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false"><defs>
@@ -139,6 +139,9 @@
         <svg class="ico" aria-hidden="true"><use href="#i-list-checks"/></svg>
         <span id="todo-badge" class="todo-badge" hidden></span>
       </button>
+      <button id="tt-toggle" class="btn icon ghost" type="button" title="History" aria-label="History" aria-controls="tt-panel" aria-expanded="false" disabled>
+        <svg class="ico" aria-hidden="true"><use href="#i-clock"/></svg>
+      </button>
       <button id="more" class="btn icon ghost" type="button" title="Thread actions" aria-label="Thread actions" disabled>
         <svg class="ico" aria-hidden="true"><use href="#i-more"/></svg>
       </button>
@@ -192,6 +195,41 @@
       </div>
     </footer>
   </main>
+  <aside id="tt-panel" class="tt-panel" aria-labelledby="tt-heading" hidden>
+    <header class="tt-head">
+      <h2 id="tt-heading">History</h2>
+      <button id="tt-close" class="btn icon ghost" type="button" aria-label="Close history" title="Close history"><svg class="ico" aria-hidden="true"><use href="#i-x"/></svg></button>
+    </header>
+    <p id="tt-empty" class="tt-empty" hidden>No checkpoints yet. They appear when the agent starts working.</p>
+    <div id="tt-scrub" class="tt-scrub">
+      <div class="tt-steps">
+        <button id="tt-prev" class="btn icon" type="button" aria-label="Previous checkpoint" title="Previous checkpoint"><svg class="ico" aria-hidden="true"><use href="#i-chev-left"/></svg></button>
+        <!-- biome-ignore lint/a11y/useSemanticElements: roving-tabindex group of tick buttons filled by time-travel.js -->
+        <div id="tt-track" class="tt-track" role="group" aria-label="Checkpoints"></div>
+        <button id="tt-next" class="btn icon" type="button" aria-label="Next checkpoint" title="Next checkpoint"><svg class="ico" aria-hidden="true"><use href="#i-chev-right"/></svg></button>
+      </div>
+      <input id="tt-range" class="tt-range" type="range" min="0" max="0" step="1" value="0" aria-label="Checkpoint">
+      <p id="tt-position" class="tt-position" role="status" aria-live="polite"></p>
+      <p class="tt-legend"><span data-s="A"><b>A</b> added</span><span data-s="M"><b>M</b> modified</span><span data-s="D"><b>D</b> deleted</span><span data-s="X"><b>±</b> mixed</span></p>
+      <p id="tt-missing" class="tt-note" hidden>This checkpoint is older than the loaded conversation.</p>
+    </div>
+    <div id="tt-detail" class="tt-detail" aria-busy="false">
+      <p id="tt-summary" class="tt-summary" role="status"></p>
+      <div id="tt-counts"></div>
+      <label class="tt-base"><span>Compare with</span>
+        <select id="tt-base" class="input"><option value="prev">Previous checkpoint</option><option value="turn">Start of this turn</option><option value="0">Thread start</option></select>
+      </label>
+      <p id="tt-truncated" class="tt-note" hidden>Diff truncated at 1 MB.</p>
+      <details class="tt-files-wrap" open><summary>Changed files</summary>
+        <ul id="tt-files" class="tt-files"></ul>
+        <p id="tt-files-none" class="tt-note" hidden>No file changes.</p>
+      </details>
+    </div>
+    <div id="tt-actions" class="tt-actions">
+      <button id="tt-rewind" class="btn primary" type="button">Rewind files here</button>
+      <button id="tt-fork" class="btn" type="button">Fork from here</button>
+    </div>
+  </aside>
 </div>
 <div id="dropzone" aria-hidden="true"><div>Drop files to attach</div></div>
 <div id="toast" role="status" hidden></div>
@@ -228,6 +266,20 @@
   <ul id="todo-list" class="todo-list" aria-label="Todos"></ul>
   <p id="todo-empty" class="sub" hidden>Nothing to do yet.</p>
   <div class="row"><button id="todo-close" class="btn" type="button">Close</button></div>
+</dialog>
+<dialog id="tt-confirm" class="tt-confirm" aria-labelledby="tt-confirm-title">
+  <h2 id="tt-confirm-title">Rewind files?</h2>
+  <p id="tt-confirm-sub" class="sub"></p>
+  <p id="tt-confirm-wait" class="sub" role="status">Checking what would change…</p>
+  <p id="tt-confirm-warn" class="callout" role="alert" hidden><svg class="ico" aria-hidden="true"><use href="#i-alert"/></svg><span id="tt-confirm-warn-text"></span></p>
+  <div id="tt-confirm-counts"></div>
+  <ul id="tt-confirm-files" class="tt-files tt-scroll" aria-label="Files that will change"></ul>
+  <p id="tt-confirm-error" role="alert"></p>
+  <div class="row"><button id="tt-confirm-cancel" class="btn" type="button">Cancel</button><button id="tt-confirm-go" class="btn primary" type="button" disabled>Rewind</button></div>
+</dialog>
+<dialog id="tt-diff-dialog" class="tt-diff-dialog" aria-labelledby="tt-diff-title">
+  <header class="tt-head"><!-- biome-ignore lint/a11y/useHeadingContent: file path is filled at runtime by time-travel.js --><h2 id="tt-diff-title"></h2><button id="tt-diff-close" class="btn icon ghost" type="button" aria-label="Close diff" title="Close diff"><svg class="ico" aria-hidden="true"><use href="#i-x"/></svg></button></header>
+  <pre class="tt-diff"><code id="tt-diff-code"></code></pre>
 </dialog>
 <dialog id="queue-editor" aria-labelledby="queue-edit-title"><form id="queue-edit-form">
   <h2 id="queue-edit-title">Edit queued message</h2>
