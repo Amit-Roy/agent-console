@@ -89,6 +89,10 @@ const AUTO_ALLOWED_TOOLS = [
   "mcp__agent_console__cli_search",
   "mcp__agent_console__thread_list",
   "mcp__agent_console__thread_send",
+  "mcp__agent_console__todo_list",
+  "mcp__agent_console__todo_add",
+  "mcp__agent_console__todo_complete",
+  "mcp__agent_console__todo_remove",
 ];
 
 function respondControl(ctx: ControlContext, requestId: string, response: object) {

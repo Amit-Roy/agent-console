@@ -63,6 +63,7 @@ import {
 import { suggestTitle, titleText } from "./providers/title.ts";
 import { type PendingQuestion, Questions } from "./questions.ts";
 import { ThreadToolAuth } from "./thread-tool-auth.ts";
+import { cleanTodoText, MAX_TODOS, type Todo, Todos } from "./todos.ts";
 import { fromProcess, runFacts, TurnClock, TurnTimingStore } from "./turn-timing.ts";
 import {
   MAX_ATTACHMENTS,
@@ -117,6 +118,7 @@ export interface Thread {
   replay?: boolean; // forked from an agent with no native fork: the first message carries the earlier conversation as text
   replayLimit?: number; // explicit short handoff instead of native session or full text replay
   status: "idle" | "running";
+  todoOpen?: number; // unchecked items on the thread's todo list (badge count; the list itself lives in todos.json)
   waiting?: number; // unanswered blocking requests or persistent async questions
   background?: number; // background subagents still working after the turn ended; their completion wakes the agent
   operation?: "compact";
@@ -141,6 +143,7 @@ const THREADS_FILE = path.join(DATA_DIR, "threads.json");
 const COMMANDS_FILE = path.join(DATA_DIR, "commands.json");
 const QUEUES_FILE = path.join(DATA_DIR, "queues.json");
 const QUESTIONS_FILE = path.join(DATA_DIR, "questions.json");
+const TODOS_FILE = path.join(DATA_DIR, "todos.json");
 const LOG_DIR = path.join(DATA_DIR, "logs");
 fs.mkdirSync(LOG_DIR, { recursive: true, mode: 0o700 });
 
@@ -727,6 +730,7 @@ function carryForkSession(
 
 export class Threads {
   private questions = new Questions();
+  private todos = new Todos(TODOS_FILE);
   private threadToolAuth = new ThreadToolAuth();
   private idleCompactionTimers = new IdleCompactionTimers();
   private closed = false;
@@ -1299,6 +1303,54 @@ export class Threads {
       child.claudeAccount = requireClaudeAccount(pick.claudeAccount);
   }
 
+  getTodos(threadId: string): Todo[] {
+    return this.todos.list(threadId);
+  }
+
+  /** One todo operation for a thread: validates, updates the badge count, persists and tells every client. */
+  todo(
+    op: "get" | "add" | "set" | "remove",
+    threadId: string,
+    input: { items?: unknown; id?: unknown; done?: unknown; by?: Todo["by"] } = {},
+  ): Todo[] {
+    const thread = this.threads.get(threadId);
+    if (!thread) throw new Error("No such thread.");
+    if (op === "add") this.addTodos(threadId, input.items, input.by ?? "user");
+    else if (op === "set") this.todos.setDone(threadId, input.id, input.done !== false);
+    else if (op === "remove") this.todos.remove(threadId, input.id);
+    const list = this.todos.list(threadId);
+    const open = this.todos.openCount(threadId);
+    if (op !== "get" && (thread.todoOpen ?? 0) !== open) {
+      if (open) thread.todoOpen = open;
+      else delete thread.todoOpen;
+      this.persist();
+      this.emit({ t: "thread", thread });
+    }
+    if (op !== "get") this.emit({ t: "todos", thread: threadId, todos: list });
+    return list;
+  }
+
+  private addTodos(threadId: string, items: unknown, by: Todo["by"]) {
+    const texts = (Array.isArray(items) ? items : [items]).map(cleanTodoText);
+    if (this.todos.list(threadId).length + texts.length > MAX_TODOS)
+      throw new Error(`A thread holds at most ${MAX_TODOS} todos. Remove some first.`);
+    for (const text of texts) this.todos.add(threadId, text, by);
+  }
+
+  /** Agent tool calls: the caller's own list, returned as text with ids visible. */
+  todoTool(name: string, threadId: string | undefined, input: any): string {
+    if (!threadId || !this.threads.has(threadId))
+      throw new Error("Todo tools require an Agent Console thread.");
+    const args = input && typeof input === "object" && !Array.isArray(input) ? input : {};
+    const op = { todo_list: "get", todo_add: "add", todo_complete: "set", todo_remove: "remove" }[
+      name
+    ] as "get" | "add" | "set" | "remove";
+    const list = this.todo(op, threadId, { ...args, by: "agent" });
+    return list.length
+      ? list.map((t) => `[${t.done ? "x" : " "}] ${t.id} ${t.text}`).join("\n")
+      : "The todo list is empty.";
+  }
+
   remove(id: string) {
     if (!safeId(id) || !this.threads.has(id)) return;
     this.cancelQuestions(id, true);
@@ -1306,6 +1358,7 @@ export class Threads {
     this.queues.delete(id);
     this.emitQueue(id);
     this.idleCompactionTimers.cancel(id);
+    this.todos.dropThread(id);
     this.threads.delete(id);
     this.titling.delete(id);
     this.persist();
@@ -1363,7 +1416,7 @@ export class Threads {
         const buf = Buffer.alloc(len);
         await handle.read(buf, 0, len, pos);
         rest = Buffer.concat([buf, rest]);
-        let from = pos > 0 ? rest.indexOf(10) + 1 : 0; // a partial first line waits for the next chunk
+        const from = pos > 0 ? rest.indexOf(10) + 1 : 0; // a partial first line waits for the next chunk
         if (pos > 0 && from === 0) continue;
         const lines = rest.subarray(from).toString("utf8").split("\n").filter(Boolean);
         rest = rest.subarray(0, from);

@@ -50,7 +50,16 @@ for (const tool of [
   "schedule_transcript",
 ])
   assert.equal(gate(derived, "auto-1", tool).status, 200, tool);
-for (const tool of ["schedule_create", "schedule_run_now", "schedule_config_update", "pi_research"])
+assert.equal(gate(derived, "auto-1", "todo_list").status, 200);
+for (const tool of [
+  "schedule_create",
+  "schedule_run_now",
+  "schedule_config_update",
+  "pi_research",
+  "todo_add",
+  "todo_complete",
+  "todo_remove",
+])
   assert.equal(gate(derived, "auto-1", tool).status, 400, tool);
 // a derived token for a thread the Console does not know as an issue run is still restricted
 const other = derivedToolToken(master, "unknown");

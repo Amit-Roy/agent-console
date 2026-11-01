@@ -45,6 +45,58 @@ export const TOOLS = [
     },
   },
   {
+    name: "todo_list",
+    label: "List todos",
+    description:
+      "List this thread's todo checklist with ids and done state. The user sees and edits the same list in Agent Console.",
+    parameters: { type: "object", additionalProperties: false, properties: {} },
+  },
+  {
+    name: "todo_add",
+    label: "Add todos",
+    description:
+      'Add items to this thread\'s todo checklist, e.g. items ["write tests", "update docs"]. Returns the full list with ids. Max 100 items, 500 characters each.',
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      required: ["items"],
+      properties: {
+        items: {
+          type: "array",
+          minItems: 1,
+          maxItems: 100,
+          items: { type: "string", minLength: 1, maxLength: 500 },
+        },
+      },
+    },
+  },
+  {
+    name: "todo_complete",
+    label: "Complete a todo",
+    description:
+      "Mark a todo done (or not done with done=false). Use the id from todo_list. Returns the full list.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      required: ["id"],
+      properties: {
+        id: { type: "string", description: "Todo id from todo_list." },
+        done: { type: "boolean", description: "Default true." },
+      },
+    },
+  },
+  {
+    name: "todo_remove",
+    label: "Remove a todo",
+    description: "Delete a todo by id from todo_list. Returns the full list.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      required: ["id"],
+      properties: { id: { type: "string", description: "Todo id from todo_list." } },
+    },
+  },
+  {
     name: "session_redact",
     label: "Clean session credentials",
     description:

@@ -410,6 +410,72 @@ try {
       });
       await visual.close();
     }
+  // Todos: user edits update the badge; an agent adding through the tool endpoint shows up live.
+  {
+    const todoContext = await browser.newContext({
+      viewport: { width: 1280, height: 900 },
+      colorScheme: "dark",
+      serviceWorkers: "block",
+    });
+    await todoContext.addCookies([
+      {
+        name: "__Host-ac_session",
+        value: makeToken(),
+        domain: new URL(base).hostname,
+        path: "/",
+        secure: true,
+      },
+    ]);
+    const todoPage = await todoContext.newPage();
+    todoPage.on("pageerror", (error) => errors.push(error.message));
+    await todoPage.goto(base);
+    await todoPage.waitForFunction(
+      () =>
+        document.getElementById("ttl")?.textContent === "Search conversation" &&
+        !(document.getElementById("input") as HTMLTextAreaElement)?.disabled,
+    );
+    const badge = todoPage.locator("#todo-badge");
+    assert.equal(await badge.isHidden(), true, "badge hidden at zero");
+    await todoPage.click("#todo-toggle");
+    await todoPage.fill("#todo-input", "first task");
+    await todoPage.click("#todo-add");
+    await todoPage.fill("#todo-input", "second task");
+    await todoPage.press("#todo-input", "Enter");
+    await todoPage.waitForFunction(
+      () => document.getElementById("todo-badge")?.textContent === "2",
+    );
+    await todoPage.locator("#todo-list li", { hasText: "first task" }).locator("input").check();
+    await todoPage.waitForFunction(
+      () => document.getElementById("todo-badge")?.textContent === "1",
+    );
+    assert.equal(
+      await todoPage.locator("#todo-list li").last().textContent(),
+      "first task",
+      "done rows sort last",
+    );
+    await todoPage.locator("#todo-list li", { hasText: "second task" }).locator("button").click();
+    await todoPage.waitForFunction(() => document.getElementById("todo-badge")?.hidden === true);
+    await todoPage.click("#todo-close");
+    await todoPage.click("#todo-toggle");
+    await todoPage.fill("#todo-input", "x");
+    await todoPage.click("#todo-close");
+    await todoPage.fill("#input", "todo agent added");
+    await todoPage.press("#input", "Enter");
+    await todoPage.waitForFunction(
+      () => document.getElementById("todo-badge")?.textContent === "1",
+    );
+    await todoPage.click("#todo-toggle");
+    await todoPage.locator("#todo-list li", { hasText: "agent added" }).waitFor();
+    await todoPage.screenshot({ path: path.join(shots, "todos-desktop.png") });
+    await todoPage.setViewportSize({ width: 412, height: 800 });
+    assert.equal(
+      await todoPage.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
+      true,
+      "todo sheet has no horizontal overflow on phones",
+    );
+    await todoPage.screenshot({ path: path.join(shots, "todos-mobile.png") });
+    await todoContext.close();
+  }
   assert.deepEqual(errors, [], "search causes no browser errors");
   console.log(
     "PASS chat search: old history, case, literal text, highlight, navigation, empty results, shortcuts, menu, reset, responsive themes",

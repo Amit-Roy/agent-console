@@ -26,6 +26,7 @@ import {
 } from "./render.js";
 import { createSchedules, DAY_ITEMS, REPEAT_ITEMS } from "./schedules.js";
 import { createLatencyReporter } from "./telemetry.js";
+import { createTodos } from "./todos.js";
 import { toolName, toolSummary } from "./tool-display.js";
 
 composerField($("input"));
@@ -258,6 +259,7 @@ const send = (o) => {
   ws.send(JSON.stringify(o));
   return true;
 };
+const todos = createTodos({ send, current: () => state.current });
 const questions = createQuestions({
   send,
   root: () => $("chat"),
@@ -539,7 +541,16 @@ function onThreadMessage(message) {
   } else renderUsage();
 }
 
+function onTodosMessage(message) {
+  todos.set(message.thread, message.todos);
+}
+
+function onTodoErrorMessage(message) {
+  todos.error(message.thread, message.message);
+}
+
 function onRemovedMessage(message) {
+  todos.forget(message.thread);
   state.threads.delete(message.thread);
   views.delete(message.thread);
   for (const item of [...outbox]) if (item.thread === message.thread) acked(item.cid);
@@ -671,6 +682,8 @@ const MESSAGE_HANDLERS = {
   hello: onHelloMessage,
   thread: onThreadMessage,
   removed: onRemovedMessage,
+  todos: onTodosMessage,
+  todo_error: onTodoErrorMessage,
   created: onCreatedMessage,
   tasks: onTasksMessage,
   task_saved: onTaskSavedMessage,
@@ -2296,6 +2309,7 @@ function renderHead() {
   menus.mode.setDisabled(!thread || running);
   $("more").disabled = !thread;
   $("chat-search-toggle").disabled = !thread;
+  todos.renderBadge(thread);
   $("state").hidden = !running && !thread?.background && !questions.count(state.current);
   $("input").disabled = !thread;
   $("attach").disabled = !thread;
