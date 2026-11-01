@@ -409,7 +409,7 @@
     {
       "from": "render",
       "to": "lazy-chunks",
-      "label": "ensureLanguage, highlightIdle",
+      "label": "lazy import",
       "status": "added"
     },
     {
