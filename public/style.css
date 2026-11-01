@@ -3936,7 +3936,6 @@ body.login {
     border-top-color: var(--accent);
     border-right-color: var(--accent);
   }
-  .dot.running,
   .think.live .ico {
     animation: none;
   }

@@ -18,7 +18,8 @@ try {
     return { iterations: computed.animationIterationCount, name: computed.animationName };
   });
   assert.equal(style.iterations, "infinite", "running dot pulse repeats under reduced motion");
-  console.log(`reduced-motion ok (animation-name=${style.name})`);
+  assert.equal(style.name, "pulse", "running dot pulse animation is not disabled");
+  console.log("reduced-motion ok");
   await context.close();
 } finally {
   await browser.close();
