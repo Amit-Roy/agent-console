@@ -15,7 +15,13 @@ import { DATA_DIR } from "./auth.ts";
 import { AUTO_CONTINUE_PROMPT, autoContinueEnabled } from "./auto-continue.ts";
 import { redact } from "./automation/events.ts";
 import { assertAutomationSandbox } from "./automation/sandbox.ts";
-import { type CheckpointKind, snapshot } from "./checkpoints.ts";
+import {
+  type CheckpointKind,
+  list as listCheckpoints,
+  preview as previewRewind,
+  restore as restoreCheckpoint,
+  snapshot,
+} from "./checkpoints.ts";
 import { CONSOLE_COMMANDS, commandList, parseCommand } from "./commands.ts";
 import { recentPreamble, replayPreamble } from "./export.ts";
 import { headroom } from "./headroom.ts";
@@ -1050,6 +1056,59 @@ export class Threads {
   }
   get(id: string) {
     return this.threads.get(id);
+  }
+
+  private rewindNotes = new Map<string, string>(); // one-shot prefix for the next prompt after a rewind
+
+  private realFolder(cwd: string) {
+    try {
+      return fs.realpathSync(cwd);
+    } catch {
+      return cwd;
+    }
+  }
+
+  /** Ids of running threads that share this thread's folder (a rewind would pull files from under them). */
+  runningInFolder(thread: Thread): string[] {
+    const folder = this.realFolder(thread.cwd);
+    return this.list()
+      .filter((other) => other.status === "running" && this.realFolder(other.cwd) === folder)
+      .map((other) => other.id);
+  }
+
+  /** Rewind a thread's folder to checkpoint `seq`; dryRun only reports what would change. */
+  async rewind(
+    threadId: string,
+    seq: number,
+    opts: { dryRun?: boolean; expectCommit?: string } = {},
+  ) {
+    const thread = this.threads.get(threadId);
+    if (!thread) return { code: 404, body: { error: "Unknown thread." } };
+    const busy = this.runningInFolder(thread);
+    if (busy.length) return { code: 409, body: { error: "busy", threads: busy } };
+    const all = await listCheckpoints(threadId, thread.cwd);
+    const target = all.find((entry) => entry.seq === seq);
+    if (!target) return { code: 404, body: { error: "Unknown checkpoint." } };
+    const latest = all[all.length - 1];
+    if (opts.expectCommit && opts.expectCommit !== latest.commit)
+      return { code: 409, body: { error: "stale" } };
+    if (opts.dryRun)
+      return {
+        code: 200,
+        body: await previewRewind(thread.cwd, threadId, target.commit, latest.commit),
+      };
+    const before = await snapshot({ cwd: thread.cwd, threadId, kind: "pre_rewind" });
+    if (before && "status" in before) return { code: 409, body: { error: "too_big" } };
+    if (before) this.publish(threadId, { type: "checkpoint", ...before });
+    const preRewindSeq = before ? before.seq : latest.seq;
+    await restoreCheckpoint(thread.cwd, threadId, target.commit);
+    this.publish(threadId, { type: "rewound", seq, preRewindSeq });
+    this.emit({ t: "rewound", thread: threadId, seq, preRewindSeq });
+    this.rewindNotes.set(
+      threadId,
+      `[Files rewound to checkpoint ${seq}; re-read files before editing.]\n\n`,
+    );
+    return { code: 200, body: { preRewindSeq } };
   }
   /** Snapshot only transcript-derived catalog text for the private cleanup pipe. */
   redactionCatalog() {
@@ -2664,8 +2723,12 @@ export class Threads {
     opts: SendOptions,
     attachments: ReturnType<typeof resolveAttachments>,
   ): string {
+    const note = this.rewindNotes.get(thread.id) ?? "";
+    this.rewindNotes.delete(thread.id);
     const prompt =
-      withFileList(text, attachments) + (opts.instructions ? `\n\n---\n${opts.instructions}` : "");
+      note +
+      withFileList(text, attachments) +
+      (opts.instructions ? `\n\n---\n${opts.instructions}` : "");
     if (!thread.replay || opts.auto) return prompt;
     const preamble =
       thread.replayLimit === 6000

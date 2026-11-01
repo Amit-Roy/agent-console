@@ -55,6 +55,13 @@ import {
 import { BenchmarkError, benchmarkUsage, createBenchmarks } from "./benchmarks.ts";
 import { createBootTiming } from "./boot-timing.ts";
 import { BrainGraph, BrainGraphError } from "./brain-graph.ts";
+import {
+  type CheckpointInfo,
+  diff as diffCheckpoint,
+  EMPTY_TREE,
+  fileAt as fileAtCheckpoint,
+  list as listCheckpoints,
+} from "./checkpoints.ts";
 import { cancelClaudeLogin, finishClaudeLogin, startClaudeLogin } from "./claude-login.ts";
 import { CliSearch } from "./cli-search.ts";
 import { mountMaps } from "./codemap/http.ts";
@@ -63,7 +70,7 @@ import { consoleCliTool, isConsoleCliTool } from "./console-cli-tools.ts";
 import { contextAllocation } from "./context-allocation.ts";
 import { createDoctor } from "./doctor.ts";
 import { threadToMarkdown } from "./export.ts";
-import { fileMedia, fileTree, fileViewer } from "./files.ts";
+import { fileMedia, fileTree, fileViewer, sensitive as sensitiveFile } from "./files.ts";
 import { refHandler } from "./gh-refs.ts";
 import { headroom, metricsIngest } from "./headroom.ts";
 import { HeadroomProfileStore } from "./headroom-profile.ts";
@@ -1165,6 +1172,72 @@ app.get("/api/context-allocation/:thread", async (req, res) => {
   if (!thread) return void res.status(404).json({ error: "Unknown thread." });
   res.json(await contextAllocation(thread));
 });
+// Commit the diff starts from: the previous checkpoint, the turn's start, or the thread's first.
+function diffBase(all: CheckpointInfo[], seq: number, mode: string): string | null {
+  if (mode === "prev") return all.find((entry) => entry.seq === seq - 1)?.commit ?? EMPTY_TREE;
+  if (mode === "0") return all[0].commit;
+  if (mode !== "turn") return null;
+  const starts = all.filter((entry) => entry.seq <= seq && entry.kind === "turn_start");
+  return starts.length ? starts[starts.length - 1].commit : all[0].commit;
+}
+const checkpointSeq = (value: string) => (/^\d{1,9}$/.test(value) ? Number(value) : 0);
+app.get("/api/threads/:id/checkpoints", async (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  const thread = threads.get(req.params.id);
+  if (!thread) return void res.status(404).json({ error: "Unknown thread." });
+  res.json(await listCheckpoints(thread.id, thread.cwd));
+});
+app.get("/api/threads/:id/checkpoints/:seq/diff", async (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  const thread = threads.get(req.params.id);
+  if (!thread) return void res.status(404).json({ error: "Unknown thread." });
+  const all = await listCheckpoints(thread.id, thread.cwd);
+  const seq = checkpointSeq(req.params.seq);
+  const target = all.find((entry) => entry.seq === seq);
+  if (!target) return void res.status(404).json({ error: "Unknown checkpoint." });
+  const mode = String(req.query.base ?? "prev");
+  const base = diffBase(all, seq, mode);
+  if (!base) return void res.status(400).json({ error: "Unknown base." });
+  const file = typeof req.query.path === "string" && req.query.path ? req.query.path : undefined;
+  res.json(await diffCheckpoint(thread.cwd, target.commit, base, file));
+});
+app.get("/api/threads/:id/checkpoints/:seq/file", async (req, res) => {
+  const thread = threads.get(req.params.id);
+  if (!thread) return void res.status(404).json({ error: "Unknown thread." });
+  const file = typeof req.query.path === "string" ? req.query.path : "";
+  if (!file) return void res.status(400).json({ error: "Missing path." });
+  if (sensitiveFile(path.join(path.sep, file)))
+    return void res.status(403).json({ error: "Sensitive file." });
+  const all = await listCheckpoints(thread.id, thread.cwd);
+  const target = all.find((entry) => entry.seq === checkpointSeq(req.params.seq));
+  const bytes = target ? await fileAtCheckpoint(thread.cwd, target.commit, file) : null;
+  if (!bytes) return void res.status(404).json({ error: "Not found." });
+  res
+    .type("text/plain; charset=utf-8")
+    .set({ "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store" })
+    .send(bytes);
+});
+app.post(
+  "/api/threads/:id/checkpoints/:seq/rewind",
+  sameOrigin,
+  express.json({ limit: "4kb" }),
+  async (req, res) => {
+    const seq = checkpointSeq(req.params.seq);
+    if (!seq) return void res.status(404).json({ error: "Unknown checkpoint." });
+    const expectCommit =
+      typeof req.body?.expectCommit === "string" ? req.body.expectCommit : undefined;
+    try {
+      const out = await threads.rewind(req.params.id, seq, {
+        dryRun: req.body?.dryRun === true,
+        expectCommit,
+      });
+      res.status(out.code).json(out.body);
+    } catch (error) {
+      console.error("rewind failed:", error);
+      res.status(500).json({ error: "Rewind failed." });
+    }
+  },
+);
 app.get("/api/automation", (req, res) => {
   res.setHeader("Cache-Control", "no-store");
   try {

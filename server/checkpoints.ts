@@ -31,7 +31,7 @@ export type SnapshotResult = Checkpoint | null | { status: "too_big" };
 export const MAX_FILE_BYTES = 10 * 1024 * 1024;
 export const MAX_FILES = 50_000;
 export const MAX_DIFF_BYTES = 1 << 20;
-const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+export const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 const HASH = /^[0-9a-f]{40}$/;
 const SAFE_ID = /^[A-Za-z0-9_-]{1,128}$/;
 const IDENTITY = {
@@ -364,6 +364,58 @@ export async function restore(
       await git(folder, ["restore", `--source=${targetCommit}`, "--worktree", "--", ":/"], {
         index: scratch,
       });
+    } finally {
+      await fs.promises.rm(scratch, { force: true });
+    }
+  });
+}
+
+export type RewindPreview = {
+  files: { p: string; s: FileChange["s"] }[];
+  outside: string[];
+};
+
+// What restore(targetCommit) would change, and which files differ from latestCommit right now
+// (edits made outside the thread's own checkpoints). Reads only; the folder is not touched.
+export async function preview(
+  cwd: string,
+  threadId: string,
+  targetCommit: string,
+  latestCommit: string | null,
+  dataDir: string = DATA_DIR,
+): Promise<RewindPreview> {
+  checkId(threadId);
+  checkCommit(targetCommit);
+  if (latestCommit) checkCommit(latestCommit);
+  const folder = await openFolder(cwd, dataDir);
+  return serial(folder.shadow, async () => {
+    const scratch = path.join(folder.shadow, `index-preview-${process.pid}-${Date.now()}`);
+    try {
+      const { secret, big } = await leftOut(folder, scratch);
+      await stageAll(folder, scratch, [...secret, ...big]);
+      const current = (await git(folder, ["write-tree"], { index: scratch })).trim();
+      const names = async (base: string, other: string) =>
+        [
+          ...parseNameStatus(
+            await git(folder, [
+              "diff-tree",
+              "-r",
+              "-z",
+              "--no-renames",
+              "--name-status",
+              base,
+              other,
+            ]),
+          ),
+        ].filter(([filePath]) => !isSensitive(filePath));
+      const files = (await names(current, targetCommit)).map(([filePath, status]) => ({
+        p: filePath,
+        s: status,
+      }));
+      const outside = latestCommit
+        ? (await names(latestCommit, current)).map(([filePath]) => filePath)
+        : [];
+      return { files, outside };
     } finally {
       await fs.promises.rm(scratch, { force: true });
     }
