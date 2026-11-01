@@ -312,6 +312,46 @@ a.mp-name:focus-visible {
 }
 
 /* Change-status legend is meaningful for PR diagrams only; maps are always "unchanged". */
-.diagram .legend {
+.diagram .arch .legend {
   display: none;
+}
+/* Layout-only wrapper rows in the overview: border "none" groups hide their (required) title. */
+.diagram .arch .group.none > header {
+  display: none;
+}
+.diagram .arch .group.none {
+  padding: 0;
+}
+.steps {
+  margin: 0;
+  padding-left: var(--sp-5);
+  color: var(--t2);
+  font: var(--fw-reg) var(--f-md);
+  display: grid;
+  gap: var(--sp-2);
+}
+.steps strong {
+  color: var(--t1);
+  font-weight: var(--fw-semi);
+}
+/* Phone: overview rows stack, one system per row. */
+@media (max-width: 40rem) {
+  .diagram .arch .canvas > .items.row,
+  .diagram .arch .group.none > .items.row {
+    flex-direction: column;
+  }
+}
+/* Map view: the diagram card uses the full viewport width; text panels keep a readable measure. */
+#mp:has(#mapView:not([hidden])) {
+  width: 100%;
+}
+#mapView > .panel {
+  max-width: 60rem;
+}
+/* Tighter stacks than PR diagrams: the overview has many more nodes. */
+.diagram .arch .group > .items.column {
+  row-gap: 44px;
+}
+.diagram .arch .canvas > .items.column {
+  row-gap: 56px;
 }

@@ -11,6 +11,7 @@ const COLUMN_AFTER = 4; // groups with more children stack as a column (phone re
 const DESC_MAX = 56;
 const EDGE_LABEL_MAX = 40;
 const DETAIL_FILES = 30;
+const ROW_MAX = 3; // systems per overview row (desktop readability)
 const OVERVIEW_DEGREE_CAP = 5;
 const MIN_EDGE_COUNT = 2; // overview drops one-off imports
 const MIN_EDGE_SHARE = 0.03; // ...and imports far lighter than the heaviest link
@@ -81,7 +82,7 @@ const LOOSE_GROUPS: Array<{
 }> = [
   {
     id: "grp:modules",
-    label: "Modules",
+    label: "Other",
     icon: "blocks",
     color: "blue",
     kinds: ["feature", "service"],
@@ -306,12 +307,35 @@ function callersFirst(map: CodeMap, lanes: Array<{ lane: number; loc: number; it
   return order.map((ranked) => ranked.entry);
 }
 
+/** Leaf modules, the one definition shared by list, dashboard, subtitle and brief. */
+export function moduleCount(map: Pick<CodeMap, "architecture">): number {
+  return map.architecture.nodes.filter((node) => node.kind !== "system" && node.kind !== "external")
+    .length;
+}
+
+/** Packs ordered groups into balanced borderless rows of at most ROW_MAX so the overview stays narrow. */
+function inRows(items: SpecGroup[]): SpecGroup[] {
+  if (items.length <= ROW_MAX) return items;
+  const rows = Math.ceil(items.length / ROW_MAX);
+  const size = Math.ceil(items.length / rows);
+  const wrapped: SpecGroup[] = [];
+  for (let index = 0; index < items.length; index += size)
+    wrapped.push({
+      group: `Row ${wrapped.length + 1}`, // header hidden by maps.css (.group.none)
+      border: "none",
+      direction: "row",
+      items: items.slice(index, index + size),
+    });
+  return wrapped;
+}
+
 /** Whole-repo diagram: systems as groups, modules as nodes, the heaviest module links as edges. */
 export function overviewView(map: CodeMap): MapView {
   const { project } = map.architecture;
   const lanes = callersFirst(map, [...systemGroups(map), ...looseGroups(map)]);
-  const items = lanes.map((entry) => entry.item);
-  const shown = collectNodeIds(items);
+  const flat = lanes.map((entry) => entry.item);
+  const items = inRows(flat);
+  const shown = collectNodeIds(flat);
   const drill: Record<string, string> = {};
   for (const nodeId of shown) if (hasFiles(map, nodeId)) drill[nodeId] = nodeId;
   const totals = Object.values(map.fileLoc);
@@ -320,8 +344,8 @@ export function overviewView(map: CodeMap): MapView {
     subtitle: `${plural(totals.length, "file")} · ${plural(
       totals.reduce((sum, loc) => sum + loc, 0),
       "line",
-    )} · ${plural(Object.keys(drill).length, "module")}`,
-    direction: "row",
+    )} · ${plural(moduleCount(map), "module")}`,
+    direction: items === flat ? "row" : "column",
     items: items.length ? items : [{ id: "empty", label: "No files", icon: "folder" }],
     edges: overviewEdges(map, shown),
   };
@@ -564,7 +588,11 @@ export function flowView(map: CodeMap, flowId: string): MapView {
   const items = flowItems(map, stepNodes);
   const drill: Record<string, string> = {};
   for (const nodeId of collectNodeIds(items)) if (hasFiles(map, nodeId)) drill[nodeId] = nodeId;
-  const summary = flow.steps.map((step, index) => `${index + 1}. ${step.note}`).join(" ");
+  const nodes = nodeIndex(map);
+  const steps = flow.steps.map((step) => ({
+    label: nodes.get(step.node)?.label ?? step.node,
+    note: step.note,
+  }));
   return {
     spec: {
       title: flow.title,
@@ -576,7 +604,7 @@ export function flowView(map: CodeMap, flowId: string): MapView {
     drill,
     // Flows are not architecture nodes; the flow crumb (current page) opens the overview.
     crumbs: [overviewCrumb(map), { id: null, label: flow.title }],
-    details: { title: flow.title, summary, files: [] },
+    details: { title: flow.title, summary: "", steps, files: [] },
     flows: flowList(map),
   };
 }

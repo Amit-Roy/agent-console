@@ -234,10 +234,21 @@ function renderTabs(view, route) {
   $("tabs").hidden = !view.flows.length;
 }
 
+function stepList(steps) {
+  const list = el("ol", "steps");
+  for (const step of steps) {
+    const row = el("li");
+    row.append(el("strong", "", step.label), document.createTextNode(` ${step.note}`));
+    list.append(row);
+  }
+  return list;
+}
+
 function renderDetails(details) {
   const box = $("details");
   box.replaceChildren(el("h2", "", details.title));
   if (details.summary) box.append(el("p", "", details.summary));
+  if (details.steps?.length) box.append(stepList(details.steps));
   if (!details.files.length) return;
   const list = el("ul", "files");
   for (const file of details.files) {

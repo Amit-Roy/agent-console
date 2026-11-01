@@ -16,6 +16,7 @@ import {
   refreshGithub,
   resolveLocal,
 } from "./source.ts";
+import { moduleCount } from "./spec.ts";
 import { listMaps, type MapMeta, type MapStatus, mapDir, readMeta, writeMeta } from "./store.ts";
 import type { Architecture, CodeMap } from "./types.ts";
 
@@ -256,7 +257,7 @@ export class MapJobs {
     this.patch(slug, {
       status,
       files: scan.files.length,
-      modules: map.architecture.nodes.filter((node) => node.kind !== "system").length,
+      modules: moduleCount(map),
       loc: Object.values(map.fileLoc).reduce((sum, loc) => sum + loc, 0),
       commit: commit ?? undefined,
       described: described ? 1 : 0,

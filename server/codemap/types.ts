@@ -51,7 +51,12 @@ export interface MapView {
   spec: unknown; // arch JSON spec, passes public/arch.js validateArch
   drill: Record<string, string>; // spec item id -> ArchNode id to open on click
   crumbs: Array<{ id: string | null; label: string }>; // null id = overview
-  details: { title: string; summary: string; files: Array<{ path: string; loc: number }> };
+  details: {
+    title: string;
+    summary: string;
+    steps?: Array<{ label: string; note: string }>;
+    files: Array<{ path: string; loc: number }>;
+  };
   flows: Array<{ id: string; title: string }>;
 }
 
