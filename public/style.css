@@ -3926,13 +3926,14 @@ body.login {
     animation-iteration-count: 1 !important;
     transition-duration: 0.001ms !important;
   }
-  /* opacity-only status pulse; no motion, so exempt */
+  /* opacity-only status pulse (dot and spinner); no motion, so exempt */
   .dot.running {
     animation-duration: 1.4s !important;
     animation-iteration-count: infinite !important;
   }
+  /* static half ring + opacity pulse; no rotation */
   .spin {
-    animation: none;
+    animation: pulse 1.4s ease-in-out infinite !important;
     border-top-color: var(--accent);
     border-right-color: var(--accent);
   }
