@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import type { MapsService } from "./codemap/types.ts";
 import { configPatch, positiveInteger } from "./console-cli-input.ts";
 import type { Ideas } from "./ideas.ts";
 import { PROVIDERS } from "./providers/index.ts";
@@ -16,12 +17,20 @@ const OPERATIONS = new Set([
   "schedule_report",
   "schedule_transcript",
   "schedule_config_update",
+  "map_add",
+  "map_list",
+  "map_status",
+  "map_show",
+  "map_spec",
+  "map_refresh",
+  "map_remove",
 ]);
 export const isConsoleCliTool = (name: string): boolean => OPERATIONS.has(name);
 type Services = {
   ideas: Pick<Ideas, "list" | "read">;
   schedules: Pick<Schedules, "list" | "get" | "update" | "outputs">;
   sessionSearch: Pick<SessionSearch, "read">;
+  maps?: MapsService;
 };
 
 function pickTask(schedules: Services["schedules"], identifier: unknown): Task {
@@ -107,6 +116,7 @@ export async function consoleCliTool(
 ): Promise<unknown> {
   if (!input || typeof input !== "object" || Array.isArray(input))
     throw new Error("Input must be an object.");
+  if (name.startsWith("map_")) return mapOperation(name, input, services.maps);
   if (name === "idea_list") return services.ideas.list();
   if (name === "idea_read") {
     if (typeof input.slug !== "string") throw new Error("Give an idea slug.");
@@ -115,6 +125,50 @@ export async function consoleCliTool(
   if (name === "schedule_config_list") return { tasks: services.schedules.list().map(taskConfig) };
   const task = pickTask(services.schedules, input.id);
   return taskOperation(name, input, task, services);
+}
+
+function mapSlug(input: Record<string, unknown>): string {
+  if (typeof input.slug !== "string" || !input.slug) throw new Error("Give a map slug.");
+  return input.slug;
+}
+
+function optionalText(value: unknown, label: string): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || !value) throw new Error(`${label} must be a non-empty string.`);
+  return value;
+}
+
+async function mapOperation(
+  name: string,
+  input: Record<string, unknown>,
+  maps: MapsService | undefined,
+): Promise<unknown> {
+  if (!maps) throw new Error("Codemap service is not available on this server.");
+  if (name === "map_list") return { maps: await maps.list() };
+  if (name === "map_add") {
+    if (typeof input.input !== "string" || !input.input.trim())
+      throw new Error("Give a path, owner/repo or GitHub URL.");
+    return maps.add(input.input);
+  }
+  const slug = mapSlug(input);
+  const node = optionalText(input.node, "module");
+  switch (name) {
+    case "map_status":
+      return maps.status(slug);
+    case "map_show":
+      return { brief: await maps.brief(slug, { node }) };
+    case "map_spec":
+      return {
+        spec: (await maps.view(slug, { node, flow: optionalText(input.flow, "flow") })).spec,
+      };
+    case "map_refresh":
+      return maps.refresh(slug, { describe: input.describe === true });
+    case "map_remove":
+      await maps.remove(slug);
+      return { removed: slug };
+    default:
+      throw new Error(`Unknown CLI operation ${name}.`);
+  }
 }
 
 async function taskOperation(

@@ -3,8 +3,9 @@ import { execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseIdeasArgs, parseTasksArgs } from "../scripts/console-cli-args.ts";
+import { parseCodemapArgs, parseIdeasArgs, parseTasksArgs } from "../scripts/console-cli-args.ts";
 import { CliSearch } from "../server/cli-search.ts";
+import { consoleCliTool } from "../server/console-cli-tools.ts";
 import { derivedToolToken } from "../server/tool-token.ts";
 import { createConsoleCliFixture } from "./console-cli-fixture.ts";
 
@@ -155,6 +156,50 @@ try {
   const badCredentials = await invoke("app-ideas", ["list"], { AGENT_CONSOLE_TOOL_TOKEN: "wrong" });
   assert.notEqual(badCredentials.code, 0);
   assert.match(badCredentials.stderr, /Not an Agent Console tool call/);
+  const mapArgs = (...args: string[]) => parseCodemapArgs(args);
+  assert.equal(mapArgs(), undefined);
+  assert.equal(mapArgs("-h"), undefined);
+  assert.deepEqual(mapArgs("add", "o/r", "--wait"), {
+    operation: "map_add",
+    input: { input: "o/r" },
+    wait: true,
+  });
+  assert.deepEqual(mapArgs("list")?.operation, "map_list");
+  assert.deepEqual(mapArgs("status", "demo")?.input, { slug: "demo" });
+  assert.deepEqual(mapArgs("show", "demo", "--module", "a.b")?.input, {
+    slug: "demo",
+    node: "a.b",
+  });
+  assert.deepEqual(mapArgs("spec", "demo", "--module", "a", "--flow", "f")?.input, {
+    slug: "demo",
+    node: "a",
+    flow: "f",
+  });
+  assert.deepEqual(mapArgs("refresh", "demo", "--describe")?.input, {
+    slug: "demo",
+    describe: true,
+  });
+  assert.equal(mapArgs("rm", "demo")?.operation, "map_remove");
+  for (const bad of [["bogus"], ["list", "x"], ["show"], ["show", "../x"], ["rm", "d", "--wait"]])
+    assert.throws(() => mapArgs(...bad), /codemap/);
+  const listedMaps = await invoke("codemap", ["list"]);
+  assert.equal(listedMaps.stdout.trim(), "demo  ready  12  3  yes  /tmp/demo");
+  const brief = await invoke("codemap", ["show", "demo"]);
+  assert.ok(brief.stdout.trim().split("\n").length <= 60);
+  assert.equal((await invoke("codemap", ["spec", "demo"])).stdout.trim(), '{"title":"Demo"}');
+  assert.equal(
+    (await invoke("codemap", ["add", "o/r", "--wait"])).stdout.split("\n")[0],
+    "demo ready",
+  );
+  assert.equal((await invoke("codemap", ["rm", "demo"])).stdout.trim(), "demo removed");
+  assert.equal((await invoke("codemap", ["show", "demo"], auto)).code, 0);
+  const mapDenied = await invoke("codemap", ["add", "o/r"], auto);
+  assert.notEqual(mapDenied.code, 0);
+  assert.match(mapDenied.stderr, /read-only/);
+  await assert.rejects(
+    () => consoleCliTool("map_list", {}, { ...fixture.services, maps: undefined }),
+    /not available/,
+  );
   process.env.AGENT_CONSOLE_TOOL_MANIFESTS = path.join(root, "tools.json");
   const search = new CliSearch();
   assert.match(search.search({ terms: ["app ideas"] }), /app-ideas:.*bin\/app-ideas/);
