@@ -1,6 +1,7 @@
 // Rendering and metrics helpers for the file viewer. All state lives on the shared `viewer` context.
 import {
   el as createElement,
+  ensureLanguage,
   highlightInto,
   langFromPath,
   langLabel,
@@ -225,12 +226,25 @@ function scrollToSelection(viewer, ref, selected, token) {
     );
 }
 
-function renderCode(viewer, lang, ref, range, token) {
+function appendCodeRows(viewer, lang, ref, range) {
   const fragment = document.createDocumentFragment();
   const highlighted = highlightedLines(viewer.content, lang);
   for (let index = 0; index < highlighted.length; index++)
     fragment.append(lineRow(highlighted[index], index, ref, range));
   viewer.body.append(fragment);
+}
+
+function renderCode(viewer, lang, ref, range, token) {
+  appendCodeRows(viewer, lang, ref, range);
+  // highlight.js loads lazily: show plain rows now, then swap in highlighted ones unless the viewer moved on.
+  const content = viewer.content;
+  ensureLanguage(lang).then((fresh) => {
+    if (!fresh || token !== viewer.generation || viewer.content !== content) return;
+    const top = viewer.body.scrollTop;
+    viewer.body.replaceChildren();
+    appendCodeRows(viewer, lang, ref, range);
+    viewer.body.scrollTop = top;
+  });
   requestAnimationFrame(() => scrollToSelection(viewer, ref, range.selected, token));
 }
 
