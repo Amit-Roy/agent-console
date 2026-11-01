@@ -5,6 +5,7 @@ Restricts variable axes (no glyph subsetting) and writes deterministic woff2.
 Setup: uv run --with-requirements scripts/fonts-requirements.txt scripts/build-fonts.py
    or: python3 -m venv /tmp/fv && /tmp/fv/bin/pip install -r scripts/fonts-requirements.txt
 """
+
 import sys
 from pathlib import Path
 
