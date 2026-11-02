@@ -27,6 +27,8 @@ Wall time of the whole run: 90 s. GitHub bills each job rounded up to a whole mi
 
 The `formal-queue` job now runs inside the `release` job: 17 s of Lean work on the already-billed runner instead of a minute of its own.
 
+Measured after the change (run 41390727063, `workflow_dispatch` on the PR branch): the `release` job, now with the Lean proofs, took 54 s, still 1 billed minute, and no `formal-queue` job ran. The shard jobs failed in that run at `npm run lint` with the same Biome diagnostics as the `main` run 41390069777 (CI-only; the repo lints clean locally with Biome 2.5.15), so a fully green wall time for the new layout is not measured yet.
+
 Reconciling the 1,809 minutes used in the billing cycle: at 10 billed minutes per pull request run that is about 180 runs, which fits a month of PR pushes, `main` pushes and Dependabot runs. The same 180 runs now bill about 1,630 minutes. `concurrency.cancel-in-progress` already cancels superseded runs, and the pre-commit hook below keeps broken pushes from spending a run at all. The shards stay at 3: two shards would push each job past 90 s and the wall time past 2 minutes for no billing gain.
 
 ## Keep, move or remove
