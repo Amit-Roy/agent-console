@@ -29,6 +29,17 @@ try {
   let result = run([worktree]);
   assert.equal(result.status, 0, "explicit clean worktree must pass without scanning ~/repos");
 
+  // Warnings and infos never fail Biome; printing thousands of them made green CI runs look broken (#434).
+  write("style.js", 'const name = "a";\nconsole.log("x" + name);\n');
+  result = run([worktree]);
+  assert.equal(result.status, 0, "warning-level diagnostics must not fail the lint step");
+  assert.doesNotMatch(
+    result.stdout + result.stderr,
+    /useTemplate|Found \d+ (warning|info)/,
+    "lint output must show errors only",
+  );
+  fs.unlinkSync(path.join(worktree, "style.js"));
+
   write("bad.js", "debugger;\n");
   result = run([worktree]);
   assert.notEqual(result.status, 0, "Biome failure must survive successful Ruff commands");

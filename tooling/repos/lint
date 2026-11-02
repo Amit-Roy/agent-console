@@ -60,7 +60,7 @@ for target do
       ruff check --config "$config_dir/ruff.shared.toml" --fix . || result=1
       ruff format --config "$config_dir/ruff.shared.toml" . || result=1
     else
-      biome_check --config-path="$config_dir/biome.shared.json" --no-errors-on-unmatched --max-diagnostics=50 . || result=1
+      biome_check --config-path="$config_dir/biome.shared.json" --no-errors-on-unmatched --diagnostic-level=error --max-diagnostics=50 . || result=1
       ruff check --config "$config_dir/ruff.shared.toml" . || result=1
       ruff format --config "$config_dir/ruff.shared.toml" --check . || result=1
     fi
