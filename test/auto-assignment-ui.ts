@@ -11,7 +11,7 @@ const root = path.resolve(import.meta.dirname, "..");
 const out = process.env.OUT || "/tmp/auto-assignment-ui";
 fs.mkdirSync(out, { recursive: true });
 const now = Date.now();
-const issue = { repo: "Amit-Roy/agent-console", number: 7 };
+const issue = { repo: "nefr0/agent-console", number: 7 };
 const thread = (id: string, title: string, provider = "codex", extra = {}) => ({
   id,
   title,
@@ -28,10 +28,10 @@ const thread = (id: string, title: string, provider = "codex", extra = {}) => ({
 });
 const initialThreads = [
   thread("failed-worker", "Issue #7 worker stopped", "codex", {
-    issueRun: { ...issue, key: "Amit-Roy/agent-console#7", role: "work", effort: "bau" },
+    issueRun: { ...issue, key: "nefr0/agent-console#7", role: "work", effort: "bau" },
   }),
   thread("failed-review", "Issue #7 review stopped", "claude", {
-    issueRun: { ...issue, key: "Amit-Roy/agent-console#7", role: "review", effort: "bau", pr: 95 },
+    issueRun: { ...issue, key: "nefr0/agent-console#7", role: "review", effort: "bau", pr: 95 },
   }),
 ];
 const provider = (id: string, label: string, model: string) => ({
@@ -141,7 +141,7 @@ async function openAssignment(page: Page, mobile: boolean) {
     await page.locator("#menu").click();
   if (!(await page.locator("#lane-auto").isVisible())) await page.locator("#menu").click();
   await page.locator("#lane-auto").click();
-  await page.locator('.auto-group[data-issue="amit-roy/agent-console#7"] .auto-group-more').click();
+  await page.locator('.auto-group[data-issue="nefr0/agent-console#7"] .auto-group-more').click();
   await page.getByRole("menuitem", { name: "Assign to premium", exact: true }).click();
   await page.locator("#dlg").waitFor({ state: "visible", timeout: 3000 });
 }
@@ -236,7 +236,7 @@ try {
       );
       assert.match(
         await page.locator("#dlg-sub").innerText(),
-        /Amit-Roy\/agent-console#7.*2 related runs/,
+        /nefr0\/agent-console#7.*2 related runs/,
       );
       assert.match(await page.locator("#dlg-sub").innerText(), /failed thread IDs and linked PRs/);
       for (const id of ["cwd-field", "context-field", "task-fields"])
