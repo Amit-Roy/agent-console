@@ -463,6 +463,29 @@ try {
     assert.deepEqual(all, threads.history(big.id));
     assert.deepEqual(await threads.historyAsync("nope-missing"), []);
   }
+  // the schedule_create input documented for the design-system task works as pasted
+  const scheduleJson = fs
+    .readFileSync(path.join(import.meta.dirname, "..", "docs", "design-system.md"), "utf8")
+    .split("### Schedule")[1]
+    ?.match(/```json\n([\s\S]*?)\n```/)?.[1];
+  assert.ok(scheduleJson, "docs/design-system.md Schedule has a schedule_create json block");
+  const designTask = JSON.parse(scheduleJson);
+  // the folder is not "~"-expanded, so it must be absolute
+  assert.match(designTask.folder, /^\/.*\/repos\/agent-console$/);
+  const designMade = (
+    schedules.tool("schedule_create", undefined, { ...designTask, folder: dir }) as any
+  ).created;
+  schedules.tool("schedule_delete", undefined, { id: designMade.id });
+  assert.equal(designMade.title, "Design system suggestions");
+  assert.deepEqual([designMade.agent, designMade.model], ["claude", "haiku"]);
+  assert.equal(designMade.schedule, "Mondays 09:00");
+  assert.ok(
+    designTask.prompt.includes(
+      "node scripts/check-design-system-sources.js --out ~/.local/share/agent-console/design-system",
+    ),
+  );
+  for (const word of ["git pull", "runs/", "design-system", "enhancement", "skip"])
+    assert.ok(designTask.prompt.includes(word), `design-system prompt mentions ${word}`);
   console.log(
     "PASS schedules: presets, validation, run threads, no overlap, git reports, report card, follow-ups, failures, agent tools, restart, catch-up, delete",
   );
