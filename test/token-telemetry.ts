@@ -96,10 +96,7 @@ l = linkThread({
   thread: {
     id: "b",
     defaultRepo: repo,
-    texts: [
-      "fix #12 and see https://github.com/nefr0/agent-console/pull/13",
-      "x#99 &#39; foo/#5",
-    ],
+    texts: ["fix #12 and see https://github.com/nefr0/agent-console/pull/13", "x#99 &#39; foo/#5"],
   },
   repos,
 });

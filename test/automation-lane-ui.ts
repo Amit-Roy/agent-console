@@ -200,9 +200,7 @@ try {
       );
       assert.equal(await toggle.getAttribute("aria-expanded"), "false");
       await page.waitForTimeout(700);
-      const otherMore = page.locator(
-        '.auto-group[data-issue="nefr0/other#43"] .auto-group-more',
-      );
+      const otherMore = page.locator('.auto-group[data-issue="nefr0/other#43"] .auto-group-more');
       await otherMore.focus();
       await page.keyboard.press("Enter");
       await page.keyboard.press("Enter");
