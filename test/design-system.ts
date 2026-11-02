@@ -68,8 +68,20 @@ for (const [name, value] of Object.entries(built.tokens.themes.base))
       /^[\d.]+rem \/ ([\d.]+rem|[\d.]+) /,
       `${name} is a rem size with a rem or unitless line height`,
     );
-assert.doesNotMatch(styleCss, /font(-size)?:[^;{}]*\d(\.\d+)?px/, "public/style.css has no px font sizes");
-assert.doesNotMatch(styleCss, /html\s*\{[^}]*font-size/, "html sets no font size, so browser settings scale rem");
+assert.doesNotMatch(
+  styleCss,
+  /font(-size)?:[^;{}]*\d(\.\d+)?px/,
+  "public/style.css has no px font sizes",
+);
+assert.doesNotMatch(
+  styleCss,
+  /html\s*\{[^}]*font-size/,
+  "html sets no font size, so browser settings scale rem",
+);
 assert.match(doc, /\*\*Text Scaling\*\*/, "Usage Guidelines has the Text Scaling rule");
-assert.match(doc, /dbushell\.com\/2026\/11\/01\/tangled-accessibility/, "Text Scaling cites its source");
+assert.match(
+  doc,
+  /dbushell\.com\/2026\/11\/01\/tangled-accessibility/,
+  "Text Scaling cites its source",
+);
 console.log("design-system ok");
