@@ -3931,11 +3931,9 @@ body.login {
     animation-duration: 1.4s !important;
     animation-iteration-count: infinite !important;
   }
-  /* static half ring + opacity pulse; no rotation */
+  /* status spinner keeps a slow rotation; small essential motion */
   .spin {
-    animation: pulse 1.4s ease-in-out infinite !important;
-    border-top-color: var(--accent);
-    border-right-color: var(--accent);
+    animation: spin 1.6s linear infinite !important;
   }
   .think.live .ico {
     animation: none;
