@@ -32,6 +32,10 @@ PROVIDERS.set("fixture", {
   },
 } as any);
 const tick = () => new Promise((r) => setTimeout(r, 50));
+// Naming runs behind the turn checkpoint and a log read, so a fixed 50 ms is not enough on a busy machine.
+const untilTitled = async (get: () => string | undefined, want: string) => {
+  for (let waited = 0; waited < 5000 && get() !== want; waited += 50) await tick();
+};
 const { cleanTitle, titleInput, MAX_INPUT, MAX_INPUT_TOKENS } = await import(
   "../server/providers/title.ts"
 );
@@ -63,7 +67,7 @@ try {
   assert.equal(t.autoTitle, true);
   assert.ok(!t.titleLocked);
   threads.send(t.id, "fix the login redirect bug please");
-  await tick();
+  await untilTitled(() => threads.get(t.id)?.title, "fix the login redirect");
   assert.equal(threads.get(t.id)!.title, "fix the login redirect");
   assert.equal(threads.get(t.id)!.autoTitle, false);
   // the title helper reads every user message from the log, not a stored copy
@@ -87,7 +91,7 @@ try {
   // A long model reply is shortened on a word boundary.
   const capped = threads.create({ provider: "fixture", cwd: path.join(dir, "capped") });
   threads.send(capped.id, "Video generation portfolio exploration plans");
-  await tick();
+  await untilTitled(() => threads.get(capped.id)?.title, "Video generation portfolio");
   assert.equal(threads.get(capped.id)!.title, "Video generation portfolio");
 } finally {
   threads.shutdown();
