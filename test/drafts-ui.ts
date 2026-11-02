@@ -46,10 +46,23 @@ fs.writeFileSync(
           readAt: 1000,
           usageStop: { provider: "mock", at: 4000, resetsAt: 9e12, text: "Fixture limit hit" },
         } as any,
+        {
+          id: "paused-a",
+          provider: "mock",
+          model: "echo",
+          mode: "acceptEdits",
+          title: "Paused 1",
+          cwd: os.tmpdir(),
+          status: "idle",
+          cost: 0,
+          createdAt: 0,
+          updatedAt: 0,
+          quotaPaused: { provider: "mock", windowLabel: "5-hour", resetsAt: 9e12 },
+        } as any,
       ]),
   ),
 );
-for (const id of [...ids, "unread-a"])
+for (const id of [...ids, "unread-a", "paused-a"])
   fs.writeFileSync(
     path.join(data, "logs", `${id}.jsonl`),
     JSON.stringify({ type: "user_input", text: "fixture" }) + "\n",
@@ -329,6 +342,12 @@ try {
       (await unreadRow.locator(".limit-tag").getAttribute("title")) || "",
       /Resets .*\nFixture limit hit/,
       "limit tooltip",
+    );
+    const pausedRow = page.locator("#threads li", { hasText: "Paused 1" });
+    assert.match(
+      (await pausedRow.locator(".quota-pause-tag").textContent()) || "",
+      /^Resumes \d/,
+      "paused thread shows its resume time",
     );
     await thread("Unread 1");
     await page.waitForFunction(

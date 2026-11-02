@@ -486,6 +486,20 @@ if (process.env.AGENT_CONSOLE_MOCK !== "1") {
   const resumeQuotaPaused = () => {
     const cfg = loadDispatchConfig();
     if (!cfg.enabled) return;
+    // A paused thread continues the moment its window reopens; the late-window gate below catches the rest.
+    const opened = cfg.dryRun
+      ? 0
+      : threads.resumeWindowOpened(
+          Date.now(),
+          (provider) => usage.exhausted(provider),
+          (t) => !!t.issueRun?.premiumAssignment || !assignedOwner(t),
+        );
+    if (opened)
+      automationLog.record({
+        step: "dispatcher",
+        kind: "ok",
+        msg: `resumed ${opened} quota-paused thread(s) whose usage window opened`,
+      });
     for (const provider of resumeDue(usage.all(), Date.now(), cfg)) {
       const waiting = threads
         .list()

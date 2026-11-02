@@ -1413,6 +1413,26 @@ function usageLimitTag(stop) {
   limit.append(icon("alert"), el("span", "", "Usage limit"));
   return limit;
 }
+const quotaResumeTime = (pause) =>
+  new Date(pause.resetsAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+function quotaPauseTag(pause) {
+  const tag = el("span", "tag warn limit-tag quota-pause-tag");
+  tag.title = `Usage limit hit. Resumes automatically when the ${pause.windowLabel} window opens, ${new Date(pause.resetsAt).toLocaleString()}.`;
+  tag.append(icon("alert"), el("span", "", `Resumes ${quotaResumeTime(pause)}`));
+  return tag;
+}
+function usageResumeNote(usageKey) {
+  const waiting = [...state.threads.values()].filter(
+    (thread) => !thread.archived && thread.quotaPaused?.provider === usageKey,
+  );
+  if (!waiting.length) return null;
+  const first = Math.min(...waiting.map((thread) => thread.quotaPaused.resetsAt));
+  return el(
+    "div",
+    "usage-note usage-resume-note",
+    `${waiting.length} thread${waiting.length === 1 ? "" : "s"} waiting to resume at ${quotaResumeTime({ resetsAt: first })}`,
+  );
+}
 function threadRowMeta(thread, usualDir, waiting) {
   const meta = el("div", "meta");
   if (base(thread.cwd) !== usualDir) meta.append(el("span", "dir", base(thread.cwd)));
@@ -1424,7 +1444,8 @@ function threadRowMeta(thread, usualDir, waiting) {
     meta.append(tag);
   }
   if (waiting) meta.append(el("span", "tag question-tag", "Needs input"));
-  if (thread.usageStop) meta.append(usageLimitTag(thread.usageStop));
+  if (thread.quotaPaused) meta.append(quotaPauseTag(thread.quotaPaused));
+  else if (thread.usageStop) meta.append(usageLimitTag(thread.usageStop));
   const time = el("time", "", ago(thread.updatedAt));
   time.dateTime = new Date(thread.updatedAt).toISOString();
   meta.append(time);
@@ -4276,6 +4297,8 @@ function renderUsage() {
   const deepseek = state.usageTab === "pi:deepseek";
   pane.append(usageHead(sample, deepseek));
   appendUsageAllowance(pane, sample, deepseek, selectedAccount);
+  const resumeNote = usageResumeNote(state.usageTab);
+  if (resumeNote) pane.append(resumeNote);
   const thread = usageContextThread();
   pane.append(usageContextGroup(thread));
   if (
