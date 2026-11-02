@@ -12,15 +12,29 @@ exec(compile(installer["REFRESH_SOURCE"], "triage-watchdog", "exec"), worker)
 
 with TemporaryDirectory(prefix="triage-caddy-fixture-") as temporary:
     directory = Path(temporary)
-    environment = directory / "caddy.env"
-    environment.write_text("DUCKDNS_API_TOKEN=fixture-only\n")
+    duckdns = directory / "duckdns.env"
+    duckdns.write_text("DUCKDNS_API_TOKEN=fixture-only\n")
+    proxy = directory / "console-proxy.env"
+    proxy.write_text(
+        "CODER_WORKSPACE_HOST_SUFFIX=main--ws--owner.example.test\nCODER_CONTAINER=coder-Owner-ws\n"
+    )
+    fixture_files = {"/etc/caddy/duckdns.env": duckdns, "/etc/caddy/console-proxy.env": proxy}
     config = directory / "Caddyfile"
     snippet = directory / "github-triage.caddy"
     config.write_text(worker["SITE"] + "\n}\n")
     worker["CONFIG"] = config
     worker["SNIPPET"] = snippet
-    worker["Path"] = lambda value: (
-        environment if str(value) == "/etc/caddy/duckdns.env" else Path(value)
+    worker["Path"] = lambda value: fixture_files.get(str(value), Path(value))
+    worker["CONTAINER"] = worker["caddy_environment"]()["CODER_CONTAINER"]
+    assert worker["CONTAINER"] == "coder-Owner-ws"
+    proxy.write_text("CODER_CONTAINER=coder-Owner-ws\n")
+    try:
+        worker["caddy_environment"]()
+        raise AssertionError("A missing workspace host suffix must fail validation")
+    except RuntimeError as error:
+        assert "CODER_WORKSPACE_HOST_SUFFIX" in str(error)
+    proxy.write_text(
+        "CODER_WORKSPACE_HOST_SUFFIX=main--ws--owner.example.test\nCODER_CONTAINER=coder-Owner-ws\n"
     )
     calls = []
     state = {"inspect": "true\n172.18.0.4\nno\n", "code": 0}

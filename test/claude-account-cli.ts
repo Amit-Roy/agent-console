@@ -5,6 +5,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+process.env.CLAUDE_SUNNY_EMAIL = "sunny@example.com";
+process.env.CLAUDE_NEFRO_EMAIL = "nefro@example.com";
+
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "ac-account-cli-"));
 const sunny = path.join(home, ".claude"),
   nefro = path.join(home, ".claude-nefro");
@@ -32,6 +35,8 @@ fs.writeFileSync(
 const env = {
   ...process.env,
   HOME: home,
+  CLAUDE_SUNNY_EMAIL: "sunny@example.com",
+  CLAUDE_NEFRO_EMAIL: "nefro@example.com",
   PATH: bin + path.delimiter + process.env.PATH,
   CAPTURE: capture,
   ANTHROPIC_API_KEY: "fixture",
@@ -52,10 +57,21 @@ try {
   assert.equal(run("nefro", "setup").status, 0, "Setup is idempotent.");
   assert.equal(run("nefro", "login").status, 0);
   assert.deepEqual(JSON.parse(fs.readFileSync(capture, "utf8")), {
-    args: ["auth", "login", "--claudeai", "--email", "nefro.amit.roy@gmail.com"],
+    args: ["auth", "login", "--claudeai", "--email", "nefro@example.com"],
     dir: nefro,
     leaked: [],
   });
+  const { CLAUDE_NEFRO_EMAIL: _unset, ...unsetEnv } = env;
+  assert.equal(
+    spawnSync(process.execPath, [script, "nefro", "login"], { env: unsetEnv, encoding: "utf8" })
+      .status,
+    0,
+  );
+  assert.deepEqual(
+    JSON.parse(fs.readFileSync(capture, "utf8")).args,
+    ["auth", "login", "--claudeai"],
+    "An unset email variable drops --email.",
+  );
   assert.equal(run("sunny", "status").status, 0);
   assert.deepEqual(
     JSON.parse(fs.readFileSync(capture, "utf8")),

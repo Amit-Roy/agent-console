@@ -5,6 +5,9 @@ import os from "node:os";
 import path from "node:path";
 import { finishClaudeLogin, startClaudeLogin } from "../server/claude-login.ts";
 
+process.env.CLAUDE_SUNNY_EMAIL = "sunny@example.com";
+process.env.CLAUDE_NEFRO_EMAIL = "nefro@example.com";
+
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "ac-claude-login-"));
 const fake = path.join(home, "claude");
 // Prints the authorize link, then signs in as FAKE_EMAIL when given the code "good#state".
@@ -43,18 +46,18 @@ try {
   fs.writeFileSync(path.join(home, ".claude.json"), JSON.stringify({ mcpServers: { keep: 1 } }));
   const { url } = await startClaudeLogin("sunny", {
     command: fake,
-    env: env("sunny.amit.roy@gmail.com"),
+    env: env("sunny@example.com"),
   });
   assert.match(url, /^https:\/\/claude\.com\/cai\/oauth\/authorize\?/);
   await finishClaudeLogin("sunny", "good#state", home, base);
   assert.equal(
     read(path.join(home, ".claude", ".credentials.json")).claudeAiOauth.accessToken,
-    "fresh-sunny.amit.roy@gmail.com",
+    "fresh-sunny@example.com",
   );
   assert.equal(fs.statSync(path.join(home, ".claude", ".credentials.json")).mode & 0o777, 0o600);
   assert.deepEqual(read(path.join(home, ".claude.json")), {
     mcpServers: { keep: 1 },
-    oauthAccount: { emailAddress: "sunny.amit.roy@gmail.com" },
+    oauthAccount: { emailAddress: "sunny@example.com" },
   });
 
   // A login as the wrong person never replaces the working one.
@@ -65,16 +68,16 @@ try {
   );
   assert.equal(
     read(path.join(home, ".claude", ".credentials.json")).claudeAiOauth.accessToken,
-    "fresh-sunny.amit.roy@gmail.com",
+    "fresh-sunny@example.com",
   );
 
   // A rejected code reports the CLI error; the session is then gone.
-  await startClaudeLogin("nefro", { command: fake, env: env("nefro.amit.roy@gmail.com") });
+  await startClaudeLogin("nefro", { command: fake, env: env("nefro@example.com") });
   await assert.rejects(finishClaudeLogin("nefro", "bad#state", home, base), /Login failed/);
   await assert.rejects(finishClaudeLogin("nefro", "good#state", home, base), /expired/);
 
   // Nefro installs into its own profile, with the email hint and without metered-billing overrides.
-  await startClaudeLogin("nefro", { command: fake, env: env("nefro.amit.roy@gmail.com") });
+  await startClaudeLogin("nefro", { command: fake, env: env("nefro@example.com") });
   const tmp = fs
     .readdirSync(os.tmpdir())
     .filter((d) => d.startsWith("claude-login-"))
@@ -82,16 +85,16 @@ try {
     .find(
       (d) =>
         fs.existsSync(path.join(d, "args.json")) &&
-        read(path.join(d, "args.json")).args.includes("nefro.amit.roy@gmail.com"),
+        read(path.join(d, "args.json")).args.includes("nefro@example.com"),
     )!;
   assert.deepEqual(read(path.join(tmp, "args.json")), {
-    args: ["auth", "login", "--claudeai", "--email", "nefro.amit.roy@gmail.com"],
+    args: ["auth", "login", "--claudeai", "--email", "nefro@example.com"],
     leaked: [],
   });
   await finishClaudeLogin("nefro", "good#state", home, base);
   assert.equal(
     read(path.join(home, ".claude-nefro", ".claude.json")).oauthAccount.emailAddress,
-    "nefro.amit.roy@gmail.com",
+    "nefro@example.com",
   );
   assert.equal(fs.existsSync(tmp), false, "the throwaway profile is removed");
   console.log("claude login: ok");

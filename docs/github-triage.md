@@ -107,7 +107,7 @@ For the existing VPS, install the narrow Caddy route using the versioned routing
 ssh vps 'python3 -' < scripts/github-triage-caddy.py
 ```
 
-The route accepts only POST requests for the webhook hostname and exact path. A host timer refreshes the workspace container IP and supervises the separate triage worker every 60 seconds. Other routes retain Coder authentication. Never add the webhook hostname to `AGENT_CONSOLE_PUBLIC_HOST`.
+The route accepts only POST requests for the webhook hostname and exact path. The container name comes from `CODER_CONTAINER` and `caddy validate` receives `DUCKDNS_API_TOKEN` and `CODER_WORKSPACE_HOST_SUFFIX`, all parsed from `/etc/caddy/duckdns.env` and `/etc/caddy/console-proxy.env`; the worker exits with an error if one is missing. A host timer refreshes the workspace container IP and supervises the separate triage worker every 60 seconds. Other routes retain Coder authentication. Never add the webhook hostname to `AGENT_CONSOLE_PUBLIC_HOST`.
 
 Register the webhook and classify the existing backlog:
 
