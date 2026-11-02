@@ -66,7 +66,7 @@ export const DEFAULTS: Config = {
   maxUsedPct: 90,
   perWindow: 2,
   repos: ["nefr0/agent-console"],
-  authors: ["owner"],
+  authors: ["nefr0"],
   routing: { mode: "shadow", bauOnPi: false },
 };
 

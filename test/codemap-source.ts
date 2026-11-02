@@ -26,7 +26,7 @@ for (const bad of [
   assert.throws(() => src.parseSource(bad), undefined, `rejects ${bad}`);
 }
 // parseSource github forms
-const want = { kind: "github", owner: "owner", repo: "agent-console" };
+const want = { kind: "github", owner: "nefr0", repo: "agent-console" };
 for (const validInput of [
   "nefr0/agent-console",
   "https://github.com/nefr0/agent-console",
@@ -35,7 +35,7 @@ for (const validInput of [
 ]) {
   assert.deepEqual(src.parseSource(validInput), want, validInput);
 }
-assert.equal(src.slugFor(want), "gh-owner-agent-console");
+assert.equal(src.slugFor(want), "gh-nefr0-agent-console");
 assert.deepEqual(src.parseSource("/etc"), { kind: "local", path: "/etc" });
 
 // local resolution

@@ -488,7 +488,7 @@ try {
     JSON.stringify({ enabled: true, leadMinutes: 9999, repos: ["../evil"] }),
   );
   const c = loadConfig(path.join(dir, "window-dispatch.json"));
-  assert.deepEqual(c.authors, ["owner"]);
+  assert.deepEqual(c.authors, ["nefr0"]);
   assert.equal(c.enabled, true);
   assert.equal(c.dryRun, true);
   assert.equal(c.leadMinutes, 300);
@@ -499,10 +499,10 @@ try {
     {
       number: 1,
       title: "x",
-      user: { login: "owner" },
+      user: { login: "nefr0" },
       labels: [{ name: "Eff: Deep" }, { name: "Pri: P1" }],
     },
-    { number: 2, pull_request: {}, user: { login: "owner" }, labels: [] },
+    { number: 2, pull_request: {}, user: { login: "nefr0" }, labels: [] },
     {
       number: 3,
       title: "stranger",
@@ -567,13 +567,13 @@ try {
       {
         number: 1,
         title: "deep one",
-        user: { login: "owner" },
+        user: { login: "nefr0" },
         labels: [{ name: "Eff: Deep" }, { name: "Pri: P1" }],
       },
       {
         number: 2,
         title: "bau one",
-        user: { login: "owner" },
+        user: { login: "nefr0" },
         labels: [{ name: "Eff: BAU" }, { name: "Pri: P2" }],
       },
     ];
@@ -695,7 +695,7 @@ try {
       [2, 3, 4, 5].map((number) => ({
         number,
         title: "small",
-        user: { login: "owner" },
+        user: { login: "nefr0" },
         labels: [{ name: number === 2 ? "Eff: BAU" : "Eff: Trivial" }],
       }));
     const limited = createDispatcher({

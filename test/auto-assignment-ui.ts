@@ -236,7 +236,7 @@ try {
       );
       assert.match(
         await page.locator("#dlg-sub").innerText(),
-        /owner\/agent-console#7.*2 related runs/,
+        /nefr0\/agent-console#7.*2 related runs/,
       );
       assert.match(await page.locator("#dlg-sub").innerText(), /failed thread IDs and linked PRs/);
       for (const id of ["cwd-field", "context-field", "task-fields"])

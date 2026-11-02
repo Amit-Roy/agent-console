@@ -334,7 +334,7 @@ try {
       403,
     );
     assert.equal(
-      (await fixture.post({ ...payload(), repository: { full_name: "nefr0/agent-console" } }))
+      (await fixture.post({ ...payload(), repository: { full_name: "NEFR0/agent-console" } }))
         .status,
       403,
     );

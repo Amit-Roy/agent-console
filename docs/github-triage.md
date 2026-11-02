@@ -88,7 +88,7 @@ Issue #5 uses the existing Pi worker and subscription fallbacks. This keeps the 
 To cover all repositories owned by the authenticated personal account:
 
 ```sh
-bin/github-triage configure --owner owner https://github-webhook.nefro-dev-coder.duckdns.org/api/github/webhook
+bin/github-triage configure --owner nefr0 https://github-webhook.nefro-dev-coder.duckdns.org/api/github/webhook
 bin/github-triage sync
 bin/github-triage reconcile
 ```

@@ -126,7 +126,7 @@ try {
     "pi title is shown for review",
   );
   assert.match(await page.inputValue("#issue-body"), /Crash above 5,000 lines/);
-  assert.match((await page.textContent("#issue-note")) || "", /owner\/agent-console/);
+  assert.match((await page.textContent("#issue-note")) || "", /nefr0\/agent-console/);
   await page.fill("#issue-title", "Edited by owner");
 
   // Nothing opens before the owner confirms; the reviewed (edited) text is what GitHub receives.
