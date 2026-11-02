@@ -877,7 +877,7 @@ export class Threads {
   private threadToolAuth = new ThreadToolAuth();
   private idleCompactionTimers = new IdleCompactionTimers();
   private closed = false;
-  private historyIndex = new HistoryIndex();
+  private historyIndex = new HistoryIndex(path.join(DATA_DIR, "history-index"));
   private titling = new Map<string, number>(); // per thread: the newest title request, so a slow older answer cannot overwrite it
   private threads = new Map<string, Thread>();
   private live = new Map<string, Live>();
@@ -1584,6 +1584,7 @@ export class Threads {
     this.threads.delete(id);
     this.titling.delete(id);
     this.persist();
+    this.historyIndex.forget(logFile(id));
     fs.rmSync(logFile(id), { force: true });
     fs.rmSync(path.join(DATA_DIR, "pi-sessions", id), { recursive: true, force: true });
     fs.rmSync(path.join(DATA_DIR, "auto-runtime", id), { recursive: true, force: true });

@@ -208,6 +208,27 @@
           "tech": "server/latency.ts, SQLite",
           "desc": "New kind cold with nullable ttfb_ms, dcl_ms, ws_open_ms, hello_ms columns",
           "icon": "database"
+        },
+        {
+          "id": "history-snapshot",
+          "label": "History snapshot fast path",
+          "tech": "server/history.ts \u00b7 HistoryIndex",
+          "desc": "New: restore newline offsets for an exact matching file generation; otherwise scan JSONL. Existing page and reconnect cursors stay physical-line based.",
+          "icon": "list-filter"
+        },
+        {
+          "id": "history-cache",
+          "label": "Derived offset cache",
+          "tech": "DATA_DIR/history-index \u00b7 JSON",
+          "desc": "New: private, atomic snapshots with bounded validation. Page reads write snapshots; live counts do not. Cache failures fall back to logs.",
+          "icon": "database"
+        },
+        {
+          "id": "history-proofs",
+          "label": "History model proofs",
+          "tech": "Lean 4.35.0 \u00b7 History.lean",
+          "desc": "New development-time checks: append boundaries, conditional cache equivalence, and adjacent slices. Runtime conformance tested separately.",
+          "icon": "shield-check"
         }
       ],
       "status": "modified"
@@ -531,6 +552,9 @@
     {"from":"app","to":"tt-ui","label":"History header button","status":"added"},
     {"from":"tt-ui","to":"tt-http","label":"HTTP checkpoints, diff, rewind, fork","status":"added"},
     {"from":"tt-http","to":"tt-turns","label":"rewind / fork","status":"added"},
-    {"from":"tt-turns","to":"tt-shadow","label":"snapshot, restore","status":"added"}
+    {"from":"tt-turns","to":"tt-shadow","label":"snapshot, restore","status":"added"},
+    {"from":"app","to":"history-snapshot","label":"open or older page via Threads.page"},
+    {"from":"history-snapshot","to":"history-cache","label":"validate or rebuild derived offsets"},
+    {"from":"history-proofs","to":"history-snapshot","label":"models invariants; not runtime"}
   ]
 }
