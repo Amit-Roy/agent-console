@@ -15,6 +15,9 @@ assert.deepEqual(names.sort(), ["release", "telemetry-comment", "test", "test-sh
 const release = workflow.slice(workflow.indexOf("\n  release:\n"), workflow.indexOf("\n  test:\n"));
 assert.match(release, /npm run test:formal/, "release job must run the Lean queue proofs");
 
+const queueReadme = read("../formal/queue/README.md");
+assert.doesNotMatch(queueReadme, /formal-queue/, "formal/queue/README.md must not name the removed formal-queue job");
+
 for (const heading of ["Billed minutes per run", "Decision"])
   assert.ok(doc.includes(`\n## ${heading}\n`), `docs/ci.md needs section: ## ${heading}`);
 assert.match(doc, /1,809/, "docs/ci.md must reconcile the 1,809 minutes used");
