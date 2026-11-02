@@ -1,13 +1,10 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import {
-  generateAuthenticationOptions,
-  generateRegistrationOptions,
+import type {
   verifyAuthenticationResponse,
   verifyRegistrationResponse,
 } from "@simplewebauthn/server";
-import { isoBase64URL } from "@simplewebauthn/server/helpers";
 import type express from "express";
 
 // Passkey step-up for vault writes. Credentials live in vault-passkeys.json (0600); challenges are single-use,
@@ -17,6 +14,14 @@ const CHALLENGE_TTL = 2 * 60_000;
 const GRANT_TTL = 5 * 60_000;
 const ALERT_EVERY = 10 * 60_000;
 const COOKIE = "vault_grant";
+// The WebAuthn library and its certificate parsers load on the first passkey request, not at boot (#18).
+const webauthn = async () => {
+  const [server, helpers] = await Promise.all([
+    import("@simplewebauthn/server"),
+    import("@simplewebauthn/server/helpers"),
+  ]);
+  return { ...server, isoBase64URL: helpers.isoBase64URL };
+};
 
 type Cred = {
   id: string;
@@ -221,6 +226,7 @@ async function registerOptions(ctx: Context, req: express.Request) {
     first = store.credentials.length === 0;
   if (!first && !hasGrant(ctx, req, false))
     throw new PasskeyError(401, "Confirm with your passkey first.", { stepUp: true });
+  const { generateRegistrationOptions, isoBase64URL } = await webauthn();
   const options = await generateRegistrationOptions({
     rpName: "Agent Console",
     rpID: rpIdOf(ctx, req),
@@ -243,9 +249,10 @@ async function registerOptions(ctx: Context, req: express.Request) {
 }
 
 async function verifyRegistration(ctx: Context, req: express.Request, challenge: Challenge) {
+  const { verifyRegistrationResponse: verify } = await webauthn();
   let verification: Awaited<ReturnType<typeof verifyRegistrationResponse>>;
   try {
-    verification = await verifyRegistrationResponse({
+    verification = await verify({
       response: req.body?.response,
       expectedChallenge: challenge.challenge,
       expectedOrigin: originsOf(ctx, req),
@@ -287,6 +294,7 @@ async function registerVerify(ctx: Context, req: express.Request, res: express.R
       "Use this device's own fingerprint or face unlock, not another device or a security key.",
     );
   }
+  const { isoBase64URL } = await webauthn();
   const registered = verification.registrationInfo.credential;
   const name = passkeyName(req, store);
   store.credentials.push({
@@ -321,6 +329,7 @@ async function stepupOptions(ctx: Context, req: express.Request) {
   const store = loadStore(ctx);
   if (!store.credentials.length)
     throw new PasskeyError(409, "No passkey is set up yet.", { setup: true });
+  const { generateAuthenticationOptions } = await webauthn();
   const options = await generateAuthenticationOptions({
     rpID: rpIdOf(ctx, req),
     userVerification: "required",
@@ -338,9 +347,10 @@ async function verifyAssertion(
   challenge: Challenge,
   cred: Cred,
 ) {
+  const { verifyAuthenticationResponse: verify, isoBase64URL } = await webauthn();
   let verification: Awaited<ReturnType<typeof verifyAuthenticationResponse>>;
   try {
-    verification = await verifyAuthenticationResponse({
+    verification = await verify({
       response: req.body.response,
       expectedChallenge: challenge.challenge,
       expectedOrigin: originsOf(ctx, req),

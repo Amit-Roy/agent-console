@@ -94,8 +94,8 @@ import { describe, Schedules } from "./schedules.ts";
 import { mountSecurity } from "./security.ts";
 import { SessionSearch } from "./session-search.ts";
 import { isSandboxedShareProvider, sharePrompt, shareTitle } from "./share/prompt.ts";
-import { resolveShare } from "./share/registry.ts";
-import { downloadShare } from "./share/run.ts";
+import type { resolveShare } from "./share/registry.ts";
+import type { downloadShare } from "./share/run.ts";
 import { ShareError } from "./share/types.ts";
 import { createStaticAssets } from "./static-assets.ts";
 import { safeId, Threads, turnTiming } from "./threads.ts";
@@ -983,10 +983,20 @@ function attachShare(
     throw error;
   }
 }
+// Sharing pulls in undici, linkedom and Defuddle, about half of the server bundle: it loads on the first share, not at boot (#18).
+const loadShare = async () => {
+  const [registry, run] = await Promise.all([
+    import("./share/registry.ts"),
+    import("./share/run.ts"),
+  ]);
+  return { resolveShare: registry.resolveShare, downloadShare: run.downloadShare };
+};
 async function handleShare(req: express.Request, res: express.Response, only?: string) {
   let link: ReturnType<typeof resolveShare>;
+  let share: Awaited<ReturnType<typeof loadShare>>;
   try {
-    link = resolveShare(req.body?.text, req.body?.url);
+    share = await loadShare();
+    link = share.resolveShare(req.body?.text, req.body?.url);
   } catch (failure: any) {
     return void res.status(422).json({ error: failure?.message ?? "Share failed." });
   }
@@ -1003,7 +1013,7 @@ async function handleShare(req: express.Request, res: express.Response, only?: s
   });
   let download: Awaited<ReturnType<typeof downloadShare>> | undefined;
   try {
-    download = await downloadShare(link, abort.signal);
+    download = await share.downloadShare(link, abort.signal);
     const { result } = download;
     const saved = attachShare(link, result, target);
     // the client fills the composer with the prompt and these uploads; nothing is sent until the user taps Send
