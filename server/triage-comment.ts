@@ -149,9 +149,15 @@ const contributionLines = (contributions: EffortQuote["contributions"]): string[
 function structureLines(structure?: StructureQuote, typical?: number): string[] {
   if (!structure || structure.budget === null) return [];
   const { counterfactual } = structure;
+  const complete = Object.values(structure.flags).every(Boolean);
   return [
-    `Recommended budget **${compact(structure.budget)}** tokens${typical === undefined ? "" : `; typical **${compact(typical)}**`}.`,
+    `Recommended budget: **${compact(structure.budget)}** tokens (${(structure.basis ?? "p80").toUpperCase()}).${typical === undefined ? "" : ` Typical: **${compact(typical)}** (P50).`}`,
     ...(structure.costDriver ? [`Biggest cost driver: ${structure.costDriver}.`] : []),
+    ...(complete
+      ? [
+          "No missing structure item: the request names a file path, the expected output and an acceptance check.",
+        ]
+      : []),
     ...(counterfactual
       ? [
           `${counterfactual.suggestion ? safeTriageText(counterfactual.suggestion).replace(/[.]$/, "") : `Add ${counterfactual.label}`} → estimated budget drops to **${compact(counterfactual.budget)}** tokens.`,
@@ -383,10 +389,23 @@ function accountingTables(price: Pricing, totalTarget: boolean): string[] {
   return lines;
 }
 
+/** Every structure feature the quote saw, so a run shows them even without a missing item. */
+function structureDetail(structure?: StructureQuote): string[] {
+  if (!structure?.shape) return [];
+  const shape = Object.entries(structure.shape).map(([name, value]) => `${name} ${value}/3`);
+  const flags = Object.entries(structure.flags).map(
+    ([name, present]) => `${name} ${present ? "yes" : "no"}`,
+  );
+  return ["", `Request structure: ${shape.join(", ")}; ${flags.join(", ")}.`];
+}
+
 function accountingNotes(price: Pricing, totalTarget: boolean): string[] {
   const workUnit = totalTarget ? "total session tokens" : "logged tool actions";
   const lines = [
     "",
+    price.confidence === "validated"
+      ? "Residual note: quotes are historical scenarios without calibrated coverage."
+      : "Residual note: the model is experimental and its intervals under-cover. Newest sessions run longer than the older residuals behind these quotes, so they are historical scenarios without calibrated coverage.",
     "Total tokens include input and output. Cached replay is included once. Human hours and unmeasured child agents are excluded.",
     `Effort follows the level of design: none is Trivial, light is BAU, detailed is Deep. The token table is a rough guide only. It prices ${price.effortBasis.toUpperCase()} ${workUnit}; unknown or extrapolated pricing scope selects P95 by policy.`,
     `P80 − P50 reserve: ${price.total ? `${number(price.total.p80 - price.total.p50)} total tokens; ` : ""}${number(price.riskPremium.output)} generated tokens.`,
@@ -464,6 +483,7 @@ export function renderTriageComment(decision: TriageDecision, sourceMarker = "")
     ...evidenceLines(score),
     ...accountingTables(price, totalTarget),
     ...accountingNotes(price, totalTarget),
+    ...structureDetail(score.structure),
     ...checkLines(price, metrics, coverage, totalTarget),
     ...closingLines(price, decision.model),
   );
