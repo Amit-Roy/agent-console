@@ -78,7 +78,27 @@ try {
   assert.equal(result.status, 0, "default sweep must select only the five named repositories");
   assert.notEqual(run(["--unknown"]).status, 0, "unknown options must fail before scanning");
   assert.notEqual(run([path.join(scratch, "missing")]).status, 0, "missing targets must fail");
-  console.log("PASS repos-lint: worktree isolation, aggregate failures, fixes, exclusions, scope");
+
+  // Sandboxed agents can see owned repositories they cannot read; never report those as clean.
+  const unreadable = path.join(scratch, "unreadable");
+  fs.mkdirSync(unreadable);
+  fs.chmodSync(unreadable, 0o000);
+  write("pending.js", "console.log( 2 )\n");
+  try {
+    result = run(["--fix", worktree, unreadable]);
+  } finally {
+    fs.chmodSync(unreadable, 0o700);
+  }
+  assert.equal(result.status, 2, "unreadable targets must fail validation");
+  assert.match(result.stderr, /repository directory is not readable/);
+  assert.equal(
+    fs.readFileSync(path.join(worktree, "pending.js"), "utf8"),
+    "console.log( 2 )\n",
+    "--fix must not touch any target when another target is unreadable",
+  );
+  console.log(
+    "PASS repos-lint: worktree isolation, aggregate failures, fixes, exclusions, scope, access",
+  );
 } finally {
   fs.rmSync(scratch, { recursive: true, force: true });
 }
