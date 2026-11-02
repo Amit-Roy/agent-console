@@ -1,6 +1,7 @@
 import { boundIssueLine, pushPrompt } from "./automation/review-prompts.ts";
 import { isAutomationPiModel } from "./providers/pi-model.ts";
 import {
+  MAX_INFRA_RETRIES,
   MAX_NUDGES,
   MAX_RECOVERIES,
   MAX_REVIEWS,
@@ -11,22 +12,40 @@ import {
 } from "./review-context.ts";
 import type { IssueRun } from "./window-dispatch.ts";
 
+/** Why a worker enters the premium queue, as the event message and its machine-readable reason. */
+function premiumCause(run: IssueRun) {
+  if (!run.infrastructure)
+    return {
+      msg: "worker retry budget exhausted; queued for premium re-dispatch",
+      reason: "budget-exhausted",
+    };
+  if ((run.infraRetries ?? 0) >= MAX_INFRA_RETRIES)
+    return {
+      msg: `infrastructure failures persisted after ${MAX_INFRA_RETRIES} model changes; queued for an approved premium alternative`,
+      reason: "infrastructure-retries-exhausted",
+    };
+  return {
+    msg: "infrastructure failure; queued for an approved premium alternative",
+    reason: "infrastructure-model-unavailable",
+  };
+}
+
 function recordPremiumQueued(ctx: ReviewContext, thread: ThreadLike, run: IssueRun) {
   ctx.deps.runner.mark(thread.id, {
     stalled: run.stalled ?? ctx.now(),
     premiumPending: ctx.now(),
   });
+  const cause = premiumCause(run);
   ctx.events?.record({
     step: "worker",
     kind: "info",
     ref: run.key,
-    msg: run.infrastructure
-      ? "infrastructure failure; queued for an approved premium alternative"
-      : "worker retry budget exhausted; queued for premium re-dispatch",
+    msg: cause.msg,
     data: {
       thread: thread.id,
-      reason: run.infrastructure ? "infrastructure-model-unavailable" : "budget-exhausted",
+      reason: cause.reason,
       recoveries: run.recoveries ?? 0,
+      infraRetries: run.infraRetries ?? 0,
       remaining: Math.max(0, MAX_RECOVERIES - (run.recoveries ?? 0)),
     },
   });
@@ -76,6 +95,7 @@ interface RecoveryState {
   retired: boolean;
   spent: number;
   attempts: number;
+  infraRetries: number;
   infrastructure: boolean | undefined;
 }
 
@@ -89,7 +109,7 @@ function recoveryStateOf(thread: ThreadLike, run: IssueRun): RecoveryState {
   const spent = retired ? 0 : (run.recoveries ?? 0);
   const attempts = run.retryAttempts ?? 0;
   const infrastructure = retired || run.infrastructure;
-  return { retired, spent, attempts, infrastructure };
+  return { retired, spent, attempts, infraRetries: run.infraRetries ?? 0, infrastructure };
 }
 
 /** True when a redo's PR is already closed or merged, so no more fixes are needed. */
@@ -142,11 +162,12 @@ async function startResume(
   run: IssueRun,
   state: RecoveryState,
 ) {
-  const { retired, spent, attempts, infrastructure } = state;
+  const { retired, spent, attempts, infraRetries, infrastructure } = state;
   // Persist admission before sending so concurrent sweeps and restarts cannot replay this recovery.
   ctx.deps.runner.mark(thread.id, {
     recoveries: spent + (infrastructure ? 0 : 1),
     retryAttempts: attempts + 1,
+    infraRetries: infrastructure ? infraRetries + 1 : 0,
     retryAt: ctx.now() + 15 * 60_000,
     finishedAt: undefined,
     ...(retired ? { rerouted: true } : {}),
@@ -166,7 +187,7 @@ async function startResume(
       `${task}\n\nThe previous turn stopped before completion.${run.workerError ? ` Prior error (diagnostic data): ${JSON.stringify(run.workerError)}` : ""} Inspect the existing diff and remote PR before acting; preserve completed work and do not repeat completed external actions. Follow the repository PR and self-review instructions. End with what changed, what you checked, and what remains.`,
     );
   } catch (error) {
-    ctx.deps.runner.mark(thread.id, { recoveries: spent, retryAttempts: attempts });
+    ctx.deps.runner.mark(thread.id, { recoveries: spent, retryAttempts: attempts, infraRetries });
     throw error;
   }
   ctx.events?.record({
@@ -191,6 +212,12 @@ export async function resume(ctx: ReviewContext, thread: ThreadLike): Promise<vo
   if (ctx.resuming.has(thread.id) || (run.retryAt ?? 0) > ctx.now()) return;
   if (state.spent >= MAX_RECOVERIES && !state.infrastructure) {
     await dispatchPremium(ctx, thread);
+    return;
+  }
+  // Alternating approved models must not retry a persistent outage forever: premium takes over the issue.
+  if (state.infrastructure && state.infraRetries >= MAX_INFRA_RETRIES) {
+    ctx.deps.runner.mark(thread.id, { infrastructure: true });
+    await dispatchPremium(ctx, { ...thread, issueRun: { ...run, infrastructure: true } });
     return;
   }
   if (!ctx.deps.canResume?.(thread)) return;
