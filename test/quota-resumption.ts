@@ -335,9 +335,21 @@ const opened = createThread(threads, "codex");
 const notYet = createThread(threads, "codex");
 const stillFull = createThread(threads, "claude");
 const openNow = Date.now();
-threads.get(opened)!.quotaPaused = { provider: "codex", windowLabel: "5-hour", resetsAt: openNow - 1000 };
-threads.get(notYet)!.quotaPaused = { provider: "codex", windowLabel: "5-hour", resetsAt: openNow + 60_000 };
-threads.get(stillFull)!.quotaPaused = { provider: "claude", windowLabel: "5-hour", resetsAt: openNow - 1000 };
+threads.get(opened)!.quotaPaused = {
+  provider: "codex",
+  windowLabel: "5-hour",
+  resetsAt: openNow - 1000,
+};
+threads.get(notYet)!.quotaPaused = {
+  provider: "codex",
+  windowLabel: "5-hour",
+  resetsAt: openNow + 60_000,
+};
+threads.get(stillFull)!.quotaPaused = {
+  provider: "claude",
+  windowLabel: "5-hour",
+  resetsAt: openNow - 1000,
+};
 resumedThreads.length = 0;
 assert.equal(
   threads.resumeWindowOpened(openNow, (provider) => provider === "claude"),
