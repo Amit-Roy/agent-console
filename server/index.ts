@@ -69,6 +69,7 @@ import { mountMaps } from "./codemap/http.ts";
 import { createMapsService } from "./codemap/service.ts";
 import { consoleCliTool, isConsoleCliTool } from "./console-cli-tools.ts";
 import { contextAllocation } from "./context-allocation.ts";
+import { readLogTail } from "./cwd-hints.ts";
 import { createDoctor } from "./doctor.ts";
 import { threadToMarkdown } from "./export.ts";
 import { fileMedia, fileTree, fileViewer, sensitive as sensitiveFile } from "./files.ts";
@@ -410,6 +411,7 @@ if (process.env.AGENT_CONSOLE_MOCK !== "1") {
   const reviewer = createReviewer({
     threads: () => threads.list(),
     dataDir: DATA_DIR,
+    transcript: (id) => readLogTail(id)?.text,
     canReview: (t) => !assignedOwner(t),
     rerouteWorker: (req) => threads.rerouteIssueWorker(req),
     premium: async (req) => {
