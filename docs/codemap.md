@@ -1,6 +1,6 @@
 # Codemap
 
-Codemap is an in-house codebase map for local and GitHub repos. It is our take on [haydenschmitty/floorplan](https://github.com/haydenschmitty/floorplan). The scanner is vendored under `server/vendor/floorplan/` (MIT, see its `LICENSE` and `UPSTREAM.txt`). Issue [#405](https://github.com/Amit-Roy/agent-console/issues/405).
+Codemap is an in-house codebase map for local and GitHub repos. It is our take on [haydenschmitty/floorplan](https://github.com/haydenschmitty/floorplan). The scanner is vendored under `server/vendor/floorplan/` (MIT, see its `LICENSE` and `UPSTREAM.txt`). Issue [#405](https://github.com/nefr0/agent-console/issues/405).
 
 ## Use
 

@@ -89,7 +89,7 @@ try {
     },
     "test",
     {
-      vapidDetails: { ...vapid, subject: "https://github.com/Amit-Roy/agent-console" },
+      vapidDetails: { ...vapid, subject: "https://github.com/nefr0/agent-console" },
     },
   );
   assert.ok(request.headers.Authorization);

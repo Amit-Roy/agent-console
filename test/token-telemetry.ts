@@ -12,7 +12,7 @@ import {
   TELEMETRY_MARKER,
 } from "../server/token-telemetry.ts";
 
-const repo = "Amit-Roy/agent-console";
+const repo = "nefr0/agent-console";
 const repos = [repo];
 
 // --- issues a thread filed link to it, but are not listed as PRs ---
@@ -29,7 +29,7 @@ const toolLog = (id: string, command: string, out: string) =>
   ].join("\n");
 const filed = toolLog(
   "t1",
-  "cd /tmp && gh issue create -R Amit-Roy/agent-console --title x",
+  "cd /tmp && gh issue create -R nefr0/agent-console --title x",
   `https://github.com/${repo}/issues/39`,
 );
 assert.deepEqual(
@@ -96,10 +96,7 @@ l = linkThread({
   thread: {
     id: "b",
     defaultRepo: repo,
-    texts: [
-      "fix #12 and see https://github.com/Amit-Roy/agent-console/pull/13",
-      "x#99 &#39; foo/#5",
-    ],
+    texts: ["fix #12 and see https://github.com/nefr0/agent-console/pull/13", "x#99 &#39; foo/#5"],
   },
   repos,
 });
@@ -169,8 +166,8 @@ assert.equal(
 assert.doesNotThrow(() =>
   linkThread({ version: 99, extra: 1, thread: { id: "e", texts: [5 as any] }, repos } as any),
 );
-assert.equal(parseRemote("git@github.com:Amit-Roy/agent-console.git"), repo);
-assert.equal(parseRemote("https://github.com/Amit-Roy/agent-console"), repo);
+assert.equal(parseRemote("git@github.com:nefr0/agent-console.git"), repo);
+assert.equal(parseRemote("https://github.com/nefr0/agent-console"), repo);
 
 // --- render ---
 assert.ok(renderTelemetry({ runs: [] }).body.includes(NO_USAGE_TEXT));
@@ -278,7 +275,7 @@ const make = (extra: object = {}) =>
     github: github as any,
     threads: () => threadList,
     git: async (_cwd, ...args) =>
-      args[0] === "rev-parse" ? "manual-branch" : "git@github.com:Amit-Roy/agent-console.git",
+      args[0] === "rev-parse" ? "manual-branch" : "git@github.com:nefr0/agent-console.git",
     debounceMs: 5,
     log: (e, f) => logs.push([e, f]),
     ...extra,
@@ -353,7 +350,7 @@ const cached = make({
   threads: () => shared,
   git: async (cwd: string, ...args: string[]) => {
     gitCalls.push(cwd);
-    return args[0] === "rev-parse" ? "manual-branch" : "git@github.com:Amit-Roy/agent-console.git";
+    return args[0] === "rev-parse" ? "manual-branch" : "git@github.com:nefr0/agent-console.git";
   },
 });
 await cached.syncByNumber(repo, 3);

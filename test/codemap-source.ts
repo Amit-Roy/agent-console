@@ -26,16 +26,16 @@ for (const bad of [
   assert.throws(() => src.parseSource(bad), undefined, `rejects ${bad}`);
 }
 // parseSource github forms
-const want = { kind: "github", owner: "Amit-Roy", repo: "agent-console" };
+const want = { kind: "github", owner: "nefr0", repo: "agent-console" };
 for (const validInput of [
-  "Amit-Roy/agent-console",
-  "https://github.com/Amit-Roy/agent-console",
-  "https://github.com/Amit-Roy/agent-console.git",
-  "github.com/Amit-Roy/agent-console",
+  "nefr0/agent-console",
+  "https://github.com/nefr0/agent-console",
+  "https://github.com/nefr0/agent-console.git",
+  "github.com/nefr0/agent-console",
 ]) {
   assert.deepEqual(src.parseSource(validInput), want, validInput);
 }
-assert.equal(src.slugFor(want), "gh-amit-roy-agent-console");
+assert.equal(src.slugFor(want), "gh-nefr0-agent-console");
 assert.deepEqual(src.parseSource("/etc"), { kind: "local", path: "/etc" });
 
 // local resolution
