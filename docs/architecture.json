@@ -1,6 +1,6 @@
 {
   "title": "Agent Console architecture",
-  "subtitle": "App load path: release-versioned immutable static assets and HTML rewrite with modulepreload on top of compression and SW navigation preload",
+  "subtitle": "Design system: package generated from the app token layer; weekly scheduled task triages popular design posts into GitHub issues",
   "items": [
     {
       "group": "Share entry points",
@@ -360,6 +360,19 @@
         {"id": "tt-turns", "label": "Turn checkpoints", "tech": "server/threads.ts", "desc": "Snapshot at turn start, after file tools (500 ms debounce) and turn end; rewind, fork, prune", "icon": "flag", "status": "added"},
         {"id": "tt-shadow", "label": "Shadow git store", "tech": "server/checkpoints.ts", "desc": "Per-folder repo, per-thread index; skips ignored, sensitive, over 10 MB files", "icon": "git-branch", "status": "added"}
       ]
+    },
+    {
+      "group": "Design system",
+      "icon": "palette",
+      "status": "added",
+      "items": [
+        {"id": "ds-tokens", "label": "App token layer", "tech": "public/style.css", "desc": ":root blocks: base, dark, coarse pointer, high contrast", "icon": "palette", "status": "added"},
+        {"id": "ds-build", "label": "Package build", "tech": "scripts/build-design-system.js", "desc": "Copies the token layer, parses tokens.json; test fails on drift", "icon": "hammer", "status": "added"},
+        {"id": "ds-package", "label": "Published package", "tech": "packages/design-system", "desc": "@agent-console/design-system: design-system.css, tokens.json, index.js, index.d.ts", "icon": "package", "status": "added"},
+        {"id": "ds-schedule", "label": "Weekly scheduled task", "tech": "Agent Console Schedules", "desc": "Design system suggestions, Monday 09:00, Claude Haiku", "icon": "calendar-clock", "status": "added"},
+        {"id": "ds-sources", "label": "Suggestion run", "tech": "scripts/check-design-system-sources.js", "desc": "Reads Hacker News and Lobsters only; triage rule; drafts.json or run record", "icon": "filter", "status": "added"},
+        {"id": "ds-issues", "label": "GitHub issues", "tech": "gh issue list/create", "desc": "Dedupe by link; files only approved suggestions, label design-system", "icon": "circle-dot", "status": "added"}
+      ]
     }
   ],
   "edges": [
@@ -555,6 +568,10 @@
     {"from":"tt-turns","to":"tt-shadow","label":"snapshot, restore","status":"added"},
     {"from":"app","to":"history-snapshot","label":"open or older page via Threads.page"},
     {"from":"history-snapshot","to":"history-cache","label":"validate or rebuild derived offsets"},
-    {"from":"history-proofs","to":"history-snapshot","label":"models invariants; not runtime"}
+    {"from":"history-proofs","to":"history-snapshot","label":"models invariants; not runtime"},
+    {"from":"ds-tokens","to":"ds-build","label":"read token layer","status":"added"},
+    {"from":"ds-build","to":"ds-package","label":"write css and tokens.json","status":"added"},
+    {"from":"ds-schedule","to":"ds-sources","label":"run weekly","status":"added"},
+    {"from":"ds-sources","to":"ds-issues","label":"list, create approved","status":"added"}
   ]
 }

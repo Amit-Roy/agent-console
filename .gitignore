@@ -9,5 +9,6 @@ __pycache__/
 # Impeccable design hook: shared config is committed, per-developer state is not
 .impeccable/*
 !.impeccable/config.json
-.design-system-seen.json
 CLAUDE.md
+# Design-system suggestion runs (scripts/check-design-system-sources.js)
+logs/design-system/
