@@ -16,15 +16,19 @@ const ITEM_URL =
 
 export const isPrCreate = (command: unknown) => typeof command === "string" && CREATE.test(command);
 
+// A PR create refused by pr-evidence-guard ("Blocked: ...") or by pr-evidence ("pr.md:7 Evidence: ...", "Stop: create failed: ...").
+const REJECTED = /\bBlocked:|^Stop: create failed:|^\S+\.md:\d+ /m;
+
+const resultText = (content: unknown) =>
+  typeof content === "string"
+    ? content
+    : Array.isArray(content)
+      ? content.map((c) => (typeof c?.text === "string" ? c.text : "")).join("\n")
+      : "";
+
 /** PR URLs printed by a `gh pr create` result. gh prints the new PR URL last; earlier URLs are existing PRs it mentions. */
 export function prsFromResult(content: unknown, url = PR_URL): RaisedPr[] {
-  const text =
-    typeof content === "string"
-      ? content
-      : Array.isArray(content)
-        ? content.map((c) => (typeof c?.text === "string" ? c.text : "")).join("\n")
-        : "";
-  const all = [...text.matchAll(url)];
+  const all = [...resultText(content).matchAll(url)];
   const last = all.at(-1);
   return last ? [{ repo: last[1], number: Number(last[2]), url: last[0] }] : [];
 }
@@ -79,6 +83,23 @@ export function raisedReplayer(create: RegExp = CREATE_ITEM, url: RegExp = ITEM_
       return out;
     },
   };
+}
+
+/** How often the PR evidence guard refused this session's PR create calls, and its newest error text. */
+export function guardRejections(log: string): { count: number; last: string } {
+  const calls = new Set<string>();
+  const found = { count: 0, last: "" };
+  for (const line of log.split("\n")) {
+    const content = parseLogLine(line)?.message?.content;
+    for (const block of Array.isArray(content) ? content : []) {
+      if (isCreateCall(block, CREATE)) calls.add(block.id);
+      else if (block?.type === "tool_result" && calls.has(block.tool_use_id)) {
+        const text = resultText(block.content);
+        if (REJECTED.test(text)) Object.assign(found, { count: found.count + 1, last: text });
+      }
+    }
+  }
+  return found;
 }
 
 function scan(log: string, create: RegExp, url: RegExp): RaisedPr[] {

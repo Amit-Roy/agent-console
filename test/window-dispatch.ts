@@ -325,16 +325,27 @@ for (const [repo, effort] of [
   assert.doesNotMatch(text, /what is left/, `${effort} prompt does not invite stopping early`);
 }
 
-// guard rejections: name the evidence skill, cap retries, then draft PR plus guard error
+// guard rejections: generate the body with the evidence CLI, cap retries, then agent-console opens the draft
 {
   const text = issuePrompt(dec("o/webapp", "bau"), "b", "main");
   assert.match(text, /pr-evidence\/SKILL\.md/, "prompt names the evidence skill");
-  assert.match(text, /pr-evidence-guard validate-body/, "prompt names the validation command");
-  assert.match(text, /rejects[\s\S]*twice[\s\S]*--draft/, "two rejections lead to a draft PR");
-  assert.match(text, /gh pr comment[\s\S]*guard/, "guard error goes into a PR comment");
+  assert.match(
+    text,
+    /cp \/home\/coder\/repos\/brain\/config\/pr-evidence-example\.md/,
+    "prompt names the body template",
+  );
+  assert.match(text, /pr-evidence create pr\.md/, "prompt names the evidence-generation CLI");
+  assert.match(text, /not by hand/, "workers generate the body instead of writing it");
+  assert.match(text, /rejects[\s\S]*twice[\s\S]*stop retrying/, "two rejections end the retries");
+  assert.match(
+    text,
+    /draft PR[\s\S]*guard error/,
+    "agent-console opens the draft with the guard error",
+  );
+  assert.doesNotMatch(text, /gh pr create --draft/, "the guard refuses agent drafts too");
   assert.doesNotMatch(
     issuePrompt(dec("o/agent-console", "deep"), "b", "main"),
-    /--draft/,
+    /pr-evidence create/,
     "direct pushes open no PR",
   );
 }
