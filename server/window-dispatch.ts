@@ -368,6 +368,7 @@ export type IssueRun = {
   retryAttempts?: number; // Delivered retries, including infrastructure retries that do not spend task budget.
   workerError?: string; // Redacted error from the latest worker turn, used as retry context.
   infrastructure?: boolean; // The latest failed turn needs another approved model, without spending task budget.
+  infraRetries?: number; // Consecutive infrastructure retries; a task retry or a clean turn end resets the streak.
   premiumPending?: number; // Exhausted worker queued for the premium assigner, independently of the dispatch ledger.
   premiumThread?: string; // Durable assignment receipt; prevents another premium dispatch after restart.
   retryAt?: number; // Earliest time another worker recovery may start.

@@ -3,6 +3,7 @@ import { redact } from "./automation/events.ts";
 import { reviewPrompt } from "./automation/review-prompts.ts";
 import { githubRequest } from "./github-triage.ts";
 import {
+  MAX_INFRA_RETRIES,
   MAX_NUDGES,
   MAX_RECOVERIES,
   MAX_REVIEWS,
@@ -28,7 +29,7 @@ import { defaultDirs, defaultGit, type Git } from "./window-dispatch.ts";
 // and review-sweep.ts (catch up); they share one ReviewContext.
 
 export type { ReviewDeps };
-export { MAX_NUDGES, MAX_RECOVERIES, MAX_REVIEWS, reviewPrompt };
+export { MAX_INFRA_RETRIES, MAX_NUDGES, MAX_RECOVERIES, MAX_REVIEWS, reviewPrompt };
 
 function defaultApplied(dirs: { repos: string }, git: Git) {
   return async (name: string, sha: string) => {
@@ -139,6 +140,7 @@ function turnEnded(
     recoveries: run.stalled ? 0 : run.recoveries,
     premiumPending: undefined,
     premiumThread: undefined,
+    ...(event?.is_error ? {} : { infraRetries: undefined }),
   });
   if (run.effort === "deep") return; // The sweep recovers Deep workers; their successful turns need no review.
   return attemptReview(ctx, {

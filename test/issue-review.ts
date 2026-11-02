@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { createEventLog } from "../server/automation/events.ts";
 import { route as realRoute } from "../server/automation/router.ts";
-import { createReviewer } from "../server/issue-review.ts";
+import { createReviewer, MAX_INFRA_RETRIES } from "../server/issue-review.ts";
 import { ROUTES, startIssue } from "../server/window-dispatch.ts";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "ac-review-"));
@@ -958,6 +958,71 @@ try {
     await directRecovery.turnEnded(direct, { is_error: true, error: "implementation failed" });
     await directRecovery.sweep([direct]);
     assert.equal(retries, 1, "Deep errors still resume the existing worker");
+  }
+
+  // Persistent infrastructure failures alternate approved models only a bounded number of times, then go to premium.
+  {
+    const looping: any = {
+      id: "LOOPING",
+      provider: "pi",
+      model: "nvidia/nvidia/nemotron-3-ultra-550b-a55b",
+      status: "idle",
+      issueRun: { ...created[0].issueRun, effort: "bau" },
+    };
+    const models = [looping.model, "nvidia/nvidia/nemotron-3.5-super-vl-120b-a12b"];
+    const prompts: string[] = [],
+      escalations: any[] = [];
+    const loopDeps: any = {
+      github: async (_method: string, url: string) =>
+        /\/pulls\?/.test(url) ? [] : { state: "open" },
+      runner: {
+        ...runner,
+        mark: (_id: string, patch: any) => Object.assign(looping.issueRun, patch),
+        send: (_id: string, text: string) => prompts.push(text),
+      },
+      route: routing,
+      canResume: () => true,
+      rerouteWorker: () => {
+        looping.model = models.find((model) => model !== looping.model);
+        return { model: looping.model };
+      },
+      premium: async (req: any) => {
+        escalations.push(req);
+        return undefined;
+      },
+      events: ev,
+      now: () => now,
+    };
+    const looper = createReviewer(loopDeps);
+    for (let turn = 0; turn <= MAX_INFRA_RETRIES + 2; turn++) {
+      await looper.turnEnded(looping, { is_error: true, error: "429 rate limit exceeded" });
+      await looper.sweep([looping]);
+      now += 15 * 60_000;
+    }
+    assert.equal(
+      prompts.length,
+      MAX_INFRA_RETRIES,
+      "failed first: consecutive infrastructure retries are bounded",
+    );
+    assert.equal(
+      looping.issueRun.recoveries ?? 0,
+      0,
+      "infrastructure retries keep the task budget",
+    );
+    assert.ok(looping.issueRun.premiumPending, "bounded infrastructure retries queue premium");
+    assert.deepEqual(escalations.at(-1).exclude, [{ provider: "pi", model: looping.model }]);
+    const logged = fs.readFileSync(path.join(root, "ev.jsonl"), "utf8");
+    assert.match(logged, /"reason":"infrastructure-retries-exhausted"/);
+    assert.match(logged, /"msg":"resuming existing worker after an incomplete turn"/);
+    // A delivered task retry clears the infrastructure streak.
+    Object.assign(looping.issueRun, { premiumPending: undefined, infraRetries: 2, retryAt: 0 });
+    await looper.turnEnded(looping, { is_error: true, error: "TypeError: totals is undefined" });
+    await looper.sweep([looping]);
+    assert.equal(looping.issueRun.infraRetries, 0);
+    assert.equal(looping.issueRun.recoveries, 1);
+    looping.issueRun.infraRetries = 2;
+    await looper.turnEnded(looping, {});
+    assert.equal(looping.issueRun.infraRetries, undefined, "a clean turn end clears the streak");
   }
 
   // Missing PRs resume the existing worker, with durable backoff and a strict cap.

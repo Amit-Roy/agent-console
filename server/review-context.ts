@@ -6,6 +6,7 @@ import type { Git, IssueRun, IssueRunner } from "./window-dispatch.ts";
 export const MAX_REVIEWS = 3;
 export const MAX_NUDGES = 2;
 export const MAX_RECOVERIES = 2;
+export const MAX_INFRA_RETRIES = 3; // Consecutive infrastructure retries before premium; each picks another approved model.
 export const VERDICT = /^\s*Review:\s*(APPROVED|CHANGES REQUESTED)\b/i;
 export type Marker = { mark(threadId: string, patch: Partial<IssueRun>): void };
 export interface ReviewDeps {
