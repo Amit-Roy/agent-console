@@ -11,7 +11,7 @@ npm run test:formal
 node test/queue-edit.ts
 ```
 
-`lean-toolchain` pins Lean to `leanprover/lean4:v4.35.0`. `lake build` uses only Lean's bundled standard library. The Lake configuration treats warnings as errors, so an admitted proof fails the build. `ProofAudit.lean` checks every theorem’s reported axiom dependencies against an explicit list containing only standard Lean foundations (`propext` and `Quot.sound`); introducing a custom axiom into these proofs fails the audit. The separate `formal-queue` CI job installs Lean and checks the proofs; Node runtime installation and ordinary application tests do not require Lean.
+`lean-toolchain` pins Lean to `leanprover/lean4:v4.35.0`. `lake build` uses only Lean's bundled standard library. The Lake configuration treats warnings as errors, so an admitted proof fails the build. `ProofAudit.lean` checks every theorem’s reported axiom dependencies against an explicit list containing only standard Lean foundations (`propext` and `Quot.sound`); introducing a custom axiom into these proofs fails the audit. The `release` CI job installs Lean and checks the proofs; Node runtime installation and ordinary application tests do not require Lean.
 
 ## Model and source correspondence
 
