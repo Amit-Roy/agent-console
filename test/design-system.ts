@@ -59,4 +59,13 @@ const packed = JSON.parse(
 const tarball = packed.files.map((entry: any) => entry.path);
 for (const file of ["index.js", "index.d.ts", "tokens.json", "design-system.css", "package.json"])
   assert.ok(tarball.includes(file), `tarball contains ${file}`);
+// schedule section carries the exact task prompt so the task can be created verbatim
+const schedule = doc.slice(doc.indexOf("### Schedule"));
+for (const part of [
+  "git pull",
+  "node scripts/check-design-system-sources.js --out ~/.local/share/agent-console/design-system",
+  "newest file in `runs/`",
+  "run record path",
+])
+  assert.ok(schedule.includes(part), `schedule prompt has ${part}`);
 console.log("design-system ok");

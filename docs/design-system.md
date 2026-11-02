@@ -324,3 +324,9 @@ An approved suggestion becomes an issue titled `Design system (<section>): <post
 ### Schedule
 
 Agent Console scheduled task "Design system suggestions": weekly, Monday 09:00, Claude Haiku, folder `~/repos/agent-console`. Each run pulls `main`, runs the command above with `--out ~/.local/share/agent-console/design-system`, and reports the created issues and skipped posts from the run record. Start one by hand with `schedule_run_now`.
+
+Prompt to paste when creating the task:
+
+> In ~/repos/agent-console run `git pull` on `main`, then run `node scripts/check-design-system-sources.js --out ~/.local/share/agent-console/design-system`. Read the newest file in `runs/` under that folder and report: created issue links, skipped posts with reasons, errors, and the run record path.
+
+Creating the task needs the Schedules tool, which issue-run threads cannot call (`/api/agent-tools/schedule_list` answers 401). Create it and start `schedule_run_now` from an interactive thread. Check: `scheduled-tasks list` shows repeat weekly; created issues carry labels `design-system` and `enhancement`.
