@@ -330,6 +330,38 @@ finishWith(staleConsole, [
 assert.ok(!threads.get(staleConsole)?.quotaPaused, "unrelated console_error does not pause");
 pass("Unrelated console_error does not pause the thread");
 
+// Issue #55: a paused thread continues as soon as its reset time passes, not only late in a later window.
+const opened = createThread(threads, "codex");
+const notYet = createThread(threads, "codex");
+const stillFull = createThread(threads, "claude");
+const openNow = Date.now();
+threads.get(opened)!.quotaPaused = {
+  provider: "codex",
+  windowLabel: "5-hour",
+  resetsAt: openNow - 1000,
+};
+threads.get(notYet)!.quotaPaused = {
+  provider: "codex",
+  windowLabel: "5-hour",
+  resetsAt: openNow + 60_000,
+};
+threads.get(stillFull)!.quotaPaused = {
+  provider: "claude",
+  windowLabel: "5-hour",
+  resetsAt: openNow - 1000,
+};
+resumedThreads.length = 0;
+assert.equal(
+  threads.resumeWindowOpened(openNow, (provider) => provider === "claude"),
+  1,
+  "only the thread whose window opened and whose provider is free resumes",
+);
+assert.deepEqual(resumedThreads, [opened]);
+assert.ok(!threads.get(opened)?.quotaPaused);
+assert.ok(threads.get(notYet)?.quotaPaused, "window not open yet keeps the pause");
+assert.ok(threads.get(stillFull)?.quotaPaused, "provider still exhausted keeps the pause");
+pass("Window open resumes paused threads without waiting for the late-window gate");
+
 threads.shutdown();
 fs.rmSync(data, { recursive: true, force: true });
 console.log("All quota resumption tests passed");

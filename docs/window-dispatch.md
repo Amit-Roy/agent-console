@@ -45,7 +45,7 @@ Each started issue gets its own private clone, `~/worktrees/<repo>-issue-<n>-<at
 
 ## Quota-paused threads
 
-A Claude or Codex thread whose turn ends on a rate-limit error while its quota is exhausted is marked quota-paused. Every 5 minutes, with the dispatcher enabled, such threads continue with `Continue.` once their provider (per Claude account) passes the same gate as Deep issues: the 5-hour window is in its last `leadMinutes` (or `lowUsageLeadMinutes` below `lowUsagePct` used), is below `maxUsedPct`, and no window is still exhausted. With the defaults that is the last 180 minutes of a lightly used window. `dryRun` only logs. A manual message or archiving clears the pause.
+A Claude or Codex thread whose turn ends on a rate-limit error while its quota is exhausted is marked quota-paused. The thread row shows `Resumes <time>` and the usage pane lists the waiting threads. Every 5 minutes, with the dispatcher enabled and live, a paused thread continues with `Continue.` as soon as its recorded window has reset and no window of that provider is still exhausted. Otherwise, every 5 minutes, with the dispatcher enabled, such threads continue with `Continue.` once their provider (per Claude account) passes the same gate as Deep issues: the 5-hour window is in its last `leadMinutes` (or `lowUsageLeadMinutes` below `lowUsagePct` used), is below `maxUsedPct`, and no window is still exhausted. With the defaults that is the last 180 minutes of a lightly used window. `dryRun` only logs. A manual message or archiving clears the pause.
 
 ## Window opener
 

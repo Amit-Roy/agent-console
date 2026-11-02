@@ -1365,23 +1365,40 @@ export class Threads {
     windowLabel?: string,
     eligible?: (thread: Thread) => boolean,
   ) {
+    return this.resumePaused(
+      (t) =>
+        t.quotaPaused?.provider === provider &&
+        (!windowLabel || t.quotaPaused.windowLabel === windowLabel) &&
+        (!eligible || eligible(t)),
+    );
+  }
+
+  /** Resume quota-paused threads whose recorded window has reset and whose provider has no window still exhausted. */
+  resumeWindowOpened(
+    now: number,
+    exhausted: (provider: string) => boolean,
+    eligible?: (thread: Thread) => boolean,
+  ) {
+    return this.resumePaused(
+      (t) =>
+        !!t.quotaPaused &&
+        t.quotaPaused.resetsAt <= now &&
+        !exhausted(t.quotaPaused.provider) &&
+        (!eligible || eligible(t)),
+    );
+  }
+
+  private resumePaused(match: (thread: Thread) => boolean) {
     let resumed = 0;
     for (const t of this.threads.values()) {
-      if (t.archived || (eligible && !eligible(t))) continue;
-      if (
-        t.quotaPaused?.provider === provider &&
-        (!windowLabel || t.quotaPaused.windowLabel === windowLabel)
-      ) {
-        delete t.quotaPaused;
-        if (t.status === "running") continue; // the user already continued it; send would throw and abort the other resumes
-        try {
-          this.send(t.id, "Continue.", { auto: "quota-resume" });
-          resumed++;
-        } catch (error) {
-          console.error(
-            `[quota-resume] ${t.id}: ${error instanceof Error ? error.message : error}`,
-          );
-        }
+      if (t.archived || !match(t)) continue;
+      delete t.quotaPaused;
+      if (t.status === "running") continue; // the user already continued it; send would throw and abort the other resumes
+      try {
+        this.send(t.id, "Continue.", { auto: "quota-resume" });
+        resumed++;
+      } catch (error) {
+        console.error(`[quota-resume] ${t.id}: ${error instanceof Error ? error.message : error}`);
       }
     }
     return resumed;
