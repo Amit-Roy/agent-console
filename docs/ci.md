@@ -19,17 +19,17 @@ Wall time of the whole run: 90 s. GitHub bills each job rounded up to a whole mi
 
 ## Billed minutes per run
 
-| | Before | After |
+| | Before (run 41388550640) | After (run 41394447423, this PR, all jobs green) |
 | --- | ---: | ---: |
 | Jobs | 7 | 6 |
-| Billed minutes per pull request run | 10 | 9 |
-| Wall time | 90 s | about 90 s |
+| Billed minutes | 10 | 7 |
+| Wall time | 90 s | 70 s |
 
-The `formal-queue` job now runs inside the `release` job: 17 s of Lean work on the already-billed runner instead of a minute of its own.
+After-change jobs, seconds from start to finish: telemetry-comment 4, release 64 (2 billed minutes, now with the Lean proofs), test-shard 46, 54 and 57 (1 each), test 7. The `formal-queue` job now runs inside `release`: its 17 s of Lean work shares the already-billed runner instead of starting a runner of its own.
 
-Measured after the change (run 41390727063, `workflow_dispatch` on the PR branch): the `release` job, now with the Lean proofs, took 54 s, still 1 billed minute, and no `formal-queue` job ran. The shard jobs failed in that run at `npm run lint` with the same Biome diagnostics as the `main` run 41390069777 (CI-only; the repo lints clean locally with Biome 2.5.15), so a fully green wall time for the new layout is not measured yet.
+Read the 3-minute drop with care. Billing rounds each job up to a whole minute, and the shards sat just under 60 s in this run but at 65 to 73 s in the baseline, so shard minutes move between 1 and 2 per shard from run to run. The fold itself is billing-neutral when `release` crosses 60 s, as it did here (49 s plus 20 s became 64 s: 2 minutes before, 2 minutes after); it saves a billed minute only when the combined job stays under 60 s (run 41390727063 took 54 s). Expect 7 to 10 billed minutes per run; the wall time stays under 2 minutes either way.
 
-Reconciling the 1,809 minutes used in the billing cycle: at 10 billed minutes per pull request run that is about 180 runs, which fits a month of PR pushes, `main` pushes and Dependabot runs. The same 180 runs now bill about 1,630 minutes. `concurrency.cancel-in-progress` already cancels superseded runs, and the pre-commit hook below keeps broken pushes from spending a run at all. The shards stay at 3: two shards would push each job past 90 s and the wall time past 2 minutes for no billing gain.
+Reconciling the 1,809 minutes used in the billing cycle: at 10 billed minutes per pull request run that is about 180 runs, which fits a month of PR pushes, `main` pushes and Dependabot runs. The same 180 runs bill about 1,260 minutes at 7 per run and 1,800 at 10. `concurrency.cancel-in-progress` already cancels superseded runs, and the pre-commit hook below keeps broken pushes from spending a run at all. The shards stay at 3: two shards would push each job past 90 s and the wall time past 2 minutes for no billing gain.
 
 ## Keep, move or remove
 
@@ -48,7 +48,7 @@ Reconciling the 1,809 minutes used in the billing cycle: at 10 billed minutes pe
 
 ## Decision
 
-GitHub Actions is still needed: yes. Three things cannot move to a local hook: the required `telemetry-comment` check reads the PR through the GitHub API, the deploy hook fires on a green `workflow_run` of the `CI` workflow on `main`, and the browser suites and release smoke boot need a clean runner. No replacement mechanism; the saving comes from fewer billed jobs plus the local gate. Expected usage after the change: about 9 billed minutes per pull request run, down from 10, and a default-branch run finishes in under 2 minutes, inside the 5 minute target.
+GitHub Actions is still needed: yes. Three things cannot move to a local hook: the required `telemetry-comment` check reads the PR through the GitHub API, the deploy hook fires on a green `workflow_run` of the `CI` workflow on `main`, and the browser suites and release smoke boot need a clean runner. No replacement mechanism; the saving comes from fewer billed jobs plus the local gate. Expected usage after the change: 7 to 10 billed minutes per pull request run (7 measured), down from 10, and a default-branch run finishes in about 70 s, inside the 5 minute target. The coverage gate (`test` job) still fails the run when a test file is missing from every shard.
 
 ## Local pre-commit hook
 
