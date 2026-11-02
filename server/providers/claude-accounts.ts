@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileEnv } from "./env.ts";
 
 export type ClaudeAccount = "sunny" | "nefro";
 
@@ -14,6 +15,12 @@ export function claudeConfigDir(account?: string, env = process.env, home = os.h
   return normalizeClaudeAccount(account) === "nefro"
     ? path.join(home, ".claude-nefro")
     : env.CLAUDE_CONFIG_DIR || path.join(home, ".claude");
+}
+
+// Expected sign-in emails are deployment config (process env, else the Console env file); unset skips the mismatch check.
+function expectedEmail(account: ClaudeAccount): string {
+  const name = account === "nefro" ? "CLAUDE_NEFRO_EMAIL" : "CLAUDE_SUNNY_EMAIL";
+  return process.env[name] || fileEnv()[name] || "";
 }
 
 export function claudeAccountReady(
@@ -36,9 +43,10 @@ export function claudeAccountReady(
       file && fs.existsSync(file)
         ? JSON.parse(fs.readFileSync(file, "utf8")).oauthAccount?.emailAddress
         : undefined;
-    const expected = selected === "nefro" ? "nefro@example.com" : "sunny@example.com";
+    const expected = expectedEmail(selected);
     if (selected === "nefro" && typeof email !== "string") return false;
-    if (typeof email === "string" && email.toLowerCase() !== expected) return false;
+    if (expected && typeof email === "string" && email.toLowerCase() !== expected.toLowerCase())
+      return false;
     return true;
   } catch {
     return false;
@@ -62,13 +70,13 @@ export function claudeAccounts() {
     {
       id: "sunny",
       label: "Sunny",
-      email: "sunny@example.com",
+      email: expectedEmail("sunny"),
       ready: claudeAccountReady("sunny"),
     },
     {
       id: "nefro",
       label: "Nefro",
-      email: "nefro@example.com",
+      email: expectedEmail("nefro"),
       ready: claudeAccountReady("nefro"),
     },
   ];

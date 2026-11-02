@@ -16,7 +16,8 @@ from tempfile import TemporaryDirectory
 
 ROOT = Path(__file__).resolve().parent.parent
 SHORT = "console.nefro-dev-coder.duckdns.org"
-LONG = "7070--main--workspace--owner.example.test"
+WORKSPACE_HOST_SUFFIX = "main--ws--owner.example.test"
+LONG = "7070--" + WORKSPACE_HOST_SUFFIX
 
 
 class CoderFixture(BaseHTTPRequestHandler):
@@ -155,7 +156,11 @@ if __name__ == "__main__":
             + "\n reverse_proxy 127.0.0.1:7080\n}\n"
         )
         adapted = subprocess.run(
-            [caddy, "adapt", "--config", str(config)], capture_output=True, text=True, check=True
+            [caddy, "adapt", "--config", str(config)],
+            capture_output=True,
+            text=True,
+            check=True,
+            env={**os.environ, "CODER_WORKSPACE_HOST_SUFFIX": WORKSPACE_HOST_SUFFIX},
         )
         compiled = adapted.stdout.replace("127.0.0.1:7080", "127.0.0.1:" + str(fixture.server_port))
         runtime = scratch / "caddy.json"

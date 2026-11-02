@@ -7,6 +7,9 @@ import os from "node:os";
 import path from "node:path";
 import { type Browser, chromium, type Page } from "playwright";
 
+process.env.CLAUDE_SUNNY_EMAIL = "sunny@example.com";
+process.env.CLAUDE_NEFRO_EMAIL = "nefro@example.com";
+
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "ac-accounts-ui-"));
 const home = path.join(scratch, "home"),
   data = path.join(scratch, "data"),
@@ -147,8 +150,8 @@ try {
       "OpenRouter",
       "Codex",
     ]);
-    assert.match(await usageMenu.innerText(), /sunny\.user\.nefro@gmail\.com/);
-    assert.match(await usageMenu.innerText(), /nefro\.user\.nefro@gmail\.com/);
+    assert.match(await usageMenu.innerText(), /sunny@example\.com/);
+    assert.match(await usageMenu.innerText(), /nefro@example\.com/);
     await page.screenshot({ path: path.join(out, `${name}-usage-open.png`), fullPage: true });
     if (name === "phone") {
       await page.emulateMedia({ colorScheme: "dark" });

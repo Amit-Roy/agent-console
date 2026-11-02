@@ -8,6 +8,9 @@ import os from "node:os";
 import path from "node:path";
 import { type Browser, chromium } from "playwright";
 
+process.env.CLAUDE_SUNNY_EMAIL = "sunny@example.com";
+process.env.CLAUDE_NEFRO_EMAIL = "nefro@example.com";
+
 const port = process.env.AUTH_EXPIRED_TEST_PORT || "7075";
 assert.match(port, /^707[1-5]$/, "use an isolated scratch port, 7071–7075");
 const base = `http://127.0.0.1:${port}`;

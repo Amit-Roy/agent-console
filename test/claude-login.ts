@@ -5,6 +5,9 @@ import os from "node:os";
 import path from "node:path";
 import { finishClaudeLogin, startClaudeLogin } from "../server/claude-login.ts";
 
+process.env.CLAUDE_SUNNY_EMAIL = "sunny@example.com";
+process.env.CLAUDE_NEFRO_EMAIL = "nefro@example.com";
+
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "ac-claude-login-"));
 const fake = path.join(home, "claude");
 // Prints the authorize link, then signs in as FAKE_EMAIL when given the code "good#state".

@@ -16,11 +16,18 @@ credentials stay in the workspace. No Coder access URL, template, database, or w
 restart is required. The existing Coder login URL may still use its tunnel domain.
 
 Caddy presents the existing app hostname
-`7070--main--workspace--owner.example.test` in both `Host`
+`7070--$CODER_WORKSPACE_HOST_SUFFIX` in both `Host`
 and `X-Forwarded-Host` so Coder resolves the same workspace application. Only the exact
 short HTTPS `Origin` is translated to that app origin, preserving same-origin checks
 for writes and WebSocket connections. Other origins remain subject to Coder and Console
 checks. Do not add the alias to `AGENT_CONSOLE_PUBLIC_HOST` or expose port 7070 publicly.
+
+The snippets `docs/console-url.caddy` and `docs/acode-caddy.caddy` use Caddy's `{$CODER_WORKSPACE_HOST_SUFFIX}` text substitution. Add two lines to `/etc/caddy/console-proxy.env` on the VPS (the Caddy unit loads it; mode 0600):
+
+```
+CODER_WORKSPACE_HOST_SUFFIX=main--<workspace>--<owner>.<domain>
+CODER_CONTAINER=coder-<Owner>-<workspace>
+```
 
 Coder's login redirect still names the original app host. A temporary 307 redirect on
 that host preserves the complete path and query while returning the browser to the

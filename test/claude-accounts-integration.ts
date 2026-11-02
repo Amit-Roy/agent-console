@@ -4,6 +4,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+process.env.CLAUDE_SUNNY_EMAIL = "sunny@example.com";
+process.env.CLAUDE_NEFRO_EMAIL = "nefro@example.com";
+
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "ac-accounts-integration-"));
 const before = { ...process.env };
 const data = path.join(home, "data"),
