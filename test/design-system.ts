@@ -59,4 +59,17 @@ const packed = JSON.parse(
 const tarball = packed.files.map((entry: any) => entry.path);
 for (const file of ["index.js", "index.d.ts", "tokens.json", "design-system.css", "package.json"])
   assert.ok(tarball.includes(file), `tarball contains ${file}`);
+// text scales with the browser font size (WCAG 1.4.4 Resize Text): rem sizes, no px root size, documented rule
+const styleCss = fs.readFileSync(path.join(root, "public", "style.css"), "utf8");
+for (const [name, value] of Object.entries(built.tokens.themes.base))
+  if (/^--fm?-/.test(name))
+    assert.match(
+      String(value),
+      /^[\d.]+rem \/ ([\d.]+rem|[\d.]+) /,
+      `${name} is a rem size with a rem or unitless line height`,
+    );
+assert.doesNotMatch(styleCss, /font(-size)?:[^;{}]*\d(\.\d+)?px/, "public/style.css has no px font sizes");
+assert.doesNotMatch(styleCss, /html\s*\{[^}]*font-size/, "html sets no font size, so browser settings scale rem");
+assert.match(doc, /\*\*Text Scaling\*\*/, "Usage Guidelines has the Text Scaling rule");
+assert.match(doc, /dbushell\.com\/2026\/11\/01\/tangled-accessibility/, "Text Scaling cites its source");
 console.log("design-system ok");
