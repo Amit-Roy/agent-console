@@ -13,6 +13,7 @@ The design system uses CSS custom properties (variables) defined in `:root` and 
   - Text: `--font-text`: Newsreader (for conversation text)
   - Mono: `--font-mono`: JetBrains Mono (for code and paths)
 - Font sizes (defined as `size/line-height`):
+  - `--f-text`: 1.125rem/1.6 Newsreader (18px, conversation text)
   - `--f-xs`: 0.75rem/1rem (12px)
   - `--f-sm`: 0.8125rem/1.125rem (13px)
   - `--f-md`: 0.875rem/1.25rem (14px)
@@ -64,7 +65,7 @@ The design system uses CSS custom properties (variables) defined in `:root` and 
 
 ### Layout
 
-- `--col`: 46rem (reading column width)
+- `--col`: 60rem (reading column width)
 - `--side-w`: 16.5rem (sidebar width)
 - Control heights:
   - `--ctl-h`: 2rem (fine pointer)
@@ -100,7 +101,12 @@ The design system uses CSS custom properties (variables) defined in `:root` and 
   - `--warn`: #7d4a00
   - `--bad`: #bf2a22
   - `--stop`: #dc2626
+  - `--stop-hover`: #b91c1c
   - `--on-stop`: #fff
+  - `--warn-tint`: rgba(217,138,0,.16)
+  - `--bad-tint`: rgba(191,42,34,.1)
+  - `--add-bg`: rgba(19,112,58,.11) (diff added line)
+  - `--del-bg`: rgba(191,42,34,.1) (diff removed line)
 - Misc:
   - `--hover`: rgba(20,20,40,.06)
   - `--press`: rgba(20,20,40,.1)
@@ -154,7 +160,12 @@ The design system uses CSS custom properties (variables) defined in `:root` and 
   - `--warn`: #f2b45a
   - `--bad`: #ff8f87
   - `--stop`: #dc2626
+  - `--stop-hover`: #b91c1c
   - `--on-stop`: #fff
+  - `--warn-tint`: rgba(242,180,90,.14)
+  - `--bad-tint`: rgba(255,143,135,.13)
+  - `--add-bg`: rgba(95,211,138,.13)
+  - `--del-bg`: rgba(255,143,135,.13)
 - Misc:
   - `--hover`: rgba(255,255,255,.06)
   - `--press`: rgba(255,255,255,.1)
@@ -231,8 +242,8 @@ Each token and component is explicitly scoped as **In** (published, supported) o
 - Layout: col, side-w, control heights, icon size — **In**
 - Colors (light + dark): surfaces (s0–s3, pop, code-bg, code-head), text (t1–t3), accent/fill/on-fill, status (ok/warn/bad/stop), hover/press/edge/scrim, shadows, focus, visualization series (viz-1–6), syntax highlighting (hl-kw–hl-meta) — **In**
 
-### Components — All In
-- Button, Input/Textarea, Checkbox/Radio, Select, Modal/Dialog, Card, Sidebar, TabBar, ChatBubble, Composer, Notification, Badge — **In**
+### Components — In as documented patterns
+- Button, Input/Textarea, Checkbox/Radio, Select, Modal/Dialog, Card, Sidebar, TabBar, ChatBubble, Composer, Notification, Badge — **In** as the recipes in [Components](#components). The package ships tokens only; component CSS stays in the app.
 
 ### Out of Scope (v0)
 - Data grid / table component — **Out**
@@ -243,6 +254,19 @@ Each token and component is explicitly scoped as **In** (published, supported) o
 - Tree view — **Out**
 - Virtual list — **Out**
 - Form validation library — **Out**
+
+## Published output
+
+Path: `packages/design-system/`, npm package `@agent-console/design-system`. The token layer of `public/style.css` (its `:root` blocks, up to the `base` section) is the single source; `node scripts/build-design-system.js` regenerates the package from it, and `test/design-system.ts` fails when the package or this document falls behind the app.
+
+| File | Contents |
+| --- | --- |
+| `design-system.css` | The token layer verbatim: `:root` plus the `prefers-color-scheme: dark`, `pointer: coarse` and `prefers-contrast: more` overrides |
+| `tokens.json` | `{ version, source, themes: { base, dark, coarse, contrast } }`, each theme a map of custom property to value |
+| `index.js` | ESM entry: `tokens` (parsed `tokens.json`) and `cssString` |
+| `index.d.ts` | Types for `index.js` |
+
+Every token listed under [Tokens](#tokens) is published; a token added to the app's token layer must be listed there before the test passes.
 
 ## Icon-Pack Style Constraint
 
@@ -259,16 +283,44 @@ The design system mandates a single icon pack for visual consistency. All icons 
 The design system is published as an npm package to GitHub Packages. See `packages/design-system/package.json` for the package configuration.
 
 - **Versioning**: semver in `packages/design-system/package.json`. Token removal or rename = major; new token/component = minor; value tweak = patch.
-- **Publish**: `cd packages/design-system && npm publish` (registry `https://npm.pkg.github.com`, needs a GitHub token with `write:packages` in your own `~/.npmrc`; never commit it). `npm pack --dry-run` shows the tarball: `index.js`, `index.d.ts`, `tokens.json`, `design-system.css`.
+- **Publish**: `node scripts/build-design-system.js`, then `cd packages/design-system && npm publish` (registry `https://npm.pkg.github.com`, needs a GitHub token with `write:packages` in your own `~/.npmrc`; never commit it). `npm pack --dry-run` shows the tarball: `index.js`, `index.d.ts`, `tokens.json`, `design-system.css`.
 - **Install**: `npm install @agent-console/design-system`, then `import { tokens, cssString } from '@agent-console/design-system'` or `@agent-console/design-system/css`.
 
 ## Popular-opinion sources
 
-`scripts/check-design-system-sources.js` polls these sources and turns new matches into GitHub issues (labels `design-system`, `suggestion`), deduplicated by URL in `.design-system-seen.json`:
+A scheduled task reads what designers and developers are upvoting, keeps what touches this design system, and files it as GitHub issues. Code: `scripts/check-design-system-sources.js`; test: `node test/design-system-sources.ts` (fetch and `gh` injected, no network).
 
-| Source | Endpoint | Match |
+### Sources (read only these)
+
+| Source | Endpoint | Popularity floor | What it reads |
+| --- | --- | --- | --- |
+| Hacker News | `https://hn.algolia.com/api/v1/search` | 100 points | stories from the last 90 days for: design system, design tokens, dark mode, typography, accessibility, color contrast |
+| Lobsters | `https://lobste.rs/t/design,css,a11y.json` | 20 votes | latest posts tagged design, css or a11y |
+
+Input per post: title, link, discussion link, score, comment count, posted time. Reddit was dropped: its JSON API answers 403 without OAuth.
+
+### Triage rule
+
+Posts are taken most popular first. Each gets one verdict, the first rule that matches:
+
+1. Link already in an issue labelled `design-system` (open or closed): skip, "already filed".
+2. Same link already seen in this run from another source: skip.
+3. No topic word in the title: skip, "off-topic". Topic words map to the section of this document the issue would change: Colors (color, contrast, dark mode, theme, palette), Typography (typography, font, typeface), Spacing (spacing, layout, density), Animation Durations (animation, motion, transition), Icon-Pack Style Constraint (icon), Usage Guidelines (accessibility, a11y, focus, keyboard, screen reader), Components (design system, design token, component, button, dialog, modal).
+4. Score below the source's floor: skip, "below popularity".
+5. Posted more than 90 days ago: skip.
+6. Otherwise approve, up to 3 per run; the rest skip as "over the per-run cap".
+
+An approved suggestion becomes an issue titled `Design system (<section>): <post title>`, labels `design-system` and `enhancement`, with the link, discussion, score and the triage reason in the body. `@mentions` in titles are broken so nobody is pinged.
+
+### Runs
+
+| Command | Creates issues | Writes |
 | --- | --- | --- |
-| Reddit r/design_system | `new.json?limit=10` | title has "design system" plus improve/suggestion/idea/feedback |
-| Hacker News | newest 50 stories | same title rule, story must have a URL |
+| `node scripts/check-design-system-sources.js --dry-run` | no | `logs/design-system/drafts.json`: proposed titles and bodies, plus every skipped post and its reason |
+| `node scripts/check-design-system-sources.js` | only approved ones | `logs/design-system/runs/<time>.json`: created issue links, skipped posts and reasons, errors |
 
-Run it: `node scripts/check-design-system-sources.js` (`--dry-run` prints without creating issues). Schedule it daily with the console's Schedules (`schedule_create`, folder = repo root, prompt = run that command and report the result); a manual `schedule_run_now` is the end-to-end check. Matches are appended to `logs/design-system-suggestions.log`. Test: `node test/design-system-sources.ts` (fetch and `gh` are injected, no network).
+`--out DIR` changes the folder, `--repo OWNER/NAME` the target repo (default `nefr0/agent-console`). If the existing issues cannot be listed, nothing is created (no dedupe means duplicates). A failed source or failed `gh issue create` is recorded in `errors`; the run exits 1 when nothing could be read or an approved issue was not created.
+
+### Schedule
+
+Agent Console scheduled task "Design system suggestions": weekly, Monday 09:00, Claude Haiku, folder `~/repos/agent-console`. Each run pulls `main`, runs the command above with `--out ~/.local/share/agent-console/design-system`, and reports the created issues and skipped posts from the run record. Start one by hand with `schedule_run_now`.
