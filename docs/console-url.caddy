@@ -9,6 +9,7 @@ handle @consoleAlias {
     request_header @consoleOrigin Origin https://7070--{$CODER_WORKSPACE_HOST_SUFFIX}
     reverse_proxy 127.0.0.1:7080 {
         header_up Host 7070--{$CODER_WORKSPACE_HOST_SUFFIX}
+        header_up X-Agent-Console-Proxy {env.CONSOLE_PROXY_SECRET}
         header_up X-Forwarded-Host 7070--{$CODER_WORKSPACE_HOST_SUFFIX}
     }
 }

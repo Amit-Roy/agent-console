@@ -29,6 +29,8 @@ CODER_WORKSPACE_HOST_SUFFIX=main--<workspace>--<owner>.<domain>
 CODER_CONTAINER=coder-<Owner>-<workspace>
 ```
 
+`docs/console-url.caddy` also reads `CONSOLE_PROXY_SECRET` from the same env file on the VPS (its value is set there at runtime and never committed).
+
 Coder's login redirect still names the original app host. A temporary 307 redirect on
 that host preserves the complete path and query while returning the browser to the
 alias. Coder then redeems its encrypted callback parameter and strips it with its own
