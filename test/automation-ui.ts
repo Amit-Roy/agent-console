@@ -143,6 +143,13 @@ try {
       msg: "live: route pi/default — pi allowance unknown",
     },
     { step: "worker", kind: "start", run: "work:w1", ref: "o/r#5", msg: "pi/default" },
+    {
+      step: "worker",
+      kind: "info",
+      ref: "o/r#7",
+      msg: "infrastructure failures persisted after 3 model changes; queued for an approved premium alternative",
+      data: { reason: "infrastructure-retries-exhausted", recoveries: 0, infraRetries: 3 },
+    },
     { step: "worktree", kind: "fail", ref: "o/r#6", msg: "No local checkout of o/missing" },
     { step: "review", kind: "start", run: "review:r1", ref: "o/r#5", msg: "claude/sonnet" },
     { step: "effort_sessions", kind: "ok", run: "effort:w1", msg: "420 sessions read" },
@@ -674,6 +681,14 @@ try {
       (await page.locator("#drawer-log").innerText()).includes("labeled by pi/nemotron") &&
         !(await page.locator("#drawer-log").innerText()).includes("No local checkout"),
     );
+    await page.keyboard.press("Escape");
+    await page.click('[data-step="worker"]');
+    await page.waitForSelector("#drawer:not([hidden])");
+    ok(
+      "worker drawer shows the premium queue after bounded infrastructure retries",
+      (await page.locator("#drawer-log").innerText()).includes("persisted after 3 model changes"),
+    );
+    await page.screenshot({ path: `${OUT}/worker-recovery-${name}.png` });
     await page.keyboard.press("Escape");
     ok(
       "no horizontal overflow",
