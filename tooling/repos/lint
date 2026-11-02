@@ -27,6 +27,12 @@ for target do
     echo "lint: repository directory does not exist: $target" >&2
     exit 2
   fi
+  # Ruff prints "All checks passed!" on unreadable trees, so refuse them up front.
+  # List the directory instead of testing mode bits: sandboxes deny reads that `test -r` allows.
+  if ! ls -A -- "$target" >/dev/null 2>&1; then
+    echo "lint: repository directory is not readable: $target" >&2
+    exit 2
+  fi
 done
 for tool in biome ruff; do
   if ! command -v "$tool" >/dev/null 2>&1; then
