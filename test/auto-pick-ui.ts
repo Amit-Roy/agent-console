@@ -6,6 +6,9 @@ import os from "node:os";
 import path from "node:path";
 import { type Browser, chromium, type Page } from "playwright";
 
+process.env.CLAUDE_SUNNY_EMAIL = "sunny@example.com";
+process.env.CLAUDE_NEFRO_EMAIL = "nefro@example.com";
+
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "ac-auto-pick-ui-"));
 const home = path.join(scratch, "home"),
   data = path.join(scratch, "data"),
@@ -20,8 +23,8 @@ for (const dir of [
 ])
   fs.mkdirSync(dir, { recursive: true });
 for (const [dir, email] of [
-  [".claude", "sunny.amit.roy@gmail.com"],
-  [".claude-nefro", "nefro.amit.roy@gmail.com"],
+  [".claude", "sunny@example.com"],
+  [".claude-nefro", "nefro@example.com"],
 ]) {
   fs.writeFileSync(
     path.join(home, dir, ".credentials.json"),

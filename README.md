@@ -122,6 +122,12 @@ process environment values take precedence.
 
 Credentials for non-Claude agents: `~/.config/agent-console/env`, then `~/openrouter/.env`. Override with `AGENT_CONSOLE_ENV_FILES` (colon-separated). `OPEN_ROUTER_TOKEN` is an alias for `OPENROUTER_API_KEY`.
 
+Deployment identifiers stay out of the repository and live in the same env file (the process environment wins); `.env.example` lists every name with placeholder values:
+
+- `CLAUDE_SUNNY_EMAIL`, `CLAUDE_NEFRO_EMAIL`: expected Claude sign-in emails. Unset skips the mismatch check and `bin/claude-account login` omits `--email`.
+- `AGENT_CONSOLE_ALERT_TO`, `AGENT_CONSOLE_ALERT_CC`: comma lists of default vault alert recipients (none when unset).
+- `CODER_USER`, `CODER_WORKSPACE_HOST_SUFFIX`, `CODER_CONTAINER`, `LAPTOP_USER`: Coder owner, workspace host suffix (`main--<workspace>--<owner>.<domain>`), workspace container name and laptop SSH user.
+
 OpenRouter free tier: 50 requests/day (1000 after a one-off $10 credit). Use the mock for routine tests.
 
 ### Two Claude accounts, one brain
@@ -134,7 +140,7 @@ Set up Nefro:
 bin/claude-account nefro login
 ```
 
-Complete the browser login with `nefro.amit.roy@gmail.com`, then reload the Console.
+Complete the browser login with the address in `CLAUDE_NEFRO_EMAIL`, then reload the Console.
 
 Check status: `bin/claude-account sunny status` or `bin/claude-account nefro status`.
 

@@ -28,7 +28,28 @@ CONFIG = Path("/opt/coder/https/Caddyfile")
 SNIPPET = Path("/opt/coder/https/agent-console/github-triage.caddy")
 SITE = "*.nefro-dev-coder.duckdns.org {"
 IMPORT = "\timport /opt/coder/https/agent-console/github-triage.caddy"
-CONTAINER = "coder-Amit-Roy-nefro-dev-ssdnodes"
+CONTAINER = os.environ.get("CODER_CONTAINER", "")
+ENV_FILES = ("/etc/caddy/duckdns.env", "/etc/caddy/console-proxy.env")
+NEEDED = ("DUCKDNS_API_TOKEN", "CODER_WORKSPACE_HOST_SUFFIX", "CODER_CONTAINER")
+
+
+def caddy_environment():
+    """Process env overlaid with the Caddy env files; the validate step and the container name need them."""
+    environment = os.environ.copy()
+    for name in ENV_FILES:
+        for line in Path(name).read_text().splitlines():
+            key, separator, value = line.partition("=")
+            key = key.strip()
+            if not separator or not key.isidentifier():
+                continue
+            values = shlex.split(value, comments=True)
+            if len(values) != 1:
+                raise RuntimeError("The Caddy environment file has an invalid " + key + " assignment.")
+            environment[key] = values[0]
+    missing = [key for key in NEEDED if not environment.get(key)]
+    if missing:
+        raise RuntimeError("Missing from the Caddy environment files: " + ", ".join(missing))
+    return environment
 
 
 def atomic_write(path, content):
@@ -106,14 +127,7 @@ def refresh(upstream):
     if original == current.encode() and previous_route == route:
         return
 
-    environment = os.environ.copy()
-    for line in Path("/etc/caddy/duckdns.env").read_text().splitlines():
-        key, separator, value = line.partition("=")
-        if separator and key.strip() == "DUCKDNS_API_TOKEN":
-            values = shlex.split(value, comments=True)
-            if len(values) != 1:
-                raise RuntimeError("The Caddy environment file has an invalid token assignment.")
-            environment[key.strip()] = values[0]
+    environment = caddy_environment()
     SNIPPET.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
     stamp = str(time.time_ns())
     for path in (CONFIG, SNIPPET):
@@ -148,6 +162,10 @@ if __name__ == "__main__":
         raise SystemExit("Run this refresh worker as root.")
     with open("/run/lock/agent-console-github-triage-caddy.lock", "w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            CONTAINER = caddy_environment()["CODER_CONTAINER"]
+        except (OSError, RuntimeError, KeyError) as error:
+            raise SystemExit(str(error))
         upstream = workspace()
         if upstream:
             refresh(upstream)

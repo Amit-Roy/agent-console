@@ -4,10 +4,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import { fileEnv } from "../server/providers/env.ts";
 
 const profiles = {
-  sunny: { email: "sunny.amit.roy@gmail.com", dir: process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude") },
-  nefro: { email: "nefro.amit.roy@gmail.com", dir: path.join(os.homedir(), ".claude-nefro") },
+  sunny: { email: process.env.CLAUDE_SUNNY_EMAIL || fileEnv().CLAUDE_SUNNY_EMAIL, dir: process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude") },
+  nefro: { email: process.env.CLAUDE_NEFRO_EMAIL || fileEnv().CLAUDE_NEFRO_EMAIL, dir: path.join(os.homedir(), ".claude-nefro") },
 };
 const [account, action = "status", ...args] = process.argv.slice(2);
 if (!Object.hasOwn(profiles, account) || !["setup", "login", "status"].includes(action) || args.length) {
@@ -43,7 +44,7 @@ const env = { ...process.env };
 if (account === "nefro") env.CLAUDE_CONFIG_DIR = profile.dir;
 for (const name of ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDECODE"]) delete env[name];
 const command = action === "login"
-  ? ["auth", "login", "--claudeai", "--email", profile.email]
+  ? ["auth", "login", "--claudeai", ...(profile.email ? ["--email", profile.email] : [])]
   : ["auth", "status"];
 const result = spawnSync("claude", command, { env, stdio: "inherit" });
 if (result.error) console.error(result.error.message);

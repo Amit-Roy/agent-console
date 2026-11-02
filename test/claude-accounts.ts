@@ -9,6 +9,9 @@ import {
   normalizeClaudeAccount,
 } from "../server/providers/claude-accounts.ts";
 
+process.env.CLAUDE_SUNNY_EMAIL = "sunny@example.com";
+process.env.CLAUDE_NEFRO_EMAIL = "nefro@example.com";
+
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "ac-claude-accounts-"));
 try {
   const config = path.join(home, ".claude-nefro");
@@ -32,7 +35,7 @@ try {
   const metadata = path.join(config, ".claude.json");
   fs.writeFileSync(
     metadata,
-    JSON.stringify({ oauthAccount: { emailAddress: "sunny.amit.roy@gmail.com" } }),
+    JSON.stringify({ oauthAccount: { emailAddress: "sunny@example.com" } }),
   );
   assert.equal(
     claudeAccountReady("nefro", {}, home),
@@ -41,7 +44,7 @@ try {
   );
   fs.writeFileSync(
     metadata,
-    JSON.stringify({ oauthAccount: { emailAddress: "nefro.amit.roy@gmail.com" } }),
+    JSON.stringify({ oauthAccount: { emailAddress: "nefro@example.com" } }),
   );
   assert.equal(claudeAccountReady("nefro", {}, home), true);
   fs.writeFileSync(path.join(config, ".credentials.json"), "{}");

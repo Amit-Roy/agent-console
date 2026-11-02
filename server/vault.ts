@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import express from "express";
 import { type IronSpec, presets, SpecError, specHosts, validateSpec } from "./iron-spec.ts";
+import { fileEnv } from "./providers/env.ts";
 import { backupStatus, retryBackup, scheduleBackup } from "./vault-backup.ts";
 import { refreshEgress } from "./vault-egress.ts";
 import {
@@ -40,8 +41,12 @@ const ENV_KEY = /^[A-Z_][A-Z0-9_]*$/;
 const ENV_LINE = /^(\s*(?:export\s+)?)([A-Za-z_][A-Za-z0-9_]*)(\s*=\s*)(.*)$/;
 const DEFAULT_GH_REPOS = ["nefr0/harden-vps"];
 const GH_TIMEOUT = 20_000;
-const DEFAULT_ALERT_TO = ["sunny.amit.roy@gmail.com"],
-  DEFAULT_ALERT_CC = ["nefro.amit.roy@gmail.com"];
+// Default alert recipients are deployment config: comma lists in the process env or the Console env file, else none.
+const envList = (name: string): string[] =>
+  (process.env[name] || fileEnv()[name] || "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
 
 const SECRETISH = /(KEY|TOKEN|SECRET|PASS|AUTH|CRED|PRIVATE|DSN|URL)/i; // env keys outside this are settings, not secrets: hidden unless showAllKeys
 type Source = {
@@ -122,8 +127,8 @@ function config(): {
     sources: Array.isArray(raw) ? raw : Array.isArray(raw?.sources) ? raw.sources : null,
     extra: Array.isArray(raw?.extra) ? raw.extra : [],
     showAllKeys: raw?.showAllKeys === true,
-    alertTo: list(raw?.alertTo, DEFAULT_ALERT_TO),
-    alertCc: list(raw?.alertCc, DEFAULT_ALERT_CC),
+    alertTo: list(raw?.alertTo, envList("AGENT_CONSOLE_ALERT_TO")),
+    alertCc: list(raw?.alertCc, envList("AGENT_CONSOLE_ALERT_CC")),
     rpId: typeof raw?.rpId === "string" && /^[\w.-]+$/.test(raw.rpId) ? raw.rpId : undefined,
     origins: Array.isArray(raw?.origins)
       ? raw.origins.filter((o: unknown) => typeof o === "string" && /^https:\/\/[\w.-]+$/.test(o))
