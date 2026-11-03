@@ -385,7 +385,7 @@
       {"id": "ia-logs", "label": "Dispatch ledger and event log", "tech": "window-dispatch.jsonl, automation-events.jsonl(.1)", "desc": "Live data directory: one ledger row per dispatch, one event per step", "icon": "database"},
       {"id": "ia-report", "label": "worker-retries report", "tech": "bin/agent-console worker-retries", "desc": "Read-only: stranded live dispatches with turn ends, retries, PR numbers and premium reasons; a zero result prints filter and range", "icon": "file-search"}
     ]},
-    {"group": "Deployment identity", "icon": "key-round", "status": "modified", "items": [{"id": "id-env", "label": "Console env file", "tech": "~/.config/agent-console/env, .env.example", "desc": "Gitignored real values; .env.example lists names with placeholders", "icon": "file-key", "status": "modified"}, {"id": "id-accounts", "label": "Claude accounts", "tech": "server/providers/claude-accounts.ts, bin/claude-account", "desc": "Expected emails from env; unset skips mismatch check and --email", "icon": "users", "status": "modified"}, {"id": "id-vault", "label": "Vault alerts", "tech": "server/vault.ts", "desc": "Default alert recipients from AGENT_CONSOLE_ALERT_TO/CC, else none", "icon": "bell", "status": "modified"}, {"id": "id-caddy", "label": "Caddy snippets", "tech": "docs/console-url.caddy, docs/acode-caddy.caddy", "desc": "Host uses {$CODER_WORKSPACE_HOST_SUFFIX} substitution", "icon": "route", "status": "modified"}, {"id": "id-proxyenv", "label": "VPS console-proxy.env", "tech": "/etc/caddy/console-proxy.env", "desc": "Two new lines: CODER_WORKSPACE_HOST_SUFFIX, CODER_CONTAINER", "icon": "server", "status": "added"}, {"id": "id-triage", "label": "Triage Caddy worker", "tech": "scripts/github-triage-caddy.py", "desc": "Container name and validate env parsed from the two Caddy env files; errors if missing", "icon": "shield-check", "status": "modified"}]}
+    {"group": "Deployment identity", "icon": "key-round", "status": "modified", "items": [{"id": "id-env", "label": "Console env file", "tech": "~/.config/agent-console/env, .env.example", "desc": "Gitignored real values; .env.example lists names with placeholders", "icon": "file-key", "status": "modified"}, {"id": "id-accounts", "label": "Claude accounts", "tech": "server/providers/claude-accounts.ts, bin/claude-account", "desc": "Expected emails from env; unset skips mismatch check and --email", "icon": "users", "status": "modified"}, {"id": "id-vault", "label": "Vault alerts", "tech": "server/vault.ts", "desc": "Default alert recipients from the alert env vars, else none", "icon": "bell", "status": "modified"}, {"id": "id-caddy", "label": "Caddy snippets", "tech": "docs/console-url.caddy, docs/acode-caddy.caddy", "desc": "Host comes from the workspace host suffix env var", "icon": "route", "status": "modified"}, {"id": "id-proxyenv", "label": "VPS console-proxy.env", "tech": "/etc/caddy/console-proxy.env", "desc": "Two new lines: workspace host suffix and container name", "icon": "server", "status": "added"}, {"id": "id-triage", "label": "Triage Caddy worker", "tech": "scripts/github-triage-caddy.py", "desc": "Container name and validate env parsed from the two Caddy env files; errors if missing", "icon": "shield-check", "status": "modified"}]}
   ],
   "edges": [
     {
@@ -594,8 +594,8 @@
     {"from":"ia-recovery","to":"ia-logs","label":"worker start and info events"},
     {"from":"ia-report","to":"ia-logs","label":"read only"},
     {"from":"id-env","to":"id-accounts","label":"CLAUDE_*_EMAIL"},
-    {"from":"id-env","to":"id-vault","label":"AGENT_CONSOLE_ALERT_*"},
-    {"from":"id-proxyenv","to":"id-caddy","label":"{$CODER_WORKSPACE_HOST_SUFFIX}"},
-    {"from":"id-proxyenv","to":"id-triage","label":"CODER_CONTAINER"}
+    {"from":"id-env","to":"id-vault","label":"alert env vars"},
+    {"from":"id-proxyenv","to":"id-caddy","label":"host suffix"},
+    {"from":"id-proxyenv","to":"id-triage","label":"container name"}
   ]
 }
