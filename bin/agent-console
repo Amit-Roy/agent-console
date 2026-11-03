@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# agent-console start|stop|restart|deploy [ref]|rollback|restart-when-idle|status|password|url|release [ref] [--repo PATH]  (supervise: internal, run by start)
+# agent-console start|stop|restart|deploy [ref]|rollback|restart-when-idle|status|password|url|release [ref] [--repo PATH]|worker-retries [--since D] [--until D] [--json]  (supervise: internal, run by start)
+# worker-retries: read-only report of live issue workers whose turn ended in error or without a PR, with their retry and premium queue events
 # release: build an immutable release under $AGENT_CONSOLE_HOME/releases/<sha12> (default ~/.local/share/agent-console), print its path
 # deploy: build a release, wait until every thread is idle, then hand the port to a standby server of the new release (restart-when-idle is an alias)
 # rollback: hand the port back to $AGENT_CONSOLE_HOME/previous. supervise --handoff: internal, run by deploy/rollback.
@@ -147,4 +148,5 @@ case "${1:-status}" in
   password) cat "$HOME/.config/agent-console/password" 2>/dev/null || echo "(created on first start)" ;;
   url) PORT=$PORT node "$DIR/scripts/console-url.ts" ;;
   release) shift; exec node "$DIR/scripts/release.mjs" "$@" ;;
+  worker-retries) shift; exec node "$DIR/scripts/worker-retries.ts" "$@" ;;
 esac
