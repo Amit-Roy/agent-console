@@ -99,14 +99,14 @@ The design system uses CSS custom properties (variables) defined in `:root` and 
 - Status:
   - `--ok`: #13703a
   - `--warn`: #7d4a00
-  - `--bad`: #bf2a22
+  - `--bad`: #ba241d
   - `--stop`: #dc2626
   - `--stop-hover`: #b91c1c
   - `--on-stop`: #fff
   - `--warn-tint`: rgba(217,138,0,.16)
-  - `--bad-tint`: rgba(191,42,34,.1)
+  - `--bad-tint`: rgba(186,36,29,.1)
   - `--add-bg`: rgba(19,112,58,.11) (diff added line)
-  - `--del-bg`: rgba(191,42,34,.1) (diff removed line)
+  - `--del-bg`: rgba(186,36,29,.1) (diff removed line)
 - Misc:
   - `--hover`: rgba(20,20,40,.06)
   - `--press`: rgba(20,20,40,.1)
@@ -192,6 +192,21 @@ The design system uses CSS custom properties (variables) defined in `:root` and 
     - `--viz-4`: #ff8fa3
     - `--viz-5`: #7cc4ff
     - `--viz-6`: #c4a7f5
+
+### Contrast Rules
+
+**Contrast rules**: every place two colour tokens meet is listed here, and each foreground must clear the strictest floor among the places it appears, in both themes. Taste stays in the hue; contrast decides the lightness. To fix a failing pair, change only the OKLCH lightness of the foreground and keep its hue and chroma. Source: [There are many themes, but this one is yours](https://earendil.com/posts/system-theme/), which builds a theme from explicit contrast rules in a perceptual colour space. `test/design-system.ts` checks every pair below with the WCAG 2.2 ratio.
+
+| Foreground | Background | Floor |
+| --- | --- | --- |
+| `--t1`, `--t2`, `--t3`, `--accent`, `--ok`, `--warn`, `--bad` | `--s0`, `--s1`, `--s2`, `--s3`, `--pop`, `--sel` | 4.5:1 |
+| each tone on its own tint: `--accent` on `--accent-tint`, `--warn` on `--warn-tint`, `--bad` on `--bad-tint`, `--ok` on `--add-bg`, `--bad` on `--del-bg` | the tint over `--s0`, `--s1`, `--s2`, `--pop`, `--code-bg` | 4.5:1 |
+| `--on-fill`, `--on-stop` | `--fill`, `--fill-hover`, `--stop`, `--stop-hover` | 4.5:1 |
+| `--hl-*` | `--code-bg` | 4.5:1 |
+| `--viz-*` | `--s1`, `--s2` | 3:1 |
+| `--focus` | `--s0`, `--s1`, `--s2`, `--pop` | 3:1 |
+
+The first audit against these rules found one failure: light `--bad` #bf2a22 on `--bad-tint` over `--s0` was 4.37:1 (a danger button hovered on the canvas). `--bad` moved to #ba241d (OKLCH lightness 0.527 to 0.513, same chroma and hue), now 4.62:1 there and 6.25:1 on `--s1`; `--bad-tint` and `--del-bg` follow the new red.
 
 ### Touch and Contrast Adjustments
 
