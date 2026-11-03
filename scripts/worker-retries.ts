@@ -14,7 +14,7 @@ const PREMIUM_REASONS = [
 ];
 const FILTER =
   "live window-dispatch.jsonl rows (dryRun false, no start error) dispatched in [since, until); " +
-  "kept when a worker turn ended with kind fail, or ended ok with no event carrying data.pr for the same ref; " +
+  "kept when a worker turn ended with kind fail, or ended ok with no PR event (data.pr or pr/ok 'PR #N') for the same ref; " +
   `retries = worker|redo start "${RETRY_MSG}"; premium = worker info with data.reason in ${PREMIUM_REASONS.join(", ")}`;
 
 type Row = Record<string, any>;
@@ -65,13 +65,18 @@ const isRetry = (event: Row) =>
 const isPremium = (event: Row) =>
   event.step === "worker" && event.kind === "info" && PREMIUM_REASONS.includes(event.data?.reason);
 
+// Review events carry data.pr; the pr step itself only names the number in its message ("PR #80").
+function prNumber(event: Row): number | undefined {
+  if (typeof event.data?.pr === "number") return event.data.pr;
+  const match = event.step === "pr" && event.kind === "ok" && /^PR #(\d+)/.exec(event.msg ?? "");
+  return match ? Number(match[1]) : undefined;
+}
+
 function issueReport(dispatch: Row, events: Row[], until: number) {
   const own = events.filter(
     (event) => event.ref === dispatch.key && event.ts >= dispatch.ts && event.ts < until,
   );
-  const prs = [
-    ...new Set(own.map((event) => event.data?.pr).filter((pr) => typeof pr === "number")),
-  ];
+  const prs = [...new Set(own.map(prNumber).filter((pr) => pr !== undefined))];
   const turnEnds = own.filter(isTurnEnd);
   const stranded =
     turnEnds.some((event) => event.kind === "fail") || (turnEnds.length > 0 && !prs.length);

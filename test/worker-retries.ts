@@ -16,10 +16,12 @@ const run = (dir: string, ...args: string[]) =>
 
 const errored = "nefr0/agent-console#12";
 const merged = "nefr0/agent-console#14";
+const opened = "nefr0/agent-console#15";
 const ledger = [
   { ts: at("2026-10-25T08:00:00Z"), dryRun: false, key: errored, route: { model: "pi" } },
   { ts: at("2026-10-25T08:05:00Z"), dryRun: true, key: "nefr0/agent-console#13" },
   { ts: at("2026-10-25T09:00:00Z"), dryRun: false, key: merged },
+  { ts: at("2026-10-25T09:30:00Z"), dryRun: false, key: opened },
   { ts: at("2026-10-20T09:00:00Z"), dryRun: false, key: "nefr0/agent-console#9" },
 ];
 const event = (seq: number, iso: string, row: object) => ({ seq, ts: at(iso), ...row });
@@ -59,6 +61,9 @@ const current = [
     ref: merged,
     data: { thread: "r14", pr: 77 },
   }),
+  event(7, "2026-10-25T10:10:00Z", { step: "worker", kind: "ok", ref: opened, msg: "turn ended" }),
+  // The PR step names the number only in its message; no review has started yet.
+  event(8, "2026-10-25T10:11:00Z", { step: "pr", kind: "ok", ref: opened, msg: "PR #80" }),
   event(6, "2026-10-25T10:00:00Z", {
     step: "worker",
     kind: "info",
