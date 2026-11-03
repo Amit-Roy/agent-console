@@ -10,6 +10,7 @@ import {
   type ThreadLike,
   type WorkThread,
 } from "./review-context.ts";
+import { openRejectedDraft } from "./review-draft.ts";
 import { nudge, resume } from "./review-recovery.ts";
 import { discussionOf, retryReview, reviewerVerdicts } from "./review-verdict.ts";
 import { addWorktree, type IssueRun, installPrOnlyHook, topicOf } from "./window-dispatch.ts";
@@ -258,7 +259,8 @@ async function review(ctx: ReviewContext, thread: WorkThread, recover: boolean):
     `repos/${run.repo}/pulls?state=open&head=${encodeURIComponent(`${owner}:${run.branch}`)}`,
   );
   if (ctx.deps.canReview?.(thread) === false) return false;
-  const pull = Array.isArray(prs) ? prs[0] : undefined;
+  const pull = (Array.isArray(prs) ? prs[0] : undefined) ?? (await openRejectedDraft(ctx, thread));
+  if (ctx.deps.canReview?.(thread) === false) return false;
   if (!pull || !Number.isSafeInteger(pull.number)) {
     await handleMissingPull(ctx, thread, run, recover);
     return false;

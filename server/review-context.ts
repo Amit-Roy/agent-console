@@ -28,6 +28,7 @@ export interface ReviewDeps {
   git?: Git;
   applied?: (repoName: string, sha: string) => boolean | Promise<boolean>; // is the local checkout of a local-apply repo at the merge commit?
   log?: (msg: string) => void;
+  transcript?: (threadId: string) => string | undefined; // recent canonical log of a thread, read for PR evidence guard rejections
   now?: () => number;
 }
 export type ThreadLike = {

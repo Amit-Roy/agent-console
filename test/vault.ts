@@ -9,6 +9,9 @@ import { isoBase64URL, isoCBOR } from "@simplewebauthn/server/helpers";
 import express from "express";
 import { mountVault } from "../server/vault.ts";
 
+process.env.AGENT_CONSOLE_ALERT_TO = "sunny@example.com";
+process.env.AGENT_CONSOLE_ALERT_CC = "nefro@example.com";
+
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vault-"));
 const conf = path.join(dir, ".config", "agent-console");
 fs.mkdirSync(conf, { recursive: true });
@@ -604,10 +607,7 @@ try {
   assert.equal(mail.url, "/v0/inboxes/box%40example.test/messages/send");
   assert.equal(mail.auth, "Bearer fake-mail-key");
   assert.equal(mail.body.subject, "[Agent Console] ALERT: vault decoy revealed");
-  assert.deepEqual(
-    [mail.body.to, mail.body.cc],
-    [["sunny.amit.roy@gmail.com"], ["nefro.amit.roy@gmail.com"]],
-  );
+  assert.deepEqual([mail.body.to, mail.body.cc], [["sunny@example.com"], ["nefro@example.com"]]);
   assert.match(
     mail.body.text,
     /Time: .*\nClient IP: .*\nUser-agent: vault-test\/1\.0\nKey: AWS_SECRET_ACCESS_KEY/,

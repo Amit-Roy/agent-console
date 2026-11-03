@@ -17,12 +17,12 @@ The design system uses CSS custom properties (variables) defined in `:root` and 
   - `--f-xs`: 0.75rem/1rem (12px)
   - `--f-sm`: 0.8125rem/1.125rem (13px)
   - `--f-md`: 0.875rem/1.25rem (14px)
-  - `--f-base`: 0.9375rem/1.6rem (15px)
+  - `--f-base`: 0.9375rem/1.6 (15px)
   - `--f-lg`: 1.0625rem/1.5rem (17px)
   - `--f-xl`: 1.25rem/1.75rem (20px)
   - `--f-2xl`: 1.5rem/1.875rem (24px)
   - `--fm-xs`: 0.75rem/1.125rem (12px) for mono
-  - `--fm-sm`: 0.8125rem/1.55rem (13px) for mono
+  - `--fm-sm`: 0.8125rem/1.55 (13px) for mono
 - Font weights:
   - `--fw-reg`: 400
   - `--fw-med`: 500
@@ -225,6 +225,7 @@ The Agent Console uses a component-based approach with vanilla JavaScript. Key c
 6. **Spacing**: Use the spacing tokens (`--sp-1` through `--sp-8`) for padding and margin.
 7. **Component Composition**: Build components by combining tokens and following the patterns outlined above.
 8. **Extending the Design System**: To add new tokens, define them in `:root` and dark media query. Add new components by following existing patterns.
+9. **Text Scaling**: Text must resize with the browser font setting up to 200% without clipped or truncated content (WCAG 2.2 1.4.4 Resize Text). Size text in `rem` via the `--f-*` tokens, never `px`; never set `font-size` on `html`; give line height as a unitless number or `rem`, and never fix the height of a box that holds text. Source: [Tangled, hire a front-end accessibility expert](https://dbushell.com/2026/11/01/tangled-accessibility/), where a 12px root size and clipped descenders at 200% were the failures. `test/design-system.ts` enforces the token and stylesheet parts.
 
 ## Documentation
 

@@ -1,6 +1,6 @@
 {
   "title": "Agent Console architecture",
-  "subtitle": "Design system: package generated from the app token layer; weekly scheduled task triages popular design posts into GitHub issues",
+  "subtitle": "Deployment identifiers (emails, Coder host, container) come from the gitignored env file instead of committed literals",
   "items": [
     {
       "group": "Share entry points",
@@ -373,7 +373,16 @@
         {"id": "ds-sources", "label": "Suggestion run", "tech": "scripts/check-design-system-sources.js", "desc": "Reads Hacker News and Lobsters only; triage rule; drafts.json or run record", "icon": "filter", "status": "added"},
         {"id": "ds-issues", "label": "GitHub issues", "tech": "gh issue list/create", "desc": "Dedupe by link; files only approved suggestions, label design-system", "icon": "circle-dot", "status": "added"}
       ]
-    }
+    },
+    {"group": "Issue automation", "icon": "bot", "items": [
+      {"id": "ia-prompt", "label": "Worker prompt", "tech": "server/window-dispatch.ts", "desc": "Unattended issue prompt; names the pr-evidence template and pr-evidence create", "icon": "message-square-text"},
+      {"id": "ia-worker", "label": "Pi worker", "tech": "Pi thread, own worktree", "desc": "Pushes the branch; stops after two guard rejections", "icon": "bot"},
+      {"id": "ia-guard", "label": "PR evidence guard", "tech": "brain/bin/pr-evidence-guard", "desc": "Blocks gh pr create; names missing sections and the template command", "icon": "shield-check"},
+      {"id": "ia-review", "label": "Review loop", "tech": "server/review-launch.ts", "desc": "On worker turn end: finds the open PR, else resumes the worker", "icon": "git-pull-request"},
+      {"id": "ia-draft", "label": "Draft opener", "tech": "server/review-draft.ts, server/session-prs.ts", "desc": "Counts guard rejections in the transcript; at two opens a draft PR and comments the error", "icon": "git-pull-request-draft"},
+      {"id": "ia-github", "label": "GitHub", "tech": "gh api", "desc": "Draft PR and guard error comment", "icon": "cloud"}
+    ]},
+    {"group": "Deployment identity", "icon": "key-round", "status": "modified", "items": [{"id": "id-env", "label": "Console env file", "tech": "~/.config/agent-console/env, .env.example", "desc": "Gitignored real values; .env.example lists names with placeholders", "icon": "file-key", "status": "modified"}, {"id": "id-accounts", "label": "Claude accounts", "tech": "server/providers/claude-accounts.ts, bin/claude-account", "desc": "Expected emails from env; unset skips mismatch check and --email", "icon": "users", "status": "modified"}, {"id": "id-vault", "label": "Vault alerts", "tech": "server/vault.ts", "desc": "Default alert recipients from AGENT_CONSOLE_ALERT_TO/CC, else none", "icon": "bell", "status": "modified"}, {"id": "id-caddy", "label": "Caddy snippets", "tech": "docs/console-url.caddy, docs/acode-caddy.caddy", "desc": "Host uses {$CODER_WORKSPACE_HOST_SUFFIX} substitution", "icon": "route", "status": "modified"}, {"id": "id-proxyenv", "label": "VPS console-proxy.env", "tech": "/etc/caddy/console-proxy.env", "desc": "Two new lines: CODER_WORKSPACE_HOST_SUFFIX, CODER_CONTAINER", "icon": "server", "status": "added"}, {"id": "id-triage", "label": "Triage Caddy worker", "tech": "scripts/github-triage-caddy.py", "desc": "Container name and validate env parsed from the two Caddy env files; errors if missing", "icon": "shield-check", "status": "modified"}]}
   ],
   "edges": [
     {
@@ -572,6 +581,15 @@
     {"from":"ds-tokens","to":"ds-build","label":"read token layer","status":"added"},
     {"from":"ds-build","to":"ds-package","label":"write css and tokens.json","status":"added"},
     {"from":"ds-schedule","to":"ds-sources","label":"run weekly","status":"added"},
-    {"from":"ds-sources","to":"ds-issues","label":"list, create approved","status":"added"}
+    {"from":"ds-sources","to":"ds-issues","label":"list, create approved","status":"added"},
+    {"from":"ia-prompt","to":"ia-worker","label":"task with evidence CLI"},
+    {"from":"ia-worker","to":"ia-guard","label":"pr-evidence create"},
+    {"from":"ia-worker","to":"ia-review","label":"turn end"},
+    {"from":"ia-review","to":"ia-draft","label":"no open PR"},
+    {"from":"ia-draft","to":"ia-github","label":"draft PR, guard comment"},
+    {"from":"id-env","to":"id-accounts","label":"CLAUDE_*_EMAIL"},
+    {"from":"id-env","to":"id-vault","label":"AGENT_CONSOLE_ALERT_*"},
+    {"from":"id-proxyenv","to":"id-caddy","label":"{$CODER_WORKSPACE_HOST_SUFFIX}"},
+    {"from":"id-proxyenv","to":"id-triage","label":"CODER_CONTAINER"}
   ]
 }

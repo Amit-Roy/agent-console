@@ -8,6 +8,9 @@ import os from "node:os";
 import path from "node:path";
 import { type Browser, chromium } from "playwright";
 
+process.env.CLAUDE_SUNNY_EMAIL = "sunny@example.com";
+process.env.CLAUDE_NEFRO_EMAIL = "nefro@example.com";
+
 const port = process.env.AUTH_EXPIRED_TEST_PORT || "7075";
 assert.match(port, /^707[1-5]$/, "use an isolated scratch port, 7071–7075");
 const base = `http://127.0.0.1:${port}`;
@@ -21,7 +24,7 @@ fs.writeFileSync(
 );
 fs.writeFileSync(
   path.join(home, ".claude.json"),
-  JSON.stringify({ oauthAccount: { emailAddress: "sunny.amit.roy@gmail.com" } }),
+  JSON.stringify({ oauthAccount: { emailAddress: "sunny@example.com" } }),
 );
 const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "ac-auth-cwd-"));
 const id = "55555555-5555-4555-8555-555555555555";
