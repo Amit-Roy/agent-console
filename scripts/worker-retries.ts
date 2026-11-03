@@ -19,6 +19,9 @@ const FILTER =
 
 type Row = Record<string, any>;
 
+// Lines that are not JSON, such as a row cut short by a concurrent append; reported, never dropped silently.
+let unreadableLines = 0;
+
 const { values } = parseArgs({
   options: {
     since: { type: "string" },
@@ -50,7 +53,9 @@ function readJsonl(file: string, required: boolean): Row[] {
   for (const line of text.split("\n")) {
     try {
       if (line) rows.push(JSON.parse(line));
-    } catch {}
+    } catch {
+      unreadableLines++;
+    }
   }
   return rows;
 }
@@ -98,8 +103,12 @@ function buildReport(dir: string, since: number, until: number) {
     (left, right) => left.seq - right.seq,
   );
   const latest = new Map<string, Row>();
-  for (const row of ledger)
-    if (!row.dryRun && !row.error && row.ts >= since && row.ts < until) latest.set(row.key, row);
+  // A failed start appends its row again with the error, so that error cancels the dispatch it repeats.
+  for (const row of ledger) {
+    if (row.dryRun || row.ts < since || row.ts >= until) continue;
+    if (row.error) latest.delete(row.key);
+    else latest.set(row.key, row);
+  }
   const issues = [...latest.values()]
     .map((dispatch) => issueReport(dispatch, events, until))
     .filter((issue) => issue !== undefined);
@@ -113,6 +122,7 @@ function buildReport(dir: string, since: number, until: number) {
       first: events.length ? iso(events[0].ts) : null,
       last: events.length ? iso(events.at(-1)!.ts) : null,
     },
+    unreadableLines,
     issues,
   };
 }
@@ -130,6 +140,7 @@ function printText(report: ReturnType<typeof buildReport>) {
   console.log(
     `Ledger rows: ${report.ledger.rows} (${report.ledger.liveInRange} live in range); events: ${report.events.rows} (${report.events.first ?? "none"} to ${report.events.last ?? "none"})`,
   );
+  if (report.unreadableLines) console.log(`Unreadable lines skipped: ${report.unreadableLines}`);
   console.log(`${report.issues.length} issues whose worker turn ended in error or without a PR`);
   for (const issue of report.issues) {
     console.log(
