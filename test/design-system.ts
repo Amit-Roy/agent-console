@@ -93,4 +93,71 @@ for (const part of [
   "run record path",
 ])
   assert.ok(schedule.includes(part), `schedule prompt has ${part}`);
+// contrast rules: every place two colour tokens meet clears its WCAG floor in both themes
+// (docs Colors "Contrast rules"; source: earendil.com/posts/system-theme)
+function channels(value: string) {
+  const hex = value.match(/^#([\da-f]{3}|[\da-f]{6})$/i);
+  if (hex) {
+    const digits = hex[1].length === 3 ? [...hex[1]].map((ch) => ch + ch).join("") : hex[1];
+    return [0, 2, 4].map((at) => parseInt(digits.slice(at, at + 2), 16)).concat(1);
+  }
+  const rgba = value.match(/^rgba?\(([^)]+)\)$/);
+  assert.ok(rgba, `colour token value ${value} is hex or rgba`);
+  const [red, green, blue, alpha = 1] = rgba[1].split(",").map(Number);
+  return [red, green, blue, alpha];
+}
+function blend(top: number[], under: number[]) {
+  return top.slice(0, 3).map((chan, idx) => chan * top[3] + under[idx] * (1 - top[3]));
+}
+function luminance(rgb: number[]) {
+  const lin = rgb.map((chan) => {
+    const unit = chan / 255;
+    return unit <= 0.04045 ? unit / 12.92 : ((unit + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2];
+}
+function contrastRatio(fore: number[], back: number[]) {
+  const [high, low] = [luminance(fore), luminance(back)].sort((left, right) => right - left);
+  return (high + 0.05) / (low + 0.05);
+}
+const surfaces = ["--s0", "--s1", "--s2", "--s3", "--pop", "--sel"];
+const tintBases = ["--s0", "--s1", "--s2", "--pop", "--code-bg"];
+const toneTints = [
+  ["--accent", "--accent-tint"],
+  ["--warn", "--warn-tint"],
+  ["--bad", "--bad-tint"],
+  ["--ok", "--add-bg"],
+  ["--bad", "--del-bg"],
+];
+const solidPairs = [
+  ["--on-fill", "--fill"],
+  ["--on-fill", "--fill-hover"],
+  ["--on-stop", "--stop"],
+  ["--on-stop", "--stop-hover"],
+];
+const tokenNames = Object.keys(built.tokens.themes.base);
+for (const theme of ["base", "dark"]) {
+  const color = (name: string) =>
+    channels(String(built.tokens.themes[theme][name] ?? built.tokens.themes.base[name]));
+  const meets = (fore: string, back: number[], floor: number, where: string) => {
+    const ratio = contrastRatio(color(fore), back);
+    assert.ok(
+      ratio >= floor,
+      `${theme}: ${fore} on ${where} is ${ratio.toFixed(2)}:1, needs ${floor}:1`,
+    );
+  };
+  for (const fore of ["--t1", "--t2", "--t3", "--accent", "--ok", "--warn", "--bad"])
+    for (const back of surfaces) meets(fore, color(back), 4.5, back);
+  for (const [fore, tint] of toneTints)
+    for (const base of tintBases)
+      meets(fore, blend(color(tint), color(base)), 4.5, `${tint} over ${base}`);
+  for (const [fore, back] of solidPairs) meets(fore, color(back), 4.5, back);
+  for (const name of tokenNames.filter((name) => name.startsWith("--hl-")))
+    meets(name, color("--code-bg"), 4.5, "--code-bg");
+  for (const name of tokenNames.filter((name) => name.startsWith("--viz-")))
+    for (const back of ["--s1", "--s2"]) meets(name, color(back), 3, back);
+  for (const back of ["--s0", "--s1", "--s2", "--pop"]) meets("--focus", color(back), 3, back);
+}
+assert.match(doc, /\*\*Contrast rules\*\*/, "Colors documents the contrast rules");
+assert.match(doc, /earendil\.com\/posts\/system-theme/, "Contrast rules cite their source");
 console.log("design-system ok");
