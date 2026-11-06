@@ -7,7 +7,7 @@ import {
 } from "./providers/model-rate-client.ts";
 import { MODEL_REQUEST_PRIORITIES } from "./providers/model-rate-limit.ts";
 import "./privacy.ts";
-import { execFileSync, spawn } from "node:child_process";
+import { execFile, execFileSync, spawn } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
@@ -38,10 +38,10 @@ import {
 import { createAutomationArchiver } from "./automation/archive.ts";
 import { canonicalIssue, createPremiumAssigner } from "./automation/assign.ts";
 import { createCalibrationBridge } from "./automation/calibration-bridge.ts";
-import { watchClosed } from "./automation/closed-signal.ts";
+import { type PrSignal, watchClosed, watchPrSignals } from "./automation/closed-signal.ts";
 import { startDebug } from "./automation/debug.ts";
 import { createDream, DREAM_TASK_ID } from "./automation/dream.ts";
-import { createEventLog } from "./automation/events.ts";
+import { createEventLog, redact } from "./automation/events.ts";
 import { diagnoseJob, readJobError } from "./automation/job.ts";
 import { route as routeWork } from "./automation/router.ts";
 import { sweepAutoRuntime } from "./automation/runtime-cleanup.ts";
@@ -85,9 +85,20 @@ import { LatencyStore } from "./latency.ts";
 import { createWorkspaceMonitor } from "./monitor-wire.ts";
 import { Notifications } from "./notifications.ts";
 import { researchToolText, runPiResearch } from "./pi-subagent-worker.ts";
+import {
+  defaultDeps as prCockpitDeps,
+  createPrStore,
+  type PrCard,
+  parseGhResponse,
+  parseKey,
+  prKey,
+  invalidateBranch,
+} from "./pr-cockpit.ts";
+import { createShipJobs, ShipBusyError, type ShipRecord, type ShipState } from "./pr-ship-job.ts";
 import { mountPromptImprove } from "./prompt-improve.ts";
 import { promptOverhead } from "./prompt-overhead.ts";
 import { BRAIN_BIN } from "./providers/brain.ts";
+import { childEnv } from "./providers/env.ts";
 import { claudeAccounts, claudeUsageKey } from "./providers/claude-accounts.ts";
 import { providerInfo, refreshPiModels } from "./providers/index.ts";
 import { effortModelPath } from "./providers/triage-effort.ts";
@@ -581,6 +592,145 @@ if (process.env.AGENT_CONSOLE_MOCK !== "1") {
   setInterval(() => {
     opener.tick().catch(() => {});
   }, 5 * 60_000).unref();
+}
+
+// ---- PR cockpit (#421): cards for the PRs a thread owns, pushed live as {t:"pr"} and acted on by the routes below.
+const PR_SHIP_STATE = process.env.PR_SHIP_STATE || path.join(os.homedir(), ".local/state/pr-ship");
+const prDeps = prCockpitDeps({
+  shipDir: PR_SHIP_STATE,
+  sessionPrs: async (thread) =>
+    (await sessionSearch.prs({ thread })).prs.map((row: any) => ({
+      repo: String(row.repo),
+      number: Number(row.number),
+    })),
+  issueCrossRefs: async (repo, number) => {
+    const events = JSON.parse(
+      (await prDeps.gh([`repos/${repo}/issues/${number}/timeline?per_page=100`])) || "[]",
+    );
+    return (Array.isArray(events) ? events : [])
+      .filter(
+        (event) =>
+          event?.event === "cross-referenced" &&
+          event.source?.issue?.pull_request &&
+          String(event.source.issue.repository?.full_name ?? "").toLowerCase() ===
+            repo.toLowerCase(),
+      )
+      .map((event) => Number(event.source.issue.number));
+  },
+});
+const prStore = createPrStore(prDeps);
+const prTracked = new Set<string>();
+const prTracking = new Map<string, Promise<void>>();
+type PrNoticeKind = "shipped" | "checks_failed" | "review_comment";
+// Notification seam for PR events; the PR notification kinds are delivered by notifications.ts, not here.
+function notifyPr(_kind: PrNoticeKind, _thread: string, _card: PrCard) {}
+const prCards = (thread: string) =>
+  prStore.cardsFor(thread).map((card) => {
+    const ship = shipJobs.get(card.key);
+    return ship ? { ...card, ship } : card;
+  });
+const pushPr = (thread: string) => broadcast({ t: "pr", thread, cards: prCards(thread) });
+const prThreadOpen = (thread: string) => [...clients].some((c) => subscriptions.get(c) === thread);
+function trackPr(id: string, open = prThreadOpen(id)): Promise<void> {
+  const thread = threads.get(id);
+  if (!thread) return Promise.resolve();
+  let running = prTracking.get(id);
+  if (!running) {
+    prTracked.add(id);
+    running = prStore
+      .track({ id, cwd: thread.cwd, issueRun: thread.issueRun }, open)
+      .catch(() => {})
+      .finally(() => prTracking.delete(id));
+    prTracking.set(id, running);
+  }
+  return running.then(() => pushPr(id));
+}
+const prSeen = new Map<string, { failed: number; talk: number }>();
+// Failed checks and review comments only notify when their count rises after the first sighting.
+function notePrDeltas(thread: string, cards: PrCard[]) {
+  for (const card of cards) {
+    const id = `${thread}\n${card.key}`;
+    const prev = prSeen.get(id);
+    const next = { failed: card.checkCounts.failed, talk: card.commentCount + card.reviewCount };
+    prSeen.set(id, next);
+    if (!prev) continue;
+    if (next.failed > prev.failed) notifyPr("checks_failed", thread, card);
+    if (next.talk > prev.talk) notifyPr("review_comment", thread, card);
+  }
+}
+prStore.onChange(({ thread, cards }) => {
+  notePrDeltas(thread, cards);
+  pushPr(thread);
+});
+const prThreadsWith = (key: string) =>
+  [...prTracked].filter((thread) => prStore.cardsFor(thread).some((card) => card.key === key));
+// Webhook signals name a PR, or only a commit: sha signals map to tracked cards by head sha.
+function onPrSignal(signal: PrSignal) {
+  const cards = [...prTracked].flatMap((thread) => prStore.cardsFor(thread));
+  const repo = signal.repo.toLowerCase();
+  const keys = new Set(
+    cards
+      .filter((card) =>
+        signal.pr !== undefined
+          ? card.key === prKey(signal.repo, signal.pr)
+          : card.repo.toLowerCase() === repo && !!signal.sha && card.headSha === signal.sha,
+      )
+      .map((card) => card.key),
+  );
+  for (const key of keys) {
+    prStore.noteSignal(key);
+    void prStore.refresh(key);
+  }
+}
+function onShipDone(thread: string, card: PrCard, ship: ShipState) {
+  if (ship.state === "merged") notifyPr("shipped", thread, card);
+}
+function onShipUpdate(record: ShipRecord, ship: ShipState) {
+  for (const thread of new Set([record.thread, ...prThreadsWith(record.key)])) pushPr(thread);
+  if (ship.state === "running") return;
+  void prStore
+    .refresh(record.key)
+    .then(() => (prTracked.has(record.thread) ? undefined : trackPr(record.thread)))
+    .then(() => {
+      const card = prStore.cardsFor(record.thread).find((entry) => entry.key === record.key);
+      if (card) onShipDone(record.thread, card, ship);
+    });
+}
+const shipJobs = createShipJobs({
+  dir: path.join(DATA_DIR, "pr-ship-jobs"),
+  onUpdate: onShipUpdate,
+});
+const stopPrSignals = watchPrSignals(onPrSignal);
+prStore.start();
+{
+  const turnDone = threads.onTurnDone;
+  // A turn may have switched branch or opened a PR: re-discover threads the cockpit already shows.
+  threads.onTurnDone = (thread, event) => {
+    turnDone?.(thread, event);
+    if (!prTracked.has(thread.id) && !prThreadOpen(thread.id)) return;
+    if (thread.cwd) invalidateBranch(thread.cwd);
+    void trackPr(thread.id);
+  };
+}
+// Last 80 lines of a failed job log, redacted, at most 64 KB.
+function prLogTail(text: string, maxLines = 80, maxBytes = 64 * 1024): string[] {
+  const lines = text.split(/\r?\n/);
+  if (lines.at(-1) === "") lines.pop();
+  const kept = lines.slice(-maxLines).map((line) => redact(line));
+  let size = kept.reduce((total, line) => total + Buffer.byteLength(line) + 1, 0);
+  while (size > maxBytes && kept.length > 1) size -= Buffer.byteLength(kept.shift()!) + 1;
+  if (size > maxBytes) kept[0] = Buffer.from(kept[0]).subarray(-maxBytes).toString("utf8");
+  return kept;
+}
+function ghCli(args: string[]): Promise<string> {
+  return new Promise((resolve, reject) =>
+    execFile(
+      "gh",
+      args,
+      { env: childEnv(), timeout: 60_000, maxBuffer: 32 * 1024 * 1024 },
+      (error, stdout) => (error && !stdout.trim() ? reject(error) : resolve(stdout)),
+    ),
+  );
 }
 
 const app = express();
@@ -1237,6 +1387,105 @@ app.get("/api/threads/:id/checkpoints/:seq/file", async (req, res) => {
     .set({ "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store" })
     .send(bytes);
 });
+// ---- PR cockpit routes: the key must be `owner/repo#n` and one of this thread's cards.
+function prTarget(req: express.Request, res: express.Response) {
+  const thread = threads.get(req.params.id as string);
+  if (!thread) return void res.status(404).json({ error: "Unknown thread." });
+  const ref = parseKey(String(req.body?.key ?? req.query.key ?? ""));
+  if (!ref) return void res.status(400).json({ error: "Expected key owner/repo#n." });
+  const card = prStore
+    .cardsFor(thread.id)
+    .find((entry) => entry.key === prKey(ref.repo, ref.number));
+  if (!card) return void res.status(404).json({ error: "This PR does not belong to the thread." });
+  return { thread, card };
+}
+const prId = (value: unknown) =>
+  typeof value === "string" && /^\d{1,20}$/.test(value) ? value : "";
+app.get("/api/threads/:id/pr", async (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  if (!threads.get(req.params.id)) return void res.status(404).json({ error: "Unknown thread." });
+  if (!prTracked.has(req.params.id)) await trackPr(req.params.id);
+  res.json({ cards: prCards(req.params.id) });
+});
+app.post(
+  "/api/threads/:id/pr/refresh",
+  sameOrigin,
+  express.json({ limit: "4kb" }),
+  async (req, res) => {
+    const target = prTarget(req, res);
+    if (!target) return;
+    await prStore.refresh(target.card.key);
+    res.json({ ok: true });
+  },
+);
+app.post(
+  "/api/threads/:id/pr/rerun",
+  sameOrigin,
+  express.json({ limit: "4kb" }),
+  async (req, res) => {
+    const target = prTarget(req, res);
+    if (!target) return;
+    const runId = prId(String(req.body?.runId ?? ""));
+    if (!runId || !target.card.checks.some((check) => check.runId === runId))
+      return void res.status(400).json({ error: "Unknown workflow run for this PR." });
+    const endpoint = `repos/${target.card.repo}/actions/runs/${runId}/rerun-failed-jobs`;
+    const reply = parseGhResponse(await prDeps.gh(["-i", "-X", "POST", endpoint]).catch(() => ""));
+    if (!reply.status || reply.status >= 400)
+      return void res
+        .status(502)
+        .json({ error: `GitHub refused the re-run (${reply.status || "no response"}).` });
+    void prStore.refresh(target.card.key);
+    res.json({ ok: true });
+  },
+);
+app.get("/api/threads/:id/pr/log", async (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  const target = prTarget(req, res);
+  if (!target) return;
+  const job = prId(req.query.job);
+  if (!job || !target.card.checks.some((check) => check.jobId === job))
+    return void res.status(400).json({ error: "Unknown job for this PR." });
+  try {
+    const log = await ghCli(["run", "view", "--job", job, "--log-failed", "-R", target.card.repo]);
+    res.json({ lines: prLogTail(log) });
+  } catch {
+    res.status(502).json({ error: "Could not read the job log." });
+  }
+});
+app.post("/api/threads/:id/pr/ship", sameOrigin, express.json({ limit: "4kb" }), (req, res) => {
+  if (req.body?.confirm !== true)
+    return void res.status(400).json({ error: "Shipping needs confirm: true." });
+  const target = prTarget(req, res);
+  if (!target) return;
+  const { thread, card } = target;
+  try {
+    const ship = shipJobs.start({
+      key: card.key,
+      thread: thread.id,
+      repo: card.repo,
+      number: card.number,
+      cwd: thread.cwd && fs.existsSync(thread.cwd) ? thread.cwd : HOME,
+    });
+    pushPr(thread.id);
+    res.json({ ship });
+  } catch (error) {
+    if (error instanceof ShipBusyError) return void res.status(409).json({ error: error.message });
+    res.status(500).json({ error: "Could not start pr-ship." });
+  }
+});
+app.post("/api/threads/:id/pr/ask-fix", sameOrigin, express.json({ limit: "4kb" }), (req, res) => {
+  const target = prTarget(req, res);
+  if (!target) return;
+  const ship = shipJobs.get(target.card.key);
+  if (!ship?.line || ship.state === "running" || ship.state === "merged")
+    return void res.status(409).json({ error: "No pr-ship attention line for this PR." });
+  try {
+    threads.send(target.thread.id, `${target.card.key}: ${ship.line}`, { mode: "queue" });
+    res.json({ ok: true });
+  } catch (error: any) {
+    res.status(409).json({ error: error?.message || "Could not queue the message." });
+  }
+});
 app.post(
   "/api/threads/:id/checkpoints/:seq/rewind",
   sameOrigin,
@@ -1733,9 +1982,21 @@ wss.on("connection", (ws) => {
     isAlive = false;
     if (ws.readyState === ws.OPEN) ws.ping();
   }, Number(process.env.AGENT_CONSOLE_WS_PING_MS) || 25_000);
+  // The selected thread's PRs poll at the open-thread pace; the one it leaves drops to the idle pace.
+  const releasePr = (thread: string | undefined) => {
+    if (thread && !prThreadOpen(thread)) prStore.release(thread);
+  };
+  const subscribePr = (thread: string) => {
+    const previous = subscriptions.get(ws);
+    subscriptions.set(ws, thread);
+    if (previous !== thread) releasePr(previous);
+    reply({ t: "pr", thread, cards: prCards(thread) });
+    void trackPr(thread, true);
+  };
   ws.on("close", () => {
     clearInterval(ping);
     clients.delete(ws);
+    releasePr(subscriptions.get(ws));
   });
   ws.on("message", (raw) => {
     isAlive = true;
@@ -1839,10 +2100,12 @@ wss.on("connection", (ws) => {
           }
         }
         case "subscribe":
-          if (threads.get(m.thread)) subscriptions.set(ws, m.thread);
+          if (threads.get(m.thread)) subscribePr(m.thread);
           return;
         case "open":
-          if (m.foregroundOnly === true && threads.get(m.thread)) subscriptions.set(ws, m.thread);
+          if (m.foregroundOnly === true && threads.get(m.thread)) subscribePr(m.thread);
+          else if (!Number.isInteger(m.before) && threads.get(m.thread))
+            reply({ t: "pr", thread: m.thread, cards: prCards(m.thread) });
           return reply({
             t: "history",
             thread: m.thread,
@@ -2132,6 +2395,9 @@ async function shutdown(sig: string) {
   headroom.release(ORPHAN_FILE); // the next server waits for it, or kills it 5 s after this file was written
   benchmarks.close();
   workspaceMonitor?.stop();
+  prStore.stop();
+  stopPrSignals();
+  shipJobs.stop();
   await Promise.all([settled(transcriptRedaction.close(), 200), settled(answered, 100)]);
   latency?.close();
   process.exit(0);

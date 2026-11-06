@@ -520,6 +520,8 @@ export function createPrStore(deps: CockpitDeps, options: StoreOptions = {}) {
     refresh,
     tick,
     noteSignal: (key: string) => void signals.set(key, deps.now()),
+    /** The thread left the screen: its PRs fall back to the idle poll without a re-discovery. */
+    release: (threadId: string) => void openThreads.delete(threadId),
     onChange(cb: (change: PrChange) => void) {
       listeners.add(cb);
       return () => void listeners.delete(cb);
