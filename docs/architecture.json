@@ -217,6 +217,14 @@
           "icon": "list-filter"
         },
         {
+          "id": "history-view-cache",
+          "label": "Projected line cache",
+          "tech": "server/history.ts \u00b7 in-memory LRU",
+          "desc": "New: keeps the clipped wire event for history lines >= 16 KiB (32 MiB budget). Warm pages skip read, decode and parse; dropped on rewrite, truncation, replacement and redaction.",
+          "icon": "layers",
+          "status": "added"
+        },
+        {
           "id": "history-cache",
           "label": "Derived offset cache",
           "tech": "DATA_DIR/history-index \u00b7 JSON",
@@ -599,6 +607,7 @@
     {"from":"id-proxyenv","to":"id-caddy","label":"host suffix"},
     {"from":"id-proxyenv","to":"id-triage","label":"container name"},
     {"from":"pr-signal","to":"pr-store","label":"debounced refresh, push if changed","status":"added"},
-    {"from":"pr-ship","to":"pr-store","label":"ship state on card","status":"added"}
+    {"from":"pr-ship","to":"pr-store","label":"ship state on card","status":"added"},
+    {"from":"history-snapshot","to":"history-view-cache","label":"reuse clipped large lines","status":"added"}
   ]
 }
