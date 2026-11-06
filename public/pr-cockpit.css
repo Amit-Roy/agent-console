@@ -223,3 +223,6 @@
     border-radius: var(--r-xl) var(--r-xl) 0 0;
   }
 }
+.pr-deploy {
+  margin-top: var(--sp-3);
+}

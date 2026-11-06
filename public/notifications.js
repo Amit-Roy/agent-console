@@ -1,5 +1,7 @@
 // Browser push is the single notification channel for thread outcomes and questions.
 const SILENT_KEY = "ac_notifications_silent";
+const PR_KEY = "ac_notifications_pr";
+const PR_URL = "/api/notifications/pr";
 const SUBSCRIPTIONS_URL = "/api/notifications/subscriptions";
 
 function readSilent(ctx) {
@@ -8,7 +10,40 @@ function readSilent(ctx) {
   } catch {}
 }
 
+function readPrNotices(ctx) {
+  try {
+    ctx.prNotices = ctx.storage?.getItem(PR_KEY) === "1";
+  } catch {}
+}
+
+function postPrNotices(ctx, enabled) {
+  return request(ctx, PR_URL, {
+    method: "POST",
+    ...jsonBody({ endpoint: ctx.subscription.endpoint, enabled }),
+  });
+}
+
+async function changePrNotices(ctx) {
+  if (ctx.busy) return;
+  const nextEnabled = ctx.prToggle.checked;
+  ctx.busy = true;
+  render(ctx, "Saving notification preference…");
+  try {
+    if (ctx.subscription) await postPrNotices(ctx, nextEnabled);
+    ctx.storage?.setItem(PR_KEY, nextEnabled ? "1" : "0");
+    ctx.prNotices = nextEnabled;
+    render(ctx);
+  } catch (error) {
+    render(ctx, `${error.message} PR update preference was not saved. Try again.`);
+  } finally {
+    ctx.busy = false;
+    updateControls(ctx);
+  }
+}
+
 function updateControls(ctx) {
+  ctx.prToggle.disabled = ctx.busy;
+  ctx.prToggle.checked = ctx.prNotices;
   ctx.toggle.disabled =
     ctx.busy || !ctx.supported || (!ctx.subscription && ctx.Notification?.permission === "denied");
   ctx.silentToggle.disabled = ctx.busy;
@@ -141,6 +176,7 @@ async function enableSubscription(ctx, permission) {
     ctx.subscription = null;
     throw error;
   }
+  if (ctx.prNotices) await postPrNotices(ctx, true).catch(() => {});
   return true;
 }
 
@@ -183,7 +219,9 @@ export function setupNotifications({
     toggle: document.getElementById("notifications-toggle"),
     status: document.getElementById("notifications-status"),
     silentToggle: document.getElementById("notifications-silent"),
+    prToggle: document.getElementById("notifications-pr"),
     silent: false,
+    prNotices: false,
     subscription: null,
     registration: undefined,
     busy: false,
@@ -194,7 +232,9 @@ export function setupNotifications({
       "PushManager" in window,
   };
   readSilent(ctx);
+  readPrNotices(ctx);
   ctx.silentToggle.onchange = () => changeSilent(ctx);
+  ctx.prToggle.onchange = () => changePrNotices(ctx);
   ctx.launch.onclick = async () => {
     ctx.dialog.showModal();
     await refresh(ctx);

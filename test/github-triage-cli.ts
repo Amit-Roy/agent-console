@@ -6,6 +6,19 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { TriageCliCleanup } from "./helpers/triage-cli-cleanup.ts";
 
+// Mirrors PR_SIGNAL_EVENTS in scripts/github-triage.ts.
+const prSignalEvents = [
+  "issues",
+  "pull_request",
+  "check_suite",
+  "check_run",
+  "status",
+  "pull_request_review",
+  "pull_request_review_comment",
+  "issue_comment",
+  "deployment_status",
+  "workflow_run",
+];
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "ac-triage-cli-"));
 const cleanup = new TriageCliCleanup(path.join(root, "scripts/github-triage.ts"));
@@ -511,14 +524,12 @@ try {
       ),
       "Discovery must fetch repositories after the first full page",
     );
-    assert.deepEqual([...synced.hooks["fixture/repository"][0].events].sort(), [
-      "issues",
-      "pull_request",
-      "push",
-      "workflow_run",
-    ]);
+    assert.deepEqual(
+      [...synced.hooks["fixture/repository"][0].events].sort(),
+      [...prSignalEvents, "push"].sort(),
+    );
     for (const repo of ["fixture/fork", "fixture/private", "fixture/second-page"]) {
-      assert.deepEqual([...synced.hooks[repo][0].events].sort(), ["issues", "pull_request"]);
+      assert.deepEqual([...synced.hooks[repo][0].events].sort(), [...prSignalEvents].sort());
     }
     const postCount = synced.calls.filter((call: any) => call.method === "POST").length;
     const savedConfiguration = fs.readFileSync(configuration, "utf8");

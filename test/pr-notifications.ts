@@ -13,7 +13,7 @@ const subscription = {
   keys: { p256dh: key.toString("base64url"), auth: Buffer.alloc(16, 2).toString("base64url") },
 };
 const sent: any[] = [];
-const send = async (_s: any, payload: any) => {
+const send = async (_subscription: any, payload: any) => {
   sent.push(JSON.parse(payload));
   return {} as any;
 };
@@ -35,14 +35,14 @@ try {
   for (const kind of Object.keys(labels) as (keyof typeof labels)[]) {
     await channel.notifyPr(kind, "t1", card, kind === "shipped" ? undefined : "lint");
   }
-  const pr = sent.slice(1);
+  const prNotices = sent.slice(1);
   assert.deepEqual(
-    pr.map((p) => p.title),
+    prNotices.map((notice) => notice.title),
     ["Shipped · Agent Console", "Checks failed · Agent Console", "Review comment · Agent Console"],
   );
-  assert.equal(pr[0].body, "nefr0/agent-console#421 PR cockpit");
-  assert.equal(pr[1].body, "nefr0/agent-console#421 PR cockpit · lint");
-  assert.equal(pr[0].url, "https://console.test/#thread=t1");
+  assert.equal(prNotices[0].body, "nefr0/agent-console#421 PR cockpit");
+  assert.equal(prNotices[1].body, "nefr0/agent-console#421 PR cockpit · lint");
+  assert.equal(prNotices[0].url, "https://console.test/#thread=t1");
   // Preference survives restart and re-subscribe; can be turned off again.
   channel.subscribe(subscription, "https://console.test");
   const restored = new Notifications(directory, send);

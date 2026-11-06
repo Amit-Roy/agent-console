@@ -3,7 +3,7 @@
 // and a JSON record {pid, key, thread, startedAt, outFile} lets a restarted Console reattach:
 // a live pid keeps being watched (polling the output file and /proc), a dead one is read from its output.
 // Exit 0 -> merged, 1 -> attention, anything else (or no exit line) -> failed.
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { redact } from "./automation/events.ts";
@@ -21,6 +21,8 @@ export interface ShipRecord {
   thread: string;
   startedAt: number;
   outFile: string;
+  /** systemd transient unit running the job, when launched through `systemd-run --user`. */
+  unit?: string;
   done?: ShipState;
 }
 export interface ShipStart {
@@ -39,6 +41,8 @@ export interface ShipJobOptions {
   command?: string;
   env?: NodeJS.ProcessEnv;
   now?: () => number;
+  /** Force (true) or forbid (false) systemd-run launching; default probes `systemd-run --user` once. */
+  systemd?: boolean;
 }
 
 export class ShipBusyError extends Error {
@@ -107,6 +111,27 @@ export function jobAlive(pid: number, outFile: string): boolean {
   }
 }
 
+let systemdProbe: boolean | undefined;
+/** True when `systemd-run --user` can start a transient unit here (probed once per process). */
+function systemdRunWorks(): boolean {
+  systemdProbe ??=
+    spawnSync(
+      "systemd-run",
+      ["--user", "--collect", "--quiet", `--unit=ac-probe-${process.pid}-${Date.now()}`, "true"],
+      { stdio: "ignore", timeout: 5000 },
+    ).status === 0;
+  return systemdProbe;
+}
+
+const unitSafe = (text: string) => text.replace(/[^A-Za-z0-9_.-]/g, "-");
+
+function unitActive(unit: string): boolean {
+  return (
+    spawnSync("systemctl", ["--user", "is-active", "--quiet", unit], { stdio: "ignore" }).status ===
+    0
+  );
+}
+
 function isZombie(pid: number): boolean {
   try {
     return /\)\s+Z\s/.test(fs.readFileSync(`/proc/${pid}/stat`, "utf8"));
@@ -168,29 +193,68 @@ export class ShipJobs {
     const outFile = path.join(this.options.dir, `${fileBase(job.key)}.out`);
     fs.writeFileSync(outFile, "", { mode: 0o600 });
     const args = [outFile, this.options.command ?? "pr-ship", String(job.number), "-R", job.repo];
-    const child = spawn("sh", ["-c", WRAPPER, "sh", ...args], {
-      cwd: job.cwd,
-      env: this.options.env ?? childEnv(),
-      detached: true,
-      stdio: "ignore",
-    });
+    const env = this.options.env ?? childEnv();
+    const startedAt = this.now();
+    const unit =
+      (this.options.systemd ?? systemdRunWorks())
+        ? `ac-pr-ship-${unitSafe(`${job.repo}-${job.number}`)}-${startedAt}`
+        : undefined;
+    const launched = unit
+      ? this.launchUnit(unit, args, job.cwd, env)
+      : this.launchDetached(args, job.cwd, env);
     const record: ShipRecord = {
-      pid: child.pid ?? 0,
+      pid: launched.pid,
       key: job.key,
       thread: job.thread,
-      startedAt: this.now(),
+      startedAt,
       outFile,
+      ...(unit && launched.pid ? { unit } : {}),
     };
-    child.on("error", () => {
+    launched.onError?.(() => {
       if (!record.done) this.finish(record, startFailure(record.startedAt));
     });
-    child.unref();
     this.records.set(job.key, record);
     this.progress.delete(job.key);
     this.persist(record);
     if (record.pid) this.watch();
     else this.finish(record, startFailure(record.startedAt));
     return this.current(record)!;
+  }
+
+  // Survives a Console restart that kills its cgroup: the unit belongs to the user manager, not to this process.
+  private launchUnit(unit: string, args: string[], cwd: string, env: NodeJS.ProcessEnv) {
+    const names = Object.keys(env).filter((name) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(name));
+    const result = spawnSync(
+      "systemd-run",
+      [
+        "--user",
+        "--collect",
+        "--quiet",
+        `--unit=${unit}`,
+        `--working-directory=${cwd}`,
+        "--property=KillMode=control-group",
+        ...names.map((name) => `--setenv=${name}`),
+        "sh",
+        "-c",
+        WRAPPER,
+        "sh",
+        ...args,
+      ],
+      { env, stdio: "ignore", timeout: 10_000 },
+    );
+    const pid = result.status === 0 ? (result.pid ?? 0) : 0;
+    return { pid, onError: undefined };
+  }
+
+  private launchDetached(args: string[], cwd: string, env: NodeJS.ProcessEnv) {
+    const child = spawn("sh", ["-c", WRAPPER, "sh", ...args], {
+      cwd,
+      env,
+      detached: true,
+      stdio: "ignore",
+    });
+    child.unref();
+    return { pid: child.pid ?? 0, onError: (handler: () => void) => child.on("error", handler) };
   }
 
   /** One watch pass over running jobs; driven by the unref'd interval, public for tests. */
@@ -245,7 +309,8 @@ export class ShipJobs {
     if (outcome) return this.finish(record, outcome);
     const last = outputLines(text).pop();
     const line = last ? clip(last) : undefined;
-    if (!jobAlive(record.pid, record.outFile))
+    const alive = record.unit ? unitActive(record.unit) : jobAlive(record.pid, record.outFile);
+    if (!alive)
       return this.finish(record, {
         state: "failed",
         startedAt: record.startedAt,

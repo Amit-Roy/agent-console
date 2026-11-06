@@ -49,6 +49,7 @@ const instance = () =>
   createShipJobs({
     dir,
     env,
+    systemd: false,
     pollMs: 25,
     onUpdate: (record, ship) => updates.push({ record, ship }),
   });

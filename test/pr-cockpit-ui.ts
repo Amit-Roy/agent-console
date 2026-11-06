@@ -47,13 +47,13 @@ const PIXEL = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
   "base64",
 );
-const check = (name: string, status: string, conclusion: string | null, id: string) => ({
+const check = (name: string, status: string, conclusion: string | null, key: string) => ({
   name,
   status,
   conclusion,
   detailsUrl: null,
-  jobId: `job-${id}`,
-  runId: `run-${id}`,
+  jobId: `job-${key}`,
+  runId: `run-${key}`,
 });
 const card = (over: object = {}) => ({
   key: "o/r#7",
@@ -146,7 +146,11 @@ async function openView(
   const calls: Call[] = [];
   const sockets: WebSocketRoute[] = [];
   await page.routeWebSocket(/\/ws$/, (route) => {
-    route.connectToServer();
+    // The real server pushes its own (empty) PR cards after subscribe; only the mocked pushes may reach the page.
+    const upstream = route.connectToServer();
+    upstream.onMessage((message) => {
+      if (typeof message !== "string" || !message.includes('"t":"pr"')) route.send(message);
+    });
     sockets.push(route);
   });
   await page.route("**/evidence-*.png", (route) =>

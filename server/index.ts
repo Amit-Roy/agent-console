@@ -86,20 +86,21 @@ import { createWorkspaceMonitor } from "./monitor-wire.ts";
 import { Notifications } from "./notifications.ts";
 import { researchToolText, runPiResearch } from "./pi-subagent-worker.ts";
 import {
-  defaultDeps as prCockpitDeps,
+  countChecks,
   createPrStore,
+  invalidateBranch,
   type PrCard,
   parseGhResponse,
   parseKey,
+  defaultDeps as prCockpitDeps,
   prKey,
-  invalidateBranch,
 } from "./pr-cockpit.ts";
 import { createShipJobs, ShipBusyError, type ShipRecord, type ShipState } from "./pr-ship-job.ts";
 import { mountPromptImprove } from "./prompt-improve.ts";
 import { promptOverhead } from "./prompt-overhead.ts";
 import { BRAIN_BIN } from "./providers/brain.ts";
-import { childEnv } from "./providers/env.ts";
 import { claudeAccounts, claudeUsageKey } from "./providers/claude-accounts.ts";
+import { childEnv } from "./providers/env.ts";
 import { providerInfo, refreshPiModels } from "./providers/index.ts";
 import { effortModelPath } from "./providers/triage-effort.ts";
 import { describe, Schedules } from "./schedules.ts";
@@ -622,8 +623,13 @@ const prStore = createPrStore(prDeps);
 const prTracked = new Set<string>();
 const prTracking = new Map<string, Promise<void>>();
 type PrNoticeKind = "shipped" | "checks_failed" | "review_comment";
-// Notification seam for PR events; the PR notification kinds are delivered by notifications.ts, not here.
-function notifyPr(_kind: PrNoticeKind, _thread: string, _card: PrCard) {}
+const notifyPr = (kind: PrNoticeKind, thread: string, card: PrCard, detail?: string) =>
+  void notifications?.notifyPr(
+    kind,
+    thread,
+    { repo: card.repo, number: card.number, title: card.title },
+    detail,
+  );
 const prCards = (thread: string) =>
   prStore.cardsFor(thread).map((card) => {
     const ship = shipJobs.get(card.key);
@@ -645,6 +651,12 @@ function trackPr(id: string, open = prThreadOpen(id)): Promise<void> {
   }
   return running.then(() => pushPr(id));
 }
+const failedCheckNames = (card: PrCard): string | undefined => {
+  const names = card.checks
+    .filter((check) => countChecks([check]).failed > 0)
+    .map((check) => check.name);
+  return names.length ? names.slice(0, 3).join(", ") : undefined;
+};
 const prSeen = new Map<string, { failed: number; talk: number }>();
 // Failed checks and review comments only notify when their count rises after the first sighting.
 function notePrDeltas(thread: string, cards: PrCard[]) {
@@ -654,8 +666,9 @@ function notePrDeltas(thread: string, cards: PrCard[]) {
     const next = { failed: card.checkCounts.failed, talk: card.commentCount + card.reviewCount };
     prSeen.set(id, next);
     if (!prev) continue;
-    if (next.failed > prev.failed) notifyPr("checks_failed", thread, card);
-    if (next.talk > prev.talk) notifyPr("review_comment", thread, card);
+    if (next.failed > prev.failed) notifyPr("checks_failed", thread, card, failedCheckNames(card));
+    if (next.talk > prev.talk)
+      notifyPr("review_comment", thread, card, `+${next.talk - prev.talk} new`);
   }
 }
 prStore.onChange(({ thread, cards }) => {
@@ -683,7 +696,7 @@ function onPrSignal(signal: PrSignal) {
   }
 }
 function onShipDone(thread: string, card: PrCard, ship: ShipState) {
-  if (ship.state === "merged") notifyPr("shipped", thread, card);
+  if (ship.state === "merged") notifyPr("shipped", thread, card, ship.line);
 }
 function onShipUpdate(record: ShipRecord, ship: ShipState) {
   for (const thread of new Set([record.thread, ...prThreadsWith(record.key)])) pushPr(thread);
@@ -1072,6 +1085,15 @@ app.delete(
     }
   },
 );
+app.post("/api/notifications/pr", sameOrigin, express.json({ limit: "4kb" }), (req, res) => {
+  if (!notifications) return void res.status(503).json({ error: "Notifications are unavailable." });
+  const { endpoint, enabled } = req.body ?? {};
+  if (typeof endpoint !== "string" || typeof enabled !== "boolean")
+    return void res.status(400).json({ error: "Missing endpoint or enabled flag." });
+  if (!notifications.setPrNotices(endpoint, enabled))
+    return void res.status(404).json({ error: "Unknown subscription." });
+  res.json({ ok: true });
+});
 delete process.env.NODE_COMPILE_CACHE; // the launcher caches compiled server code; agents this server spawns must not share it
 // In-app Claude sign-in: start returns Anthropic's link, finish takes the code its page shows.
 app.post(

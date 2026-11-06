@@ -106,7 +106,9 @@ export class Notifications {
     const parsed = new URL(origin);
     if (!["https:", "http:"].includes(parsed.protocol) || parsed.origin !== origin)
       throw new Error("Invalid origin.");
-    const previous = this.state.devices.find((d) => d.subscription.endpoint === value.endpoint);
+    const previous = this.state.devices.find(
+      (device) => device.subscription.endpoint === value.endpoint,
+    );
     if (!previous && this.state.devices.length >= 32)
       throw new Error("Too many notification devices.");
     const device = {
@@ -119,7 +121,7 @@ export class Notifications {
       prNotices: previous?.prNotices ?? false,
     };
     this.state.devices = this.state.devices.filter(
-      (d) => d.subscription.endpoint !== value.endpoint,
+      (device) => device.subscription.endpoint !== value.endpoint,
     );
     this.state.devices.push(device);
     this.save();
@@ -127,14 +129,14 @@ export class Notifications {
 
   unsubscribe(endpoint: string, origin: string) {
     this.state.devices = this.state.devices.filter(
-      (d) => d.subscription.endpoint !== endpoint || d.origin !== origin,
+      (device) => device.subscription.endpoint !== endpoint || device.origin !== origin,
     );
     this.save();
   }
 
   // PR kinds are opt-in per device (off by default). Returns false for an unknown endpoint.
   setPrNotices(endpoint: string, enabled: boolean) {
-    const device = this.state.devices.find((d) => d.subscription.endpoint === endpoint);
+    const device = this.state.devices.find((device) => device.subscription.endpoint === endpoint);
     if (!device) return false;
     device.prNotices = enabled === true;
     this.save();
@@ -157,7 +159,7 @@ export class Notifications {
     const prKind = PR_KINDS.includes(notice.kind);
     await Promise.all(
       this.state.devices
-        .filter((d) => !prKind || d.prNotices === true)
+        .filter((device) => !prKind || device.prNotices === true)
         .map(async (device) => {
           const payload = JSON.stringify({
             ...notice,
