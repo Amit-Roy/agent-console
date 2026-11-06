@@ -1,0 +1,228 @@
+/* PR cockpit: header strip of chips and the detail sheet (desktop right side, phone bottom sheet). */
+.pr-strip {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: 1.75rem;
+  padding: var(--sp-1) var(--sp-4);
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+}
+.pr-strip[hidden] {
+  display: none;
+}
+.pr-chip {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  min-height: 1.5rem;
+  padding: 0 var(--sp-2);
+  border: 0;
+  border-radius: var(--r-full);
+  background: var(--s2);
+  color: var(--t1);
+  font: var(--fw-med) var(--f-xs);
+  letter-spacing: var(--ls-xs);
+  cursor: pointer;
+  box-shadow: inset 0 0 0 1px var(--edge);
+}
+.pr-chip.ok {
+  background: color-mix(in srgb, var(--ok) 14%, transparent);
+}
+.pr-chip.warn {
+  background: var(--warn-tint);
+}
+.pr-chip.bad {
+  background: var(--bad-tint);
+}
+.pr-chip:focus-visible,
+.pr-image:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.pr-chip .ico,
+.pr-check .ico {
+  width: 0.8125rem;
+  height: 0.8125rem;
+}
+.pr-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.125rem;
+  color: var(--t2);
+}
+.pr-state.ok,
+.pr-ship-line.merged {
+  color: var(--ok);
+}
+.pr-state.warn,
+.pr-ship-line.attention {
+  color: var(--warn);
+}
+.pr-state.bad,
+.pr-ship-line.failed {
+  color: var(--bad);
+}
+
+.pr-sheet,
+.pr-ship-dialog {
+  border: 0;
+  padding: 0;
+  color: var(--t1);
+  background: var(--pop);
+  box-shadow: var(--shadow-pop);
+}
+.pr-sheet::backdrop,
+.pr-ship-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.4);
+}
+.pr-sheet[open] {
+  display: flex;
+  flex-direction: column;
+  position: fixed;
+  inset: var(--sp-2) var(--sp-2) var(--sp-2) auto;
+  margin: 0;
+  width: min(26rem, 90vw);
+  max-width: none;
+  height: auto;
+  max-height: none;
+  border-radius: var(--r-xl);
+}
+.pr-sheet-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-3) var(--sp-2) var(--sp-4);
+}
+.pr-sheet-head h2 {
+  flex: 1;
+  min-width: 0;
+  font: var(--fw-semi) var(--f-lg);
+  letter-spacing: var(--ls-lg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pr-sheet-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 var(--sp-4) calc(var(--sp-4) + env(safe-area-inset-bottom));
+  font: var(--fw-reg) var(--f-md);
+}
+.pr-h {
+  margin: var(--sp-3) 0 var(--sp-1);
+  font: var(--fw-semi) var(--f-sm);
+  color: var(--t2);
+}
+.pr-checks-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+.pr-check-head,
+.pr-check-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.pr-check-name {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.pr-check-word {
+  color: var(--t2);
+  font: var(--fw-reg) var(--f-xs);
+}
+.pr-check-actions {
+  padding: var(--sp-1) 0 0 1.25rem;
+}
+.pr-log {
+  margin: var(--sp-1) 0 0;
+  padding: var(--sp-2);
+  max-height: 14rem;
+  overflow: auto;
+  border-radius: var(--r-md);
+  background: var(--s2);
+  font: var(--fm-xs);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.pr-log[hidden] {
+  display: none;
+}
+.pr-images {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(7rem, 1fr));
+  gap: var(--sp-2);
+}
+.pr-image img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+  border-radius: var(--r-md);
+  box-shadow: inset 0 0 0 1px var(--edge);
+}
+.pr-ship {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-top: var(--sp-4);
+}
+.pr-ship-line {
+  flex-basis: 100%;
+  margin: 0;
+}
+.pr-ship-dialog {
+  width: min(24rem, calc(100vw - var(--sp-8)));
+  padding: var(--sp-4);
+  border-radius: var(--r-xl);
+}
+.pr-ship-dialog .row {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+  margin-top: var(--sp-3);
+}
+#pr-ship-error {
+  color: var(--bad);
+  font: var(--fw-med) var(--f-md);
+}
+#pr-ship-error:empty {
+  display: none;
+}
+
+@media (max-width: 700px) {
+  .pr-sheet[open] {
+    inset: auto 0 0 0;
+    width: auto;
+    height: 70vh;
+    border-radius: var(--r-xl) var(--r-xl) 0 0;
+  }
+}
+@media (pointer: coarse) {
+  .pr-chip {
+    min-height: 2.75rem;
+  }
+  .pr-sheet .btn,
+  .pr-ship-dialog .btn {
+    min-height: 2.75rem;
+    min-width: 2.75rem;
+  }
+  .pr-sheet[open] {
+    inset: auto 0 0 0;
+    width: auto;
+    height: 70vh;
+    border-radius: var(--r-xl) var(--r-xl) 0 0;
+  }
+}
+.pr-deploy {
+  margin-top: var(--sp-3);
+}

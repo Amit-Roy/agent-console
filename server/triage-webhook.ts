@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { verify } from "@octokit/webhooks-methods";
+import { announcePr } from "./automation/closed-signal.ts";
 import { enqueue, schedule } from "./triage-queue.ts";
 import { reconcile } from "./triage-scan.ts";
 import { triageStatus } from "./triage-store.ts";
@@ -153,11 +154,60 @@ function isDeployableRun(workflow: string, payload: any): boolean {
   );
 }
 
+const SHA = /^[a-f0-9]{40}$/;
+
+// Finds the PR number and head sha in any PR-related payload; the sha stands in when no PR is attached (forks, status events).
+function prKey(event: string, repo: string, payload: any) {
+  const nested = [
+    payload.pull_request,
+    payload.issue?.pull_request ? payload.issue : undefined,
+    payload.check_suite?.pull_requests?.[0],
+    payload.check_run?.pull_requests?.[0],
+    payload.workflow_run?.pull_requests?.[0],
+  ];
+  const pr = nested.map(itemNumber).find((n) => n !== undefined);
+  const shas = [
+    payload.pull_request?.head?.sha,
+    payload.check_suite?.head_sha,
+    payload.check_run?.head_sha,
+    payload.workflow_run?.head_sha,
+    payload.deployment?.sha,
+    payload.sha,
+  ];
+  const sha = shas.find((v) => typeof v === "string" && SHA.test(v));
+  return pr !== undefined || sha ? { repo, pr, sha, event } : undefined;
+}
+
+// Announces only; never enqueues triage.
+function handlePrSignal(call: WebhookCall) {
+  const { ctx, res, event, payload } = call;
+  const repo = allowedRepo(ctx, payload);
+  if (!repo) {
+    respond(res, 403, { error: "Repository not allowed" });
+    return;
+  }
+  if (event === "issue_comment" && !payload.issue?.pull_request) {
+    respond(res, 200, { ignored: true });
+    return;
+  }
+  const key = prKey(event, repo, payload);
+  if (!key) {
+    respond(res, 200, { ignored: true });
+    return;
+  }
+  try {
+    announcePr(key);
+  } catch {
+    logEvent(ctx, "pr_signal_failed");
+  }
+  respond(res, 200, { signalled: true });
+}
+
 function handleWorkflowRun(call: WebhookCall) {
   const { ctx, res, payload } = call;
   const deploy = ctx.options.deploy;
   if (!deploy || !isDeployableRun(deploy.workflow, payload)) {
-    respond(res, 200, { ignored: true });
+    handlePrSignal(call);
     return;
   }
   const repo = allowedRepo(ctx, payload);
@@ -243,6 +293,17 @@ function handleItemChange(call: WebhookCall) {
 }
 
 function handleItemEvent(call: WebhookCall) {
+  if (call.event === "pull_request") {
+    const repo = allowedRepo(call.ctx, call.payload);
+    const key = repo && prKey("pull_request", repo, call.payload);
+    if (key) {
+      try {
+        announcePr({ ...key, event: `pull_request.${call.payload.action}` });
+      } catch {
+        logEvent(call.ctx, "pr_signal_failed");
+      }
+    }
+  }
   if (call.payload.action === "closed") handleClosed(call);
   else handleItemChange(call);
 }
@@ -252,6 +313,13 @@ const EVENT_HANDLERS: Record<string, EventHandler> = {
   workflow_run: handleWorkflowRun,
   issues: handleItemEvent,
   pull_request: handleItemEvent,
+  check_suite: handlePrSignal,
+  check_run: handlePrSignal,
+  status: handlePrSignal,
+  pull_request_review: handlePrSignal,
+  pull_request_review_comment: handlePrSignal,
+  issue_comment: handlePrSignal,
+  deployment_status: handlePrSignal,
 };
 
 async function receive(ctx: TriageContext, req: IncomingMessage, res: ServerResponse) {

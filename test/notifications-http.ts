@@ -121,6 +121,34 @@ try {
   );
   assert.equal((await request("POST", { ...subscription, silent: false })).status, 200);
   assert.equal(readState().devices[0].silent, false, "Sound defaults can be restored.");
+  const prRoute = (
+    method: string,
+    body: unknown,
+    requestHeaders: Record<string, string> = headers,
+  ) =>
+    fetch(origin + "/api/notifications/pr", {
+      method,
+      headers: requestHeaders,
+      body: JSON.stringify(body),
+    });
+  const prBody = { endpoint: subscription.endpoint, enabled: true };
+  assert.equal((await prRoute("POST", prBody, { "Content-Type": "application/json" })).status, 401);
+  assert.equal(
+    (await prRoute("POST", { ...prBody, endpoint: "https://nope.invalid/x" })).status,
+    404,
+  );
+  assert.equal((await prRoute("POST", { endpoint: subscription.endpoint })).status, 400);
+  assert.equal(readState().devices[0].prNotices, false);
+  assert.equal((await prRoute("POST", prBody)).status, 200);
+  assert.equal(readState().devices[0].prNotices, true, "PR updates are saved per device.");
+  assert.equal((await request("POST", subscription)).status, 200);
+  assert.equal(
+    readState().devices[0].prNotices,
+    true,
+    "Resubscribing keeps the PR updates choice.",
+  );
+  assert.equal((await prRoute("POST", { ...prBody, enabled: false })).status, 200);
+  assert.equal(readState().devices[0].prNotices, false);
   assert.equal((await request("DELETE", {})).status, 400);
   assert.equal((await request("DELETE", { endpoint: subscription.endpoint })).status, 200);
   assert.deepEqual(readState().devices, []);

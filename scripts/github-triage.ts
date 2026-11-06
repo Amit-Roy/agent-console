@@ -183,11 +183,24 @@ async function ownedRepos(owner: string): Promise<string[]> {
   ].sort();
 }
 
+const PR_SIGNAL_EVENTS = [
+  "issues",
+  "pull_request",
+  "check_suite",
+  "check_run",
+  "status",
+  "pull_request_review",
+  "pull_request_review_comment",
+  "issue_comment",
+  "deployment_status",
+  "workflow_run",
+];
+
 async function registerHooks(c: Config, force = false) {
   for (const repo of c.repos) {
     const hooks = await pages(`repos/${repo}/hooks`);
     const existing = hooks.find((h) => h.config?.url === c.url);
-    const required = ["issues", "pull_request", ...(repo === c.deploy ? ["workflow_run"] : [])];
+    const required = PR_SIGNAL_EVENTS;
     const events = [...new Set<string>([...(existing?.events ?? []), ...required])];
     const current =
       existing?.active &&
