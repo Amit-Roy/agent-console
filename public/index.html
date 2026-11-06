@@ -10,7 +10,7 @@
 <link rel="preload" href="/fonts/inter-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="/fonts/newsreader-latin-standard-normal.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="/fonts/jetbrains-mono-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/time-travel.css"></head>
+<link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/time-travel.css"><link rel="stylesheet" href="/pr-cockpit.css"></head>
 <body>
 <!-- icon sprite: 16px grid, 1.5 stroke, round caps (stroke/fill come from .ico in style.css) -->
 <svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false"><defs>
@@ -156,6 +156,8 @@
       <button id="chat-search-next" class="btn icon ghost" type="button" aria-label="Next match" title="Next match (Enter)" disabled><svg class="ico" aria-hidden="true"><use href="#i-chev-down"/></svg></button>
       <button id="chat-search-close" class="btn icon ghost" type="button" aria-label="Close search" title="Close search (Escape)"><svg class="ico" aria-hidden="true"><use href="#i-x"/></svg></button>
     </div>
+    <!-- biome-ignore lint/a11y/useSemanticElements: role=group on a div filled by pr-cockpit.js; fieldset would change the layout -->
+    <div id="pr-strip" class="pr-strip" role="group" aria-label="Pull requests" hidden></div>
     <div id="banner" role="status" hidden></div>
     <section id="chat" role="log" aria-label="Conversation" aria-relevant="additions" tabindex="-1"></section>
     <footer id="composer">
@@ -266,6 +268,16 @@
   <ul id="todo-list" class="todo-list" aria-label="Todos"></ul>
   <p id="todo-empty" class="sub" hidden>Nothing to do yet.</p>
   <div class="row"><button id="todo-close" class="btn" type="button">Close</button></div>
+</dialog>
+<dialog id="pr-sheet" class="pr-sheet" aria-labelledby="pr-sheet-title">
+  <header class="pr-sheet-head"><!-- biome-ignore lint/a11y/useHeadingContent: title is filled at runtime by pr-cockpit.js --><h2 id="pr-sheet-title"></h2><!-- biome-ignore lint/a11y/useValidAnchor: href is set at runtime by pr-cockpit.js --><a id="pr-sheet-link" class="btn sm" target="_blank" rel="noopener" hidden>Open PR</a><button id="pr-sheet-close" class="btn icon ghost" type="button" aria-label="Close" title="Close"><svg class="ico" aria-hidden="true"><use href="#i-x"/></svg></button></header>
+  <div id="pr-sheet-body" class="pr-sheet-body"></div>
+</dialog>
+<dialog id="pr-ship-dialog" class="pr-ship-dialog" aria-labelledby="pr-ship-title">
+  <h2 id="pr-ship-title">Ship this PR?</h2>
+  <p id="pr-ship-sub" class="sub"></p>
+  <p id="pr-ship-error" role="alert"></p>
+  <div class="row"><button id="pr-ship-cancel" class="btn" type="button">Cancel</button><button id="pr-ship-go" class="btn primary" type="button">Ship</button></div>
 </dialog>
 <dialog id="tt-confirm" class="tt-confirm" aria-labelledby="tt-confirm-title">
   <h2 id="tt-confirm-title">Rewind files?</h2>
