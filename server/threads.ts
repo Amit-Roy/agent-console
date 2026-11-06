@@ -472,6 +472,11 @@ function clipResultBlock(block: any) {
   return clippable ? { ...block, content: clip(block.content, RESULT_CLIP) } : block;
 }
 
+// What a replayed history line looks like on the wire; null drops it. Cached per large line, so it must stay pure.
+function projectHistoryLine(_line: number, entry: any) {
+  return NOISE.has(kindOf(entry)) ? null : historyWireEvent(clipToolResults(entry));
+}
+
 // Too big: begin at the earliest later user message that fits, else just the newest PAGE events (mid-turn, like an unaligned page).
 function pageCut(
   items: { e: any; size: number }[],
@@ -1682,15 +1687,13 @@ export class Threads {
     const at = performance.now();
     const file = logFile(threadId);
     const delta =
-      since != null && before == null ? this.historyIndex.after(file, since, PAGE) : null;
-    const page = delta || this.historyIndex.read(file, before, limit);
-    let items = page.events
-      .map((entry, offset) => ({ line: page.start + offset, entry }))
-      .filter(({ entry }) => !NOISE.has(kindOf(entry)))
-      .map(({ line, entry }) => {
-        const wire = historyWireEvent(clipToolResults(entry));
-        return { line, e: wire, size: JSON.stringify(wire).length };
-      });
+      since != null && before == null
+        ? this.historyIndex.after(file, since, PAGE, projectHistoryLine)
+        : null;
+    const page = delta || this.historyIndex.read(file, before, limit, projectHistoryLine);
+    // Cached wire values are shared between pages: they are only read, never mutated.
+    let items = (page.items ?? []).map(({ line, value, size }) => ({ line, e: value, size }));
+    const { items: _items, ...pageFields } = page;
     let start = page.start;
     const total = items.reduce((sum, item) => sum + item.size, 0);
     if (!delta && total > maxBytes && items.length > 1) {
@@ -1701,7 +1704,7 @@ export class Threads {
       }
     }
     return {
-      ...page,
+      ...pageFields,
       start,
       events: items.map((item) => item.e),
       questions: this.questions.list(threadId),
@@ -1709,6 +1712,11 @@ export class Threads {
       ...(delta ? { delta: true } : {}),
       server_ms: Math.round((performance.now() - at) * 10) / 10,
     };
+  }
+
+  // Drop every cached wire view, e.g. after transcripts were rewritten in place.
+  invalidateHistoryViews() {
+    this.historyIndex.invalidateViews();
   }
 
   private log(id: string, ev: unknown) {
