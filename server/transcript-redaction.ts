@@ -32,6 +32,7 @@ type Options = {
   threads: {
     redactionCatalog(): CatalogEntry[];
     applyRedactionCatalog(before: CatalogEntry[], after: CatalogEntry[]): boolean;
+    invalidateHistoryViews?(): void;
   };
   search: { beginMaintenance(): Promise<void>; endMaintenance(rebuild: boolean): Promise<void> };
 };
@@ -225,8 +226,10 @@ export class TranscriptRedaction {
     job.status = "running";
     let acquired = false;
     let finalStatus: Summary["status"] = "failed";
+    const rewrites = job.action === "apply" && job.scope !== "native";
     try {
-      if (job.action === "apply" && job.scope !== "native") {
+      if (rewrites) {
+        this.options.threads.invalidateHistoryViews?.();
         await this.options.search.beginMaintenance();
         acquired = true;
       }
@@ -240,6 +243,7 @@ export class TranscriptRedaction {
       this.fail(job, "cleanup_failed");
       finalStatus = "failed";
     } finally {
+      if (rewrites) this.options.threads.invalidateHistoryViews?.();
       if (acquired) {
         try {
           await this.options.search.endMaintenance(job.action === "apply");
