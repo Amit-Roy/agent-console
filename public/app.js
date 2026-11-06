@@ -8,6 +8,7 @@ import { composerField } from "./composer-field.js";
 import { createHostCard } from "./host-card.js";
 import { createMenu } from "./menu.js";
 import { setupNotifications } from "./notifications.js";
+import { createPrCockpit } from "./pr-cockpit.js";
 import { createPromptImprove } from "./prompt-improve.js";
 import { createQuestions, find as findQuestionCard } from "./questions.js";
 import {
@@ -269,6 +270,7 @@ const timeTravel = createTimeTravel({
   openThread: (id) => openThread(id),
   openFile: (path, opener) => openCheckpointFile(path, opener),
 });
+const prCockpit = createPrCockpit({ apiFetch, toast: (text) => toast(text) });
 const questions = createQuestions({
   send,
   root: () => $("chat"),
@@ -694,6 +696,7 @@ const MESSAGE_HANDLERS = {
   todos: onTodosMessage,
   todo_error: onTodoErrorMessage,
   rewound: (message) => timeTravel.onRewound(message),
+  pr: (message) => prCockpit.onMessage(message),
   created: onCreatedMessage,
   tasks: onTasksMessage,
   task_saved: onTaskSavedMessage,
@@ -2342,6 +2345,7 @@ function renderHead() {
   $("chat-search-toggle").disabled = !thread;
   todos.renderBadge(thread);
   timeTravel.renderButton(thread);
+  prCockpit.renderThread(thread);
   $("state").hidden = !running && !thread?.background && !questions.count(state.current);
   $("input").disabled = !thread;
   $("attach").disabled = !thread;

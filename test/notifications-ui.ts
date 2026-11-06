@@ -11,6 +11,7 @@ async function browser(permission = "default", preferences = new Map<string, str
     "notifications-toggle",
     "notifications-status",
     "notifications-silent",
+    "notifications-pr",
   ]) {
     elements.set(id, {
       textContent: "",

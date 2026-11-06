@@ -1,0 +1,95 @@
+{
+  "data": {
+    "repository": {
+      "pullRequest": {
+        "title": "Add cockpit",
+        "state": "OPEN",
+        "isDraft": false,
+        "url": "https://example.test/Acme/Widgets/7",
+        "mergeable": "MERGEABLE",
+        "mergeStateStatus": "BLOCKED",
+        "reviewDecision": "REVIEW_REQUIRED",
+        "headRefOid": "abc123",
+        "bodyHTML": "<p>Done</p><img src=\"https://example.test/assets/one.png?a=1&amp;b=2\" alt=\"x\"><img alt=\"y\" src='https://example.test/two.png'><img src=\"/relative.png\"><img src=\"https://example.test/two.png\">",
+        "reviewThreads": {
+          "nodes": [{ "isResolved": false }, { "isResolved": true }, { "isResolved": false }]
+        },
+        "comments": {
+          "nodes": [
+            { "body": "looks good", "author": { "login": "alice" } },
+            { "body": "<!-- agent-console-marker --> status", "author": { "login": "bot" } },
+            { "body": "Copilot could not review", "author": { "login": "Copilot" } }
+          ]
+        },
+        "reviews": {
+          "nodes": [
+            { "body": "", "state": "COMMENTED", "author": { "login": "bob" } },
+            { "body": "", "state": "CHANGES_REQUESTED", "author": { "login": "carol" } },
+            {
+              "body": "nit",
+              "state": "COMMENTED",
+              "author": { "login": "copilot-pull-request-reviewer" }
+            },
+            { "body": "ship it", "state": "APPROVED", "author": { "login": "dave" } }
+          ]
+        },
+        "commits": {
+          "nodes": [
+            {
+              "commit": {
+                "statusCheckRollup": {
+                  "contexts": {
+                    "nodes": [
+                      {
+                        "__typename": "CheckRun",
+                        "name": "build",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                        "detailsUrl": "https://example.test/actions/runs/111/job/222",
+                        "databaseId": 9,
+                        "checkSuite": { "workflowRun": { "databaseId": 111 } }
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "lint",
+                        "status": "COMPLETED",
+                        "conclusion": "FAILURE",
+                        "detailsUrl": "https://example.test/actions/runs/111/job/333",
+                        "databaseId": 10,
+                        "checkSuite": { "workflowRun": { "databaseId": 111 } }
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "e2e",
+                        "status": "IN_PROGRESS",
+                        "conclusion": null,
+                        "detailsUrl": "https://example.test/x",
+                        "databaseId": 11,
+                        "checkSuite": { "workflowRun": null }
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "docs",
+                        "status": "COMPLETED",
+                        "conclusion": "SKIPPED",
+                        "detailsUrl": null,
+                        "databaseId": 12,
+                        "checkSuite": { "workflowRun": null }
+                      },
+                      {
+                        "__typename": "StatusContext",
+                        "context": "ci/legacy",
+                        "state": "SUCCESS",
+                        "targetUrl": "https://example.test/ci/1"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}
