@@ -151,6 +151,10 @@ bin/github-triage restart
 
 The CLI tests kill and recover an isolated worker and verify that healthy workers keep their PID. Host supervisor tests cover IP changes, restart policy, and preservation of intentionally stopped workspaces. Full host/workspace reboot tests require an external maintenance window; do not restart the workspace from an agent running inside it.
 
+## PR cockpit signals
+
+The same webhook also writes per-PR marker files for the PR cockpit. These markers never enqueue triage. Details, polling budget and runbook: [PR cockpit](./pr-cockpit.md). After a deploy, run `bin/github-triage restart` and then `bin/github-triage sync` once.
+
 ## CI and deploy
 
 `.github/workflows/ci.yml` runs `npm test` against a mock scratch server, then `test/pi-e2e-ui.ts`. That smoke test drives the browser through a real `pi --mode rpc` child whose model is a local OpenAI-compatible stub, so CI needs no secrets and spends no quota.
