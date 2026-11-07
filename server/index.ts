@@ -144,6 +144,7 @@ import {
   usage,
 } from "./usage.ts";
 import { mountVault } from "./vault.ts";
+import { Voice } from "./voice.ts";
 import {
   createDispatcher,
   defaultDirs,
@@ -1108,6 +1109,45 @@ app.delete(
       res.json({ ok: true });
     } catch {
       res.status(503).json({ error: "Could not save notification settings." });
+    }
+  },
+);
+// ---- voice input: audio is decoded in memory and never stored or logged
+const voice = new Voice();
+const audioOnly: express.RequestHandler = (req, res, next) =>
+  /^audio\//i.test(req.headers["content-type"] || "")
+    ? next()
+    : void res.status(415).json({ error: "Send audio/* data." });
+app.get("/api/voice/status", (_req, res) => res.json({ stt: voice.status() }));
+app.post(
+  "/api/voice/transcribe",
+  sameOrigin,
+  audioOnly,
+  express.raw({ type: () => true, limit: "2mb" }),
+  async (req, res) => {
+    if (!Buffer.isBuffer(req.body) || !req.body.length)
+      return void res.status(400).json({ error: "Empty recording." });
+    try {
+      res.json(await voice.transcribe(req.body));
+    } catch (e: any) {
+      const busy = /busy/.test(e?.message);
+      res.status(voice.status() === "missing" ? 503 : busy ? 503 : 422).json({
+        error: e?.message || "Could not transcribe.",
+      });
+    }
+  },
+);
+app.post(
+  "/api/questions/:thread/:id/answer",
+  sameOrigin,
+  express.json({ limit: "8kb" }),
+  (req, res) => {
+    const { answers, skip, nonce } = req.body ?? {};
+    try {
+      threads.answerFromPush(req.params.thread, req.params.id, answers, skip === true, nonce);
+      res.json({ ok: true });
+    } catch (e: any) {
+      res.status(e?.status || 400).json({ error: e?.message || "Could not send your answer." });
     }
   },
 );
@@ -2512,6 +2552,7 @@ async function shutdown(sig: string) {
   const newest = handoff ? "(restart handoff)" : newestProcesses();
   console.log(`[${new Date().toISOString()}] stopping on ${sig}; newest processes:\n${newest}`);
   schedules.shutdown();
+  voice.close();
   threads.shutdown();
   headroom.release(ORPHAN_FILE); // the next server waits for it, or kills it 5 s after this file was written
   benchmarks.close();

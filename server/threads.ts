@@ -1293,6 +1293,19 @@ export class Threads {
     if (live?.agent.alive && t.status === "idle") this.kill(id, "tool_rules", true);
   }
 
+  // Answer from a push notification action: the one-time nonce proves the tap came from that notification.
+  answerFromPush(thread: string, id: string, answers: unknown, skip: boolean, nonce: unknown) {
+    const fail = (status: number, message: string) => Object.assign(new Error(message), { status });
+    if (!this.questions.list(thread).some((q) => q.id === id))
+      throw fail(404, "This question is no longer waiting for an answer.");
+    if (!this.questions.nonceMatches(thread, id, nonce)) throw fail(409, "Invalid answer token.");
+    try {
+      this.answer(thread, id, answers, skip);
+    } catch (error: any) {
+      throw fail(/no longer waiting/.test(error?.message) ? 404 : 400, error?.message);
+    }
+  }
+
   private updateWaiting(id: string) {
     const t = this.threads.get(id);
     if (!t) return;
@@ -1840,9 +1853,14 @@ export class Threads {
     this.emit({ t: "commands", provider, commands: commandList(list) });
   }
 
-  private notify(t: Thread, kind: ThreadNotice["kind"]) {
+  private notify(t: Thread, kind: ThreadNotice["kind"], question?: ThreadNotice["question"]) {
     try {
-      this.onNotification?.({ kind, thread: t.id, title: t.title });
+      this.onNotification?.({
+        kind,
+        thread: t.id,
+        title: t.title,
+        ...(question ? { question } : {}),
+      });
     } catch {
       /* notification transport cannot interrupt a turn */
     }
@@ -2213,7 +2231,7 @@ export class Threads {
       if (thread.archived) delete thread.archived; // a new question puts the thread back in front of the user
       this.updateWaiting(thread.id);
       if (!flow.compacting && this.notificationTurns.has(thread.id))
-        this.notify(thread, "needs_input");
+        this.notify(thread, "needs_input", this.questions.pushSummary(thread.id, flow.event.id));
     }
     if (flow.event.type === "question_answer") {
       if (!this.questions.remove(thread.id, flow.event.id)) return true;

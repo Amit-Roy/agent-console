@@ -66,19 +66,66 @@ self.addEventListener("push", (event) => {
   } catch {
     return;
   }
+  const answer = answerAction(payload);
   event.waitUntil(
     self.registration.showNotification(payload.title || "Agent Console", {
-      body: payload.body || "Open the thread for details.",
+      body: payload.question?.text || payload.body || "Open the thread for details.",
       tag: payload.tag || `thread-${payload.thread}`,
       icon: "/icon.svg",
       silent: payload.silent === true,
-      data: { url: url.href },
+      data: { url: url.href, ...(answer ? { answer } : {}) },
+      ...(answer
+        ? { actions: answer.options.map((title, index) => ({ action: `answer:${index}`, title })) }
+        : {}),
     }),
   );
 });
 
+// A needs_input push with one simple question and a nonce gets one button per option (when the browser shows buttons).
+function answerAction(payload) {
+  const q = payload.question;
+  const room = typeof Notification === "undefined" ? 0 : Notification.maxActions;
+  if (payload.kind !== "needs_input" || !q?.nonce || !q.options?.length || !(room >= 1))
+    return null;
+  return {
+    thread: payload.thread,
+    id: q.id,
+    key: q.key,
+    nonce: q.nonce,
+    options: q.options.slice(0, Math.min(2, room)),
+  };
+}
+
+// Send the tapped option to the server. Any failure shows a notification that opens the thread instead.
+async function submitAnswer(data, index) {
+  const { thread, id, key, nonce, options } = data.answer;
+  let ok = false;
+  try {
+    const res = await fetch(
+      `/api/questions/${encodeURIComponent(thread)}/${encodeURIComponent(id)}/answer`,
+      {
+        method: "POST",
+        credentials: "include",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ answers: { [key]: [options[index]] }, nonce }),
+      },
+    );
+    ok = res.ok;
+  } catch {}
+  if (ok) return;
+  await self.registration.showNotification("Answer failed, open thread", {
+    body: "Your answer was not sent.",
+    tag: `thread-${thread}`,
+    icon: "/icon.svg",
+    data: { url: data.url },
+  });
+}
+
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
+  const data = event.notification.data;
+  const tapped = /^answer:(\d)$/.exec(event.action || "");
+  if (tapped && data?.answer) return event.waitUntil(submitAnswer(data, Number(tapped[1])));
   event.waitUntil(
     (async () => {
       let url;

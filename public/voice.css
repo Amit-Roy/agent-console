@@ -1,0 +1,88 @@
+/* Voice input: hold-to-talk mic, recording pill, question-card mic. */
+.voice-mic {
+  color: var(--t2);
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+.btn.voice-mic.recording,
+.btn.voice-mic.recording:hover:not(:disabled) {
+  background: var(--bad);
+  color: var(--s0);
+}
+.btn.voice-mic.cancelling {
+  opacity: 0.6;
+}
+.voice-pill {
+  position: fixed;
+  left: 50%;
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 6rem);
+  transform: translateX(-50%);
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  max-width: calc(100vw - 2rem);
+  padding: var(--sp-2) var(--sp-4);
+  border: 1px solid var(--bd, currentColor);
+  border-radius: var(--r-full);
+  background: var(--s1);
+  color: var(--t1);
+  font: var(--fw-med) var(--f-sm);
+  box-shadow: 0 6px 24px rgb(0 0 0 / 0.2);
+}
+.voice-pill[hidden] {
+  display: none;
+}
+.voice-pill[data-mode="error"],
+.voice-pill[data-mode="cancel"] {
+  color: var(--bad);
+}
+.voice-bars {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: 1rem;
+}
+.voice-bars i {
+  width: 3px;
+  height: 100%;
+  border-radius: 2px;
+  background: currentColor;
+  transform: scaleY(0.2);
+  transition: transform 80ms linear;
+}
+.voice-pill[data-mode="rec"] .voice-bars i {
+  transform: scaleY(calc(0.2 + var(--level, 0) * 0.8));
+}
+.voice-pill[data-mode="rec"] .voice-bars i:nth-child(2n) {
+  transform: scaleY(calc(0.2 + var(--level, 0) * 0.55));
+}
+.voice-pill[data-mode="busy"] .voice-bars i {
+  animation: voice-wait 1s ease-in-out infinite alternate;
+}
+.voice-pill:not([data-mode="rec"]):not([data-mode="busy"]) .voice-bars {
+  display: none;
+}
+@keyframes voice-wait {
+  to {
+    transform: scaleY(0.9);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .voice-bars i {
+    animation: none !important;
+    transition: none;
+  }
+}
+.question-mic {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-2);
+}
+.question-mic-hint {
+  color: var(--t2);
+  font: var(--f-xs);
+}

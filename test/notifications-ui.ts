@@ -248,4 +248,99 @@ await dispatch("notificationclick", {
   notification: { close() {}, data: { url: "https://evil.example/" } },
 });
 assert.equal(focused, 1);
+
+// Answer buttons: only with room for actions, a nonce and options; a tap posts the answer, a failure shows a fallback.
+const answerEvents = new Map<string, Function>();
+const answerShown: any[] = [];
+const fetched: any[] = [];
+let fetchOk = true;
+const answerWorker = {
+  location: { origin: "https://console.example" },
+  addEventListener(name: string, callback: Function) {
+    answerEvents.set(name, callback);
+  },
+  registration: {
+    async showNotification(title: string, options: any) {
+      answerShown.push({ title, options });
+    },
+  },
+  clients: {
+    async matchAll() {
+      return [];
+    },
+    async openWindow() {},
+  },
+};
+const swSource = fs.readFileSync(new URL("../public/sw.js", import.meta.url), "utf8");
+function loadWorker(maxActions: number) {
+  vm.runInNewContext(swSource, {
+    self: answerWorker,
+    URL,
+    JSON,
+    Notification: { maxActions },
+    encodeURIComponent,
+    async fetch(url: string, init: any) {
+      fetched.push({ url, init });
+      if (!fetchOk) throw new Error("offline");
+      return { ok: true };
+    },
+  });
+}
+async function fire(name: string, props: any) {
+  let pending: Promise<unknown> = Promise.resolve();
+  answerEvents.get(name)!({ ...props, waitUntil: (value: Promise<unknown>) => (pending = value) });
+  await pending;
+}
+const question = {
+  id: "req 1",
+  key: "scope",
+  text: "How much?",
+  options: ["Quick", "Full", "Third"],
+  nonce: "n1",
+};
+const askPush = {
+  data: {
+    json: () => ({
+      kind: "needs_input",
+      thread: "t 1",
+      url: "/#thread=t%201",
+      title: "Needs input",
+      body: "Title",
+      question,
+    }),
+  },
+};
+loadWorker(0);
+await fire("push", askPush);
+assert.equal(
+  "actions" in answerShown[0].options,
+  false,
+  "No actions when the browser has no button room",
+);
+assert.equal(answerShown[0].options.body, "How much?");
+loadWorker(2);
+await fire("push", askPush);
+assert.deepEqual(JSON.parse(JSON.stringify(answerShown[1].options.actions)), [
+  { action: "answer:0", title: "Quick" },
+  { action: "answer:1", title: "Full" },
+]);
+await fire("push", {
+  data: { json: () => ({ ...askPush.data.json(), question: { ...question, nonce: undefined } }) },
+});
+assert.equal("actions" in answerShown[2].options, false, "No nonce, no actions");
+await fire("notificationclick", {
+  action: "answer:1",
+  notification: { close() {}, data: answerShown[1].options.data },
+});
+assert.equal(fetched[0].url, "/api/questions/t%201/req%201/answer");
+assert.equal(fetched[0].init.credentials, "include");
+assert.deepEqual(JSON.parse(fetched[0].init.body), { answers: { scope: ["Full"] }, nonce: "n1" });
+assert.equal(answerShown.length, 3, "A sent answer shows nothing more");
+fetchOk = false;
+await fire("notificationclick", {
+  action: "answer:0",
+  notification: { close() {}, data: answerShown[1].options.data },
+});
+assert.equal(answerShown.at(-1).title, "Answer failed, open thread");
+assert.equal(answerShown.at(-1).options.data.url, "https://console.example/#thread=t%201");
 console.log("Notification permission, subscription, push, and thread click checks passed.");

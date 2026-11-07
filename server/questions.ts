@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import {
   type Agent,
   cleanQuestions,
@@ -72,14 +73,50 @@ function buildAnswerEvent(
   };
 }
 
+export interface PushQuestion {
+  id: string;
+  key: string; // id of the question inside the request; keys the answer map
+  text: string;
+  options: string[];
+  nonce?: string;
+}
+
 // Blocking requests belong to a live process; async messages remain answerable after it exits.
 export class Questions {
   private threads = new Map<string, Map<string, PendingQuestion>>();
+  private nonces = new Map<string, string>();
   list(thread: string): PendingQuestion[] {
     return [...(this.threads.get(thread)?.values() ?? [])];
   }
   all() {
     return Object.fromEntries([...this.threads].map(([id]) => [id, this.list(id)]));
+  }
+  // Summary for a push notification. One single-select question with at most two options gets a one-time nonce for tap-to-answer.
+  pushSummary(thread: string, id: string): PushQuestion | undefined {
+    const request = this.threads.get(thread)?.get(id);
+    const first = request?.questions[0];
+    if (!request || !first) return undefined;
+    const summary: PushQuestion = {
+      id,
+      key: first.id,
+      text: first.question.slice(0, 160),
+      options: [],
+    };
+    const simple =
+      request.questions.length === 1 &&
+      !first.multiSelect &&
+      !first.secret &&
+      first.options.length >= 1 &&
+      first.options.length <= 2;
+    if (!simple) return summary;
+    summary.options = first.options.map((option) => option.label.slice(0, 40));
+    summary.nonce = randomBytes(16).toString("base64url");
+    this.nonces.set(`${thread}\n${id}`, summary.nonce);
+    return summary;
+  }
+  nonceMatches(thread: string, id: string, nonce: unknown) {
+    const expected = this.nonces.get(`${thread}\n${id}`);
+    return !!expected && typeof nonce === "string" && nonce === expected;
   }
   add(thread: string, event: any): PendingQuestion {
     if (typeof event.id !== "string" || !event.id || event.id.length > 500)
@@ -100,6 +137,7 @@ export class Questions {
     const pending = this.threads.get(thread);
     const request = pending?.get(id);
     pending?.delete(id);
+    this.nonces.delete(`${thread}\n${id}`);
     if (!pending?.size) this.threads.delete(thread);
     return request;
   }

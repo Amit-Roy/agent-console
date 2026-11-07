@@ -7,6 +7,7 @@ export type ThreadNotice = {
   kind: "finished" | "failed" | "needs_input" | PrNoticeKind;
   thread: string;
   title: string;
+  question?: { id: string; key: string; text: string; options: string[]; nonce?: string };
 };
 export type PrNoticeKind = "shipped" | "checks_failed" | "review_comment";
 export type PrCard = { repo: string; number: number; title: string };
