@@ -9,8 +9,10 @@ const OK_CONCLUSIONS = new Set(["SUCCESS", "NEUTRAL", "SKIPPED"]);
 
 const safeUrl = (url) => (typeof url === "string" && SAFE_URL.test(url) ? url : null);
 
-/** Overall tone of a card: bad, warn or ok. Always shown with a word and icon too. */
+/** Overall tone of a card: merged, closed, bad, warn or ok. Always shown with a word and icon too. */
 export function toneOf(card) {
+  if (card.state === "MERGED") return "merged";
+  if (card.state === "CLOSED") return "closed";
   const counts = card.checkCounts || {};
   if (counts.failed > 0 || card.mergeable === "CONFLICTING" || card.ship?.state === "failed")
     return "bad";
@@ -23,8 +25,22 @@ export function toneOf(card) {
     return "warn";
   return "ok";
 }
-const TONE_WORD = { ok: "Ready", warn: "Pending", bad: "Failing" };
-const TONE_ICON = { ok: "check", warn: "clock", bad: "alert" };
+const TONE_WORD = {
+  ok: "Ready",
+  warn: "Pending",
+  bad: "Failing",
+  merged: "Merged",
+  closed: "Closed",
+};
+const TONE_ICON = {
+  ok: "check",
+  warn: "clock",
+  bad: "alert",
+  merged: "fork",
+  closed: "x",
+};
+const MAX_DONE_INLINE = 2;
+const isDone = (card) => card.state === "MERGED" || card.state === "CLOSED";
 
 /** Failing checks first, then pending, then the rest. */
 export function sortChecks(checks = []) {
@@ -106,10 +122,39 @@ function chip(cockpit, card) {
   return button;
 }
 
+function doneToggle(cockpit, count) {
+  const open = Boolean(cockpit.model.showDone);
+  const button = el("button", "pr-chip pr-done-toggle", open ? "Hide" : `+${count} done`);
+  button.type = "button";
+  button.setAttribute(
+    "aria-label",
+    open ? "Hide merged or closed pull requests" : `${count} merged or closed pull requests, show`,
+  );
+  button.setAttribute("aria-expanded", String(open));
+  button.addEventListener("click", () => {
+    cockpit.model.showDone = !open;
+    renderStrip(cockpit);
+  });
+  return button;
+}
+
+/** Open PRs first (order kept), then merged/closed; more than two done PRs collapse into one toggle chip. */
+function stripChips(cockpit) {
+  const cards = cockpit.model.cards;
+  const live = cards.filter((card) => !isDone(card));
+  const done = cards.filter(isDone);
+  const chips = live.map((card) => chip(cockpit, card));
+  const collapsible = done.length > MAX_DONE_INLINE;
+  if (!collapsible || cockpit.model.showDone)
+    chips.push(...done.map((card) => chip(cockpit, card)));
+  if (collapsible) chips.push(doneToggle(cockpit, done.length));
+  return chips;
+}
+
 function renderStrip(cockpit) {
   const strip = stripEl();
   if (!strip) return;
-  strip.replaceChildren(...cockpit.model.cards.map((card) => chip(cockpit, card)));
+  strip.replaceChildren(...stripChips(cockpit));
   strip.hidden = cockpit.model.cards.length === 0;
 }
 
@@ -131,7 +176,11 @@ function actionButton(cockpit, label, onClick, cls = "btn sm") {
 function checkPhase(check) {
   if (isFailed(check)) return { word: "Failed", iconName: "alert", tone: "bad" };
   if (check.status !== "COMPLETED") return { word: "Pending", iconName: "clock", tone: "warn" };
-  return { word: (check.conclusion || "done").toLowerCase(), iconName: "check", tone: "ok" };
+  return {
+    word: (check.conclusion || "done").toLowerCase(),
+    iconName: "check",
+    tone: "ok",
+  };
 }
 
 async function fetchLog(cockpit, card, check, logId, pre) {
@@ -346,7 +395,13 @@ function wire(cockpit) {
 export function createPrCockpit(deps) {
   const cockpit = {
     deps,
-    model: { thread: null, cards: [], open: null, logs: new Map(), busy: false },
+    model: {
+      thread: null,
+      cards: [],
+      open: null,
+      logs: new Map(),
+      busy: false,
+    },
   };
   const { model } = cockpit;
   wire(cockpit);

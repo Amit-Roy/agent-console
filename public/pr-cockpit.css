@@ -37,6 +37,14 @@
 .pr-chip.bad {
   background: var(--bad-tint);
 }
+.pr-chip.merged {
+  background: var(--accent-tint);
+}
+.pr-chip.closed,
+.pr-done-toggle {
+  background: var(--s2);
+  color: var(--t3);
+}
 .pr-chip:focus-visible,
 .pr-image:focus-visible {
   outline: 2px solid var(--accent);
@@ -64,6 +72,12 @@
 .pr-state.bad,
 .pr-ship-line.failed {
   color: var(--bad);
+}
+.pr-state.merged {
+  color: var(--accent);
+}
+.pr-state.closed {
+  color: var(--t3);
 }
 
 .pr-sheet,
