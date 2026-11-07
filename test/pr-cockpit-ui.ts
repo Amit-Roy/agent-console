@@ -119,7 +119,12 @@ server.stderr.on("data", (chunk) => {
 const errors: string[] = [];
 
 type Call = { method: string; path: string; body: any };
-type View = { page: Page; context: BrowserContext; calls: Call[]; push: (cards: object[]) => void };
+type View = {
+  page: Page;
+  context: BrowserContext;
+  calls: Call[];
+  push: (cards: object[]) => void;
+};
 async function openView(
   viewport: { width: number; height: number },
   scheme: "light" | "dark",
@@ -169,7 +174,9 @@ async function openView(
         body: JSON.stringify(payload),
       });
     if (request.method() === "GET" && tail.startsWith("/log"))
-      return json({ lines: ["FAIL src/a.test.ts", "expected 1 got <script>2</script>"] });
+      return json({
+        lines: ["FAIL src/a.test.ts", "expected 1 got <script>2</script>"],
+      });
     if (request.method() === "GET") return json({ cards: initial });
     return json({ ok: true });
   });
@@ -266,6 +273,47 @@ try {
   await empty.page.locator("#pr-strip").waitFor({ state: "hidden" });
   await empty.context.close();
 
+  // Done PRs: merged with UNKNOWN mergeable reads Merged (not Pending); open first; 3 done collapse.
+  const doneCard = (number: number, state: string) =>
+    card({
+      key: `o/r#${number}`,
+      number,
+      state,
+      mergeable: "UNKNOWN",
+      commentCount: 0,
+    });
+  const done = await openView({ width: 1280, height: 860 }, "dark", false, [
+    doneCard(1, "MERGED"),
+    doneCard(2, "CLOSED"),
+    doneCard(3, "MERGED"),
+    second,
+  ]);
+  const doneChips = done.page.locator("#pr-strip .pr-chip");
+  await doneChips.nth(1).waitFor();
+  await done.page.locator("#pr-strip").screenshot({ path: path.join(shots, "done-strip.png") });
+  assert.equal(await doneChips.count(), 2, "open chip plus collapsed toggle");
+  assert.match((await doneChips.first().getAttribute("aria-label")) || "", /#8, Ready/);
+  const toggle = done.page.locator("#pr-strip .pr-done-toggle");
+  assert.equal((await toggle.textContent()) || "", "+3 done");
+  assert.match(
+    (await toggle.getAttribute("aria-label")) || "",
+    /3 merged or closed pull requests, show/,
+  );
+  await toggle.click();
+  assert.equal(await doneChips.count(), 5, "expanded: open, three done, toggle");
+  await done.page
+    .locator("#pr-strip")
+    .screenshot({ path: path.join(shots, "done-strip-open.png") });
+  const labels = await doneChips.evaluateAll((nodes) =>
+    nodes.map((node) => node.getAttribute("aria-label")),
+  );
+  assert.match(labels[1] || "", /#1, Merged/, "merged is not Pending");
+  assert.match(labels[2] || "", /#2, Closed/);
+  assert.equal(await toggle.textContent(), "Hide");
+  await toggle.click();
+  assert.equal(await doneChips.count(), 2, "collapsed again");
+  await done.context.close();
+
   const view = await openView({ width: 1280, height: 860 }, "dark", false, [card(), second]);
   const { page } = view;
   await page.locator("#pr-strip .pr-chip").nth(1).waitFor();
@@ -342,7 +390,10 @@ try {
   await page.waitForFunction(
     () => !(document.getElementById("pr-ship-dialog") as HTMLDialogElement).open,
   );
-  assert.deepEqual(callsTo(view, "POST", /^\/ship$/).at(-1)?.body, { key: "o/r#7", confirm: true });
+  assert.deepEqual(callsTo(view, "POST", /^\/ship$/).at(-1)?.body, {
+    key: "o/r#7",
+    confirm: true,
+  });
 
   // Ship state arrives over the socket; attention offers "Ask agent to fix".
   view.push([card({ ship: { state: "running", line: "Merging", startedAt: 1 } }), second]);
@@ -367,7 +418,9 @@ try {
   assert.equal(await page.locator("#pr-sheet .pr-ship-line i").count(), 0, "ship line is text");
   await page.locator("#pr-sheet .btn", { hasText: "Ask agent to fix" }).click();
   await page.waitForTimeout(100);
-  assert.deepEqual(callsTo(view, "POST", /^\/ask-fix$/).at(-1)?.body, { key: "o/r#7" });
+  assert.deepEqual(callsTo(view, "POST", /^\/ask-fix$/).at(-1)?.body, {
+    key: "o/r#7",
+  });
   await page.keyboard.press("Escape");
   await page
     .locator("#pr-sheet[open]")
