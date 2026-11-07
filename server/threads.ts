@@ -476,6 +476,24 @@ function clipResultBlock(block: any) {
 function projectHistoryLine(_line: number, entry: any) {
   return NOISE.has(kindOf(entry)) ? null : historyWireEvent(clipToolResults(entry));
 }
+export { projectHistoryLine };
+
+// Bump when projectHistoryLine or history-wire output changes in a way NOISE/RESULT_CLIP do not capture; persisted views are keyed on it.
+// test/history-projection-contract.ts pins the output so a forgotten bump fails.
+export const HISTORY_PROJECTION_VERSION = 1;
+export const HISTORY_PROJECTION = {
+  key: crypto
+    .createHash("sha256")
+    .update(
+      JSON.stringify({
+        version: HISTORY_PROJECTION_VERSION,
+        noise: [...NOISE].sort(),
+        resultClip: RESULT_CLIP,
+      }),
+    )
+    .digest("hex"),
+  project: projectHistoryLine,
+};
 
 // Too big: begin at the earliest later user message that fits, else just the newest PAGE events (mid-turn, like an unaligned page).
 function pageCut(
@@ -1688,9 +1706,9 @@ export class Threads {
     const file = logFile(threadId);
     const delta =
       since != null && before == null
-        ? this.historyIndex.after(file, since, PAGE, projectHistoryLine)
+        ? this.historyIndex.after(file, since, PAGE, HISTORY_PROJECTION)
         : null;
-    const page = delta || this.historyIndex.read(file, before, limit, projectHistoryLine);
+    const page = delta || this.historyIndex.read(file, before, limit, HISTORY_PROJECTION);
     // Cached wire values are shared between pages: they are only read, never mutated.
     let items = (page.items ?? []).map(({ line, value, size }) => ({ line, e: value, size }));
     const { items: _items, ...pageFields } = page;
