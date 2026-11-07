@@ -80,7 +80,8 @@ async function open(
 async function checkFixButtons(page: any, name: string, width: number) {
   const rows = page.locator("#trivy-rows .hrow.tgt");
   for (let rowIndex = 0; rowIndex < (await rows.count()); rowIndex++)
-    if ((await rows.nth(rowIndex).getAttribute("aria-expanded")) !== "true") await rows.nth(rowIndex).click();
+    if ((await rows.nth(rowIndex).getAttribute("aria-expanded")) !== "true")
+      await rows.nth(rowIndex).click();
   await page.locator("#falco-rows .hrow.tgt", { hasText: "Write below etc" }).click();
   const fixUrl = (scanId: string, kind: string, key: string) =>
     `/?fix_scan=${encodeURIComponent(scanId)}&fix_kind=${kind}&fix_key=${encodeURIComponent(key)}`;
@@ -108,7 +109,8 @@ async function checkFixButtons(page: any, name: string, width: number) {
     const bad: string[] = [];
     for (const node of document.querySelectorAll("#hm *")) {
       const rect = (node as HTMLElement).getBoundingClientRect();
-      if (rect.width && rect.right > maxWidth + 0.5) bad.push(`${node.tagName}.${(node as HTMLElement).className}`);
+      if (rect.width && rect.right > maxWidth + 0.5)
+        bad.push(`${node.tagName}.${(node as HTMLElement).className}`);
     }
     return bad.slice(0, 3).join(",");
   }, width);

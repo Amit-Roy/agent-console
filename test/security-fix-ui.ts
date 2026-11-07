@@ -140,7 +140,7 @@ try {
   await page.waitForFunction(() => /fix CVE-1/.test(document.querySelector("#input")?.value || ""));
   assert.deepEqual(created.sends, [], "nothing sent");
   assert.deepEqual(created.errors, []);
-  let threads = JSON.parse(fs.readFileSync(path.join(data, "threads.json"), "utf8"));
+  const threads = JSON.parse(fs.readFileSync(path.join(data, "threads.json"), "utf8"));
   assert.equal(threads.length, 1);
   assert.equal(threads[0].title, "Fix CVE-1", "title passed to create");
   await page.close();

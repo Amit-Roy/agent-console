@@ -2,9 +2,9 @@ import { execFile } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import express from "express";
-import { buildFixPrompt, FIX_KINDS, type FixKind, fixTitle, KeyNotFound } from "./security-fix.ts";
 import { createSecAutomations, type SecAutomations, statusKeyFile } from "./sec-automations.ts";
 import { createSecCrashes, type SecCrashes } from "./sec-crashes.ts";
+import { buildFixPrompt, FIX_KINDS, type FixKind, fixTitle, KeyNotFound } from "./security-fix.ts";
 import { createToolWatch, RemoteError, type ToolWatch } from "./tool-watch.ts";
 
 // Security scans run on the VPS host (clamav, falco, trivy, nmap). This workspace only reads their
