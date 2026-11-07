@@ -90,7 +90,10 @@ function mockQuestionScript(run: MockRun) {
           question: "How much should I review?",
           options: [
             { label: "Quick pass", description: "Focus on the changed code." },
-            { label: "Full review", description: "Review the complete implementation." },
+            {
+              label: "Full review",
+              description: "Review the complete implementation.",
+            },
           ],
           allowOther: true,
         },
@@ -99,10 +102,41 @@ function mockQuestionScript(run: MockRun) {
           header: "Checks",
           question: "Which checks should I run?",
           options: [
-            { label: "Tests", description: "Run the relevant automated checks." },
-            { label: "Screenshots", description: "Inspect desktop and mobile layouts." },
+            {
+              label: "Tests",
+              description: "Run the relevant automated checks.",
+            },
+            {
+              label: "Screenshots",
+              description: "Inspect desktop and mobile layouts.",
+            },
           ],
           multiSelect: true,
+          allowOther: true,
+        },
+      ],
+    }),
+  );
+}
+
+function mockPermissionScript(run: MockRun) {
+  run.questionId = `fixture-permission-${crypto.randomUUID()}`;
+  const questionId = run.questionId;
+  mockAt(run, 10, () =>
+    run.ctx.event({
+      type: "question",
+      id: questionId,
+      tool_use_id: "perm1",
+      permission: {
+        tool: "Bash",
+        input: { command: "npm test -- --run", description: "Run tests" },
+      },
+      questions: [
+        {
+          id: "0",
+          header: "Permission",
+          question: "Allow Bash?",
+          options: [{ label: "Allow once" }, { label: "Allow for this thread" }, { label: "Deny" }],
           allowOther: true,
         },
       ],
@@ -119,7 +153,12 @@ function mockSlowScript(run: MockRun) {
 function mockFailScript(run: MockRun) {
   mockAt(run, 20, () => {
     run.ctx.event({ type: "console_error", text: "mock failure" });
-    run.ctx.event({ type: "result", subtype: "error", is_error: true, duration_ms: 20 });
+    run.ctx.event({
+      type: "result",
+      subtype: "error",
+      is_error: true,
+      duration_ms: 20,
+    });
   });
 }
 
@@ -190,12 +229,22 @@ function mockAgentScript(run: MockRun) {
   );
   mockAt(run, 70, () =>
     mockSubagentMessage(run, "assistant", [
-      { type: "tool_use", id: "s1", name: "Bash", input: { command: "ls -la" } },
+      {
+        type: "tool_use",
+        id: "s1",
+        name: "Bash",
+        input: { command: "ls -la" },
+      },
     ]),
   );
   mockAt(run, 90, () =>
     mockSubagentMessage(run, "user", [
-      { type: "tool_result", tool_use_id: "s1", content: "total 8", is_error: false },
+      {
+        type: "tool_result",
+        tool_use_id: "s1",
+        content: "total 8",
+        is_error: false,
+      },
     ]),
   );
   mockAt(run, 100, () =>
@@ -230,7 +279,14 @@ function mockToolScript(run: MockRun, reply: string) {
       type: "assistant",
       message: {
         role: "assistant",
-        content: [{ type: "tool_use", id: "t1", name: "Bash", input: { command: "echo hello" } }],
+        content: [
+          {
+            type: "tool_use",
+            id: "t1",
+            name: "Bash",
+            input: { command: "echo hello" },
+          },
+        ],
       },
     }),
   );
@@ -239,7 +295,14 @@ function mockToolScript(run: MockRun, reply: string) {
       type: "user",
       message: {
         role: "user",
-        content: [{ type: "tool_result", tool_use_id: "t1", content: "hello", is_error: false }],
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "t1",
+            content: "hello",
+            is_error: false,
+          },
+        ],
       },
     }),
   );
@@ -289,6 +352,7 @@ function mockReplyText(thread: ThreadSpec, text: string, images: Attachment[]): 
 // First matching prefix wins; anything else is echoed back.
 const MOCK_SCRIPTS: [string, (run: MockRun, reply: string) => void][] = [
   ["question", (run) => mockQuestionScript(run)],
+  ["permission", (run) => mockPermissionScript(run)],
   ["slow", (run) => mockSlowScript(run)],
   ["fail", (run) => mockFailScript(run)],
   ["agent", (run) => mockAgentScript(run)],

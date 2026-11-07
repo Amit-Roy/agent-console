@@ -1,3 +1,4 @@
+import { renderPermission } from "./permission-card.js";
 import { el, icon } from "./render.js";
 
 // Question drafts belong to the request, so thread refreshes and socket reconnects cannot erase them.
@@ -162,7 +163,11 @@ function acknowledgeAnswer(ctx, message, entry) {
   if (entry.answer) return; // The canonical transcript answer can arrive before its acknowledgment.
   const submitted = { ...entry.submitted };
   if (submitted.answers) submitted.answers = maskSecretAnswers(entry, submitted.answers);
-  receive(ctx, message.thread, { type: "question_answer", id: message.id, ...submitted });
+  receive(ctx, message.thread, {
+    type: "question_answer",
+    id: message.id,
+    ...submitted,
+  });
 }
 
 function reply(ctx, message) {
@@ -175,6 +180,11 @@ function reply(ctx, message) {
   }
   entry.error = message.message || "Could not send your answer. Try again.";
   redraw(ctx, entry);
+}
+
+function submitPermission(ctx, entry, label, text) {
+  entry.drafts["0"] = text ? { selected: [], other: true, text } : { selected: [label] };
+  submit(ctx, entry);
 }
 
 function submit(ctx, entry, skip = false) {
@@ -213,7 +223,10 @@ function buildAnswerList(questions, answer) {
   const list = el("dl", "question-answers");
   const rows = questions.length
     ? questions
-    : Object.keys(answer.answers).map((rowId) => ({ id: rowId, header: rowId }));
+    : Object.keys(answer.answers).map((rowId) => ({
+        id: rowId,
+        header: rowId,
+      }));
   for (const question of rows) {
     const text = summaryAnswerText(question, answer.answers[question.id]);
     list.append(el("dt", "", question.header || question.question || "Answer"), el("dd", "", text));
@@ -472,6 +485,10 @@ function render(ctx, card, entry) {
   const questions = entry.event.questions || [];
   if (!entry.active) {
     renderSummary(card, entry, questions);
+    return;
+  }
+  if (entry.event.permission) {
+    renderPermission(ctx, card, entry, (label, text) => submitPermission(ctx, entry, label, text));
     return;
   }
   entry.step = Math.max(0, Math.min(entry.step, questions.length - 1));

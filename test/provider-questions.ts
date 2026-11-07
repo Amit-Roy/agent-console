@@ -23,6 +23,7 @@ const control = claudeControl(
   (m) => writes.push(m),
   (e) => events.push(e),
   "acceptEdits",
+  { interactive: false },
 );
 const askClaude = (id: string) =>
   control.handle({
@@ -42,7 +43,13 @@ assert.deepEqual(writes.at(-1).response.response.updatedInput.answers, {
 });
 assert.throws(() => control.answer("claude-1", { answers: {} }), /no longer/);
 askClaude("claude-note");
-assert.equal(control.answer("claude-note", { answers: {}, note: "Follow my latest brief" }), true);
+assert.equal(
+  control.answer("claude-note", {
+    answers: {},
+    note: "Follow my latest brief",
+  }),
+  true,
+);
 assert.match(writes.at(-1).response.response.message, /Follow my latest brief/);
 askClaude("claude-skip");
 control.answer("claude-skip", { answers: {}, skip: true });
@@ -53,12 +60,96 @@ assert.equal(events.at(-1).cancelled, true);
 askClaude("claude-stop");
 control.cancelAll();
 assert.equal(control.pending.size, 0);
-control.handle({
-  type: "control_request",
-  request_id: "permission",
-  request: { subtype: "can_use_tool", tool_name: "Bash", input: { command: "rm file" } },
+const bash = (id: string, tool = "Bash") =>
+  control.handle({
+    type: "control_request",
+    request_id: id,
+    request: {
+      subtype: "can_use_tool",
+      tool_name: tool,
+      input: { command: "rm file" },
+      tool_use_id: `u-${id}`,
+    },
+  });
+const lastReply = () => writes.at(-1).response.response;
+// non-interactive (issue runs, schedules): denied as before
+bash("permission");
+assert.equal(lastReply().behavior, "deny");
+assert.equal(control.pending.size, 0);
+
+const perm = claudeControl(
+  (m) => writes.push(m),
+  (e) => events.push(e),
+  "acceptEdits",
+  { interactive: true },
+);
+const permBash = (id: string, tool = "Bash") =>
+  perm.handle({
+    type: "control_request",
+    request_id: id,
+    request: {
+      subtype: "can_use_tool",
+      tool_name: tool,
+      input: { command: "ls" },
+      tool_use_id: id,
+    },
+  });
+permBash("p1");
+const card = events.at(-1);
+assert.equal(card.type, "question");
+assert.equal(card.permission.tool, "Bash");
+assert.deepEqual(card.permission.input, { command: "ls" });
+assert.deepEqual(
+  card.questions[0].options.map((o: any) => o.label),
+  ["Allow once", "Allow for this thread", "Deny"],
+);
+assert.equal(perm.answer("p1", { answers: { "0": ["Allow once"] } }), false);
+assert.deepEqual(lastReply(), {
+  behavior: "allow",
+  updatedInput: { command: "ls" },
 });
-assert.equal(writes.at(-1).response.response.behavior, "deny");
+permBash("p2"); // allow once does not stick
+assert.equal(events.at(-1).id, "p2");
+perm.answer("p2", { answers: { "0": ["Allow for this thread"] } });
+assert.equal(lastReply().behavior, "allow");
+const before = events.length;
+permBash("p3"); // now auto-allowed, no card
+assert.equal(events.length, before);
+assert.equal(lastReply().behavior, "allow");
+permBash("p4", "Edit");
+perm.answer("p4", { answers: { "0": ["Wrong files"] } });
+assert.deepEqual(lastReply(), {
+  behavior: "deny",
+  message: "The user denied Edit: Wrong files",
+});
+permBash("p5", "Edit");
+perm.answer("p5", { answers: {}, skip: true });
+assert.deepEqual(lastReply(), {
+  behavior: "deny",
+  message: "The user denied Edit.",
+});
+permBash("p6", "Edit");
+perm.answer("p6", { answers: { "0": ["Deny"] } });
+assert.equal(lastReply().message, "The user denied Edit.");
+permBash("p7", "Edit");
+assert.equal(perm.answer("p7", { answers: {}, note: "see chat" }), true);
+assert.match(lastReply().message, /see chat/);
+const beforePlan = events.length;
+permBash("p8", "ExitPlanMode");
+assert.equal(events.length, beforePlan);
+assert.equal(lastReply().behavior, "deny");
+const seeded = claudeControl(
+  (m) => writes.push(m),
+  (e) => events.push(e),
+  "acceptEdits",
+  { interactive: true, allowed: ["Bash"] },
+);
+seeded.handle({
+  type: "control_request",
+  request_id: "s1",
+  request: { subtype: "can_use_tool", tool_name: "Bash", input: {} },
+});
+assert.equal(lastReply().behavior, "allow");
 
 const native = codexQuestion("item/tool/requestUserInput", {
   questions: [question, { id: "secret", question: "Private?", options: null, isSecret: true }],
@@ -119,11 +210,21 @@ const pi = piQuestions(
   (e) => events.push(e),
 );
 const dialog = (id: string, method = "input", extra: any = {}) =>
-  pi.handle({ type: "extension_ui_request", id, method, title: "Pick a scope", ...extra });
+  pi.handle({
+    type: "extension_ui_request",
+    id,
+    method,
+    title: "Pick a scope",
+    ...extra,
+  });
 dialog("input");
 assert.equal(events.at(-1).questions[0].allowOther, true);
 assert.equal(pi.answer("pi-input", { answers: {}, note: "My brief" }), true);
-assert.deepEqual(writes.at(-1), { type: "extension_ui_response", id: "input", value: "My brief" });
+assert.deepEqual(writes.at(-1), {
+  type: "extension_ui_response",
+  id: "input",
+  value: "My brief",
+});
 dialog("select", "select", { options: ["Quick", "Full"] });
 assert.deepEqual(events.at(-1).questions[0].options, [{ label: "Quick" }, { label: "Full" }]);
 pi.answer("pi-select", { answers: { answer: ["Full"] } });
@@ -161,7 +262,9 @@ const toolResult = tool.execute(
     },
   },
 );
-assert.deepEqual(JSON.parse((await toolResult).content[0].text), { answers: { scope: ["Full"] } });
+assert.deepEqual(JSON.parse((await toolResult).content[0].text), {
+  answers: { scope: ["Full"] },
+});
 dialog("tool-cancel", "input", {
   title: QUESTION_DIALOG,
   placeholder: JSON.stringify({
@@ -204,7 +307,12 @@ if(m.id==='ask'&&m.result){send({method:'item/completed',params:{threadId:thread
   const make = () => {
     const log: any[] = [];
     const agent = codex.start(
-      { id: "provider-fixture", cwd: dir, mode: "bypassPermissions", model: "default" },
+      {
+        id: "provider-fixture",
+        cwd: dir,
+        mode: "bypassPermissions",
+        model: "default",
+      },
       { event: (e) => log.push(e), commands() {}, exited() {} },
     );
     agents.push(agent);

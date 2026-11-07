@@ -45,7 +45,12 @@ PROVIDERS.set("question-fixture", {
         ctx.exited({ code: null, signal: "SIGINT", stderr: "", aborted: true });
       },
       kill() {
-        ctx.exited({ code: null, signal: "SIGTERM", stderr: "", aborted: true });
+        ctx.exited({
+          code: null,
+          signal: "SIGTERM",
+          stderr: "",
+          aborted: true,
+        });
       },
     };
   },
@@ -53,7 +58,11 @@ PROVIDERS.set("question-fixture", {
 const events: any[] = [];
 const threads = new Threads((m) => events.push(structuredClone(m)));
 const create = () => {
-  const t = threads.create({ provider: "question-fixture", cwd: data, title: "Question fixture" });
+  const t = threads.create({
+    provider: "question-fixture",
+    cwd: data,
+    title: "Question fixture",
+  });
   threads.send(t.id, "begin");
   return t;
 };
@@ -105,14 +114,24 @@ try {
   );
   rejected(t, "request", null);
   rejected(t, "request", { scope: ["Quick pass"] });
-  rejected(t, "request", { scope: ["Quick pass", "Full review"], checks: ["Tests"] });
+  rejected(t, "request", {
+    scope: ["Quick pass", "Full review"],
+    checks: ["Tests"],
+  });
   rejected(t, "request", { scope: ["Quick pass"], checks: ["Unknown choice"] });
   rejected(t, "request", { scope: ["Quick pass"], checks: ["Tests", "Tests"] });
   rejected(t, "request", { scope: ["   "], checks: ["Tests"] });
-  rejected(t, "request", { scope: ["Quick pass"], checks: ["Tests"], injected: ["unexpected"] });
+  rejected(t, "request", {
+    scope: ["Quick pass"],
+    checks: ["Tests"],
+    injected: ["unexpected"],
+  });
   assert.throws(() => threads.answer(t.id, "stale", { scope: ["Quick pass"], checks: ["Tests"] }));
   assert.equal(calls.length, 0);
-  const chosen = { scope: ["Review just the changed lines"], checks: ["Tests", "Screenshots"] };
+  const chosen = {
+    scope: ["Review just the changed lines"],
+    checks: ["Tests", "Screenshots"],
+  };
   finishInAnswer = true;
   threads.answer(t.id, "request", chosen);
   assert.deepEqual(
@@ -207,7 +226,10 @@ try {
   ask(unavailable, "unavailable");
   accept = false;
   assert.throws(() =>
-    threads.answer(unavailable.id, "unavailable", { scope: ["Quick pass"], checks: ["Tests"] }),
+    threads.answer(unavailable.id, "unavailable", {
+      scope: ["Quick pass"],
+      checks: ["Tests"],
+    }),
   );
   assert.equal(
     calls.length,
@@ -222,7 +244,10 @@ try {
   assert.equal(answerEvents(unavailable.id).length, 0);
   accept = true;
   consumed = false; // false means no ordinary chat note was consumed; structured replies still succeed.
-  threads.answer(unavailable.id, "unavailable", { scope: ["Quick pass"], checks: ["Tests"] });
+  threads.answer(unavailable.id, "unavailable", {
+    scope: ["Quick pass"],
+    checks: ["Tests"],
+  });
   assert.equal(answerEvents(unavailable.id).length, 1);
   assert.deepEqual(threads.getQuestions(unavailable.id), []);
   consumed = true;
@@ -233,7 +258,12 @@ try {
     if (exit === "abort") threads.abort(t.id);
     if (exit === "result") contexts.get(t.id).event({ type: "result", subtype: "success" });
     if (exit === "process")
-      contexts.get(t.id).exited({ code: 1, signal: null, stderr: "fixture exit", aborted: false });
+      contexts.get(t.id).exited({
+        code: 1,
+        signal: null,
+        stderr: "fixture exit",
+        aborted: false,
+      });
     assert.deepEqual(threads.getQuestions(t.id), [], `${exit} clears pending requests`);
     assert.equal(t.waiting, undefined);
     assert.equal(t.status, "idle");
@@ -253,6 +283,31 @@ try {
       assert.equal(events.length, before, "events from an aborted process are ignored");
     }
   }
+  const permThread = create();
+  contexts.get(permThread.id).event({
+    type: "question",
+    id: "perm-1",
+    permission: { tool: "Bash", input: { command: "ls" } },
+    questions: [
+      {
+        id: "0",
+        header: "Permission",
+        question: "Allow Bash?",
+        options: [{ label: "Allow once" }, { label: "Allow for this thread" }, { label: "Deny" }],
+        allowOther: true,
+      },
+    ],
+  });
+  assert.equal(threads.getQuestions(permThread.id)[0].permission?.tool, "Bash");
+  threads.answer(permThread.id, "perm-1", { "0": ["Allow for this thread"] });
+  assert.deepEqual(permThread.allowedTools, ["Bash"]);
+  const saved = JSON.parse(fs.readFileSync(path.join(data, "threads.json"), "utf8"));
+  assert.deepEqual(saved.find((x: any) => x.id === permThread.id).allowedTools, ["Bash"]);
+  const reloaded = new Threads(() => {});
+  assert.deepEqual(reloaded.get(permThread.id)?.allowedTools, ["Bash"], "rule survives restart");
+  reloaded.shutdown();
+  threads.clearToolRules(permThread.id);
+  assert.equal(permThread.allowedTools, undefined);
   console.log(
     "PASS questions: full validation, custom/multiple choices, native continuation exactly once, skip, reopen/reconnect state and terminal cleanup",
   );

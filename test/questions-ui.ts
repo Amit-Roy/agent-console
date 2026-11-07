@@ -372,6 +372,26 @@ try {
       fullPage: true,
     });
   assert.equal(await replayPage.locator(".question-summary").count(), 1, "one Answered summary");
+  // Tool-permission card: one tap answers and closes it.
+  ws.send(JSON.stringify({ t: "send", thread: replayId, text: "permission" }));
+  const permEvent = (
+    await wait((m) => m.t === "event" && m.thread === replayId && m.event.type === "question")
+  ).event;
+  assert.equal(permEvent.permission.tool, "Bash");
+  const permCard = replayPage.locator(`.question-card[data-question-id="${permEvent.id}"]`);
+  await permCard.getByRole("button", { name: "Allow once", exact: true }).waitFor();
+  assert.equal(await permCard.locator(".permission-input").count(), 1);
+  if (process.env.REPLAY_SHOT)
+    await replayPage.screenshot({
+      path: process.env.REPLAY_SHOT.replace(/\.png$/, "-permission.png"),
+    });
+  await permCard.getByRole("button", { name: "Allow once", exact: true }).tap();
+  await wait((m) => m.t === "event" && m.thread === replayId && m.event.type === "result");
+  await replayPage
+    .locator(".question-card.question-summary", { hasText: "Answered" })
+    .first()
+    .waitFor();
+  assert.equal(await permCard.getByRole("button", { name: "Allow once" }).count(), 0);
   assert.deepEqual(replayErrors, []);
   await replayCtx.close();
   console.log("PASS 390px reconnect replay mounts a single question card");
