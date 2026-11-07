@@ -419,7 +419,7 @@
         {"id":"vc-worker","label":"Voice worker","tech":"server/voice.ts","desc":"Queue of one with 30 s timeout, lazy model load, unload after 10 min idle, worker thread with 2 threads","icon":"cpu","status":"added"},
         {"id":"vc-ffmpeg","label":"ffmpeg decode","tech":"ffmpeg","desc":"stdin to stdout, 16 kHz mono float, no temp files; audio is never stored or logged","icon":"audio-lines","status":"added"},
         {"id":"vc-model","label":"sherpa-onnx + Parakeet","tech":"sherpa-onnx-node","desc":"Parakeet TDT 0.6b v2 int8 English, fetched by scripts/voice-models.sh; doctor reports presence","icon":"brain","status":"added"},
-        {"id":"vc-sw","label":"Push answer actions","tech":"public/sw.js","desc":"needs_input push carries the question and up to two option buttons with a one-time nonce; tap posts to /api/questions/:thread/:id/answer","icon":"bell-ring","status":"added"}
+        {"id":"vc-sw","label":"Push answer actions","tech":"public/sw.js","desc":"Push shows up to two option buttons with a one-time nonce; a tap posts the answer","icon":"bell-ring","status":"added"}
       ]
     }
   ],
@@ -662,7 +662,6 @@
     {"from":"vc-route","to":"vc-ffmpeg","label":"decode in memory","status":"added"},
     {"from":"vc-ffmpeg","to":"vc-worker","label":"float samples","status":"added"},
     {"from":"vc-worker","to":"vc-model","label":"recognize","status":"added"},
-    {"from":"vc-route","to":"vc-mic","label":"transcript","status":"added"},
     {"from":"vc-sw","to":"perm-questions","label":"answer with nonce","status":"added"}
   ]
 }
