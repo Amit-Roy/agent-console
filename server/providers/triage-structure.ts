@@ -1,5 +1,10 @@
 import { completeLabel } from "./small-model.ts";
-import type { EffortQuantiles, EffortQuote } from "./triage-effort.ts";
+import {
+  type EffortQuantiles,
+  type EffortQuote,
+  requestShape,
+  type SHAPE_FEATURES,
+} from "./triage-effort.ts";
 
 export interface StructureFlags {
   hasFilePath: boolean;
@@ -16,8 +21,13 @@ export interface StructureExtraction {
   /** True when the repository description, not the request, supplied expected output or a check. */
   inferredFromRepo: boolean;
 }
+export type ShapeBuckets = Record<(typeof SHAPE_FEATURES)[number], number>;
 export interface StructureQuote {
   flags: StructureFlags;
+  /** Request-shape buckets (0..3) from the same text; stored so every run shows them. */
+  shape: ShapeBuckets;
+  /** Quantile the budget starts from: P80 for complete scope, P95 when routed by policy. */
+  basis: "p80" | "p95";
   /** Recommended token budget after pricing missing structure; null when no token total exists. */
   budget: number | null;
   /** The first missing item, re-priced as if present. Null when nothing is missing or priced. */
@@ -35,11 +45,13 @@ export interface StructureQuote {
 }
 
 /** Ordered by how cheaply a requester can add the item. */
-const FLAGS: { flag: keyof StructureFlags; label: string }[] = [
-  { flag: "hasFilePath", label: "a file path" },
-  { flag: "hasExpectedOutput", label: "the expected output" },
-  { flag: "hasAcceptanceCheck", label: "an acceptance check" },
+const FLAGS: { flag: keyof StructureFlags; label: string; noun: string }[] = [
+  { flag: "hasFilePath", label: "a file path", noun: "file path" },
+  { flag: "hasExpectedOutput", label: "the expected output", noun: "expected output" },
+  { flag: "hasAcceptanceCheck", label: "an acceptance check", noun: "acceptance check" },
 ];
+/** Shape buckets that raise cost, in tie-break order. References lower cost, so they never drive it. */
+const COSTLY_SHAPE = ["requestSize", "requestLines", "requestActions"] as const;
 const DRIVER_LABELS: Record<string, string> = {
   requestSize: "request length",
   requestLines: "number of lines",
@@ -191,6 +203,28 @@ export async function extractStructure(request: StructureRequest): Promise<Struc
   }
 }
 
+const listOr = (items: string[]): string =>
+  items.length > 1 ? `${items.slice(0, -1).join(", ")} or ${items.at(-1)}` : (items[0] ?? "");
+
+/** Missing structure first; then the largest ridge term; tree quotes fall back to the costliest shape bucket. */
+function costDriverOf(
+  missing: typeof FLAGS,
+  price: EffortQuote,
+  shape: ShapeBuckets,
+): string | null {
+  if (missing.length) return `no ${listOr(missing.map((item) => item.noun))}`;
+  // Ridge contributions do not explain tree prices, so tree quotes skip them.
+  const driver =
+    price.method === "boosted-trees-quantile-v1"
+      ? undefined
+      : price.contributions
+          .filter((item) => item.logWork > 0)
+          .sort((a, b) => b.logWork - a.logWork)[0];
+  if (driver) return DRIVER_LABELS[driver.feature] ?? null;
+  const costliest = COSTLY_SHAPE.reduce((best, name) => (shape[name] > shape[best] ? name : best));
+  return DRIVER_LABELS[costliest];
+}
+
 const MISSING_RESERVE_STEPS = FLAGS.length;
 /** Every missing item moves the budget one third of the way from P80 to P95. */
 const priceMissing = (total: EffortQuantiles, missing: number): number =>
@@ -204,23 +238,24 @@ export function quoteStructure(
   const flags = extraction?.flags ?? requestStructure(text);
   const inferredFromRepo = extraction?.inferredFromRepo ?? false;
   const missing = FLAGS.filter(({ flag }) => !flags[flag]);
-  // Ridge contributions do not explain tree prices, so tree quotes name no driver.
-  const driver =
-    price.method === "boosted-trees-quantile-v1"
-      ? undefined
-      : price.contributions
-          .filter((item) => item.logWork > 0)
-          .sort((a, b) => b.logWork - a.logWork)[0];
-  const costDriver = driver ? (DRIVER_LABELS[driver.feature] ?? null) : null;
-  if (!price.total)
-    return { flags, budget: null, counterfactual: null, costDriver, inferredFromRepo };
+  const shape = Object.fromEntries(
+    Object.entries(requestShape(text)).map(([name, bucket]) => [name, bucket.value]),
+  ) as ShapeBuckets;
+  const basis = price.recommendedBudget;
+  const base = {
+    flags,
+    shape,
+    basis,
+    costDriver: costDriverOf(missing, price, shape),
+    inferredFromRepo,
+  };
+  if (!price.total) return { ...base, budget: null, counterfactual: null };
   // Already routed to the P95 reserve: missing structure cannot add more.
-  if (price.recommendedBudget === "p95")
-    return { flags, budget: price.total.p95, counterfactual: null, costDriver, inferredFromRepo };
+  if (basis === "p95") return { ...base, budget: price.total.p95, counterfactual: null };
   // The model's pick of the highest-impact missing item wins; otherwise the cheapest to add.
   const first = missing.find(({ flag }) => flag === extraction?.missing) ?? missing[0];
   return {
-    flags,
+    ...base,
     budget: priceMissing(price.total, missing.length),
     counterfactual: first
       ? {
@@ -232,7 +267,5 @@ export function quoteStructure(
             : {}),
         }
       : null,
-    costDriver,
-    inferredFromRepo,
   };
 }

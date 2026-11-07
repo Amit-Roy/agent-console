@@ -4,7 +4,7 @@ import {
   METRIC_MAX,
   type MetricName,
 } from "../server/providers/triage-scorecard.ts";
-import { requestStructure } from "../server/providers/triage-structure.ts";
+import { quoteStructure, requestStructure } from "../server/providers/triage-structure.ts";
 import {
   renderTriageComment,
   safeTriageText,
@@ -447,6 +447,91 @@ assert.ok(
   renderTriageComment(ridgeDecision)
     .split("<details>")[0]
     .includes("Initial-request features have not established predictive value."),
+);
+
+// Issue #173: both comments lead with the labelled budget, the typical figure and a cost driver
+// from the same pricing model, and the scorecard stores every structure feature.
+for (const text of [sparseText, structuredText]) {
+  const lead = text.split("### Book of work")[0];
+  assert.ok(/Recommended budget: \*\*[\d.]+[KM]?\*\* tokens \(P80\)\./.test(lead), lead);
+  assert.ok(/Typical: \*\*[\d.]+[KM]?\*\* \(P50\)\./.test(lead), lead);
+  assert.ok(/Biggest cost driver: .+\./.test(lead), lead);
+}
+assert.ok(
+  sparseText.includes("Biggest cost driver: no file path, expected output or acceptance check."),
+);
+assert.ok(
+  structuredText.includes(
+    "No missing structure item: the request names a file path, the expected output and an acceptance check.",
+  ),
+);
+for (const run of [sparse, structured]) {
+  const stored = run.scorecard.structure!;
+  for (const name of [
+    "requestSize",
+    "requestLines",
+    "requestReferences",
+    "requestActions",
+  ] as const)
+    assert.ok(Number.isInteger(stored.shape[name]), name);
+  for (const name of ["hasFilePath", "hasExpectedOutput", "hasAcceptanceCheck"] as const)
+    assert.equal(typeof stored.flags[name], "boolean");
+}
+assert.deepEqual(sparse.scorecard.structure!.shape, {
+  requestSize: 0,
+  requestLines: 0,
+  requestReferences: 0,
+  requestActions: 1,
+});
+assert.ok(
+  structuredText.includes(
+    "Request structure: requestSize 2/3, requestLines 2/3, requestReferences 2/3, requestActions 2/3; hasFilePath yes, hasExpectedOutput yes, hasAcceptanceCheck yes.",
+  ),
+);
+// Tree quotes have no ridge contributions, so the driver falls back to the request shape.
+const treePricing = structuredClone(structured.scorecard.pricing);
+treePricing.method = "boosted-trees-quantile-v1";
+assert.equal(
+  quoteStructure(
+    "Fix retry in `server/queue.ts`\nUpdate `server/queue.ts` so failed jobs retry once.\nExpected: the job shows as done in the list.\nAcceptance: `npm test` passes with a retry case.",
+    treePricing,
+  ).costDriver,
+  "request length",
+);
+// Experimental status and the residual note sit with the P50/P80/P95 table in a collapsed block.
+for (const text of [sparseText, structuredText]) {
+  const accounting = text.split("<details><summary>Token accounting and model check</summary>")[1];
+  assert.ok(accounting, "Accounting block is collapsed");
+  const block = accounting.split("</details>")[0];
+  assert.ok(block.includes("| P50 |") && block.includes("| P80 |") && block.includes("| P95 |"));
+  assert.ok(block.includes("Status: experimental."));
+  assert.ok(
+    block.includes(
+      "Residual note: the model is experimental and its intervals under-cover. Newest sessions run longer than the older residuals behind these quotes, so they are historical scenarios without calibrated coverage.",
+    ),
+  );
+  assert.ok(!text.split("<details>")[0].includes("| P50 |"));
+}
+// Changing only the token estimates leaves the effort label unchanged.
+const costlier = structuredClone(fixtureEffortModel);
+if (costlier.status !== "ready") throw Error("Synthetic effort fixture is invalid.");
+costlier.model.workload.intercept = Math.log(2000);
+const repriced = deriveAssessment(
+  {
+    metrics: Object.fromEntries(
+      Object.keys(METRIC_MAX).map((name) => [name, { value: 1, evidence: "Request" }]),
+    ) as typeof metrics,
+    work: [{ step: "Inspect the request.", check: "Result is recorded." }],
+  },
+  { title: "fix this", body: "" },
+  costlier,
+)!;
+assert.ok(repriced.scorecard.pricing.total!.p50 > 100 * sparse.scorecard.pricing.total!.p50);
+assert.equal(repriced.effort, sparse.effort);
+const effortLine = (text: string) => text.split("\n").find((line) => line.startsWith("**Eff:"));
+assert.equal(
+  effortLine(renderTriageComment({ ...repriced, model: "pi/test" })),
+  effortLine(sparseText),
 );
 
 console.log("triage-comment: pass");
