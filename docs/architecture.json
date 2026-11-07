@@ -610,6 +610,6 @@
     {"from":"pr-signal","to":"pr-store","label":"debounced refresh, push if changed","status":"added"},
     {"from":"pr-ship","to":"pr-store","label":"ship state on card","status":"added"},
     {"from":"history-snapshot","to":"history-view-cache","label":"reuse clipped large lines"},
-    {"from":"history-view-cache","to":"history-cache","label":"persist and restore view sidecar","status":"added"}
+    {"from":"history-view-cache","to":"history-cache","label":"view sidecar","status":"added"}
   ]
 }
