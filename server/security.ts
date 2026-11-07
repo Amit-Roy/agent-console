@@ -1,7 +1,8 @@
 import { execFile } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
-import type express from "express";
+import express from "express";
+import { buildFixPrompt, FIX_KINDS, type FixKind, fixTitle, KeyNotFound } from "./security-fix.ts";
 import { createSecAutomations, type SecAutomations, statusKeyFile } from "./sec-automations.ts";
 import { createSecCrashes, type SecCrashes } from "./sec-crashes.ts";
 import { createToolWatch, RemoteError, type ToolWatch } from "./tool-watch.ts";
@@ -126,6 +127,28 @@ const scanLogHandler: express.RequestHandler = async (req, res, next) => {
   })(req, res, next);
 };
 
+const fixHandler: express.RequestHandler = (req, res, next) => {
+  const { scan, kind, key } = req.body || {};
+  if (typeof scan !== "string" || !ID.test(scan))
+    return void res.status(400).json({ error: "Invalid scan id." });
+  if (typeof kind !== "string" || !FIX_KINDS.has(kind))
+    return void res.status(400).json({ error: "Invalid finding kind." });
+  if (typeof key !== "string" || !key.trim() || key.length > 300)
+    return void res.status(400).json({ error: "Invalid finding key." });
+  return guardRoute(async () => {
+    const result = await remote(`get ${scan}`);
+    if (!result || !result.id) throw new NotFound("not found");
+    try {
+      return {
+        title: fixTitle(kind as FixKind, key),
+        prompt: buildFixPrompt(result, kind as FixKind, key),
+      };
+    } catch (error) {
+      throw error instanceof KeyNotFound ? new NotFound("not found") : error;
+    }
+  })(req, res, next);
+};
+
 const scanModeHandler: express.RequestHandler = (req, res, next) => {
   const mode = req.query.mode === undefined ? "full" : req.query.mode;
   if (typeof mode !== "string" || !MODES.has(mode))
@@ -175,6 +198,7 @@ export function mountSecurity(
       return out;
     }),
   );
+  app.post("/api/security/fix", sameOrigin, express.json({ limit: "2kb" }), fixHandler);
   // Every security automation (VPS timers, OpenCVE, the patch bridge) with schedule, last and next run, colour. Cached 60 s.
   app.get(
     "/api/security/automations",
