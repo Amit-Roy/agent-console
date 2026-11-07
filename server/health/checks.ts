@@ -32,6 +32,7 @@ export interface ReportDeps {
     checks: { id: string; label: string; status: string; detail: string }[];
   }>;
   home: string;
+  brainBin: string;
   now: () => number;
   timeoutMs: number;
 }
@@ -62,18 +63,19 @@ export function defaultDeps(doctor?: ReportDeps["doctor"]): ReportDeps {
         throw new Error("doctor dependency not provided");
       }),
     home: HOME,
+    brainBin: path.join(HOME, "repos/brain/bin"),
     now: Date.now,
     timeoutMs: 15_000,
   };
 }
 
 const row = (
-  id: string,
+  checkId: string,
   label: string,
   status: HealthStatus,
   detail: string,
   healed?: HealthCheck["healed"],
-): HealthCheck => ({ id, label, status, detail, ...(healed ? { healed } : {}) });
+): HealthCheck => ({ id: checkId, label, status, detail, ...(healed ? { healed } : {}) });
 
 function doctorStatus(raw: string): HealthStatus {
   return raw === "ok" || raw === "warning" || raw === "error" ? raw : "info";
@@ -177,7 +179,7 @@ async function bootCheck(deps: ReportDeps): Promise<HealthCheck> {
 }
 
 async function phoneCheck(deps: ReportDeps): Promise<HealthCheck> {
-  const res = await deps.run("phone-link", ["status"]);
+  const res = await deps.run(path.join(deps.brainBin, "phone-link"), ["status"]);
   return res.code === 0
     ? row("phone-link", "Phone link", "ok", res.out.split("\n")[0] || "up")
     : row(
@@ -190,10 +192,10 @@ async function phoneCheck(deps: ReportDeps): Promise<HealthCheck> {
 
 async function codegraphCheck(deps: ReportDeps): Promise<HealthCheck> {
   const label = "CodeGraph watcher";
-  const status = await deps.run("codegraph-watch", ["status"]);
+  const status = await deps.run(path.join(deps.brainBin, "codegraph-watch"), ["status"]);
   if (status.code === 0 && status.out.startsWith("up"))
     return row("codegraph-watch", label, "ok", status.out);
-  const start = await deps.run("codegraph-watch", ["start"]);
+  const start = await deps.run(path.join(deps.brainBin, "codegraph-watch"), ["start"]);
   const result = start.code === 0 ? start.out || "started" : `failed: ${start.out || start.code}`;
   const healed = { action: "start", result };
   return start.code === 0
@@ -201,10 +203,10 @@ async function codegraphCheck(deps: ReportDeps): Promise<HealthCheck> {
     : row("codegraph-watch", label, "error", "down, restart failed", healed);
 }
 
-function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
+function withTimeout<T>(work: Promise<T>, limitMs: number): Promise<T> {
   let timer: NodeJS.Timeout;
   const limit = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error("timed out")), ms);
+    timer = setTimeout(() => reject(new Error("timed out")), limitMs);
   });
   return Promise.race([work, limit]).finally(() => clearTimeout(timer));
 }
@@ -227,10 +229,10 @@ export async function runReportChecks(
   const deps = { ...defaultDeps(doctor), ...rest };
   const jobs: { id: string; label: string; run: Promise<HealthCheck[]> }[] = [
     { id: "doctor", label: "Doctor", run: doctorChecks(deps) },
-    ...SINGLE_CHECKS.map(([id, label, fn]) => ({
-      id,
+    ...SINGLE_CHECKS.map(([checkId, label, probe]) => ({
+      id: checkId,
       label,
-      run: fn(deps).then((item) => [item]),
+      run: probe(deps).then((item) => [item]),
     })),
   ];
   const settled = await Promise.allSettled(jobs.map((job) => withTimeout(job.run, deps.timeoutMs)));

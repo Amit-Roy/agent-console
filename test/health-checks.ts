@@ -7,7 +7,7 @@ function deps(over: Partial<ReportDeps> = {}): Partial<ReportDeps> {
     run: async (cmd, args) => {
       calls.push(`${cmd} ${args.join(" ")}`);
       if (cmd === "git") return { code: 0, out: "aaaaaaaaaaaa" };
-      if (cmd === "codegraph-watch") return { code: 0, out: "up (pid 1)" };
+      if (cmd.endsWith("/codegraph-watch")) return { code: 0, out: "up (pid 1)" };
       return { code: 0, out: "ok" };
     },
     readFile: (file) =>
@@ -24,20 +24,21 @@ function deps(over: Partial<ReportDeps> = {}): Partial<ReportDeps> {
       ],
     }),
     home: "/h",
+    brainBin: "/bb",
     timeoutMs: 200,
     ...over,
   };
 }
-const byId = (list: Awaited<ReturnType<typeof runReportChecks>>, id: string) => {
-  const found = list.find((item) => item.id === id);
-  assert.ok(found, id);
+const byId = (list: Awaited<ReturnType<typeof runReportChecks>>, checkId: string) => {
+  const found = list.find((item) => item.id === checkId);
+  assert.ok(found, checkId);
   return found;
 };
 
 let list = await runReportChecks(deps());
 assert.equal(byId(list, "doctor:h").status, "ok");
 assert.equal(byId(list, "doctor:n").status, "error");
-for (const id of [
+for (const checkId of [
   "disk",
   "vps",
   "release-drift",
@@ -46,9 +47,11 @@ for (const id of [
   "phone-link",
   "codegraph-watch",
 ])
-  assert.equal(byId(list, id).status, "ok", id);
+  assert.equal(byId(list, checkId).status, "ok", checkId);
 assert.equal(byId(list, "codegraph-watch").healed, undefined);
-assert.ok(calls.some((c) => c.startsWith("ssh -o BatchMode=yes -o ConnectTimeout=5 vps true")));
+assert.ok(
+  calls.some((call) => call.startsWith("ssh -o BatchMode=yes -o ConnectTimeout=5 vps true")),
+);
 
 assert.equal(diskStatus(84), "ok");
 assert.equal(diskStatus(85), "warning");
@@ -67,7 +70,7 @@ list = await runReportChecks(
   deps({
     run: async (cmd) => {
       if (cmd === "git") return { code: 0, out: "bbbbbbbbbbbb" };
-      if (cmd === "codegraph-watch") return { code: 1, out: "down" };
+      if (cmd.endsWith("/codegraph-watch")) return { code: 1, out: "down" };
       return { code: 255, out: "denied" };
     },
     fetchJson: async () => ({ ok: false, status: 502 }),
@@ -85,7 +88,9 @@ assert.equal(byId(list, "codegraph-watch").healed?.action, "start");
 list = await runReportChecks(
   deps({
     run: async (cmd) =>
-      cmd === "codegraph-watch" ? { code: 0, out: "started" } : { code: 0, out: "aaaaaaaaaaaa" },
+      cmd.endsWith("/codegraph-watch")
+        ? { code: 0, out: "started" }
+        : { code: 0, out: "aaaaaaaaaaaa" },
     fetchJson: async () => {
       throw new Error("ECONNREFUSED");
     },
