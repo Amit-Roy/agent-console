@@ -7,6 +7,7 @@ assert.deepEqual(matchOptions("quick pass", labels), ["Quick pass"]);
 assert.deepEqual(matchOptions("Full Review.", labels), ["Full review"]);
 assert.deepEqual(matchOptions("one", labels), ["Quick pass"]);
 assert.deepEqual(matchOptions("the second", labels), ["Full review"]);
+assert.deepEqual(matchOptions("the second one", labels), ["Full review"]);
 assert.deepEqual(matchOptions("Option three", labels), ["Skip it"]);
 assert.deepEqual(matchOptions("let's do the full review please", labels), ["Full review"]);
 assert.deepEqual(matchOptions("fifth", labels), [], "An ordinal past the end matches nothing");

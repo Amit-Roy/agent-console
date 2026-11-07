@@ -16,10 +16,12 @@ const normalize = (text) =>
     .trim();
 
 function ordinalIndex(spoken, count) {
-  const words = spoken.replace(/^(option|number|choice|answer)\s+/, "").split(" ");
-  if (words.length > 2) return -1;
+  const words = spoken
+    .replace(/^(option|number|choice|answer)\s+/, "")
+    .replace(/\s+(one|option|choice)$/, "")
+    .split(" ");
   const found = NUMBER_WORDS.findIndex((names) => names.includes(words[0]));
-  return found >= 0 && found < count && words.length === 1 ? found : -1;
+  return words.length === 1 && found >= 0 && found < count ? found : -1;
 }
 
 // Which option labels did the speaker choose? Exact label, a label inside the sentence, or "one" / "the second".
