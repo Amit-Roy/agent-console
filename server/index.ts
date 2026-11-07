@@ -103,6 +103,7 @@ import { claudeAccounts, claudeUsageKey } from "./providers/claude-accounts.ts";
 import { childEnv } from "./providers/env.ts";
 import { providerInfo, refreshPiModels } from "./providers/index.ts";
 import { effortModelPath } from "./providers/triage-effort.ts";
+import { createHealthRunner, healthScheduleEnabled } from "./health/runner.ts";
 import { describe, Schedules } from "./schedules.ts";
 import { mountSecurity } from "./security.ts";
 import { SessionSearch } from "./session-search.ts";
@@ -1801,6 +1802,24 @@ app.get("/api/host/headroom-profile", (req, res) => {
   if (!range) return void res.status(400).json({ error: "range must be 1h, 6h, 24h or 7d" });
   if (!headroomProfile) return void res.status(503).json({ error: "Profile storage unavailable." });
   res.json(headroomProfile.query(range));
+});
+// Health runner: GET returns latest run + 14-run history; POST runs a full check (a call during an in-flight run joins it, no 409).
+const healthRunner = createHealthRunner({ threads, dataDir: DATA_DIR });
+if (healthScheduleEnabled()) healthRunner.schedule();
+app.get("/api/host/health", (_req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  res.json({
+    latest: healthRunner.latest() ?? null,
+    history: healthRunner.history(14),
+    running: healthRunner.running(),
+  });
+});
+app.post("/api/host/health/run", sameOrigin, async (_req, res) => {
+  try {
+    res.json(await healthRunner.run("manual"));
+  } catch {
+    res.status(500).json({ error: "Health run failed." });
+  }
 });
 app.get("/api/host/du", hostDu);
 app.post("/api/host/du/rescan", sameOrigin, hostDuRescan);
