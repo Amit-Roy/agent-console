@@ -1,5 +1,6 @@
 import { renderPermission } from "./permission-card.js";
 import { el, icon } from "./render.js";
+import { matchOptions } from "./voice-text.js";
 
 // Question drafts belong to the request, so thread refreshes and socket reconnects cannot erase them.
 // Secret answers stay in memory only and are never included in transcript summaries.
@@ -362,6 +363,38 @@ function buildChoices(view) {
   return view.choices;
 }
 
+// Spoken answer: pick the option(s) named in the transcript, else fill the free-text answer. False means nothing matched.
+function applyTranscript(view, transcript) {
+  const { question, draft } = view;
+  const picked = matchOptions(
+    transcript,
+    (question.options || []).map((option) => option.label),
+  );
+  if (picked.length) {
+    draft.selected = question.multiSelect
+      ? [...new Set([...draft.selected, ...picked])]
+      : picked.slice(0, 1);
+    if (!question.multiSelect) draft.other = false;
+  } else if (question.allowOther || !question.options?.length) {
+    draft.other = true;
+    if (!question.multiSelect) draft.selected = [];
+    draft.text = [draft.text, transcript].filter(Boolean).join(" ");
+  } else return false;
+  const text = view.card.querySelector(`#${view.fieldId}-other`);
+  if (text) text.value = draft.text || "";
+  updateForm(view);
+  return true;
+}
+
+function buildVoiceAnswer(view) {
+  if (view.question.secret || view.entry.busy) return null;
+  const button = view.ctx.mic?.((transcript) => applyTranscript(view, transcript));
+  if (!button) return null;
+  const row = el("div", "question-mic");
+  row.append(button, el("span", "question-mic-hint", "Hold to answer by voice"));
+  return row;
+}
+
 function buildField(view) {
   const { card, entry, question, fieldId } = view;
   const field = el("fieldset", "question-field");
@@ -374,6 +407,8 @@ function buildField(view) {
   hint.id = `${fieldId}-hint`;
   field.setAttribute("aria-describedby", hint.id);
   field.append(hint);
+  const talk = buildVoiceAnswer(view);
+  if (talk) field.append(talk);
   field.append(buildChoices(view));
   return field;
 }
@@ -526,7 +561,7 @@ export function find(host, id) {
   return host?.querySelector(`.question-card[data-question-id="${CSS.escape(id)}"]`) || null;
 }
 
-export function createQuestions({ send, root, changed }) {
+export function createQuestions({ send, root, changed, mic }) {
   const ctx = {
     entries: new Map(),
     pending: new Map(),
@@ -535,6 +570,7 @@ export function createQuestions({ send, root, changed }) {
     send,
     root,
     changed,
+    mic,
   };
   return {
     mount: (thread, event) => mount(ctx, thread, event),

@@ -4,6 +4,7 @@ import path from "node:path";
 import { headroom } from "./headroom.ts";
 import { claudeAccountReady } from "./providers/claude-accounts.ts";
 import type { Threads } from "./threads.ts";
+import { voiceInstalled } from "./voice.ts";
 
 export interface DoctorCheck {
   id: string;
@@ -220,6 +221,20 @@ function networkCheck(network: string): DoctorCheck {
   };
 }
 
+// Voice input is optional, so a missing model never marks the console unhealthy; the detail says how to enable it.
+function voiceCheck(): DoctorCheck {
+  const ready = voiceInstalled();
+  return {
+    id: "voice-input",
+    label: "Voice input",
+    status: "ok",
+    detail: ready
+      ? "Speech model, ffmpeg and sherpa-onnx are installed."
+      : "Off. Run scripts/voice-models.sh to download the speech model (needs ffmpeg).",
+    repairable: false,
+  };
+}
+
 async function inspectDoctor(ctx: DoctorContext) {
   const [state, network] = await Promise.all([ctx.proxy.probe(), ctx.upstream()]);
   const routing = ctx.threads.routingHealth();
@@ -228,6 +243,7 @@ async function inspectDoctor(ctx: DoctorContext) {
     ...accountChecks(ctx),
     headroomCheck(state),
     ...routingChecks(routing),
+    voiceCheck(),
     networkCheck(network),
   ];
   return {
