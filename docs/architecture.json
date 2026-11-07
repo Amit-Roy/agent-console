@@ -589,7 +589,7 @@
     {"from":"tt-http","to":"tt-turns","label":"rewind / fork","status":"added"},
     {"from":"tt-turns","to":"tt-shadow","label":"snapshot, restore","status":"added"},
     {"from":"app","to":"history-snapshot","label":"open or older page via Threads.page"},
-    {"from":"history-snapshot","to":"history-cache","label":"validate or rebuild derived offsets"},
+    {"from":"history-snapshot","to":"history-cache","label":"offsets and view sidecars","status":"modified"},
     {"from":"history-proofs","to":"history-snapshot","label":"models invariants; not runtime"},
     {"from":"ds-tokens","to":"ds-build","label":"read token layer","status":"added"},
     {"from":"ds-build","to":"ds-package","label":"write css and tokens.json","status":"added"},
@@ -609,7 +609,6 @@
     {"from":"id-proxyenv","to":"id-triage","label":"container name"},
     {"from":"pr-signal","to":"pr-store","label":"debounced refresh, push if changed","status":"added"},
     {"from":"pr-ship","to":"pr-store","label":"ship state on card","status":"added"},
-    {"from":"history-snapshot","to":"history-view-cache","label":"reuse clipped large lines"},
-    {"from":"history-view-cache","to":"history-cache","label":"view sidecar","status":"added"}
+    {"from":"history-snapshot","to":"history-view-cache","label":"reuse clipped large lines"}
   ]
 }
