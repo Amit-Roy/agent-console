@@ -112,6 +112,7 @@ import { resolveShare } from "./share/registry.ts";
 import { downloadShare } from "./share/run.ts";
 import { ShareError } from "./share/types.ts";
 import { createStaticAssets } from "./static-assets.ts";
+import { buildThreadGraph, repoKeys } from "./thread-graph.ts";
 import { safeId, Threads, turnTiming } from "./threads.ts";
 import { createTelemetryService } from "./token-telemetry.ts";
 import { startToolPriority } from "./tool-priority.ts";
@@ -213,9 +214,18 @@ setInterval(pruneOld, 24 * 60 * 60 * 1000).unref();
 
 const clients = new Set<WebSocket>();
 const subscriptions = new WeakMap<WebSocket, string>();
+let graphDirtyTimer: NodeJS.Timeout | undefined;
+const markGraphDirty = () => {
+  // log appends tell the thread graph page to refetch; at most one nudge per 5 s
+  graphDirtyTimer ??= setTimeout(() => {
+    graphDirtyTimer = undefined;
+    broadcast({ t: "graph_dirty" });
+  }, 5000);
+};
 const broadcast = (msg: unknown) => {
   const s = JSON.stringify(msg);
   const event = msg as { t?: string; thread?: string };
+  if (event.t === "event") markGraphDirty();
   const invalidation =
     event.t === "event" ? JSON.stringify({ t: "invalidate", thread: event.thread }) : null;
   for (const c of clients)
@@ -1921,6 +1931,27 @@ app.get("/api/brain/search", async (req, res) => {
   } catch (failure) {
     brainGraphError(res, failure);
   }
+});
+// Thread graph (#421): who worked with whom. Edges come from session-search touches, forks, issues and repos (server/thread-graph.ts).
+app.get("/graph", (_req, res) => sendPublic(res, "thread-graph.html"));
+app.get("/api/thread-graph", async (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  const since = Number(req.query.since);
+  const kinds =
+    typeof req.query.kinds === "string" ? req.query.kinds.split(",").filter(Boolean) : [];
+  const rows = await sessionSearch.graphRows();
+  const list = threads.list();
+  res.json({
+    ...buildThreadGraph({
+      threads: list,
+      touches: rows.touches,
+      prs: rows.prs,
+      repos: await repoKeys(list.map((thread) => thread.cwd)),
+      since: Number.isFinite(since) ? since : 0,
+      kinds: kinds.length ? new Set(kinds) : undefined,
+    }),
+    ...(rows.stale ? { syncing: true } : {}),
+  });
 });
 app.get("/uploads/:thread/:id/:name", (req, res) => {
   const { thread, id, name } = req.params;

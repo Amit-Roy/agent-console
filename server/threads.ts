@@ -127,6 +127,7 @@ export interface Thread {
     timing?: ReturnType<typeof runFacts>;
   };
   sessionId?: string;
+  forkedFrom?: string; // id of the thread this one was forked from
   forkFrom?: string; // forked from a Claude session: the first run continues a copy of it (cleared once the fork has its own session id)
   forkAt?: string; // with forkFrom: the assistant event uuid where the copied session stops (checkpoint fork)
   context?: { used?: number; max?: number; source?: string }; // tokens in the agent's context now, and the model's window when the harness reports it
@@ -736,6 +737,7 @@ function forkedThread(src: Thread, target: Provider | undefined, recent: boolean
   const now = Date.now();
   return {
     id: crypto.randomUUID(),
+    forkedFrom: src.id,
     provider: target?.id ?? src.provider,
     title: `${src.title.replace(/\s*\(fork\)$/, "").slice(0, 70)} (fork)`,
     cwd: src.cwd,

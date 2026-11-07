@@ -326,7 +326,7 @@ async function reliabilityChecks() {
       assert.equal((await migrated.search({ query: word })).results.length, 0, word);
     for (const word of ["migkeptcall", "migkeptresult", "migkeptprose"])
       assert.equal((await migrated.search({ query: word })).results.length, 1, word);
-    assert.equal(Number((migrated as any).db.prepare("PRAGMA user_version").get().user_version), 3);
+    assert.equal(Number((migrated as any).db.prepare("PRAGMA user_version").get().user_version), 4);
     // fts_map was backfilled: deletes go by rowid and leave no FTS or map rows behind.
     const mdb = (migrated as any).db;
     const count = (sql: string) => Number(mdb.prepare(sql).get().n);
@@ -374,7 +374,7 @@ async function reliabilityChecks() {
       2,
     );
     assert.equal(countTwo("SELECT count(*) AS n FROM fts_map WHERE thread='mig2' AND line>0"), 2);
-    assert.equal(Number(twoDb.prepare("PRAGMA user_version").get().user_version), 3);
+    assert.equal(Number(twoDb.prepare("PRAGMA user_version").get().user_version), 4);
     migratedTwo.close();
 
     await cleanupChecks(old);
@@ -473,7 +473,7 @@ async function cleanupChecks(base: string) {
   await second.whenCleaned();
   assert.ok(second.cleanupStats.batches > 0);
   const done = (second as any).db;
-  assert.equal(Number(done.prepare("PRAGMA user_version").get().user_version), 3);
+  assert.equal(Number(done.prepare("PRAGMA user_version").get().user_version), 4);
   assert.equal(Number(done.prepare("SELECT count(*) AS n FROM events").get().n), 3000);
   assert.equal(
     Number(
@@ -489,4 +489,63 @@ async function cleanupChecks(base: string) {
     "progress cleared",
   );
   second.close();
+}
+
+// Touches: files, brain pages, peers; rebuild on version bump; removal.
+{
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ac-touches-"));
+  const brain = path.join(dir, "brain");
+  process.env.BRAIN_ROOT = brain;
+  fs.mkdirSync(path.join(dir, "logs"));
+  const use = (name: string, input: any) =>
+    JSON.stringify({
+      ts: 1000,
+      type: "assistant",
+      message: { content: [{ type: "tool_use", id: name, name, input }] },
+    });
+  const rows = [
+    use("Read", { file_path: path.join(brain, "wiki", "alpha.md") }),
+    use("Edit", { file_path: path.join(brain, "ops", "beta.md") }),
+    use("Write", { file_path: "/tmp/ac-plain/../ac-plain/out.txt" }),
+    use("Bash", { command: "brain read wiki/gamma && brain write ops/delta" }),
+    JSON.stringify({
+      ts: 2000,
+      type: "user_input",
+      text: "hi",
+      sourceThread: { id: "peer-1", title: "p", provider: "claude" },
+    }),
+    use("Read", { file_path: path.join(brain, "wiki", "alpha.md") }),
+  ];
+  fs.writeFileSync(path.join(dir, "logs", "t-one.jsonl"), rows.join("\n") + "\n");
+  fs.writeFileSync(
+    path.join(dir, "threads.json"),
+    JSON.stringify([{ id: "t-one", provider: "claude", title: "touch" }]),
+  );
+  const search = new SessionSearch(dir, {});
+  await search.recent({ since: 0 });
+  const has = (kind: string, key: string) =>
+    search.touches().find((r) => r.kind === kind && r.key === key);
+  assert.ok(has("file", path.join(brain, "wiki", "alpha.md")));
+  assert.ok(has("file", "/tmp/ac-plain/out.txt"));
+  assert.equal(has("brain_r", "wiki/alpha")?.line, 6, "upsert keeps latest line");
+  assert.ok(has("brain_w", "ops/beta"));
+  assert.ok(has("brain_r", "wiki/gamma"));
+  assert.ok(has("brain_w", "ops/delta"));
+  assert.equal(has("peer", "peer-1")?.ts, 2000);
+  assert.equal(search.touches(1500).length, 1, "since filters by ts");
+  search.close();
+
+  const raw = new DatabaseSync(path.join(dir, "session-search.sqlite"));
+  raw.exec("DELETE FROM touches; PRAGMA user_version=3");
+  raw.close();
+  const rebuilt = new SessionSearch(dir, {});
+  await rebuilt.recent({ since: 0 });
+  assert.ok(rebuilt.touches().length >= 7, "touches rebuilt after version bump");
+  assert.equal(Number((rebuilt as any).db.prepare("PRAGMA user_version").get().user_version), 4);
+  fs.writeFileSync(path.join(dir, "threads.json"), "[]");
+  await rebuilt.recent({ since: 0 });
+  assert.equal(rebuilt.touches().length, 0, "removal deletes touches");
+  rebuilt.close();
+  delete process.env.BRAIN_ROOT;
+  console.log("PASS touches");
 }

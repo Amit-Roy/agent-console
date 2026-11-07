@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { recentPreamble, replayPreamble } from "../server/export.ts";
 
 const events: any[] = [
@@ -36,3 +39,20 @@ assert.ok(recentPreamble(events, 500).length <= 500);
 console.log(
   "PASS local handoff bounds, original request, recent messages and tool/subagent exclusions",
 );
+
+// A fork records its source thread id in threads.json.
+{
+  const data = fs.mkdtempSync(path.join(os.tmpdir(), "ac-handoff-fork-"));
+  process.env.AGENT_CONSOLE_DATA = data;
+  process.env.AGENT_CONSOLE_MOCK = "1";
+  process.env.AGENT_CONSOLE_BRAIN = path.join(data, "missing-brain");
+  const { Threads } = await import("../server/threads.ts");
+  const threads = new Threads(() => {});
+  const source = threads.create({ provider: "mock", cwd: data, title: "fork source" });
+  const child = threads.fork(source.id);
+  assert.equal(child.forkedFrom, source.id);
+  const saved = JSON.parse(fs.readFileSync(path.join(data, "threads.json"), "utf8"));
+  const list = Array.isArray(saved) ? saved : saved.threads;
+  assert.equal(list.find((t: any) => t.id === child.id)?.forkedFrom, source.id);
+  console.log("PASS fork persists forkedFrom");
+}

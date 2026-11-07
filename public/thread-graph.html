@@ -1,0 +1,75 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>Thread graph · Agent Console</title>
+<link rel="icon" href="/icon.svg"><link rel="apple-touch-icon" href="/icon-192.png">
+<meta name="theme-color" content="#eeeef2" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0b0b0d" media="(prefers-color-scheme: dark)">
+<link rel="preload" href="/fonts/inter-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/dashboard.css"><link rel="stylesheet" href="/ideas.css"><link rel="stylesheet" href="/brain.css"><link rel="stylesheet" href="/thread-graph.css"></head>
+<body class="ideas brain tgraph">
+<svg xmlns="http://www.w3.org/2000/svg" class="sprite" aria-hidden="true" width="0" height="0">
+  <symbol id="i-chev-down" viewBox="0 0 16 16"><path d="m4 6 4 4 4-4"/></symbol>
+</svg>
+<header class="dh">
+  <a class="btn ghost back" id="back" href="/" aria-label="Back to the console"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M10 3.5 5.5 8l4.5 4.5"/></svg><span>Console</span></a>
+  <h1 id="title">Thread graph</h1>
+  <!-- biome-ignore lint/a11y/useSemanticElements: role=group on a div styled by .range; fieldset would change the layout -->
+  <div class="range" id="viewToggle" role="group" aria-label="View">
+    <button type="button" id="viewList" aria-pressed="true">Clusters</button>
+    <button type="button" id="viewGraph" aria-pressed="false">Graph</button>
+  </div>
+</header>
+<main id="bm" aria-busy="true">
+  <!-- biome-ignore lint/a11y/useSemanticElements: role=group on a div styled by .subbar; fieldset would change the layout -->
+  <div class="subbar filters" role="group" aria-label="Filters">
+    <label class="sel">Window
+      <select id="fWindow"><option value="1h">Last hour</option><option value="24h">Last 24 hours</option><option value="7d" selected>Last 7 days</option><option value="all">All time</option></select>
+    </label>
+    <label class="sel">Provider
+      <select id="fProvider"><option value="">All</option><option value="claude">Claude</option><option value="codex">Codex</option><option value="pi">Pi</option></select>
+    </label>
+    <label class="sel">Status
+      <select id="fStatus"><option value="">All</option><option value="running">Running</option><option value="waiting">Waiting</option><option value="idle">Idle</option></select>
+    </label>
+    <button type="button" class="btn field tog" id="fArchived" aria-pressed="false">Archived</button>
+    <span class="muted" id="count" aria-live="polite"></span>
+  </div>
+  <p class="muted" id="status" aria-live="polite">Loading threads…</p>
+  <section id="listView" aria-label="Thread clusters"><div id="clusters"></div></section>
+  <section id="graphView" aria-label="Thread graph" hidden>
+    <div class="graph-wrap">
+      <div id="cy" role="img" aria-label="Graph of threads and what they share. Use Clusters view for a text version."></div>
+      <div class="graph-toolbar" role="toolbar" aria-label="Graph controls">
+        <button type="button" class="btn ghost icon" id="zoomOut" aria-label="Zoom out"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8h10"/></svg></button>
+        <button type="button" class="btn ghost icon" id="zoomIn" aria-label="Zoom in"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8h10M8 3v10"/></svg></button>
+        <button type="button" class="btn ghost" id="fitGraph">Fit</button>
+      </div>
+      <div class="graph-legend-card">
+        <button type="button" class="legend-toggle" id="legendToggle" aria-expanded="true" aria-controls="legendBody">Legend<svg class="ico legend-chev" aria-hidden="true"><use href="#i-chev-down"/></svg></button>
+        <div id="legendBody">
+          <ul class="graph-legend" id="kindLegend" aria-label="Edge kinds"></ul>
+          <ul class="graph-legend" aria-label="Providers">
+            <li><i class="legend-node prov-claude" aria-hidden="true"></i>Claude</li>
+            <li><i class="legend-node prov-codex" aria-hidden="true"></i>Codex</li>
+            <li><i class="legend-node prov-pi" aria-hidden="true"></i>Pi</li>
+          </ul>
+          <p class="legend-note">Ring: running. Dot: waiting. Tap a node for details.</p>
+        </div>
+      </div>
+      <div id="tip" role="tooltip" hidden></div>
+    </div>
+  </section>
+  <p class="muted foot" id="stamp"></p>
+</main>
+<div id="scrim" hidden></div>
+<aside id="sheet" class="sidesheet" role="dialog" aria-modal="false" aria-labelledby="sheetTitle" hidden>
+  <div class="sheethead">
+    <!-- biome-ignore lint/a11y/useHeadingContent: the sheet title is filled in by thread-graph.js -->
+    <h2 id="sheetTitle"></h2>
+    <button type="button" class="btn ghost icon" id="sheetClose" aria-label="Close details"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg></button>
+  </div>
+  <div id="sheetBody" class="sheetbody"></div>
+</aside>
+<script type="module" src="/thread-graph.js"></script>
+</body></html>

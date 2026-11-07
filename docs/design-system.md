@@ -133,6 +133,10 @@ The design system uses CSS custom properties (variables) defined in `:root` and 
     - `--viz-4`: #c2255c
     - `--viz-5`: #1d5fb8
     - `--viz-6`: #7c3aed
+  - Provider identity (thread graph node fill):
+    - `--prov-claude`: #b45309
+    - `--prov-codex`: #0f766e
+    - `--prov-pi`: #4a43d6
 
 ### Colors (Dark Theme)
 
@@ -192,6 +196,10 @@ The design system uses CSS custom properties (variables) defined in `:root` and 
     - `--viz-4`: #ff8fa3
     - `--viz-5`: #7cc4ff
     - `--viz-6`: #c4a7f5
+  - Provider identity:
+    - `--prov-claude`: #f5a970
+    - `--prov-codex`: #79d3c9
+    - `--prov-pi`: #9aa5ff
 
 ### Contrast Rules
 
