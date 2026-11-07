@@ -395,7 +395,46 @@
       {"id": "ia-report", "label": "worker-retries report", "tech": "bin/agent-console worker-retries", "desc": "Read-only: stranded live dispatches with turn ends, retries, PR numbers and premium reasons; a zero result prints filter and range", "icon": "file-search"}
     ]},
     {"group": "Deployment identity", "icon": "key-round", "status": "modified", "items": [{"id": "id-env", "label": "Console env file", "tech": "~/.config/agent-console/env, .env.example", "desc": "Gitignored real values; .env.example lists names with placeholders", "icon": "file-key", "status": "modified"}, {"id": "id-accounts", "label": "Claude accounts", "tech": "server/providers/claude-accounts.ts, bin/claude-account", "desc": "Expected emails from env; unset skips mismatch check and --email", "icon": "users", "status": "modified"}, {"id": "id-vault", "label": "Vault alerts", "tech": "server/vault.ts", "desc": "Default alert recipients from the alert env vars, else none", "icon": "bell", "status": "modified"}, {"id": "id-caddy", "label": "Caddy snippets", "tech": "docs/console-url.caddy, docs/acode-caddy.caddy", "desc": "Host comes from the workspace host suffix env var", "icon": "route", "status": "modified"}, {"id": "id-proxyenv", "label": "VPS console-proxy.env", "tech": "/etc/caddy/console-proxy.env", "desc": "Two new lines: workspace host suffix and container name", "icon": "server", "status": "added"}, {"id": "id-triage", "label": "Triage Caddy worker", "tech": "scripts/github-triage-caddy.py", "desc": "Container name and validate env parsed from the two Caddy env files; errors if missing", "icon": "shield-check", "status": "modified"}]},
-    {"group": "PR cockpit", "icon": "git-pull-request", "status": "added", "items": [{"id": "pr-store", "label": "PR cockpit store", "tech": "server/pr-cockpit.ts", "desc": "One GraphQL snapshot per PR; check-run poll with ETag; 30 s pending, 10 min idle; global 403/429 pause", "icon": "database", "status": "added"}, {"id": "pr-ship", "label": "PR ship job", "tech": "server/pr-ship-job.ts", "desc": "Detached pr-ship wrapper; job record and output in DATA_DIR/pr-ship-jobs; reattaches after restart; exit 0 merged, 1 attention, else failed", "icon": "rocket", "status": "added"}, {"id": "pr-signal", "label": "PR signal marker", "tech": "closed-signal.ts", "desc": "pr-signals/<owner_repo>-<pr or sha>.json from webhook events; Console consumes with 3 s per-key debounce; never touches triage queue", "icon": "bell", "status": "added"}]}
+    {"group": "PR cockpit", "icon": "git-pull-request", "status": "added", "items": [{"id": "pr-store", "label": "PR cockpit store", "tech": "server/pr-cockpit.ts", "desc": "One GraphQL snapshot per PR; check-run poll with ETag; 30 s pending, 10 min idle; global 403/429 pause", "icon": "database", "status": "added"}, {"id": "pr-ship", "label": "PR ship job", "tech": "server/pr-ship-job.ts", "desc": "Detached pr-ship wrapper; job record and output in DATA_DIR/pr-ship-jobs; reattaches after restart; exit 0 merged, 1 attention, else failed", "icon": "rocket", "status": "added"}, {"id": "pr-signal", "label": "PR signal marker", "tech": "closed-signal.ts", "desc": "pr-signals/<owner_repo>-<pr or sha>.json from webhook events; Console consumes with 3 s per-key debounce; never touches triage queue", "icon": "bell", "status": "added"}]},
+    {
+      "group": "Tool permission card",
+      "icon": "shield-question",
+      "items": [
+        {
+          "id": "perm-claude",
+          "label": "Claude control request",
+          "tech": "claude.ts",
+          "desc": "Tools not auto-allowed or already approved emit a question event with a permission field; issue runs and schedules still deny",
+          "icon": "shield-question",
+          "status": "added"
+        },
+        {
+          "id": "perm-questions",
+          "label": "Question store",
+          "tech": "server/questions.ts, server/threads.ts",
+          "desc": "Holds the pending card across reconnects; the answer goes back to the agent as a control_response",
+          "icon": "database",
+          "status": "added"
+        },
+        {
+          "id": "perm-card",
+          "label": "Permission card",
+          "tech": "public/permission-card.js",
+          "desc": "Tool input, Allow once, Allow for this thread, Deny, Deny with message; stacked 44px buttons on phones",
+          "icon": "square-check",
+          "status": "added"
+        },
+        {
+          "id": "perm-rules",
+          "label": "Thread tool rules",
+          "tech": "threads.json allowedTools",
+          "desc": "Allow for this thread persists the tool; menu item Forget tool approvals clears it",
+          "icon": "list-checks",
+          "status": "added"
+        }
+      ],
+      "status": "added"
+    }
   ],
   "edges": [
     {
@@ -609,6 +648,24 @@
     {"from":"id-proxyenv","to":"id-triage","label":"container name"},
     {"from":"pr-signal","to":"pr-store","label":"debounced refresh, push if changed","status":"added"},
     {"from":"pr-ship","to":"pr-store","label":"ship state on card","status":"added"},
-    {"from":"history-snapshot","to":"history-view-cache","label":"reuse clipped large lines"}
+    {"from":"history-snapshot","to":"history-view-cache","label":"reuse clipped large lines"},
+    {
+      "from": "perm-claude",
+      "to": "perm-questions",
+      "label": "control_request",
+      "status": "added"
+    },
+    {
+      "from": "perm-questions",
+      "to": "perm-card",
+      "label": "question event",
+      "status": "added"
+    },
+    {
+      "from": "perm-questions",
+      "to": "perm-rules",
+      "label": "save tool",
+      "status": "added"
+    }
   ]
 }
