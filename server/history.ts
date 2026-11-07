@@ -137,7 +137,8 @@ export class HistoryIndex {
     if (!this.cacheDirectory) return;
     try {
       for (const name of fs.readdirSync(this.cacheDirectory))
-        if (name.endsWith(".views.json")) fs.rmSync(path.join(this.cacheDirectory, name), { force: true });
+        if (name.endsWith(".views.json"))
+          fs.rmSync(path.join(this.cacheDirectory, name), { force: true });
     } catch {
       /* Optional cache. */
     }
@@ -213,7 +214,11 @@ export class HistoryIndex {
       index.projection = projection;
       for (const { line, from, to: lineEnd, value } of views) {
         const size = value == null ? 0 : JSON.stringify(value).length;
-        this.keepView(index, { owner: index.views, line, value, size, type: undefined }, lineEnd - from);
+        this.keepView(
+          index,
+          { owner: index.views, line, value, size, type: undefined },
+          lineEnd - from,
+        );
       }
       index.dirty = false;
     } catch {

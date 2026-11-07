@@ -16,7 +16,10 @@ const PINNED_OUTPUT_SHA256 = "0ec09ac2eb140c3526f60ba2072184dc7164def62b8e97d018
 const toolResult = (content: unknown, extra = {}) => ({
   type: "user",
   ts: 1,
-  message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t", content, ...extra }] },
+  message: {
+    role: "user",
+    content: [{ type: "tool_result", tool_use_id: "t", content, ...extra }],
+  },
 });
 const corpus: any[] = [
   toolResult("short result"),
@@ -62,7 +65,11 @@ try {
   assert.equal(output.filter((value) => value === null).length, 7, "every NOISE kind is dropped");
   const digest = createHash("sha256").update(JSON.stringify(output)).digest("hex");
   assert.equal(HISTORY_PROJECTION_VERSION, PINNED_VERSION, "version changed: update pins");
-  assert.equal(digest, PINNED_OUTPUT_SHA256, "projection output changed: bump HISTORY_PROJECTION_VERSION");
+  assert.equal(
+    digest,
+    PINNED_OUTPUT_SHA256,
+    "projection output changed: bump HISTORY_PROJECTION_VERSION",
+  );
   assert.match(HISTORY_PROJECTION.key, /^[0-9a-f]{64}$/);
 } finally {
   fs.rmSync(dir, { recursive: true, force: true });

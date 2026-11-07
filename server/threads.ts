@@ -476,6 +476,7 @@ function clipResultBlock(block: any) {
 function projectHistoryLine(_line: number, entry: any) {
   return NOISE.has(kindOf(entry)) ? null : historyWireEvent(clipToolResults(entry));
 }
+
 export { projectHistoryLine };
 
 // Bump when projectHistoryLine or history-wire output changes in a way NOISE/RESULT_CLIP do not capture; persisted views are keyed on it.

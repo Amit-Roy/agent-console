@@ -8,7 +8,9 @@ const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ac-view-cache-"));
 process.env.AGENT_CONSOLE_DATA = dir;
 process.env.AGENT_CONSOLE_PAGE = "40";
 process.env.AGENT_CONSOLE_PAGE_BYTES = "96000";
-const { HistoryIndex, VIEW_MIN_LINE_BYTES, VIEW_SIDECAR_VERSION } = await import("../server/history.ts");
+const { HistoryIndex, VIEW_MIN_LINE_BYTES, VIEW_SIDECAR_VERSION } = await import(
+  "../server/history.ts"
+);
 const { Threads } = await import("../server/threads.ts");
 
 const BIG = VIEW_MIN_LINE_BYTES + 4096;
@@ -131,7 +133,9 @@ function sidecarTests() {
   assert.equal(sidecars().length, 0, "stale sidecar removed on snapshot rewrite");
   appender.flushViews();
   assert.equal(sidecars().length, 1, "re-persisted after append");
-  const afterAppend = bigReads(() => new HistoryIndex(cache, options).read(log, undefined, 40, project));
+  const afterAppend = bigReads(() =>
+    new HistoryIndex(cache, options).read(log, undefined, 40, project),
+  );
   assert.equal(afterAppend.big, 0);
   assert.equal(
     JSON.stringify(afterAppend.result.items),
