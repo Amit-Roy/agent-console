@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -7,7 +8,9 @@ const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ac-view-cache-"));
 process.env.AGENT_CONSOLE_DATA = dir;
 process.env.AGENT_CONSOLE_PAGE = "40";
 process.env.AGENT_CONSOLE_PAGE_BYTES = "96000";
-const { HistoryIndex, VIEW_MIN_LINE_BYTES } = await import("../server/history.ts");
+const { HistoryIndex, VIEW_MIN_LINE_BYTES, VIEW_SIDECAR_VERSION } = await import(
+  "../server/history.ts"
+);
 const { Threads } = await import("../server/threads.ts");
 
 const BIG = VIEW_MIN_LINE_BYTES + 4096;
@@ -16,8 +19,9 @@ const toolLine = (text: string, extra = "") => ({
   message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t", content: text }] },
   provider_diagnostics: extra,
 });
-const project = (_line: number, parsed: any) =>
+const projectLine = (_line: number, parsed: any) =>
   parsed.type === "noise" ? null : { ...parsed, p: 1 };
+const project = { key: "test-projection", project: projectLine };
 const encode = (entries: any[]) => entries.map((entry) => JSON.stringify(entry) + "\n").join("");
 function counted<T>(action: () => T) {
   const original = fs.readSync;
@@ -42,6 +46,114 @@ function turns(count: number, bigAt: number[]) {
           ? { type: "noise" }
           : toolLine(`small ${position}`),
   );
+}
+
+function bigReads<T>(action: () => T) {
+  const original = fs.readSync;
+  let big = 0;
+  fs.readSync = ((...args: any[]) => {
+    if (args[3] > 16 * 1024) big++;
+    return (original as any)(...args);
+  }) as typeof fs.readSync;
+  try {
+    return { result: action(), big };
+  } finally {
+    fs.readSync = original;
+  }
+}
+
+function sidecarTests() {
+  const cache = path.join(dir, "sidecar-cache");
+  const options = { minSnapshotBytes: 1 };
+  const log = path.join(dir, "sidecar.jsonl");
+  const original = encode(turns(100, [91, 92, 93]));
+  fs.writeFileSync(log, original);
+  const sidecars = () => fs.readdirSync(cache).filter((name) => name.endsWith(".views.json"));
+  const sidecarFile = () => path.join(cache, sidecars()[0]);
+  const write = (reader: any) => {
+    reader.read(log, undefined, 40, project);
+    reader.flushViews();
+  };
+  const reopenWith = (key = project.key) => {
+    const reopened = new HistoryIndex(cache, options);
+    return reopened.read(log, undefined, 40, { key, project: projectLine });
+  };
+  const hits = (result: any) => result.items.length;
+  const writer = new HistoryIndex(cache, options);
+  write(writer);
+  assert.equal(sidecars().length, 1, "sidecar written");
+  assert.equal(fs.statSync(sidecarFile()).mode & 0o777, 0o600);
+  const expected = new HistoryIndex().read(log, undefined, 40, project);
+
+  // Reopen: byte-identical page, no large transcript reads.
+  const warm = bigReads(() => new HistoryIndex(cache, options).read(log, undefined, 40, project));
+  assert.equal(JSON.stringify(warm.result.items), JSON.stringify(expected.items));
+  assert.equal(warm.big, 0, "reopen reads no large chunks");
+  assert.ok(hits(warm.result) > 0);
+
+  // Rejections: tamper with the sidecar and expect a transcript re-read (large reads again).
+  const good = fs.readFileSync(sidecarFile(), "utf8");
+  const rejected = (mutate: (sidecar: any) => void, rechecksum = false) => {
+    const sidecar = JSON.parse(good);
+    mutate(sidecar);
+    if (rechecksum) {
+      sidecar.checksum = sidecarChecksumOf(sidecar);
+    }
+    fs.writeFileSync(sidecarFile(), JSON.stringify(sidecar));
+    const run = bigReads(() => new HistoryIndex(cache, options).read(log, undefined, 40, project));
+    assert.ok(run.big > 0, "sidecar rejected: lines re-read");
+    assert.equal(JSON.stringify(run.result.items), JSON.stringify(expected.items));
+  };
+  const sidecarChecksumOf = (sidecar: any) =>
+    createHash("sha256")
+      .update(
+        JSON.stringify({
+          version: VIEW_SIDECAR_VERSION,
+          fingerprint: sidecar.fingerprint,
+          projection: sidecar.projection,
+          views: sidecar.views,
+        }),
+      )
+      .digest("hex");
+  rejected((sidecar) => (sidecar.fingerprint = "other"), true);
+  rejected((sidecar) => (sidecar.projection = "other"), true);
+  rejected((sidecar) => (sidecar.views[0].from += 1), true);
+  rejected((sidecar) => (sidecar.views[0].value = { forged: true })); // checksum no longer matches
+  rejected((sidecar) => (sidecar.version = VIEW_SIDECAR_VERSION + 1), true);
+  fs.writeFileSync(sidecarFile(), good);
+  assert.equal(bigReads(() => reopenWith()).big, 0, "restored good sidecar again");
+  const changedKey = bigReads(() => reopenWith("another-key"));
+  assert.ok(changedKey.big > 0, "projection key change rejects the sidecar");
+
+  // Append: the snapshot rewrite drops the stale sidecar, the next page re-persists.
+  const appender = new HistoryIndex(cache, options);
+  appender.read(log, undefined, 40, project);
+  fs.appendFileSync(log, encode(turns(10, [3, 4])));
+  appender.read(log, undefined, 40, project);
+  assert.equal(sidecars().length, 0, "stale sidecar removed on snapshot rewrite");
+  appender.flushViews();
+  assert.equal(sidecars().length, 1, "re-persisted after append");
+  const afterAppend = bigReads(() =>
+    new HistoryIndex(cache, options).read(log, undefined, 40, project),
+  );
+  assert.equal(afterAppend.big, 0);
+  assert.equal(
+    JSON.stringify(afterAppend.result.items),
+    JSON.stringify(new HistoryIndex().read(log, undefined, 40, project).items),
+  );
+
+  // Pending write after invalidate is a no-op; invalidate and forget delete sidecars.
+  const pending = new HistoryIndex(cache, options);
+  pending.invalidateViews();
+  assert.equal(sidecars().length, 0, "invalidateViews deletes sidecars");
+  pending.read(log, undefined, 40, project);
+  pending.invalidateViews();
+  pending.flushViews();
+  assert.equal(sidecars().length, 0, "pending write cancelled by invalidate");
+  write(pending);
+  assert.equal(sidecars().length, 1);
+  pending.forget(log);
+  assert.equal(sidecars().length, 0, "forget deletes the sidecar");
 }
 
 try {
@@ -133,7 +245,7 @@ try {
 
   // Small lines are never cached.
   const small = new HistoryIndex();
-  small.read(file, undefined, 100, (_line, parsed) => parsed);
+  small.read(file, undefined, 100, { key: "identity", project: (_line, parsed) => parsed });
   assert.equal(small.viewStats().entries, 3 + 2, "the five large lines only");
   const tiny = path.join(dir, "tiny.jsonl");
   fs.writeFileSync(tiny, encode(turns(30, [])));
@@ -174,6 +286,8 @@ try {
   assert.ok(warming.historyIndex.viewStats().entries > 0);
   warming.invalidateHistoryViews();
   assert.equal(warming.historyIndex.viewStats().entries, 0);
+
+  sidecarTests();
 } finally {
   fs.rmSync(dir, { recursive: true, force: true });
 }

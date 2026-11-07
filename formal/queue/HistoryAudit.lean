@@ -41,3 +41,15 @@ import History
 /-- info: 'History.filtered_adjacent_pages' depends on axioms: [propext] -/
 #guard_msgs in
 #print axioms History.filtered_adjacent_pages
+
+/-- info: 'History.fingerprint_mismatch_rejected' depends on axioms: [propext] -/
+#guard_msgs in
+#print axioms History.fingerprint_mismatch_rejected
+
+/-- info: 'History.key_mismatch_rejected' depends on axioms: [propext] -/
+#guard_msgs in
+#print axioms History.key_mismatch_rejected
+
+/-- info: 'History.selected_view_page' depends on axioms: [propext] -/
+#guard_msgs in
+#print axioms History.selected_view_page

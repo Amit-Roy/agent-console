@@ -220,16 +220,17 @@
           "id": "history-view-cache",
           "label": "Projected line cache",
           "tech": "server/history.ts \u00b7 in-memory LRU",
-          "desc": "New: keeps the clipped wire event for history lines >= 16 KiB (32 MiB budget). Warm pages skip read, decode and parse; dropped on rewrite, truncation, replacement and redaction.",
+          "desc": "Keeps the clipped wire event for history lines >= 16 KiB (32 MiB budget). New: restored from a validated sidecar after restart, written about 1 s after a page; dropped on rewrite, truncation, replacement, projection change and redaction.",
           "icon": "layers",
-          "status": "added"
+          "status": "modified"
         },
         {
           "id": "history-cache",
           "label": "Derived offset cache",
           "tech": "DATA_DIR/history-index \u00b7 JSON",
-          "desc": "New: private, atomic snapshots with bounded validation. Page reads write snapshots; live counts do not. Cache failures fall back to logs.",
-          "icon": "database"
+          "desc": "Private, atomic offset snapshots plus new .views.json sidecars keyed by fingerprint and projection key. Page reads write them; cache failures fall back to logs.",
+          "icon": "database",
+          "status": "modified"
         },
         {
           "id": "history-proofs",
@@ -588,7 +589,7 @@
     {"from":"tt-http","to":"tt-turns","label":"rewind / fork","status":"added"},
     {"from":"tt-turns","to":"tt-shadow","label":"snapshot, restore","status":"added"},
     {"from":"app","to":"history-snapshot","label":"open or older page via Threads.page"},
-    {"from":"history-snapshot","to":"history-cache","label":"validate or rebuild derived offsets"},
+    {"from":"history-snapshot","to":"history-cache","label":"offsets and view sidecars","status":"modified"},
     {"from":"history-proofs","to":"history-snapshot","label":"models invariants; not runtime"},
     {"from":"ds-tokens","to":"ds-build","label":"read token layer","status":"added"},
     {"from":"ds-build","to":"ds-package","label":"write css and tokens.json","status":"added"},
@@ -608,6 +609,6 @@
     {"from":"id-proxyenv","to":"id-triage","label":"container name"},
     {"from":"pr-signal","to":"pr-store","label":"debounced refresh, push if changed","status":"added"},
     {"from":"pr-ship","to":"pr-store","label":"ship state on card","status":"added"},
-    {"from":"history-snapshot","to":"history-view-cache","label":"reuse clipped large lines","status":"added"}
+    {"from":"history-snapshot","to":"history-view-cache","label":"reuse clipped large lines"}
   ]
 }

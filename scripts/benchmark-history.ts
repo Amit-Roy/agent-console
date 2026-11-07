@@ -180,6 +180,7 @@ function scenario(data: ReturnType<typeof fixture>, small: boolean, mode: string
     fs.rmSync(arm.cache, { recursive: true, force: true });
     const instance = consoleInstance(arm);
     instance.page(data.identifier, undefined, undefined, small);
+    (instance as any).historyIndex?.flushViews?.(); // persist view sidecars where the arm supports them
     return { arm, instance, records: [] as any[] };
   });
   const { before, since } = pageArguments(data.total, mode);

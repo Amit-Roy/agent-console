@@ -97,4 +97,110 @@ theorem filtered_adjacent_pages {α : Type} (items : List α) (keep : α → Boo
       (page items start (first + second)).filter keep := by
   rw [← List.filter_append, adjacent_pages]
 
+/-- A cached projection of one physical line with the byte range it was built from. -/
+structure View (γ : Type) where
+  line : Nat
+  start : Nat
+  stop : Nat
+  value : γ
+
+/-- Persisted views, tagged with the snapshot fingerprint and projection key. -/
+structure Sidecar (γ : Type) where
+  fingerprint : Nat
+  key : Nat
+  views : List (View γ)
+
+/-- Every view stored under this fingerprint and key equals the projection of its reference line. -/
+def ValidViews {β γ : Type} (project : β → γ) (lines : List β) (fingerprint key : Nat)
+    (sidecar : Sidecar γ) : Prop :=
+  ∀ view ∈ sidecar.views, sidecar.fingerprint = fingerprint → sidecar.key = key →
+    ∀ line, lines[view.line]? = some line → view.value = project line
+
+/-- Keep views only for a matching fingerprint and key whose offsets equal the snapshot. -/
+def selectViews {γ : Type} (fingerprint key : Nat) (cached : List Nat)
+    (sidecar : Sidecar γ) : List (View γ) :=
+  sidecar.views.filter fun view =>
+    sidecar.fingerprint == fingerprint && sidecar.key == key &&
+      cached[view.line]? == some view.start && cached[view.line + 1]? == some view.stop
+
+/-- Accepted views replace the projection; other lines use the reference projection. -/
+def render {β γ : Type} (project : β → γ) (selected : List (View γ)) : Nat → List β → List γ
+  | _, [] => []
+  | index, line :: rest =>
+    (match selected.find? (fun view => view.line == index) with
+      | some view => view.value
+      | none => project line) :: render project selected (index + 1) rest
+
+private theorem filter_none {α : Type} (keep : α → Bool) (items : List α)
+    (rejects : ∀ item ∈ items, keep item = false) : items.filter keep = [] := by
+  induction items with
+  | nil => rfl
+  | cons item rest inductionHypothesis =>
+    rw [List.filter_cons_of_neg (by rw [rejects item (List.mem_cons_self ..)]; exact Bool.false_ne_true)]
+    exact inductionHypothesis fun other member => rejects other (List.mem_cons_of_mem _ member)
+
+/-- A different fingerprint selects nothing. -/
+theorem fingerprint_mismatch_rejected {γ : Type} (fingerprint key : Nat) (cached : List Nat)
+    (sidecar : Sidecar γ) (mismatch : sidecar.fingerprint ≠ fingerprint) :
+    selectViews fingerprint key cached sidecar = [] := by
+  apply filter_none
+  intro view _
+  have rejected : (sidecar.fingerprint == fingerprint) = false := by
+    cases same : (sidecar.fingerprint == fingerprint) with
+    | false => rfl
+    | true => exact absurd (Nat.eq_of_beq_eq_true same) mismatch
+  rw [rejected]
+  rfl
+
+/-- A different projection key selects nothing. -/
+theorem key_mismatch_rejected {γ : Type} (fingerprint key : Nat) (cached : List Nat)
+    (sidecar : Sidecar γ) (mismatch : sidecar.key ≠ key) :
+    selectViews fingerprint key cached sidecar = [] := by
+  apply filter_none
+  intro view _
+  have rejected : (sidecar.key == key) = false := by
+    cases same : (sidecar.key == key) with
+    | false => rfl
+    | true => exact absurd (Nat.eq_of_beq_eq_true same) mismatch
+  rw [rejected, Bool.and_false]
+  rfl
+
+private theorem render_reference {β γ : Type} (project : β → γ) (selected : List (View γ))
+    (lines : List β) (base : Nat)
+    (valid : ∀ view ∈ selected, ∀ offset line, view.line = base + offset →
+      lines[offset]? = some line → view.value = project line) :
+    render project selected base lines = lines.map project := by
+  induction lines generalizing base with
+  | nil => rfl
+  | cons line rest inductionHypothesis =>
+    rw [render, List.map_cons]
+    refine congr (congrArg List.cons ?_) ?_
+    · cases found : selected.find? (fun view => view.line == base) with
+      | none => rfl
+      | some view =>
+        have member := List.mem_of_find?_eq_some found
+        have hit := List.find?_some found
+        have same : view.line = base := Nat.eq_of_beq_eq_true hit
+        exact valid view member 0 line (by rw [same]; rfl) rfl
+    · apply inductionHypothesis
+      intro view member offset other same lookup
+      exact valid view member (offset + 1) other (by rw [same, Nat.add_assoc, Nat.add_comm 1 offset]) lookup
+
+theorem selected_view_page {β γ : Type} (project : β → γ) (lines : List β)
+    (fingerprint key : Nat) (cached : List Nat) (sidecar : Sidecar γ)
+    (valid : ValidViews project lines fingerprint key sidecar) (start count : Nat) :
+    page (render project (selectViews fingerprint key cached sidecar) 0 lines) start count =
+      page (lines.map project) start count := by
+  have reference : render project (selectViews fingerprint key cached sidecar) 0 lines =
+      lines.map project := by
+    apply render_reference
+    intro view member offset line same lookup
+    unfold selectViews at member
+    rw [List.mem_filter] at member
+    obtain ⟨inSidecar, accepted⟩ := member
+    rw [Bool.and_eq_true, Bool.and_eq_true, Bool.and_eq_true] at accepted
+    exact valid view inSidecar (Nat.eq_of_beq_eq_true accepted.1.1.1) (Nat.eq_of_beq_eq_true accepted.1.1.2) line
+      (by rw [← lookup, same, Nat.zero_add])
+  rw [reference]
+
 end History
