@@ -91,6 +91,17 @@ function issueReport(dispatch: Row, events: Row[], until: number) {
   };
 }
 
+// The sha in RELEASE.json beside this script, so a live paste names the release it ran from. Source tree: null.
+function releaseSha(): string | null {
+  try {
+    const file = path.join(import.meta.dirname, "..", "RELEASE.json");
+    const sha = JSON.parse(fs.readFileSync(file, "utf8"))?.sha;
+    return typeof sha === "string" && sha ? sha : null;
+  } catch {
+    return null;
+  }
+}
+
 function buildReport(dir: string, since: number, until: number) {
   const ledger = readJsonl(path.join(dir, "window-dispatch.jsonl"), true);
   const logFile = path.join(dir, "automation-events.jsonl");
@@ -104,6 +115,7 @@ function buildReport(dir: string, since: number, until: number) {
     .map((dispatch) => issueReport(dispatch, events, until))
     .filter((issue) => issue !== undefined);
   return {
+    release: releaseSha(),
     dataDir: dir,
     range: { since: iso(since), until: iso(until) },
     filter: FILTER,
@@ -124,6 +136,7 @@ function eventLine(event: Row): string {
 }
 
 function printText(report: ReturnType<typeof buildReport>) {
+  console.log(`Release: ${report.release ?? "none (not a release build)"}`);
   console.log(`Data: ${report.dataDir}`);
   console.log(`Range: ${report.range.since} to ${report.range.until}`);
   console.log(`Filter: ${report.filter}`);

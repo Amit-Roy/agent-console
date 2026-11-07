@@ -88,6 +88,7 @@ try {
     until: "2026-10-26T00:00:00.000Z",
   });
   assert.equal(report.events.first, "2026-10-20T09:10:00.000Z", "the rotated log must be read");
+  assert.equal(report.release, null, "a source tree has no RELEASE.json");
   assert.deepEqual(
     report.issues.map((issue: any) => issue.key),
     [errored],
@@ -111,6 +112,7 @@ try {
 
   const text = run(live, "--since", "2026-10-24", "--until", "2026-10-26");
   assert.equal(text.status, 0, text.stderr);
+  assert.match(text.stdout, /^Release: none \(not a release build\)$/m);
   assert.match(text.stdout, /nefr0\/agent-console#12/);
   assert.match(text.stdout, /PR in log: none/);
   assert.match(text.stdout, /2026-10-25T08:50:00.000Z worker\/start .*retryAttempts/);
@@ -122,6 +124,20 @@ try {
   assert.match(empty.stdout, /2026-10-26T00:00:00.000Z/);
   assert.match(empty.stdout, /2026-10-27T00:00:00.000Z/);
   assert.match(empty.stdout, /Filter: /, "a zero result must state the exact filter");
+
+  // The live paste must name the release it ran from (#456): run the script from a fake release tree.
+  const release = path.join(scratch, "release");
+  fs.mkdirSync(path.join(release, "scripts"), { recursive: true });
+  fs.copyFileSync("scripts/worker-retries.ts", path.join(release, "scripts", "worker-retries.ts"));
+  const sha = "5954fcb6927d5e33ce025f34971306cf3337479f";
+  fs.writeFileSync(path.join(release, "RELEASE.json"), JSON.stringify({ sha }));
+  const released = spawnSync(
+    "node",
+    [path.join(release, "scripts", "worker-retries.ts"), "--since", "2026-10-24", "--json"],
+    { encoding: "utf8", env: { ...process.env, AGENT_CONSOLE_DATA: live } },
+  );
+  assert.equal(released.status, 0, released.stderr);
+  assert.equal(JSON.parse(released.stdout).release, sha);
 
   const missing = run(path.join(scratch, "absent"), "--since", "2026-10-24");
   assert.notEqual(missing.status, 0, "an unreadable data directory must not read as zero issues");
