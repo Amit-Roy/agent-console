@@ -92,12 +92,12 @@ export class Questions {
     return Object.fromEntries([...this.threads].map(([id]) => [id, this.list(id)]));
   }
   // Summary for a push notification. One single-select question with at most two options gets a one-time nonce for tap-to-answer.
-  pushSummary(thread: string, id: string): PushQuestion | undefined {
-    const request = this.threads.get(thread)?.get(id);
+  pushSummary(thread: string, requestId: string): PushQuestion | undefined {
+    const request = this.threads.get(thread)?.get(requestId);
     const first = request?.questions[0];
     if (!request || !first) return undefined;
     const summary: PushQuestion = {
-      id,
+      id: requestId,
       key: first.id,
       text: first.question.slice(0, 160),
       options: [],
@@ -111,11 +111,11 @@ export class Questions {
     if (!simple) return summary;
     summary.options = first.options.map((option) => option.label.slice(0, 40));
     summary.nonce = randomBytes(16).toString("base64url");
-    this.nonces.set(`${thread}\n${id}`, summary.nonce);
+    this.nonces.set(`${thread}\n${requestId}`, summary.nonce);
     return summary;
   }
-  nonceMatches(thread: string, id: string, nonce: unknown) {
-    const expected = this.nonces.get(`${thread}\n${id}`);
+  nonceMatches(thread: string, requestId: string, nonce: unknown) {
+    const expected = this.nonces.get(`${thread}\n${requestId}`);
     return !!expected && typeof nonce === "string" && nonce === expected;
   }
   add(thread: string, event: any): PendingQuestion {

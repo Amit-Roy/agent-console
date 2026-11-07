@@ -35,11 +35,11 @@ function transcribe(samples: Float32Array): string {
   return String(engine.getResult(stream).text || "").trim();
 }
 
-parentPort!.on("message", ({ id, samples }: Job) => {
+parentPort!.on("message", ({ id: jobId, samples }: Job) => {
   try {
-    parentPort!.postMessage({ id, text: transcribe(samples) });
+    parentPort!.postMessage({ id: jobId, text: transcribe(samples) });
   } catch (error: any) {
-    parentPort!.postMessage({ id, error: String(error?.message || error).slice(0, 200) });
+    parentPort!.postMessage({ id: jobId, error: String(error?.message || error).slice(0, 200) });
   }
 });
 parentPort!.postMessage({ id: 0, ready: true });

@@ -83,26 +83,26 @@ self.addEventListener("push", (event) => {
 
 // A needs_input push with one simple question and a nonce gets one button per option (when the browser shows buttons).
 function answerAction(payload) {
-  const q = payload.question;
+  const ask = payload.question;
   const room = typeof Notification === "undefined" ? 0 : Notification.maxActions;
-  if (payload.kind !== "needs_input" || !q?.nonce || !q.options?.length || !(room >= 1))
+  if (payload.kind !== "needs_input" || !ask?.nonce || !ask.options?.length || !(room >= 1))
     return null;
   return {
     thread: payload.thread,
-    id: q.id,
-    key: q.key,
-    nonce: q.nonce,
-    options: q.options.slice(0, Math.min(2, room)),
+    questionId: ask.id,
+    key: ask.key,
+    nonce: ask.nonce,
+    options: ask.options.slice(0, Math.min(2, room)),
   };
 }
 
 // Send the tapped option to the server. Any failure shows a notification that opens the thread instead.
 async function submitAnswer(data, index) {
-  const { thread, id, key, nonce, options } = data.answer;
-  let ok = false;
+  const { thread, questionId, key, nonce, options } = data.answer;
+  let sent = false;
   try {
     const res = await fetch(
-      `/api/questions/${encodeURIComponent(thread)}/${encodeURIComponent(id)}/answer`,
+      `/api/questions/${encodeURIComponent(thread)}/${encodeURIComponent(questionId)}/answer`,
       {
         method: "POST",
         credentials: "include",
@@ -110,9 +110,9 @@ async function submitAnswer(data, index) {
         body: JSON.stringify({ answers: { [key]: [options[index]] }, nonce }),
       },
     );
-    ok = res.ok;
+    sent = res.ok;
   } catch {}
-  if (ok) return;
+  if (sent) return;
   await self.registration.showNotification("Answer failed, open thread", {
     body: "Your answer was not sent.",
     tag: `thread-${thread}`,

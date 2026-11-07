@@ -1129,10 +1129,10 @@ app.post(
       return void res.status(400).json({ error: "Empty recording." });
     try {
       res.json(await voice.transcribe(req.body));
-    } catch (e: any) {
-      const busy = /busy/.test(e?.message);
+    } catch (error: any) {
+      const busy = /busy/.test(error?.message);
       res.status(voice.status() === "missing" ? 503 : busy ? 503 : 422).json({
-        error: e?.message || "Could not transcribe.",
+        error: error?.message || "Could not transcribe.",
       });
     }
   },

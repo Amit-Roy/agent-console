@@ -38,14 +38,14 @@ PROVIDERS.set("ask-fixture", {
   models: () => ["fixture"],
   defaultModel: () => "fixture",
   status: () => ({ ok: true }),
-  start(t: any, ctx: any) {
-    contexts.set(t.id, ctx);
+  start(target: any, ctx: any) {
+    contexts.set(target.id, ctx);
     return {
       alive: true,
       send() {},
       steer() {},
-      answer(id: string, reply: any) {
-        answers.push({ id, reply });
+      answer(requestId: string, reply: any) {
+        answers.push({ id: requestId, reply });
         return true;
       },
       abort() {},
@@ -58,10 +58,10 @@ const threads = new Threads(
   () => {},
   (notice: any) => notices.push(notice),
 );
-const ask = (id: string, questions: any[]) => {
+const ask = (requestId: string, questions: any[]) => {
   const thread = threads.create({ provider: "ask-fixture", cwd: data, title: "Ask" });
   threads.send(thread.id, "go");
-  contexts.get(thread.id).event({ type: "question", id, questions });
+  contexts.get(thread.id).event({ type: "question", id: requestId, questions });
   return thread;
 };
 const one = {
@@ -71,22 +71,24 @@ const one = {
 };
 try {
   const thread = ask("q1", [one]);
-  const notice = notices.find((n) => n.kind === "needs_input" && n.thread === thread.id);
+  const notice = notices.find(
+    (entry) => entry.kind === "needs_input" && entry.thread === thread.id,
+  );
   assert.equal(notice.question.id, "q1");
   assert.equal(notice.question.key, "scope");
   assert.equal(notice.question.text, "How much?");
   assert.deepEqual(notice.question.options, ["Quick", "Full"]);
   assert.ok(notice.question.nonce.length >= 16);
-  const status = (fn: () => void) => {
+  const status = (action: () => void) => {
     try {
-      fn();
+      action();
     } catch (error: any) {
       return error.status;
     }
     return 200;
   };
-  const reply = (nonce: unknown, id = "q1") =>
-    status(() => threads.answerFromPush(thread.id, id, { scope: ["Full"] }, false, nonce));
+  const reply = (nonce: unknown, requestId = "q1") =>
+    status(() => threads.answerFromPush(thread.id, requestId, { scope: ["Full"] }, false, nonce));
   assert.equal(reply("wrong"), 409);
   assert.equal(reply(undefined), 409);
   assert.equal(reply("x", "missing"), 404);
@@ -97,7 +99,9 @@ try {
   const many = ask("q2", [
     { ...one, id: "a", options: [{ label: "1" }, { label: "2" }, { label: "3" }] },
   ]);
-  const wide = notices.findLast((n) => n.thread === many.id && n.kind === "needs_input");
+  const wide = notices.findLast(
+    (entry) => entry.thread === many.id && entry.kind === "needs_input",
+  );
   assert.deepEqual(
     [wide.question.options, wide.question.nonce],
     [[], undefined],
@@ -105,18 +109,18 @@ try {
   );
   const multi = ask("q3", [{ ...one, multiSelect: true }]);
   assert.equal(
-    notices.findLast((n) => n.thread === multi.id).question.nonce,
+    notices.findLast((entry) => entry.thread === multi.id).question.nonce,
     undefined,
     "Multi-select: no buttons",
   );
   const pair = ask("q4", [one, { ...one, id: "second" }]);
   assert.equal(
-    notices.findLast((n) => n.thread === pair.id).question.nonce,
+    notices.findLast((entry) => entry.thread === pair.id).question.nonce,
     undefined,
     "Several questions: no buttons",
   );
   const skipped = ask("q5", [one]);
-  const skipNotice = notices.findLast((n) => n.thread === skipped.id);
+  const skipNotice = notices.findLast((entry) => entry.thread === skipped.id);
   threads.answerFromPush(skipped.id, "q5", undefined, true, skipNotice.question.nonce);
   assert.equal(answers.at(-1).reply.skip, true);
 } finally {
@@ -170,26 +174,27 @@ try {
   const inbox: any[] = [];
   socket.on("message", (raw) => inbox.push(JSON.parse(String(raw))));
   await once(socket, "open");
-  const until = async (match: (m: any) => any) => {
-    for (let n = 0; n < 200; n++) {
+  const until = async (match: (message: any) => any) => {
+    for (let attempt = 0; attempt < 200; attempt++) {
       const found = inbox.find(match);
       if (found) return found;
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
     throw new Error(
-      `Timed out waiting for the server: ${JSON.stringify(inbox.map((m) => m.t + (m.message ? ":" + m.message : "")))}`,
+      `Timed out waiting for the server: ${JSON.stringify(inbox.map((message) => message.t + (message.message ? ":" + message.message : "")))}`,
     );
   };
   socket.send(JSON.stringify({ t: "create", cwd: root, title: "ask" }));
-  const created = await until((m) => m.t === "created");
+  const created = await until((message) => message.t === "created");
   const thread = created.thread?.id ?? created.id;
   socket.send(JSON.stringify({ t: "send", thread, text: "question please" }));
   const asked = await until(
-    (m) => m.t === "event" && m.thread === thread && m.event?.type === "question",
+    (message) =>
+      message.t === "event" && message.thread === thread && message.event?.type === "question",
   );
-  const id = asked.event.id;
-  const route = (t: string, q: string) =>
-    `${origin}/api/questions/${encodeURIComponent(t)}/${encodeURIComponent(q)}/answer`;
+  const questionId = asked.event.id;
+  const route = (threadId: string, questionKey: string) =>
+    `${origin}/api/questions/${encodeURIComponent(threadId)}/${encodeURIComponent(questionKey)}/answer`;
   const post = (url: string, body: unknown, headers: Record<string, string> = {}) =>
     fetch(url, {
       method: "POST",
@@ -197,16 +202,19 @@ try {
       body: JSON.stringify(body),
     });
   const body = { answers: { scope: ["Quick pass"] }, nonce: "not-the-nonce" };
-  assert.equal((await fetch(route(thread, id), { method: "POST", body: "{}" })).status, 401);
   assert.equal(
-    (await post(route(thread, id), body, { Origin: "https://evil.example" })).status,
+    (await fetch(route(thread, questionId), { method: "POST", body: "{}" })).status,
+    401,
+  );
+  assert.equal(
+    (await post(route(thread, questionId), body, { Origin: "https://evil.example" })).status,
     403,
   );
-  assert.equal((await post(route(thread, id), body)).status, 409, "Wrong nonce");
+  assert.equal((await post(route(thread, questionId), body)).status, 409, "Wrong nonce");
   assert.equal((await post(route(thread, "gone"), body)).status, 404, "Unknown question");
-  assert.equal((await post(route("nothread", id), body)).status, 404, "Unknown thread");
+  assert.equal((await post(route("nothread", questionId), body)).status, 404, "Unknown thread");
   assert.equal(
-    inbox.some((m) => m.t === "event" && m.event?.type === "question_answer"),
+    inbox.some((message) => message.t === "event" && message.event?.type === "question_answer"),
     false,
     "A refused answer changes nothing",
   );

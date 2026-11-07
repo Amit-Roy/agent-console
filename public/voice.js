@@ -42,7 +42,7 @@ function makePill() {
   pill.hidden = true;
   const bars = document.createElement("span");
   bars.className = "voice-bars";
-  for (let n = 0; n < 5; n++) bars.append(document.createElement("i"));
+  for (let barIndex = 0; barIndex < 5; barIndex++) bars.append(document.createElement("i"));
   const label = document.createElement("span");
   label.className = "voice-label";
   pill.append(bars, label);
@@ -86,7 +86,10 @@ async function startSession(onLevel) {
     if (recorder.state !== "inactive") recorder.stop();
     await ended;
     release();
-    return { blob: new Blob(chunks, { type: recorder.mimeType }), ms: Date.now() - startedAt };
+    return {
+      blob: new Blob(chunks, { type: recorder.mimeType }),
+      durationMs: Date.now() - startedAt,
+    };
   };
   return { stop };
 }
@@ -102,6 +105,49 @@ async function upload(apiFetch, blob) {
   return String(body.text || "").trim();
 }
 
+// Upload a finished recording and hand the words to onText; every outcome ends in the pill.
+async function deliverRecording(apiFetch, recording, onText) {
+  const { blob, durationMs } = recording;
+  if (durationMs < MIN_MS) return flashPill("Hold the mic and speak");
+  showPill("Transcribing…", "busy");
+  try {
+    const text = await upload(apiFetch, blob);
+    if (!text) flashPill("No speech heard");
+    else if (onText(text) === false) flashPill("No matching option");
+    else showPill("");
+  } catch (error) {
+    flashPill(error.message);
+  }
+}
+
+// Has the pointer slid far enough off the button to cancel the recording?
+function pointerOutside(button, event) {
+  const box = button.getBoundingClientRect();
+  return (
+    event.clientX < box.left - 24 ||
+    event.clientX > box.right + 24 ||
+    event.clientY < box.top - 60 ||
+    event.clientY > box.bottom + 24
+  );
+}
+
+function wirePointer(button, talk, isRecording) {
+  button.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    button.setPointerCapture?.(event.pointerId);
+    void talk.begin();
+  });
+  button.addEventListener("pointermove", (event) => {
+    if (!isRecording()) return button.classList.remove("cancelling");
+    const away = pointerOutside(button, event);
+    showPill(away ? "Release to cancel" : "Listening…", away ? "cancel" : "rec");
+    button.classList.toggle("cancelling", away);
+  });
+  button.addEventListener("pointerup", (event) => void talk.end(pointerOutside(button, event)));
+  button.addEventListener("pointercancel", () => void talk.end(true));
+  button.addEventListener("contextmenu", (event) => event.preventDefault());
+}
+
 // Hold-to-talk on any element. onText(text) returns false when it could not use the words.
 export function holdToTalk(button, { apiFetch, onText, canStart = () => true }) {
   let session = null;
@@ -113,18 +159,9 @@ export function holdToTalk(button, { apiFetch, onText, canStart = () => true }) 
     session = null;
     button.classList.remove("recording");
     if (!active) return;
-    const { blob, ms } = await active.stop();
-    if (cancel) return showPill("");
-    if (ms < MIN_MS) return flashPill("Hold the mic and speak");
-    showPill("Transcribing…", "busy");
-    try {
-      const text = await upload(apiFetch, blob);
-      if (!text) flashPill("No speech heard");
-      else if (onText(text) === false) flashPill("No matching option");
-      else showPill("");
-    } catch (error) {
-      flashPill(error.message);
-    }
+    const recording = await active.stop();
+    if (cancel) showPill("");
+    else await deliverRecording(apiFetch, recording, onText);
   };
   const begin = async () => {
     if (session || starting || !canStart()) return;
@@ -139,32 +176,9 @@ export function holdToTalk(button, { apiFetch, onText, canStart = () => true }) 
     }
     starting = false;
   };
-  const outside = (event) => {
-    const box = button.getBoundingClientRect();
-    return (
-      event.clientX < box.left - 24 ||
-      event.clientX > box.right + 24 ||
-      event.clientY < box.top - 60 ||
-      event.clientY > box.bottom + 24
-    );
-  };
-  button.addEventListener("pointerdown", (event) => {
-    event.preventDefault();
-    button.setPointerCapture?.(event.pointerId);
-    void begin();
-  });
-  button.addEventListener("pointermove", (event) => {
-    if (session)
-      showPill(
-        outside(event) ? "Release to cancel" : "Listening…",
-        outside(event) ? "cancel" : "rec",
-      );
-    button.classList.toggle("cancelling", !!session && outside(event));
-  });
-  button.addEventListener("pointerup", (event) => void end(outside(event)));
-  button.addEventListener("pointercancel", () => void end(true));
-  button.addEventListener("contextmenu", (event) => event.preventDefault());
-  return { begin, end };
+  const talk = { begin, end };
+  wirePointer(button, talk, () => !!session);
+  return talk;
 }
 
 function micButton(label) {

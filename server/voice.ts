@@ -143,11 +143,11 @@ export class Voice {
   private async run(samples: Float32Array): Promise<string> {
     this.ready ??= this.spawnWorker();
     const worker = await this.ready;
-    const id = this.nextId++;
+    const jobId = this.nextId++;
     const done = new Promise<string>((resolve, reject) =>
-      this.pending.set(id, { resolve, reject }),
+      this.pending.set(jobId, { resolve, reject }),
     );
-    worker.postMessage({ id, samples }, [samples.buffer]);
+    worker.postMessage({ id: jobId, samples }, [samples.buffer]);
     try {
       return await done;
     } finally {

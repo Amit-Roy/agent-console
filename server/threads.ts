@@ -1294,13 +1294,20 @@ export class Threads {
   }
 
   // Answer from a push notification action: the one-time nonce proves the tap came from that notification.
-  answerFromPush(thread: string, id: string, answers: unknown, skip: boolean, nonce: unknown) {
+  answerFromPush(
+    thread: string,
+    requestId: string,
+    answers: unknown,
+    skip: boolean,
+    nonce: unknown,
+  ) {
     const fail = (status: number, message: string) => Object.assign(new Error(message), { status });
-    if (!this.questions.list(thread).some((q) => q.id === id))
+    if (!this.questions.list(thread).some((pending) => pending.id === requestId))
       throw fail(404, "This question is no longer waiting for an answer.");
-    if (!this.questions.nonceMatches(thread, id, nonce)) throw fail(409, "Invalid answer token.");
+    if (!this.questions.nonceMatches(thread, requestId, nonce))
+      throw fail(409, "Invalid answer token.");
     try {
-      this.answer(thread, id, answers, skip);
+      this.answer(thread, requestId, answers, skip);
     } catch (error: any) {
       throw fail(/no longer waiting/.test(error?.message) ? 404 : 400, error?.message);
     }
@@ -1853,12 +1860,12 @@ export class Threads {
     this.emit({ t: "commands", provider, commands: commandList(list) });
   }
 
-  private notify(t: Thread, kind: ThreadNotice["kind"], question?: ThreadNotice["question"]) {
+  private notify(target: Thread, kind: ThreadNotice["kind"], question?: ThreadNotice["question"]) {
     try {
       this.onNotification?.({
         kind,
-        thread: t.id,
-        title: t.title,
+        thread: target.id,
+        title: target.title,
         ...(question ? { question } : {}),
       });
     } catch {

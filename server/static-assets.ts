@@ -3,7 +3,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import express from "express";
+import type express from "express";
 
 const SHA12 = /^[0-9a-f]{12}$/;
 const IMMUTABLE = "public, max-age=31536000, immutable";
