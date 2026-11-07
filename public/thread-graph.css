@@ -1,0 +1,161 @@
+/* Thread graph page: reuses brain.css for the canvas, toolbar, legend card and sheet; adds provider/status marks, filters and clusters. */
+body.tgraph .filters {
+  gap: var(--sp-2) var(--sp-3);
+}
+.sel {
+  display: grid;
+  gap: 2px;
+  color: var(--t3);
+  font: var(--fw-med) var(--f-sm);
+}
+.sel select {
+  min-height: 44px;
+  padding: 0 var(--sp-3);
+  border: 1px solid var(--edge-strong);
+  border-radius: var(--r-md);
+  background: var(--s1);
+  color: var(--t1);
+  font: var(--fw-reg) var(--f-md);
+}
+.sel select:focus-visible,
+.cluster a.row:focus-visible,
+.kind-toggle:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+#fArchived {
+  min-height: 44px;
+}
+#fArchived[aria-pressed="true"],
+.kind-toggle[aria-pressed="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.legend-node.prov-claude {
+  background: var(--prov-claude);
+}
+.legend-node.prov-codex {
+  background: var(--prov-codex);
+}
+.legend-node.prov-pi {
+  background: var(--prov-pi);
+}
+.kind-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--t2);
+  font: var(--fw-reg) var(--f-sm);
+  cursor: pointer;
+}
+.kind-toggle[aria-pressed="false"] {
+  opacity: 0.45;
+  text-decoration: line-through;
+}
+.kind-toggle i {
+  width: 24px;
+  border-top: 2px solid var(--kind-color, var(--t2));
+}
+.kind-toggle i.dashed {
+  border-top-style: dashed;
+}
+.kind-toggle i.dotted {
+  border-top-style: dotted;
+}
+#tip {
+  position: absolute;
+  z-index: 3;
+  max-width: 16rem;
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--r-md);
+  background: var(--graph-panel);
+  border: 1px solid var(--graph-panel-edge);
+  color: var(--t1);
+  font: var(--fw-reg) var(--f-sm);
+  pointer-events: none;
+}
+#tip[hidden] {
+  display: none;
+}
+.cluster {
+  margin-bottom: var(--sp-4);
+}
+.cluster h3 {
+  margin: 0 0 var(--sp-2);
+  color: var(--t2);
+  font: var(--fw-semi) var(--f-sm);
+}
+.cluster .group a.row {
+  min-height: 44px;
+  align-items: center;
+}
+.prov-dot {
+  display: inline-block;
+  width: 0.625rem;
+  height: 0.625rem;
+  margin-inline-end: var(--sp-2);
+  border-radius: 50%;
+  flex: none;
+}
+.prov-dot.claude {
+  background: var(--prov-claude);
+}
+.prov-dot.codex {
+  background: var(--prov-codex);
+}
+.prov-dot.pi {
+  background: var(--prov-pi);
+}
+.prov-dot.running {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+.sheetbody .open {
+  justify-self: start;
+  min-height: 44px;
+}
+@media (max-width: 700px) {
+  .tgraph .graph-wrap {
+    height: max(22rem, calc(100dvh - 20rem));
+  }
+}
+#fArchived {
+  width: auto;
+}
+.tgraph .legend-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  cursor: pointer;
+  pointer-events: auto;
+}
+.tgraph .legend-chev {
+  display: block;
+  transform: rotate(180deg);
+}
+.tgraph .legend-toggle[aria-expanded="true"] .legend-chev {
+  transform: none;
+}
+.tgraph #legendBody {
+  display: grid;
+  gap: var(--sp-2);
+  max-height: 50dvh;
+  overflow-y: auto;
+}
+.shared {
+  display: grid;
+  gap: var(--sp-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--t1);
+  font: var(--fw-reg) var(--f-sm);
+  overflow-wrap: anywhere;
+}
+.kind-toggle {
+  text-align: start;
+}

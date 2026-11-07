@@ -1,26 +1,11 @@
 // Brain graph screen: searchable list of wiki/ops pages and tags, plus a Cytoscape graph loaded only when the Graph view opens.
 // Hash routes: "" nothing open, "#/page/<slug>" page sheet, "#/tag/<name>" tag sheet. Everything comes from /api/brain/*.
 
+import { baseNodeStyle, css, ensureCytoscape, store, symbolColor } from "./graph-core.js";
 import { createMenu } from "./menu.js";
 import { $, el, renderMarkdown } from "./render.js";
 
 const PHONE = matchMedia("(max-width: 700px)");
-const store = {
-  get: (key) => {
-    try {
-      return localStorage.getItem(key);
-    } catch {
-      return null;
-    }
-  },
-  set: (key, value) => {
-    try {
-      localStorage.setItem(key, value);
-    } catch {
-      // private mode: the choice just is not remembered
-    }
-  },
-};
 const state = {
   pages: [],
   tags: [],
@@ -36,7 +21,6 @@ const state = {
   links: false,
 };
 let net = null;
-let cytoscapeLib = null;
 let sheetSeq = 0;
 
 async function api(url) {
@@ -198,45 +182,10 @@ function setView(view) {
 }
 
 // ---------- graph view ----------
-const css = (name) => getComputedStyle(document.body).getPropertyValue(name).trim();
-// Glow is a translucent underlay in the node color; the light palette sets --graph-glow to 0.
-function symbolColor(token) {
-  const color = css(token);
-  const glow = Number(css("--graph-glow")) || 0;
-  if (!glow) return { "background-color": color };
-  return {
-    "background-color": color,
-    "underlay-color": color,
-    "underlay-padding": glow,
-    "underlay-opacity": 0.28,
-    "underlay-shape": "ellipse",
-  };
-}
 function nodeStyles(canvas) {
-  const ring = { "border-width": 2, "border-color": canvas };
   return [
-    {
-      selector: "node",
-      style: {
-        "font-family": css("--font-ui") || "sans-serif",
-        color: css("--graph-text"),
-        "min-zoomed-font-size": 11,
-        label: "data(label)",
-        width: 24,
-        height: 24,
-        ...ring,
-        "font-size": 12,
-        "font-weight": 500,
-        "text-halign": "right",
-        "text-valign": "center",
-        "text-margin-x": 6,
-        "text-wrap": "ellipsis",
-        "text-max-width": 110,
-        "text-outline-color": canvas,
-        "text-outline-width": 3,
-        "text-outline-opacity": 1,
-      },
-    },
+    baseNodeStyle(canvas),
+
     {
       // Page labels wait for closer zoom so tag hubs stay readable in the overview.
       selector: "node[kind='page']",
@@ -306,10 +255,6 @@ function graphElements(pages, tags) {
     .filter((e) => (e.kind === "tag" || state.links) && ids.has(e.source) && ids.has(e.target))
     .map((e, i) => ({ data: { id: `e${i}`, source: e.source, target: e.target, kind: e.kind } }));
   return { elements: [...nodes, ...edges] };
-}
-async function ensureCytoscape() {
-  cytoscapeLib ||= import("./vendor/cytoscape.esm.min.mjs").then((m) => m.default);
-  return cytoscapeLib;
 }
 function openNode(node) {
   const [kind, ...rest] = node.id().split(":");

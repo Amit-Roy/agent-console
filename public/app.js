@@ -5577,6 +5577,7 @@ const PAGE_LINKS = {
   vault: "vault-link",
   ideas: "ideas-link",
   brain: "brain-link",
+  graph: "graph-link",
   maps: "maps-link",
 };
 // sidebar More: rare console actions behind one button; each item drives the element that owns its behaviour
@@ -5619,6 +5620,12 @@ createMenu({
       label: "Brain",
       desc: "Search the shared memory",
       icon: "search",
+    },
+    {
+      value: "graph",
+      label: "Thread graph",
+      desc: "How threads relate",
+      icon: "network",
     },
     {
       value: "maps",

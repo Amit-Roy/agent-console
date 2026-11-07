@@ -259,6 +259,9 @@
   --viz-4: #c2255c;
   --viz-5: #1d5fb8;
   --viz-6: #7c3aed; /* chart series: >= 4.5:1 on s1 */
+  --prov-claude: #b45309;
+  --prov-codex: #0f766e;
+  --prov-pi: #4a43d6; /* provider identity (thread graph nodes) */
   /* light syntax (>= 4.5:1 on code-bg) */
   --hl-kw: #c2255c;
   --hl-str: #2f7d1f;
@@ -312,6 +315,9 @@
     --viz-4: #ff8fa3;
     --viz-5: #7cc4ff;
     --viz-6: #c4a7f5;
+    --prov-claude: #f5a970;
+    --prov-codex: #79d3c9;
+    --prov-pi: #9aa5ff;
     --hl-kw: #ff8fa3;
     --hl-str: #a6d98a;
     --hl-num: #f5a970;

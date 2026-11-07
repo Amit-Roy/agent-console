@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
+import readline from "node:readline";
 import { DatabaseSync } from "node:sqlite";
 import { isPrCreate, parsePrRef, prsFromResult } from "./session-prs.ts";
 
@@ -105,6 +107,32 @@ export type SessionSearchInput = { query: string; provider?: string; limit?: num
 export type SessionReadInput = { thread: string; start?: number; limit?: number };
 
 /** Persistent local FTS5/BM25 index of canonical logs, shared by all providers. Lines are 1-based. */
+const BRAIN_PAGE = /^(wiki|ops)\/([^/]+)\.md$/;
+const BRAIN_READ = /\bbrain\s+(?:read|show)\s+(\S+)/;
+const BRAIN_WRITE = /\bbrain\s+(?:write|edit)\s+(\S+)/;
+
+/** Touch kinds and keys of one tool_use block: file paths, brain pages read or written. */
+function touchesOfToolUse(block: any): [string, string][] {
+  const out: [string, string][] = [];
+  const input = block.input;
+  if (block.name === "Bash" && typeof input?.command === "string") {
+    const read = BRAIN_READ.exec(input.command),
+      write = BRAIN_WRITE.exec(input.command);
+    if (read) out.push(["brain_r", read[1].replace(/^["']|["']$/g, "")]);
+    if (write) out.push(["brain_w", write[1].replace(/^["']|["']$/g, "")]);
+    return out;
+  }
+  const isRead = block.name === "Read";
+  if (!isRead && !["Edit", "Write", "MultiEdit"].includes(block.name)) return out;
+  if (typeof input?.file_path !== "string" || !input.file_path) return out;
+  const abs = path.resolve(input.file_path);
+  out.push(["file", abs]);
+  const brain = path.resolve(process.env.BRAIN_ROOT ?? path.join(os.homedir(), "repos", "brain"));
+  const page = BRAIN_PAGE.exec(path.relative(brain, abs));
+  if (page) out.push([isRead ? "brain_r" : "brain_w", `${page[1]}/${page[2]}`]);
+  return out;
+}
+
 export class SessionSearch {
   private db: DatabaseSync;
   private pending: Promise<void> | undefined;
@@ -117,6 +145,7 @@ export class SessionSearch {
   private loggedError = "";
   private echoPending = false;
   private mapPending = false;
+  private touchesPending = false;
   private cleanupTimer: NodeJS.Timeout | undefined;
   private cleanupWindow = 1000;
   private settleCleaned: () => void = () => {};
@@ -154,6 +183,11 @@ export class SessionSearch {
         PRIMARY KEY(thread,repo,number)
       );
       CREATE INDEX IF NOT EXISTS prs_number ON prs(number);
+      CREATE TABLE IF NOT EXISTS touches (
+        thread TEXT NOT NULL, kind TEXT NOT NULL, key TEXT NOT NULL, line INTEGER NOT NULL, ts INTEGER NOT NULL,
+        PRIMARY KEY(thread,kind,key)
+      );
+      CREATE INDEX IF NOT EXISTS touches_kind_key ON touches(kind,key);
       CREATE TABLE IF NOT EXISTS fts_map (
         thread TEXT NOT NULL, line INTEGER NOT NULL, fts INTEGER NOT NULL, PRIMARY KEY(thread,line,fts)
       ) WITHOUT ROWID;
@@ -165,13 +199,16 @@ export class SessionSearch {
     const version = Number(this.db.prepare("PRAGMA user_version").get()!.user_version);
     if (version < 1) {
       this.db.exec(
-        "DELETE FROM session_fts; DELETE FROM events; DELETE FROM sessions; DELETE FROM fts_map; PRAGMA user_version=3;",
+        "DELETE FROM session_fts; DELETE FROM events; DELETE FROM sessions; DELETE FROM fts_map; PRAGMA user_version=4;",
       );
     } else {
       // user_version 3 adds fts_map (thread,line -> FTS rowid); older indexes backfill it in the background.
       this.echoPending = version < 2;
       this.mapPending = version < 3;
+      // user_version 4 adds touches: the next sync replays every indexed log into it (version is set now; a crash before then loses the replay).
+      this.touchesPending = version < 4;
       if (this.echoPending || this.mapPending) this.scheduleCleanup();
+      else if (version < 4) this.db.exec("PRAGMA user_version=4;");
     }
     this.scheduleBackground();
   }
@@ -301,7 +338,7 @@ export class SessionSearch {
 
   private finishCleanup() {
     this.db.exec(
-      "DELETE FROM meta WHERE key LIKE 'echo_%' OR key='map_last'; PRAGMA user_version=3;",
+      "DELETE FROM meta WHERE key LIKE 'echo_%' OR key='map_last'; PRAGMA user_version=4;",
     );
     this.echoPending = false;
     this.mapPending = false;
@@ -375,6 +412,54 @@ export class SessionSearch {
     this.db.prepare("DELETE FROM pr_calls WHERE thread=?").run(thread);
     this.db.prepare("DELETE FROM echo_calls WHERE thread=?").run(thread);
     this.db.prepare("DELETE FROM prs WHERE thread=?").run(thread);
+    this.db.prepare("DELETE FROM touches WHERE thread=?").run(thread);
+  }
+
+  /** Rows of what threads touched (files, brain pages, peers) with ts >= since. */
+  touches(since = 0) {
+    return this.db
+      .prepare("SELECT thread,kind,key,line,ts FROM touches WHERE ts>=? ORDER BY ts,thread")
+      .all(since) as { thread: string; kind: string; key: string; line: number; ts: number }[];
+  }
+
+  /** Touches and PR rows for the thread graph, after a bounded refresh. `stale` marks an answer from an index that is still syncing. */
+  async graphRows() {
+    let stale = false;
+    try {
+      stale = await this.sync();
+    } catch {
+      return { touches: [], prs: [], stale: true };
+    }
+    const prs = this.db.prepare("SELECT thread,repo,number FROM prs").all() as {
+      thread: string;
+      repo: string;
+      number: number;
+    }[];
+    return { touches: this.touches(), prs, stale };
+  }
+
+  private touch(thread: string, kind: string, key: string, line: number, ts: number) {
+    this.db
+      .prepare(
+        `INSERT INTO touches(thread,kind,key,line,ts) VALUES(?,?,?,?,?)
+         ON CONFLICT(thread,kind,key) DO UPDATE SET line=excluded.line, ts=excluded.ts WHERE excluded.ts>=touches.ts`,
+      )
+      .run(thread, kind, key, line, ts);
+  }
+
+  /** Record files, brain pages and source threads an event touched. */
+  private trackTouches(thread: string, line: number, event: any) {
+    const raw = event?.ts ?? event?.timestamp;
+    const parsed = typeof raw === "number" ? raw : Date.parse(String(raw ?? ""));
+    const ts = Number.isFinite(parsed) ? parsed : Date.now();
+    if (event?.type === "user_input" && typeof event.sourceThread?.id === "string")
+      this.touch(thread, "peer", event.sourceThread.id, line, ts);
+    const content = event?.message?.content;
+    if (!Array.isArray(content)) return;
+    for (const block of content) {
+      if (block?.type !== "tool_use") continue;
+      for (const [kind, key] of touchesOfToolUse(block)) this.touch(thread, kind, key, line, ts);
+    }
   }
 
   /** Remember `gh pr create` calls and record the PR each one printed. Tool calls and results may arrive in different syncs. */
@@ -478,6 +563,26 @@ export class SessionSearch {
     for (const row of this.db.prepare("SELECT thread FROM sessions").all())
       if (!ids.has(row.thread)) this.remove(String(row.thread));
     for (const entry of valid) await this.syncThread(entry);
+    this.touchesPending = false;
+  }
+
+  /** Fill touches from an already indexed log, leaving events and FTS rows alone. */
+  private async replayTouches(thread: string, file: string) {
+    let line = 0;
+    const lines = readline.createInterface({ input: fs.createReadStream(file) });
+    try {
+      for await (const raw of lines) {
+        line++;
+        if (raw.length > MAX_LINE) continue;
+        try {
+          this.trackTouches(thread, line, JSON.parse(raw));
+        } catch {
+          /* Ignore malformed lines; physical line numbers stay exact. */
+        }
+      }
+    } catch (error: any) {
+      if (error.code !== "ENOENT") throw error;
+    }
   }
 
   private async logChanged(old: any, stat: fs.Stats | undefined, file: string) {
@@ -525,6 +630,7 @@ export class SessionSearch {
       this.remove(entry.id);
       old = undefined;
     }
+    if (old && this.touchesPending) await this.replayTouches(entry.id, file);
     this.upsertSessionRow(entry.id, title, provider, old);
     if (!stat || (old && stat.size === old.size && stat.mtimeMs === old.mtime)) return;
     await this.indexLog({ id: entry.id, title, file }, stat, old);
@@ -546,6 +652,7 @@ export class SessionSearch {
           const item = eventText(this.stripEcho(threadId, parsed));
           if (item) batch.push({ line: scan.lines, ...item });
           this.trackPrs(threadId, scan.lines, parsed);
+          this.trackTouches(threadId, scan.lines, parsed);
         } catch {
           /* Ignore malformed complete lines; keep exact physical line references. */
         }
@@ -654,7 +761,7 @@ export class SessionSearch {
       if (!rebuild || this.closed) return;
       this.db.exec("PRAGMA secure_delete=ON;");
       this.db.exec(
-        "DELETE FROM session_fts; DELETE FROM events; DELETE FROM sessions; DELETE FROM fts_map; DELETE FROM pr_calls; DELETE FROM prs; DELETE FROM echo_calls;",
+        "DELETE FROM session_fts; DELETE FROM events; DELETE FROM sessions; DELETE FROM fts_map; DELETE FROM pr_calls; DELETE FROM prs; DELETE FROM echo_calls; DELETE FROM touches;",
       );
       this.finishCleanup();
       this.db.exec("VACUUM;");
