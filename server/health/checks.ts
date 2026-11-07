@@ -119,7 +119,7 @@ async function vpsCheck(deps: ReportDeps): Promise<HealthCheck> {
 
 async function releaseCheck(deps: ReportDeps): Promise<HealthCheck> {
   const current = path
-    .basename(deps.readlink(path.join(deps.home, ".local/share/agent-console/releases/current")))
+    .basename(deps.readlink(path.join(deps.home, ".local/share/agent-console/current")))
     .slice(0, 12);
   const git = ["-C", path.join(deps.home, "repos/agent-console"), "rev-parse", "--short=12"];
   let head = await deps.run("git", [...git, "origin/main"]);
