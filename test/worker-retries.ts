@@ -17,12 +17,16 @@ const run = (dir: string, ...args: string[]) =>
 const errored = "nefr0/agent-console#12";
 const merged = "nefr0/agent-console#14";
 const opened = "nefr0/agent-console#15";
+const unstarted = "nefr0/agent-console#16";
 const ledger = [
   { ts: at("2026-10-25T08:00:00Z"), dryRun: false, key: errored, route: { model: "pi" } },
   { ts: at("2026-10-25T08:05:00Z"), dryRun: true, key: "nefr0/agent-console#13" },
   { ts: at("2026-10-25T09:00:00Z"), dryRun: false, key: merged },
   { ts: at("2026-10-25T09:30:00Z"), dryRun: false, key: opened },
   { ts: at("2026-10-20T09:00:00Z"), dryRun: false, key: "nefr0/agent-console#9" },
+  // A failed start appends the same row again with its error: that dispatch never ran a worker.
+  { ts: at("2026-10-25T09:30:00Z"), dryRun: false, key: unstarted },
+  { ts: at("2026-10-25T09:30:00Z"), dryRun: false, key: unstarted, error: "spawn failed" },
 ];
 const event = (seq: number, iso: string, row: object) => ({ seq, ts: at(iso), ...row });
 const rotated = [
@@ -71,6 +75,12 @@ const current = [
     msg: "infrastructure failure; queued for an approved premium alternative",
     data: { thread: "t12", reason: "infrastructure-model-unavailable", recoveries: 0 },
   }),
+  event(9, "2026-10-25T09:40:00Z", {
+    step: "worker",
+    kind: "fail",
+    ref: unstarted,
+    msg: "turn ended with an error",
+  }),
 ];
 
 try {
@@ -78,7 +88,8 @@ try {
   fs.mkdirSync(live);
   fs.writeFileSync(path.join(live, "window-dispatch.jsonl"), jsonl(ledger));
   fs.writeFileSync(path.join(live, "automation-events.jsonl.1"), jsonl(rotated));
-  fs.writeFileSync(path.join(live, "automation-events.jsonl"), jsonl(current));
+  // A line cut short by a concurrent write is counted, never dropped silently.
+  fs.writeFileSync(path.join(live, "automation-events.jsonl"), `${jsonl(current)}{"seq":8,"ts`);
 
   const json = run(live, "--since", "2026-10-24", "--until", "2026-10-26", "--json");
   assert.equal(json.status, 0, json.stderr);
@@ -88,6 +99,7 @@ try {
     until: "2026-10-26T00:00:00.000Z",
   });
   assert.equal(report.events.first, "2026-10-20T09:10:00.000Z", "the rotated log must be read");
+  assert.equal(report.unreadableLines, 1, "unparseable lines must be counted");
   assert.deepEqual(
     report.issues.map((issue: any) => issue.key),
     [errored],
@@ -113,6 +125,7 @@ try {
   assert.equal(text.status, 0, text.stderr);
   assert.match(text.stdout, /nefr0\/agent-console#12/);
   assert.match(text.stdout, /PR in log: none/);
+  assert.match(text.stdout, /Unreadable lines skipped: 1/);
   assert.match(text.stdout, /2026-10-25T08:50:00.000Z worker\/start .*retryAttempts/);
   assert.match(text.stdout, /reason=infrastructure-model-unavailable/);
 
