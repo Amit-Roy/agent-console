@@ -558,6 +558,7 @@ function onHelloMessage(message) {
   openInitialThread();
   maybeOpenWorkflowDialog();
   void maybeShareLink();
+  void maybeSecurityFix();
 }
 
 function onThreadMessage(message) {
@@ -5368,6 +5369,8 @@ function maybeOpenWorkflowDialog() {
 }
 // Android share sheet -> manifest share_target -> /?share_text=...&share_url=... . Strip the params first so a reload never re-shares.
 let sharingLink = false;
+const SHARE_PICK_TEXT = "Pick a thread for the reel, or tap";
+const FIX_PICK_TEXT = "Pick a thread to fix this finding, or tap";
 async function maybeShareLink() {
   const params = new URLSearchParams(location.search);
   const text = params.get("share_text") || "";
@@ -5380,7 +5383,7 @@ async function maybeShareLink() {
   const query = params.toString();
   history.replaceState(null, "", `${location.pathname}${query ? `?${query}` : ""}${location.hash}`);
   try {
-    let choice = await pickShareTarget();
+    let choice = await pickShareTarget(SHARE_PICK_TEXT);
     if (choice === "") choice = await createShareThread();
     if (choice === null) return void toast("Share cancelled");
     await prepareShareDraft(choice, url || text);
@@ -5395,6 +5398,54 @@ async function maybeShareLink() {
     await fillShareDraft(body);
   } catch (error) {
     shareFailure(error);
+  } finally {
+    sharingLink = false;
+  }
+}
+// Security "Fix it" -> /?fix_scan=<id>&fix_kind=trivy|falco|clamav&fix_key=<key>. Same picker as share; the prompt lands as a draft, never sent.
+function securityFixParams() {
+  const params = new URLSearchParams(location.search);
+  const fix = {
+    scan: params.get("fix_scan") || "",
+    kind: params.get("fix_kind") || "",
+    key: params.get("fix_key") || "",
+  };
+  if (!fix.scan && !fix.kind && !fix.key) return null;
+  for (const name of ["fix_scan", "fix_kind", "fix_key"]) params.delete(name);
+  const query = params.toString();
+  history.replaceState(null, "", `${location.pathname}${query ? `?${query}` : ""}${location.hash}`);
+  return fix;
+}
+async function fetchSecurityFix(fix) {
+  const response = await apiFetch("/api/security/fix", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(fix),
+  });
+  const body = await response.json().catch(() => ({}));
+  if (response.status === 404) throw new Error("Finding not found");
+  if (!response.ok || !body.prompt) throw new Error(body.error || "Could not load that finding.");
+  return body;
+}
+async function maybeSecurityFix() {
+  if (sharingLink) return;
+  const fix = securityFixParams();
+  if (!fix) return;
+  sharingLink = true;
+  try {
+    const body = await fetchSecurityFix(fix);
+    let choice = await pickShareTarget(FIX_PICK_TEXT);
+    if (choice === "") choice = await createShareThread(body.title);
+    if (choice === null) return void toast("Fix cancelled");
+    if (!(await waitForThread(choice))) throw new Error("The thread did not load.");
+    openThread(choice);
+    await fillShareDraft({ thread: choice, prompt: body.prompt });
+  } catch (error) {
+    if (!signedOut)
+      banner(error.message || "Could not load that finding.", {
+        label: "Dismiss",
+        run: () => banner(""),
+      });
   } finally {
     sharingLink = false;
   }
@@ -5436,11 +5487,13 @@ function resolveShareCreate(value) {
   clearTimeout(pendingShare.timer);
   pendingShare.resolve(value);
 }
-function createShareThread() {
+function createShareThread(title) {
   return new Promise((resolve) => {
-    shareCreate = { submitted: false, resolve, timer: 0 };
+    shareCreate = { submitted: false, resolve, timer: 0, title: title || "" };
     openNewDialog();
-    $("dlg-sub").textContent += " The shared post will be attached to the new thread as a draft.";
+    $("dlg-sub").textContent += title
+      ? ` Thread name: ${title}. The fix prompt will be added as a draft.`
+      : " The shared post will be attached to the new thread as a draft.";
   });
 }
 $("dlg").addEventListener("close", () => {
@@ -5505,8 +5558,9 @@ function finishShare(value) {
   $("share-banner").hidden = true;
   resolve(value);
 }
-function pickShareTarget() {
+function pickShareTarget(text) {
   finishShare(null);
+  $("share-banner-text").firstChild.textContent = `${text} `;
   return new Promise((resolve) => {
     shareResolve = resolve;
     setLane("threads");
@@ -5691,6 +5745,7 @@ $("dform").addEventListener("submit", (e) => {
       t: "create",
       ...settings,
       ...(settings.provider === "claude" ? { claudeAccount: menus.dAccount.value || "sunny" } : {}),
+      ...(shareCreate?.title ? { title: shareCreate.title } : {}),
     });
   send({
     t: "task_save",

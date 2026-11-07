@@ -221,6 +221,18 @@ function renderRunning() {
   if (s.id) box.append(logButton(s.id, "View live log"));
 }
 
+/* ---------- "Fix it": hands one finding to the fix flow on the dashboard ---------- */
+function fixButton(kind, key) {
+  const scanId = (state.viewing || state.latest)?.id;
+  if (!scanId) return null;
+  const query = `fix_scan=${encodeURIComponent(scanId)}&fix_kind=${kind}&fix_key=${encodeURIComponent(key)}`;
+  const link = el("a", "btn sm fixit", "Fix it");
+  link.href = `/?${query}`;
+  const fixBar = el("div", "fixbar");
+  fixBar.append(link);
+  return fixBar;
+}
+
 /* ---------- findings (what the scan caught) ---------- */
 function renderFindings() {
   const box = $("findings"),
@@ -239,6 +251,8 @@ function renderFindings() {
     n.append(el("b", "", f.path), el("span", "hctx", `ClamAV · ${f.signature}`));
     row.append(el("span", "pill bad", "Infected"), n);
     rows.append(row);
+    const fix = fixButton("clamav", f.path);
+    if (fix) rows.append(fix);
   }
   box.append(rows);
 }
@@ -374,13 +388,15 @@ function buildFalcoGroup(group, index) {
   body.id = panelId;
   body.hidden = !open;
   if (open) body.append(buildFalcoAlertList(group));
+  const fix = fixButton("falco", group.rule);
+  if (fix) body.prepend(fix);
   btn.append(name, chips, chevron);
   btn.addEventListener("click", () => {
     const expanded = !state.open.has(key);
     expanded ? state.open.add(key) : state.open.delete(key);
     btn.setAttribute("aria-expanded", String(expanded));
     chevron.textContent = expanded ? "−" : "+";
-    if (expanded && !body.firstChild) body.append(buildFalcoAlertList(group));
+    if (expanded && !body.querySelector(".vulns")) body.append(buildFalcoAlertList(group));
     body.hidden = !expanded;
   });
   item.append(btn, body);
@@ -460,6 +476,8 @@ function buildTrivyBody(target, id) {
   const vulns = state.fixedOnly ? all.filter((vuln) => vuln.fixed) : all;
   const body = el("div", "tbody");
   body.id = id;
+  const fix = fixButton("trivy", target.name);
+  if (fix) body.append(fix);
   if (vulns.length) {
     const list = el("ul", "vulns");
     vulns.forEach((vuln) => {

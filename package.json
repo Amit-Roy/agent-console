@@ -8,7 +8,7 @@
     "test:share": "node test/share.ts && for f in test/share-*.ts; do node $f || exit 1; done && node test/health-camofox.ts",
     "test:review-takeover": "node test/review-takeover.ts",
     "test:benchmarks": "node --test test/benchmarks.ts test/benchmark-subscriptions.ts",
-    "test:security": "node test/security.ts && node test/security-ui.ts && node test/sec-automations.ts && node test/sec-crashes.ts && node test/sec-automations-ui.ts",
+    "test:security": "node test/security.ts && node test/security-ui.ts && node test/sec-automations.ts && node test/sec-crashes.ts && node test/sec-automations-ui.ts && node test/security-fix.ts",
     "test:vault": "node test/vault.ts && node test/vault-ui.ts && node test/vault-iron.ts && node test/vault-backup.ts && node test/vault-doctor.ts",
     "test:prompt-improve": "node test/prompt-improve.ts",
     "test:ideas-ui": "node test/ideas-ui.ts",
