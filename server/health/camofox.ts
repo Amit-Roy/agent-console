@@ -172,6 +172,13 @@ function basePort(base: string): number {
   return Number(url.port || 80);
 }
 
+const WEDGE_PATTERN = /\s5\d\d$|timed out|timeout|fetch failed|ECONNREFUSED|ECONNRESET|aborted/i;
+
+/** True for a timeout, connection error or HTTP 5xx; a 4xx is a contract bug, not a wedged server. */
+export function isWedgeFailure(detail: string): boolean {
+  return WEDGE_PATTERN.test(detail);
+}
+
 function errorText(error: unknown): string {
   return String((error as Error)?.message ?? error).slice(0, 160);
 }
@@ -185,7 +192,7 @@ async function probeNow(deps: CamofoxHealthDeps): Promise<ProbeResult> {
         body: JSON.stringify({
           userId: CAMOFOX_USER,
           sessionKey: "health-probe",
-          url: "about:blank",
+          url: new URL("/health", deps.base() || CAMOFOX_DEFAULT_URL).href,
         }),
       },
       undefined,
@@ -308,6 +315,7 @@ export async function checkCamofox(
   if (!deps.base()) return { ...head, status: "warning", detail: "camofox disabled" };
   const probe = await probeCamofox(deps);
   if (probe.status === "ok") return { ...head, status: "ok", detail: probe.detail };
+  if (!isWedgeFailure(probe.detail)) return { ...head, status: "error", detail: probe.detail };
   const healed = await healCamofox(deps);
   const record = { action: healed.action, result: healed.result };
   if (healed.ok)

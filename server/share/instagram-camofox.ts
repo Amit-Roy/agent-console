@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { healCamofox } from "../health/camofox.ts";
+import { healCamofox, isWedgeFailure } from "../health/camofox.ts";
 import { CamofoxUnavailableError, camofoxCall } from "./camofox.ts";
 import { assertPublicHost, safeFetch } from "./safe-fetch.ts";
 import type { ShareLink } from "./types.ts";
@@ -54,12 +54,10 @@ export const defaultCamofoxDeps: CamofoxDeps = {
   heal: () => healCamofox(),
 };
 
-const WEDGED_TAB_PATTERN = /\/tabs 500|timed out|timeout/i;
-
 // A wedged session context fails tab creation; restart camofox in the background, never blocking or throwing.
 function healOnWedgedTab(deps: CamofoxDeps, error: unknown): void {
   const detail = String((error as Error)?.message ?? error);
-  if (!WEDGED_TAB_PATTERN.test(detail) || !deps.heal) return;
+  if (!isWedgeFailure(detail) || !deps.heal) return;
   try {
     void deps.heal().catch(() => {});
   } catch {}

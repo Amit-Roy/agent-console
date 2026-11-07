@@ -403,6 +403,20 @@ assert.match(pageExpression(CODE), /^\(\(\)=>\{function /);
   };
   await runCamofoxFallback(link, fs.mkdtempSync(path.join(os.tmpdir(), "ig-heal-")), {}, [], quiet);
   assert.equal(heals, 1, "unrelated failure does not heal");
+  const badRequest = {
+    ...wedged,
+    call: async () => {
+      throw new CamofoxUnavailableError("/tabs 400");
+    },
+  };
+  await runCamofoxFallback(
+    link,
+    fs.mkdtempSync(path.join(os.tmpdir(), "ig-heal-")),
+    {},
+    [],
+    badRequest,
+  );
+  assert.equal(heals, 1, "4xx does not heal");
 }
 
 server.close();

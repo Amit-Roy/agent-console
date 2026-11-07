@@ -92,6 +92,37 @@ assert.match(bad.detail, /tabs 500/);
 stubMode = "healthy";
 assert.equal((await probeCamofox(deps)).status, "ok");
 
+// probe url is the camofox /health http url; 4xx never heals, 5xx and timeouts do
+reset();
+const seenUrls: string[] = [];
+const spyDeps = {
+  ...deps,
+  call: (async (pathname: string, init: RequestInit) => {
+    seenUrls.push(String(JSON.parse(String(init.body ?? "{}")).url));
+    return { tabId: "x" };
+  }) as typeof deps.call,
+};
+await probeCamofox(spyDeps);
+assert.equal(seenUrls[0], `${stubUrl}/health`);
+for (const [detail, expectKill] of [
+  ["camofox unavailable: /tabs 400", false],
+  ["camofox unavailable: /tabs 500", true],
+  ["camofox unavailable: The operation was aborted due to timeout", true],
+  ["camofox unavailable: fetch failed", true],
+] as const) {
+  reset();
+  const failing = {
+    ...deps,
+    call: (async () => {
+      throw new Error(detail);
+    }) as typeof deps.call,
+  };
+  const outcome = await checkCamofox(failing);
+  if (!expectKill) assert.equal(outcome.status, "error", detail);
+  assert.equal(killed.length > 0, expectKill, detail);
+  if (!expectKill) assert.equal(outcome.healed, undefined);
+}
+
 // heal: SIGTERM injected pid, recovered, recorded through checkCamofox
 reset();
 const check = await checkCamofox(deps);
