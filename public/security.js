@@ -228,9 +228,9 @@ function fixButton(kind, key) {
   const query = `fix_scan=${encodeURIComponent(scanId)}&fix_kind=${kind}&fix_key=${encodeURIComponent(key)}`;
   const link = el("a", "btn sm fixit", "Fix it");
   link.href = `/?${query}`;
-  const bar = el("div", "fixbar");
-  bar.append(link);
-  return bar;
+  const fixBar = el("div", "fixbar");
+  fixBar.append(link);
+  return fixBar;
 }
 
 /* ---------- findings (what the scan caught) ---------- */

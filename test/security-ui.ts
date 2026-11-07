@@ -79,36 +79,36 @@ async function open(
 // "Fix it" links: one per trivy target, falco rule, infected file; never in a button row; nothing wider than the viewport
 async function checkFixButtons(page: any, name: string, width: number) {
   const rows = page.locator("#trivy-rows .hrow.tgt");
-  for (let i = 0; i < (await rows.count()); i++)
-    if ((await rows.nth(i).getAttribute("aria-expanded")) !== "true") await rows.nth(i).click();
+  for (let rowIndex = 0; rowIndex < (await rows.count()); rowIndex++)
+    if ((await rows.nth(rowIndex).getAttribute("aria-expanded")) !== "true") await rows.nth(rowIndex).click();
   await page.locator("#falco-rows .hrow.tgt", { hasText: "Write below etc" }).click();
-  const q = (id: string, kind: string, key: string) =>
-    `/?fix_scan=${encodeURIComponent(id)}&fix_kind=${kind}&fix_key=${encodeURIComponent(key)}`;
+  const fixUrl = (scanId: string, kind: string, key: string) =>
+    `/?fix_scan=${encodeURIComponent(scanId)}&fix_kind=${kind}&fix_key=${encodeURIComponent(key)}`;
   const hrefs: string[] = await page
     .locator("a.fixit")
-    .evaluateAll((a: any[]) => a.map((x) => x.getAttribute("href")));
+    .evaluateAll((anchors: any[]) => anchors.map((anchor) => anchor.getAttribute("href")));
   const want = [
-    q(LATEST.id, "clamav", "/srv/uploads/invoice.pdf.exe"),
-    q(LATEST.id, "falco", "Write below etc"),
-    q(LATEST.id, "falco", "Terminal shell in container"),
-    ...["postgres:17", "/ (rootfs)", "caddy:2", "third-party repos"].map((n) =>
-      q(LATEST.id, "trivy", n),
+    fixUrl(LATEST.id, "clamav", "/srv/uploads/invoice.pdf.exe"),
+    fixUrl(LATEST.id, "falco", "Write below etc"),
+    fixUrl(LATEST.id, "falco", "Terminal shell in container"),
+    ...["postgres:17", "/ (rootfs)", "caddy:2", "third-party repos"].map((targetName) =>
+      fixUrl(LATEST.id, "trivy", targetName),
     ),
   ];
   check(
     `${name}: fix buttons per kind with hrefs`,
-    hrefs.length === want.length && want.every((h) => hrefs.includes(h)),
+    hrefs.length === want.length && want.every((href) => hrefs.includes(href)),
     hrefs.join(" ; "),
   );
   check(
     `${name}: no fix button inside .hrow or on ports`,
     (await page.locator(".hrow a.fixit, .hrow .fixit, .sport a.fixit").count()) === 0,
   );
-  const wide = await page.evaluate((w: number) => {
+  const wide = await page.evaluate((maxWidth: number) => {
     const bad: string[] = [];
-    for (const n of document.querySelectorAll("#hm *")) {
-      const r = (n as HTMLElement).getBoundingClientRect();
-      if (r.width && r.right > w + 0.5) bad.push(`${n.tagName}.${(n as HTMLElement).className}`);
+    for (const node of document.querySelectorAll("#hm *")) {
+      const rect = (node as HTMLElement).getBoundingClientRect();
+      if (rect.width && rect.right > maxWidth + 0.5) bad.push(`${node.tagName}.${(node as HTMLElement).className}`);
     }
     return bad.slice(0, 3).join(",");
   }, width);
