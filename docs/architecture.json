@@ -601,7 +601,7 @@
     {"from":"id-proxyenv","to":"id-triage","label":"container name"},
     {"from":"pr-signal","to":"pr-store","label":"debounced refresh, push if changed","status":"added"},
     {"from":"pr-ship","to":"pr-store","label":"ship state on card","status":"added"},
-    {"from":"history-snapshot","to":"history-view-cache","label":"reuse clipped large lines"},
+    {"from":"history-snapshot","to":"history-view-cache","label":"reuse lines"},
     {
       "from": "perm-claude",
       "to": "perm-questions",
@@ -644,6 +644,6 @@
     {"from":"sec-fix-btn","to":"sec-fix-picker","label":"deep link fix_* params","status":"added"},
     {"from":"sec-fix-picker","to":"sec-fix-api","label":"prompt","status":"added"},
     {"from":"sec-fix-picker","to":"sec-fix-draft","label":"chosen thread","status":"added"},
-    {"from":"history-snapshot","to":"history-view-cache","label":"reuse clipped large lines"}
+    {"from":"history-snapshot","to":"history-view-cache","label":"reuse lines"}
   ]
 }
