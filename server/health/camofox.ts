@@ -3,6 +3,7 @@ import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { readListeningSockets } from "../host.ts";
 import { CAMOFOX_DEFAULT_URL, camofoxBase, camofoxCall } from "../share/camofox.ts";
 import { runInInstagramChain } from "../share/instagram.ts";
 import { CAMOFOX_USER } from "../share/instagram-camofox.ts";
@@ -42,12 +43,13 @@ export interface CamofoxHealthDeps {
   call: typeof camofoxCall;
   inChain: <T>(job: () => Promise<T>) => Promise<T>;
   base: () => string | null;
+  listenerPids: (port: number) => number[];
   readText: (file: string) => string | null;
   readLink: (file: string) => string | null;
   alive: (pid: number) => boolean;
   kill: (pid: number, signal: NodeJS.Signals) => void;
   now: () => number;
-  sleep: (ms: number) => Promise<void>;
+  sleep: (delayMs: number) => Promise<void>;
   portUp: (port: number) => Promise<boolean>;
   lockFree: (lockFile: string) => boolean;
   spawnServe: (port: number) => void;
@@ -95,6 +97,30 @@ function portUp(port: number): Promise<boolean> {
   });
 }
 
+// Socket inode to owning pid via /proc/<pid>/fd; used only when the supervisor wrote no pid file.
+function listenerPids(port: number): number[] {
+  const inodes = new Set(
+    readListeningSockets()
+      .filter((socket) => socket.port === port)
+      .map((socket) => socket.inode),
+  );
+  const pids: number[] = [];
+  if (!inodes.size) return pids;
+  for (const name of fs.readdirSync("/proc").filter((entry) => /^\d+$/.test(entry))) {
+    try {
+      const owns = fs
+        .readdirSync(`/proc/${name}/fd`)
+        .some((fdName) =>
+          inodes.has(
+            Number(/^socket:\[(\d+)\]$/.exec(readLink(`/proc/${name}/fd/${fdName}`) ?? "")?.[1]),
+          ),
+        );
+      if (owns) pids.push(Number(name));
+    } catch {}
+  }
+  return pids;
+}
+
 function lockFree(lockFile: string): boolean {
   try {
     execFileSync("flock", ["-n", lockFile, "true"], { stdio: "ignore" });
@@ -118,12 +144,13 @@ export const camofoxHealthDeps: CamofoxHealthDeps = {
   call: camofoxCall,
   inChain: runInInstagramChain,
   base: camofoxBase,
+  listenerPids,
   readText,
   readLink,
   alive,
   kill: (pid, signal) => process.kill(pid, signal),
   now: () => Date.now(),
-  sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  sleep: (delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs)),
   portUp,
   lockFree,
   spawnServe,
@@ -181,7 +208,7 @@ export function probeCamofox(deps: CamofoxHealthDeps = camofoxHealthDeps): Promi
 
 function rateLimited(deps: CamofoxHealthDeps): string | null {
   const now = deps.now();
-  restartTimes = restartTimes.filter((at) => now - at < DAY_MS);
+  restartTimes = restartTimes.filter((restartedAt) => now - restartedAt < DAY_MS);
   const last = restartTimes[restartTimes.length - 1];
   if (last !== undefined && now - last < MIN_GAP_MS)
     return "rate limited: restarted under 10 min ago";
@@ -201,7 +228,11 @@ function isCamofoxProcess(deps: CamofoxHealthDeps, pid: number): boolean {
 function readPid(deps: CamofoxHealthDeps, port: number): number | null {
   const text = deps.readText(path.join(deps.cacheDir(), `serve-${port}.pid`));
   const pid = Number(text?.trim());
-  return Number.isInteger(pid) && pid > 1 ? pid : null;
+  if (Number.isInteger(pid) && pid > 1) return pid;
+  const listeners = deps
+    .listenerPids(port)
+    .filter((candidate) => isCamofoxProcess(deps, candidate));
+  return listeners.length === 1 ? listeners[0] : null;
 }
 
 async function waitUntil(
@@ -240,7 +271,7 @@ async function healNow(deps: CamofoxHealthDeps): Promise<HealResult> {
   const limited = rateLimited(deps);
   if (limited) return { action: "skip", result: limited, ok: false };
   const pid = readPid(deps, port);
-  if (!pid) return { action: "skip", result: "no pid file", ok: false };
+  if (!pid) return { action: "skip", result: "no pid file or listener", ok: false };
   if (!isCamofoxProcess(deps, pid))
     return { action: "skip", result: `pid ${pid} is not the camofox server`, ok: false };
   restartTimes.push(deps.now());

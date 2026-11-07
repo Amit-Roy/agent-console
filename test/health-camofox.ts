@@ -32,6 +32,7 @@ let cwd = REPO;
 let pidFile: string | null = String(PID);
 let portIsUp = false;
 let lockIsFree = true;
+let listeners: number[] = [];
 
 const deps = {
   ...camofoxHealthDeps,
@@ -43,6 +44,7 @@ const deps = {
     return null;
   },
   readLink: (file: string) => (file === `/fakeproc/${PID}/cwd` ? cwd : null),
+  listenerPids: () => listeners,
   alive: () => procAlive,
   kill: (pid: number, signal: NodeJS.Signals) => {
     killed.push([pid, signal]);
@@ -53,8 +55,8 @@ const deps = {
     }
   },
   now: () => clock,
-  sleep: async (ms: number) => {
-    clock += ms;
+  sleep: async (delayMs: number) => {
+    clock += delayMs;
   },
   portUp: async () => portIsUp,
   lockFree: () => lockIsFree,
@@ -78,6 +80,7 @@ function reset() {
   pidFile = String(PID);
   portIsUp = false;
   lockIsFree = true;
+  listeners = [];
   stubMode = "wedged";
 }
 
@@ -136,6 +139,25 @@ for (const mutate of [
   assert.equal(refused.action, "skip");
   assert.equal(killed.length, 0);
 }
+
+// no pid file: fall back to the port listener, still verified; unverified listener is not killed
+reset();
+pidFile = null;
+listeners = [PID];
+deps.kill = (pid, signal) => {
+  killed.push([pid, signal]);
+  procAlive = false;
+  portIsUp = true;
+  stubMode = "healthy";
+};
+assert.equal((await healCamofox(deps)).ok, true);
+assert.deepEqual(killed, [[PID, "SIGTERM"]]);
+reset();
+pidFile = null;
+listeners = [PID];
+cmdline = "sshd\0-D\0";
+assert.equal((await healCamofox(deps)).action, "skip");
+assert.equal(killed.length, 0);
 
 // SIGKILL escalation when the process ignores SIGTERM
 reset();

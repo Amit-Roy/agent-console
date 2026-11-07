@@ -465,7 +465,12 @@ async function processList(): Promise<Reply> {
   };
 }
 
-function readListeningSockets(): { port: number; proto: string; inode: number; uid: number }[] {
+export function readListeningSockets(): {
+  port: number;
+  proto: string;
+  inode: number;
+  uid: number;
+}[] {
   const out: { port: number; proto: string; inode: number; uid: number }[] = [];
   for (const proto of ["tcp", "tcp6"]) {
     try {
