@@ -35,6 +35,7 @@ import {
 } from "./idle-compaction.ts";
 import type { ThreadNotice } from "./notifications.ts";
 import { brainCommit } from "./providers/brain.ts";
+import { PERMISSION_ALLOW_THREAD } from "./providers/claude.ts";
 import {
   type ClaudeAccount,
   claudeUsageKey,
@@ -87,7 +88,12 @@ import { type IssueRun, ROUTES } from "./window-dispatch.ts";
 export type { Command, Mode };
 
 export interface Thread {
-  workState?: { version: 1; foreground: string[]; background: string[]; backgroundCount: number };
+  workState?: {
+    version: 1;
+    foreground: string[];
+    background: string[];
+    backgroundCount: number;
+  };
   id: string;
   provider: string;
   title: string;
@@ -138,6 +144,7 @@ export interface Thread {
   quotaPaused?: { provider: string; windowLabel: string; resetsAt: number }; // paused due to quota exhaustion; auto-resumes late in a later window (see resumeDue)
   schedule?: { task: string; run: string }; // a scheduled task's run: the sidebar files it under its task
   issueRun?: IssueRun; // started by window-dispatch for a GitHub issue
+  allowedTools?: string[]; // Claude tools approved with "Allow for this thread"; survives restarts
   usageStop?: { provider: string; at: number; resetsAt?: number; text: string }; // last turn ended on a usage limit; cleared when the next turn starts
   replyAt?: number; // when the last non-compaction turn ended
   readAt?: number; // when the user last viewed the thread
@@ -432,7 +439,10 @@ function userInputEvent(
 // Validate a requested Claude account switch; a change is refused once a session exists.
 function accountSelection(thread: Thread, requested: string | undefined) {
   if (requested === undefined)
-    return { accountChanged: false, selectedAccount: undefined as ClaudeAccount | undefined };
+    return {
+      accountChanged: false,
+      selectedAccount: undefined as ClaudeAccount | undefined,
+    };
   if (thread.provider !== "claude")
     throw new Error("Account selection is available only for Claude threads.");
   const account = normalizeClaudeAccount(requested);
@@ -442,7 +452,10 @@ function accountSelection(thread: Thread, requested: string | undefined) {
       "Choose the Claude account in a new thread. Existing sessions keep their original account.",
     );
   requireClaudeAccount(account);
-  return { accountChanged, selectedAccount: account as ClaudeAccount | undefined };
+  return {
+    accountChanged,
+    selectedAccount: account as ClaudeAccount | undefined,
+  };
 }
 
 // Drop patch fields the provider does not offer.
@@ -460,7 +473,10 @@ function clipToolResults(entry: any) {
   if (entry?.type !== "user" || !Array.isArray(entry.message?.content)) return entry;
   return {
     ...entry,
-    message: { ...entry.message, content: entry.message.content.map(clipResultBlock) },
+    message: {
+      ...entry.message,
+      content: entry.message.content.map(clipResultBlock),
+    },
   };
 }
 
@@ -687,10 +703,16 @@ function startSpec(thread: Thread): ThreadSpec {
     forkAt: thread.sessionId ? undefined : thread.forkAt,
     issueRun: thread.issueRun,
     schedule: thread.schedule,
+    allowedTools: thread.allowedTools,
   };
 }
 
-type ForkPick = { model?: string; effort?: string; mode?: string; claudeAccount?: string };
+type ForkPick = {
+  model?: string;
+  effort?: string;
+  mode?: string;
+  claudeAccount?: string;
+};
 
 // The other agent a fork switches to, checked ready; undefined when the fork stays on the source's agent
 function forkTarget(src: Thread, provider?: string): Provider | undefined {
@@ -784,7 +806,9 @@ function carryForkSession(
   if (!how.replayAll && src.provider === "pi") {
     const dir = path.join(DATA_DIR, "pi-sessions", src.id);
     if (fs.existsSync(dir))
-      fs.cpSync(dir, path.join(DATA_DIR, "pi-sessions", child.id), { recursive: true });
+      fs.cpSync(dir, path.join(DATA_DIR, "pi-sessions", child.id), {
+        recursive: true,
+      });
     return;
   }
   if (how.hasHistory) child.replay = true;
@@ -934,7 +958,11 @@ export class Threads {
     this.emit = emit;
     this.labeler = createLabeler((job, label) => {
       if (this.threads.has(job.thread))
-        this.publish(job.thread, { type: "tool_label", tool_use_id: job.id, label });
+        this.publish(job.thread, {
+          type: "tool_label",
+          tool_use_id: job.id,
+          label,
+        });
     });
     this.loadCommands();
     this.loadThreads();
@@ -969,7 +997,12 @@ export class Threads {
     try {
       for (const saved of JSON.parse(fs.readFileSync(THREADS_FILE, "utf8")) as Thread[])
         if (reviveThread(saved)) {
-          saved.workState = { version: 1, foreground: [], background: [], backgroundCount: 0 };
+          saved.workState = {
+            version: 1,
+            foreground: [],
+            background: [],
+            backgroundCount: 0,
+          };
           this.threads.set(saved.id, saved);
         }
     } catch {}
@@ -1228,6 +1261,34 @@ export class Threads {
     );
     this.publish(thread, result.event);
     this.updateWaiting(thread);
+    this.rememberToolRule(thread, request, answers, skip);
+  }
+
+  private rememberToolRule(
+    id: string,
+    request: PendingQuestion | undefined,
+    answers: unknown,
+    skip: boolean,
+  ) {
+    const tool = request?.permission?.tool;
+    const t = this.threads.get(id);
+    const picked = (answers as Record<string, string[]> | null)?.["0"]?.[0];
+    if (!t || skip || !tool || picked !== PERMISSION_ALLOW_THREAD) return;
+    if (t.allowedTools?.includes(tool)) return;
+    t.allowedTools = [...(t.allowedTools ?? []), tool];
+    this.persist();
+    this.emit({ t: "thread", thread: t });
+  }
+
+  /** Forget every "Allow for this thread" approval; an idle warm agent restarts so its in-memory copy is dropped. */
+  clearToolRules(id: string) {
+    const t = this.threads.get(id);
+    if (!t?.allowedTools) return;
+    delete t.allowedTools;
+    this.persist();
+    this.emit({ t: "thread", thread: t });
+    const live = this.live.get(id);
+    if (live?.agent.alive && t.status === "idle") this.kill(id, "tool_rules", true);
   }
 
   private updateWaiting(id: string) {
@@ -1241,7 +1302,9 @@ export class Threads {
       const asyncRequests = requests.filter((q) => q.async);
       if (asyncRequests.length) durable[key] = asyncRequests;
     }
-    fs.writeFileSync(QUESTIONS_FILE + ".tmp", JSON.stringify(durable), { mode: 0o600 });
+    fs.writeFileSync(QUESTIONS_FILE + ".tmp", JSON.stringify(durable), {
+      mode: 0o600,
+    });
     fs.renameSync(QUESTIONS_FILE + ".tmp", QUESTIONS_FILE);
     this.refreshIdleCompaction(t);
     this.persist();
@@ -1295,7 +1358,11 @@ export class Threads {
           : prov.defaultModel();
     if (!model) throw new Error(`${prov.label} has no models available.`);
     if (opts.issueRun)
-      assertAutomationSandbox({ id: "preflight", cwd: opts.cwd, issueRun: opts.issueRun });
+      assertAutomationSandbox({
+        id: "preflight",
+        cwd: opts.cwd,
+        issueRun: opts.issueRun,
+      });
     const thread = this.newThread(prov, opts, mode, model);
     this.threads.set(thread.id, thread);
     this.refreshIdleCompaction(thread);
@@ -1627,8 +1694,14 @@ export class Threads {
     this.persist();
     this.historyIndex.forget(logFile(id));
     fs.rmSync(logFile(id), { force: true });
-    fs.rmSync(path.join(DATA_DIR, "pi-sessions", id), { recursive: true, force: true });
-    fs.rmSync(path.join(DATA_DIR, "auto-runtime", id), { recursive: true, force: true });
+    fs.rmSync(path.join(DATA_DIR, "pi-sessions", id), {
+      recursive: true,
+      force: true,
+    });
+    fs.rmSync(path.join(DATA_DIR, "auto-runtime", id), {
+      recursive: true,
+      force: true,
+    });
     removeUploads(id);
     this.emit({ t: "removed", thread: id });
   }
@@ -1759,7 +1832,9 @@ export class Threads {
   private setCommands(provider: string, list: Command[]) {
     if (JSON.stringify(list) === JSON.stringify(this.commands[provider])) return;
     this.commands[provider] = list;
-    fs.writeFileSync(COMMANDS_FILE, JSON.stringify(this.commands), { mode: 0o600 });
+    fs.writeFileSync(COMMANDS_FILE, JSON.stringify(this.commands), {
+      mode: 0o600,
+    });
     this.emit({ t: "commands", provider, commands: commandList(list) });
   }
 
@@ -1785,7 +1860,11 @@ export class Threads {
       proxyUrl,
     };
     timed(() =>
-      timing?.recordProcess({ thread: thread.id, provider: thread.provider, kind: "spawn" }),
+      timing?.recordProcess({
+        thread: thread.id,
+        provider: thread.provider,
+        kind: "spawn",
+      }),
     );
     const ctx: AgentCtx = {
       event: (event) => this.agentEvent(thread, live, event),
@@ -1930,7 +2009,10 @@ export class Threads {
   private onEvent(thread: Thread, event: any) {
     this.threadToolAuth.observe(thread.id, event);
     if (event.type === "result" && !event.parent_tool_use_id) this.threadToolAuth.clear(thread.id);
-    const flow: EventFlow = { event, compacting: thread.operation === "compact" };
+    const flow: EventFlow = {
+      event,
+      compacting: thread.operation === "compact",
+    };
     this.noteWorkState(thread, event);
     this.checkpoints.observe(thread, event);
     if (this.noteBackgroundTasks(thread, event)) return;
@@ -2227,7 +2309,10 @@ export class Threads {
     if (live) live.compactConfirmed = true;
     thread.lastCompactedAt = Date.now();
     thread.idleCompactionConsumedAt = thread.lastUserActivityAt;
-    thread.context = { max: thread.context?.max, source: thread.context?.source };
+    thread.context = {
+      max: thread.context?.max,
+      source: thread.context?.source,
+    };
     this.emit({ t: "thread", thread });
   }
 
@@ -2650,7 +2735,12 @@ export class Threads {
     this.turns.set(id, {
       start: Date.now(),
       tools: {},
-      clock: new TurnClock({ provider: t.provider, alias: t.model, start: Date.now(), cold: true }),
+      clock: new TurnClock({
+        provider: t.provider,
+        alias: t.model,
+        start: Date.now(),
+        cold: true,
+      }),
     });
     this.touch(t);
     try {
@@ -2774,7 +2864,11 @@ export class Threads {
     if (!target || target.archived)
       throw new Error("Target thread is missing or archived. Call thread_list.");
     if (target.id === sender.id) throw new Error("Cannot send a message to the same thread.");
-    const sourceThread = { id: sender.id, title: sender.title, provider: sender.provider };
+    const sourceThread = {
+      id: sender.id,
+      title: sender.title,
+      provider: sender.provider,
+    };
     const text = `[Message from thread ${sender.id} (${sender.provider}): ${sender.title}]\n${input.message}`;
     const delivery = this.send(target.id, text, { sourceThread });
     return { thread: target.id, delivery };
@@ -2984,7 +3078,11 @@ export class Threads {
       mode: 0o600,
     });
     fs.renameSync(QUEUES_FILE + ".tmp", QUEUES_FILE);
-    this.emit({ t: "queue", thread: id, items: (this.queues.get(id) ?? []).map(queuePreview) });
+    this.emit({
+      t: "queue",
+      thread: id,
+      items: (this.queues.get(id) ?? []).map(queuePreview),
+    });
   }
   getQueues(): Record<string, ReturnType<typeof queuePreview>[]> {
     const out: Record<string, ReturnType<typeof queuePreview>[]> = {};

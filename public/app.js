@@ -35,8 +35,16 @@ composerField($("input"));
 const hostCard = createHostCard($("composer").querySelector(".cwrap"));
 
 const MODE_META = {
-  plan: { label: "Plan", desc: "Read-only. Plans without editing.", icon: "eye" },
-  acceptEdits: { label: "Accept edits", desc: "Edits files without asking.", icon: "pencil" },
+  plan: {
+    label: "Plan",
+    desc: "Read-only. Plans without editing.",
+    icon: "eye",
+  },
+  acceptEdits: {
+    label: "Accept edits",
+    desc: "Edits files without asking.",
+    icon: "pencil",
+  },
   bypassPermissions: {
     label: "Bypass",
     desc: "Runs every tool without asking.",
@@ -309,7 +317,10 @@ let signedOut = false;
 function needSignIn() {
   if (signedOut) return;
   signedOut = true;
-  banner("Coder sign-in expired.", { label: "Sign in again", run: signInAgain });
+  banner("Coder sign-in expired.", {
+    label: "Sign in again",
+    run: signInAgain,
+  });
 }
 function signInAgain() {
   saveDraft();
@@ -374,7 +385,10 @@ function openRefLink(event) {
   event.preventDefault();
   if (!state.current) return;
   const tab = window.open("", "_blank"); // opened synchronously so the popup blocker allows it
-  const query = new URLSearchParams({ thread: state.current, n: link.dataset.ghRef });
+  const query = new URLSearchParams({
+    thread: state.current,
+    n: link.dataset.ghRef,
+  });
   fetch(`/api/gh-ref?${query}`)
     .then(async (res) => {
       const body = await res.json().catch(() => ({}));
@@ -426,7 +440,11 @@ $("files").onclick = async () => {
   try {
     const viewer = await loadFileViewer("viewer:repos");
     setNav(false);
-    viewer.openWorkspace({ opener, openedAt, module_ms: performance.now() - openedAt });
+    viewer.openWorkspace({
+      opener,
+      openedAt,
+      module_ms: performance.now() - openedAt,
+    });
   } catch (error) {
     toast(error.message || "Could not load the file viewer. Try again.");
   } finally {
@@ -732,7 +750,12 @@ function modelMeta(v) {
   };
 }
 const ADV = "advisor:";
-const ADVISOR_LABEL = { default: "Settings default", off: "Off", opus: "Opus", fable: "Fable" };
+const ADVISOR_LABEL = {
+  default: "Settings default",
+  off: "Off",
+  opus: "Opus",
+  fable: "Fable",
+};
 // the model list, then (for agents that have an advisor) "Advisor · X" rows: one dropdown covers both choices
 const withAdvisors = (items, p, advisor = "default") =>
   !p?.advisors?.length
@@ -758,7 +781,10 @@ const modelItems = (models, p) =>
     value: v,
     ...modelMeta(v),
     ...(p?.modelDetails?.[v]
-      ? { label: p.modelDetails[v].label, desc: p.modelDetails[v].description ?? modelMeta(v).desc }
+      ? {
+          label: p.modelDetails[v].label,
+          desc: p.modelDetails[v].description ?? modelMeta(v).desc,
+        }
       : {}),
   }));
 function fillEffort(menu, p, model, value = "default") {
@@ -862,7 +888,9 @@ async function finishSignIn() {
   $("d-signin-finish").disabled = true;
   note.textContent = "Checking the code…";
   try {
-    const { providers } = await claudeLogin(account, { code: $("d-code").value });
+    const { providers } = await claudeLogin(account, {
+      code: $("d-code").value,
+    });
     state.providers = new Map(providers.map((p) => [p.id, p]));
     signingIn = null;
     menus.dAccount.setItems(accountItems(), account);
@@ -1023,6 +1051,14 @@ const threadActions = (id) => {
           : "Cache lifetime is unknown for this provider",
       };
     }
+    if (a.value === "forget-tools") {
+      const count = thread?.allowedTools?.length ?? 0;
+      return {
+        ...a,
+        label: `Forget tool approvals (${count})`,
+        disabled: !count,
+      };
+    }
     return a.value === "archive" && filed
       ? {
           value: "unarchive",
@@ -1049,6 +1085,7 @@ const threadActions = (id) => {
     action("download"),
     action("share"),
     action("details"),
+    ...(thread?.allowedTools?.length ? [action("forget-tools")] : []),
     {
       value: "archive-menu",
       label: "Archive",
@@ -1088,15 +1125,36 @@ const THREAD_ACTIONS = [
     desc: "Pi drafts an issue from the composer text; review, then open GitHub",
     icon: "compose",
   },
-  { value: "download", label: "Download", desc: "Save as a Markdown file", icon: "download" },
-  { value: "share", label: "Share", desc: "Send the conversation as text", icon: "share" },
+  {
+    value: "download",
+    label: "Download",
+    desc: "Save as a Markdown file",
+    icon: "download",
+  },
+  {
+    value: "share",
+    label: "Share",
+    desc: "Send the conversation as text",
+    icon: "share",
+  },
   {
     value: "details",
     label: "Run details",
     desc: "Model, effort, tokens and load timings",
     icon: "code",
   },
-  { value: "archive", label: "Archive", desc: "Move out of the working list", icon: "archive" },
+  {
+    value: "archive",
+    label: "Archive",
+    desc: "Move out of the working list",
+    icon: "archive",
+  },
+  {
+    value: "forget-tools",
+    label: "Forget tool approvals",
+    desc: "Ask again before tools you allowed for this thread",
+    icon: "x",
+  },
   { value: "delete", label: "Delete thread", icon: "trash", tone: "danger" },
 ];
 let toastTimer;
@@ -1161,6 +1219,10 @@ function detailsThreadAction(id) {
 function archiveThreadAction(id, thread, action) {
   send({ t: "archive", thread: id, archived: action === "archive" });
 }
+function forgetToolsThreadAction(id) {
+  send({ t: "tool_rules_clear", thread: id });
+  toast("Tool approvals cleared.");
+}
 function deleteThreadAction(id, thread) {
   if (confirm(`Delete "${thread.title}" and its history?`)) send({ t: "delete", thread: id });
 }
@@ -1211,6 +1273,7 @@ const THREAD_ACTION_HANDLERS = {
   archive: archiveThreadAction,
   unarchive: archiveThreadAction,
   delete: deleteThreadAction,
+  "forget-tools": forgetToolsThreadAction,
   fork: forkThreadAction,
   download: downloadThreadAction,
   "create-issue": createIssueThreadAction,
@@ -1295,7 +1358,11 @@ const menus = {
     renderTrigger: fieldTrigger,
     value: "full",
   }),
-  dCwd: createMenu({ trigger: $("d-cwd"), label: "Folder", renderTrigger: fieldTrigger }),
+  dCwd: createMenu({
+    trigger: $("d-cwd"),
+    label: "Folder",
+    renderTrigger: fieldTrigger,
+  }),
   dModel: createMenu({
     trigger: $("d-model"),
     label: "Model",
@@ -1591,12 +1658,20 @@ async function refreshSecurity() {
     const behind = (d.records || []).filter((x) => x.installed !== x.fixed);
     const open = behind.filter((x) => x.pr).length;
     const failed = behind.filter((x) => x.failed).length;
-    const auto = await apiFetch("/api/security/automations", { cache: "no-store" })
+    const auto = await apiFetch("/api/security/automations", {
+      cache: "no-store",
+    })
       .then((a) => (a.ok ? a.json() : null))
       .catch(() => null);
     const failing = auto?.summary?.bad ?? 0;
     const changed = (d.mismatches || []).length;
-    ({ tone, text } = securityVerdict({ changed, failed, failing, open, behind: behind.length }));
+    ({ tone, text } = securityVerdict({
+      changed,
+      failed,
+      failing,
+      open,
+      behind: behind.length,
+    }));
   } catch {}
   link.dataset.tone = tone;
   link.setAttribute("aria-label", text);
@@ -1787,7 +1862,13 @@ function showCachedView(id, cached) {
   restoreView(cached);
   const total_ms = Math.round(performance.now() - state.openAt);
   window.agentConsoleMetrics = { thread: id, cached: true, total_ms };
-  latency.record({ kind: "cached", thread: id, total_ms, render_ms: total_ms, wait_ms: 0 });
+  latency.record({
+    kind: "cached",
+    thread: id,
+    total_ms,
+    render_ms: total_ms,
+    wait_ms: 0,
+  });
   showLoad(`Opened from cache in ${fmtMs(total_ms)}`);
   views.delete(id);
   if (cached.stale || cur()?.status === "running") revalidateCachedView(cached);
@@ -1897,7 +1978,11 @@ function refreshConversation() {
   state.deferredRefresh = false;
   $("conversation-updating").textContent = "Updating conversation…";
   state.refreshAt = performance.now();
-  state.measurement = { thread: state.current, at: state.refreshAt, hidden: document.hidden };
+  state.measurement = {
+    thread: state.current,
+    at: state.refreshAt,
+    hidden: document.hidden,
+  };
   state.requestSentAt = performance.now();
   send({
     t: "open",
@@ -2148,7 +2233,15 @@ function requestEarlier(thread) {
   state.measurement = { thread, at: state.pageAt, hidden: document.hidden };
   state.requestSentAt = performance.now();
   // The socket may be down (phone woke up, reconnecting): a dropped request would leave the button dead, so retry until it is sent.
-  if (!send({ t: "open", thread, before: state.start, request: state.request, small: SMALL_PAGES }))
+  if (
+    !send({
+      t: "open",
+      thread,
+      before: state.start,
+      request: state.request,
+      small: SMALL_PAGES,
+    })
+  )
     return void setTimeout(requestEarlier, 300, thread);
   state.earlierWanted = null;
   state.loadingEarlier = true;
@@ -2731,7 +2824,13 @@ function speedSlider(name, label, min, max) {
   const wrap = el("label", "slider"),
     out = el("output"),
     input = el("input");
-  Object.assign(input, { type: "range", min, max, step: 1, value: speedView[name] });
+  Object.assign(input, {
+    type: "range",
+    min,
+    max,
+    step: 1,
+    value: speedView[name],
+  });
   input.dataset.pct = name;
   input.sync = () => {
     input.value = speedView[name];
@@ -3021,9 +3120,13 @@ function markGesture(touching) {
   if (touching != null) gesture.touching = touching;
   gesture.at = performance.now();
 }
-$("chat").addEventListener("touchstart", () => markGesture(true), { passive: true });
+$("chat").addEventListener("touchstart", () => markGesture(true), {
+  passive: true,
+});
 for (const event of ["touchend", "touchcancel"])
-  $("chat").addEventListener(event, () => markGesture(false), { passive: true });
+  $("chat").addEventListener(event, () => markGesture(false), {
+    passive: true,
+  });
 $("chat").addEventListener("wheel", () => markGesture(), { passive: true });
 // Older pages are fetched and slid in only once the list is still: inserting mid-fling moves content under the finger.
 function loadEarlierWhenStill() {
@@ -3890,7 +3993,10 @@ function onUserEvent(event, ctx) {
 function resultStats(event) {
   const bits = [];
   const stamp = new Date(event.ts || Date.now());
-  const clock = stamp.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const clock = stamp.toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
   bits.push(
     stamp.toDateString() === new Date().toDateString()
       ? clock
@@ -4152,7 +4258,10 @@ function usageHead(sample, deepseek) {
     ? el(
         "span",
         "usage-stamp",
-        new Date(sample.updatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+        new Date(sample.updatedAt).toLocaleTimeString([], {
+          hour: "2-digit",
+          minute: "2-digit",
+        }),
       )
     : null;
   if (stamp) {
@@ -4240,7 +4349,11 @@ function usageContextGroup(thread) {
   const openForecast = (trigger) =>
     loadContextEconomics()
       .then((mod) =>
-        mod.openContextEconomics({ getThread: () => state.threads.get(thread?.id), send, trigger }),
+        mod.openContextEconomics({
+          getThread: () => state.threads.get(thread?.id),
+          send,
+          trigger,
+        }),
       )
       .catch((error) => toast(error.message || "Could not load this panel. Try again."));
   info.onclick = () => openForecast(info);
@@ -4383,15 +4496,29 @@ async function submit(mode) {
     mode = defaultSendMode(mode, attachments);
     // mid-turn a message queues until the turn ends; mode "steer" (Alt+Enter, or Steer on a queued card) hands it to the agent now
     const startsTurn = !mode && cur()?.status !== "running";
-    const draft = { thread, text: box.value, attachments: pending.map(attachmentSnapshot) };
+    const draft = {
+      thread,
+      text: box.value,
+      attachments: pending.map(attachmentSnapshot),
+    };
     if (
       sendReliable(
-        { t: "send", thread: state.current, text, attachments, ...(mode ? { mode } : {}) },
+        {
+          t: "send",
+          thread: state.current,
+          text,
+          attachments,
+          ...(mode ? { mode } : {}),
+        },
         draft,
       ) &&
       startsTurn
     )
-      firstToken = { thread: state.current, at: tapAt, wait_ms: performance.now() - tapAt };
+      firstToken = {
+        thread: state.current,
+        at: tapAt,
+        wait_ms: performance.now() - tapAt,
+      };
     box.value = "";
     saveDraft();
     box.style.height = "";
@@ -4577,7 +4704,11 @@ async function runPendingUpload(pending) {
   if (pending.removed) return;
   if (state.current === pending.thread) renderThumbs();
   const result = await upload(pending.thread, pending.blob, pending.name);
-  Object.assign(pending, { id: result.id, name: result.name, kind: result.kind });
+  Object.assign(pending, {
+    id: result.id,
+    name: result.name,
+    kind: result.kind,
+  });
   if (!pending.removed) await attachmentStorage.save(pending);
   delete pending.blob;
 }
@@ -4973,7 +5104,11 @@ function fillEditingTask(task, providerId) {
   if (!menus.dCwd.items().some((item) => item.value === task.cwd))
     menus.dCwd.setItems([
       ...menus.dCwd.items(),
-      { value: task.cwd, label: task.cwd.replace(/^.*\/repos\/?/, "~/repos/"), icon: "folder" },
+      {
+        value: task.cwd,
+        label: task.cwd.replace(/^.*\/repos\/?/, "~/repos/"),
+        icon: "folder",
+      },
     ]);
   menus.dCwd.setValue(task.cwd);
   if (menus.dModel.items().some((item) => item.value === task.model)) {
@@ -5008,7 +5143,11 @@ function setDialogKind(task) {
   dialogAssignment = null;
   $("d-assignment-error").hidden = true;
   menus.dProv.setItems(
-    [...state.providers.values()].map((p) => ({ value: p.id, label: p.label, disabled: !p.ok })),
+    [...state.providers.values()].map((p) => ({
+      value: p.id,
+      label: p.label,
+      disabled: !p.ok,
+    })),
     menus.dProv.value,
   );
   const wasTask = dialogTask !== null;
@@ -5136,7 +5275,10 @@ async function submitPremiumAssignment(settings, account) {
     const { cwd, ...choice } = settings;
     response = await apiFetch("/api/automation/assign", {
       method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/x-ndjson" },
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/x-ndjson",
+      },
       body: JSON.stringify({ v: 1, ...issue, ...choice, ...account }),
     });
     if (!response.ok || !response.headers.get("content-type")?.includes("ndjson")) {
@@ -5459,11 +5601,31 @@ createMenu({
     { value: "benchmarks", label: "Model benchmarks", icon: "chart" },
     { value: "automation", label: "Automation dashboard", icon: "play" },
     { value: "host", label: "Host dashboard", icon: "terminal" },
-    { value: "vault", label: "Vault", desc: "API tokens, write-only", icon: "key" },
-    { value: "doctor", label: "Doctor", desc: "Check and repair the setup", icon: "alert" },
+    {
+      value: "vault",
+      label: "Vault",
+      desc: "API tokens, write-only",
+      icon: "key",
+    },
+    {
+      value: "doctor",
+      label: "Doctor",
+      desc: "Check and repair the setup",
+      icon: "alert",
+    },
     { value: "ideas", label: "App ideas", icon: "sparkle" },
-    { value: "brain", label: "Brain", desc: "Search the shared memory", icon: "search" },
-    { value: "maps", label: "Map a repo", desc: "Local or GitHub", icon: "globe" },
+    {
+      value: "brain",
+      label: "Brain",
+      desc: "Search the shared memory",
+      icon: "search",
+    },
+    {
+      value: "maps",
+      label: "Map a repo",
+      desc: "Local or GitHub",
+      icon: "globe",
+    },
     { value: "reload", label: "Reload page", icon: "refresh" },
     {
       value: "restart",

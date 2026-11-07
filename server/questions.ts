@@ -11,6 +11,7 @@ export interface PendingQuestion {
   questions: Question[];
   ts?: number;
   async?: true;
+  permission?: { tool: string; input: unknown; blockedPath?: string }; // a tool-permission card (Claude)
 }
 
 function validateAnswerValues(question: Question, values: unknown): string[] {
@@ -63,7 +64,9 @@ function buildAnswerEvent(
     answers: visible,
     ...(skip ? { skip: true } : {}),
     ...(note !== undefined
-      ? { note: request.questions.some((question) => question.secret) ? "••••••" : note }
+      ? {
+          note: request.questions.some((question) => question.secret) ? "••••••" : note,
+        }
       : {}),
     ts: Date.now(),
   };

@@ -73,6 +73,7 @@ export function normalizeCommands(raw: any[]): Command[] {
 interface PendingControl {
   input: any;
   questions: ReturnType<typeof cleanQuestions>;
+  permission?: string; // tool name when this card asks to run a tool rather than carrying AskUserQuestion answers
 }
 
 interface ControlContext {
@@ -80,7 +81,14 @@ interface ControlContext {
   write: (msg: object) => void;
   emit: (event: any) => void;
   mode: string;
+  allowed: Set<string>; // tools the user approved for this thread
+  interactive: boolean; // a person can answer permission cards (not issue runs or schedules)
 }
+
+export const PERMISSION_ALLOW_ONCE = "Allow once";
+export const PERMISSION_ALLOW_THREAD = "Allow for this thread";
+const PERMISSION_DENY = "Deny";
+const PERMISSION_PREVIEW_MAX = 4096;
 
 const AUTO_ALLOWED_TOOLS = [
   "mcp__agent_console__session_search",
@@ -127,6 +135,46 @@ function askControlQuestions(ctx: ControlContext, event: any, req: any) {
   });
 }
 
+function previewInput(input: any): any {
+  const text = JSON.stringify(input ?? {}) ?? "{}";
+  if (text.length <= PERMISSION_PREVIEW_MAX) return input ?? {};
+  return { truncated: `${text.slice(0, PERMISSION_PREVIEW_MAX)}…` };
+}
+
+function askPermission(ctx: ControlContext, event: any, req: any) {
+  const tool = String(req.tool_name ?? "tool");
+  const questions = cleanQuestions([
+    {
+      id: "0",
+      header: "Permission",
+      question: `Allow ${tool}?`,
+      options: [
+        { label: PERMISSION_ALLOW_ONCE },
+        { label: PERMISSION_ALLOW_THREAD },
+        { label: PERMISSION_DENY },
+      ],
+      allowOther: true,
+    },
+  ]);
+  ctx.pending.set(event.request_id, {
+    input: req.input ?? {},
+    questions,
+    permission: tool,
+  });
+  ctx.emit({
+    type: "question",
+    id: event.request_id,
+    tool_use_id: req.tool_use_id,
+    permission: {
+      tool,
+      input: previewInput(req.input),
+      ...(typeof req.blocked_path === "string" ? { blockedPath: req.blocked_path } : {}),
+    },
+    questions,
+    ts: Date.now(),
+  });
+}
+
 function handleControlRequest(ctx: ControlContext, event: any) {
   const req = event.request ?? {};
   if (req.subtype !== "can_use_tool") {
@@ -148,11 +196,25 @@ function handleControlRequest(ctx: ControlContext, event: any) {
     (["scan", "verify", "status"].includes(redactionAction) ||
       (redactionAction === "apply" && ctx.mode === "bypassPermissions"));
   if (AUTO_ALLOWED_TOOLS.includes(req.tool_name) || redactionAllowed) {
-    respondControl(ctx, event.request_id, { behavior: "allow", updatedInput: req.input ?? {} });
+    respondControl(ctx, event.request_id, {
+      behavior: "allow",
+      updatedInput: req.input ?? {},
+    });
     return;
   }
   if (req.tool_name === "AskUserQuestion" && Array.isArray(req.input?.questions)) {
     askControlQuestions(ctx, event, req);
+    return;
+  }
+  if (ctx.interactive && req.tool_name !== "ExitPlanMode" && typeof req.tool_name === "string") {
+    if (ctx.allowed.has(req.tool_name)) {
+      respondControl(ctx, event.request_id, {
+        behavior: "allow",
+        updatedInput: req.input ?? {},
+      });
+      return;
+    }
+    askPermission(ctx, event, req);
     return;
   }
   respondControl(ctx, event.request_id, {
@@ -164,7 +226,11 @@ function handleControlRequest(ctx: ControlContext, event: any) {
 function handleControlMessage(ctx: ControlContext, event: any): boolean {
   if (event?.type === "control_cancel_request") {
     if (ctx.pending.delete(event.request_id))
-      ctx.emit({ type: "question_answer", id: event.request_id, cancelled: true });
+      ctx.emit({
+        type: "question_answer",
+        id: event.request_id,
+        cancelled: true,
+      });
     return true;
   }
   if (event?.type === "control_response") return true; // replies to host requests; we send none
@@ -173,9 +239,38 @@ function handleControlMessage(ctx: ControlContext, event: any): boolean {
   return true;
 }
 
+function answerPermission(
+  ctx: ControlContext,
+  questionId: string,
+  entry: PendingControl,
+  reply: QuestionReply,
+) {
+  const tool = entry.permission!;
+  const choice = (reply.answers["0"] ?? [])[0]?.trim() ?? "";
+  if (choice === PERMISSION_ALLOW_ONCE || choice === PERMISSION_ALLOW_THREAD) {
+    if (choice === PERMISSION_ALLOW_THREAD) ctx.allowed.add(tool);
+    respondControl(ctx, questionId, {
+      behavior: "allow",
+      updatedInput: entry.input,
+    });
+    return;
+  }
+  const text = choice && choice !== PERMISSION_DENY ? `: ${choice}` : ".";
+  respondControl(ctx, questionId, {
+    behavior: "deny",
+    message: `The user denied ${tool}${text}`,
+  });
+}
+
 function answerControl(ctx: ControlContext, questionId: string, reply: QuestionReply): boolean {
   const entry = ctx.pending.get(questionId);
   if (!entry) throw new Error("This question is no longer waiting for an answer.");
+  if (entry.permission && reply.note === undefined) {
+    if (reply.skip) reply = { answers: { "0": [PERMISSION_DENY] } };
+    answerPermission(ctx, questionId, entry, reply);
+    ctx.pending.delete(questionId);
+    return false;
+  }
   if (reply.skip || reply.note !== undefined) {
     const message =
       reply.note !== undefined
@@ -194,7 +289,10 @@ function answerControl(ctx: ControlContext, questionId: string, reply: QuestionR
       answers[String(entry.input.questions[idx]?.question ?? question.question)] =
         picked.join(", ");
   });
-  respondControl(ctx, questionId, { behavior: "allow", updatedInput: { ...entry.input, answers } });
+  respondControl(ctx, questionId, {
+    behavior: "allow",
+    updatedInput: { ...entry.input, answers },
+  });
   ctx.pending.delete(questionId);
   return false;
 }
@@ -209,8 +307,16 @@ export function claudeControl(
   write: (msg: object) => void,
   emit: (event: any) => void,
   mode: string,
+  opts: { allowed?: string[]; interactive: boolean } = { interactive: false },
 ) {
-  const ctx: ControlContext = { pending: new Map(), write, emit, mode };
+  const ctx: ControlContext = {
+    pending: new Map(),
+    write,
+    emit,
+    mode,
+    allowed: new Set(opts.allowed ?? []),
+    interactive: opts.interactive,
+  };
   return {
     pending: ctx.pending,
     cancelAll() {
@@ -393,7 +499,10 @@ function configureClaude(run: ClaudeRun, from: Settings, target: Settings): bool
   if (from.model !== target.model) ask({ subtype: "set_model", model: target.model });
   if (from.mode !== target.mode) ask({ subtype: "set_permission_mode", mode: target.mode });
   if (from.effort !== target.effort)
-    ask({ subtype: "apply_flag_settings", settings: { effortLevel: target.effort } });
+    ask({
+      subtype: "apply_flag_settings",
+      settings: { effortLevel: target.effort },
+    });
   return true;
 }
 
@@ -423,7 +532,15 @@ export const claude: Provider = {
     const args = claudeStartArgs(t);
     const env = claudeStartEnv(t, account);
     const run: ClaudeRun = { proc: undefined, requests: 0 };
-    const control = claudeControl((msg) => run.proc!.write(JSON.stringify(msg)), ctx.event, t.mode);
+    const control = claudeControl(
+      (msg) => run.proc!.write(JSON.stringify(msg)),
+      ctx.event,
+      t.mode,
+      {
+        allowed: t.allowedTools,
+        interactive: !t.issueRun && !t.schedule,
+      },
+    );
     const launch = sandboxLaunch(t, "claude", args, env);
     const proc = spawnLines(
       "claude",

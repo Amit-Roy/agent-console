@@ -272,7 +272,9 @@ boot.mark("sqlite-stores");
 setInterval(() => threads.sweep(), 60_000).unref();
 startToolPriority(); // tool commands below agents and this server: busy tests never delay a turn
 // Every automation stage writes here; the dashboard reads it. A previous process's unfinished runs are closed as abandoned.
-const automationLog = createEventLog({ file: path.join(DATA_DIR, "automation-events.jsonl") });
+const automationLog = createEventLog({
+  file: path.join(DATA_DIR, "automation-events.jsonl"),
+});
 automationLog.recoverOpenRuns();
 boot.mark("event-log");
 // Nightly brain consolidation: the server gathers its signal file before the run and verifies what the agent changed after it
@@ -301,7 +303,10 @@ workspaceMonitor = createWorkspaceMonitor({
   events: automationLog,
   host: latestHost,
   headroom: () => headroom.state(),
-  threads: { create: (o) => threads.create(o), send: (id, text) => threads.send(id, text) },
+  threads: {
+    create: (o) => threads.create(o),
+    send: (id, text) => threads.send(id, text),
+  },
   notify: (n) => notifications?.notify({ kind: "failed", thread: n.thread, title: n.title }),
 });
 const recordUsage = usageEvents(automationLog);
@@ -360,9 +365,12 @@ const automation = automationApi({
           : {}),
       })),
   schedules: () =>
-    schedules
-      .list()
-      .map((t) => ({ id: t.id, title: t.title, schedule: describe(t), enabled: t.enabled })),
+    schedules.list().map((t) => ({
+      id: t.id,
+      title: t.title,
+      schedule: describe(t),
+      enabled: t.enabled,
+    })),
 });
 const assignPremium = createPremiumAssigner({
   threads: () => threads.list(),
@@ -447,7 +455,11 @@ if (process.env.AGENT_CONSOLE_MOCK !== "1") {
         now: Date.now(),
       });
       if (answer.decision !== "route" || !answer.route || answer.route.provider === "pi") return;
-      return assignPremium({ ...req, ...answer.route, mode: "bypassPermissions" });
+      return assignPremium({
+        ...req,
+        ...answer.route,
+        mode: "bypassPermissions",
+      });
     },
     canResume: (t) => {
       const live = threads.get(t.id);
@@ -937,7 +949,10 @@ app.get("/api/sessions/prs", async (req, res) => {
   res.setHeader("Cache-Control", "no-store");
   try {
     res.json(
-      await sessionSearch.prs({ thread: req.query.thread as any, ref: req.query.ref as any }),
+      await sessionSearch.prs({
+        thread: req.query.thread as any,
+        ref: req.query.ref as any,
+      }),
     );
   } catch (e: any) {
     res.status(400).json({ error: e?.message || "PR lookup failed." });
@@ -1043,9 +1058,9 @@ app.post("/api/doctor", sameOrigin, async (_req, res) => {
   try {
     res.json(await doctor.repair());
   } catch {
-    res
-      .status(503)
-      .json({ error: "Setup repair could not finish. Check again for current status." });
+    res.status(503).json({
+      error: "Setup repair could not finish. Check again for current status.",
+    });
   }
 });
 // Browser push is opt-in per device. Both writes require a same-origin session.
@@ -1296,7 +1311,10 @@ app.get("/api/turn-latency", (req, res) => {
     try {
       return void res.json(
         store
-          ? { available: true, turns: store.recent(known, Number(req.query.detail) || 10) }
+          ? {
+              available: true,
+              turns: store.recent(known, Number(req.query.detail) || 10),
+            }
           : { available: false },
       );
     } catch {
@@ -1660,7 +1678,16 @@ app.get("/api/automation/job", (req, res) => {
 });
 app.post("/api/automation/assign", sameOrigin, express.json({ limit: "4kb" }), async (req, res) => {
   const { v, repo, number, provider, model, effort, mode, claudeAccount } = req.body ?? {};
-  const choice = { v, repo, number, provider, model, effort, mode, claudeAccount };
+  const choice = {
+    v,
+    repo,
+    number,
+    provider,
+    model,
+    effort,
+    mode,
+    claudeAccount,
+  };
   // The dialog asks for NDJSON to draw each step live; the last line is the thread or the error.
   if (!String(req.headers.accept).includes("application/x-ndjson")) {
     try {
@@ -1782,7 +1809,11 @@ app.post("/api/host/processes/:pid/kill", express.json({ limit: "1kb" }), sameOr
 const toolWatch = createToolWatch({
   // Same web push the thread notices use; no thread behind it, so the tap just opens the console.
   notify: (title, body) =>
-    notifications?.notify({ kind: "failed", thread: "tool-watch", title: `${title}: ${body}` }),
+    notifications?.notify({
+      kind: "failed",
+      thread: "tool-watch",
+      title: `${title}: ${body}`,
+    }),
   // Signed-in Claude accounts that still have window left; none = retry later instead of failing the review.
   accounts: () =>
     claudeAccounts()
@@ -1800,9 +1831,9 @@ mountPromptImprove(app, sameOrigin);
 mountMaps(app, sameOrigin, mapsService);
 // App ideas: index.md + one markdown file per idea in a private git repo (server/ideas.ts). Adding commits, so same-origin only.
 const ideaError = (res: express.Response, e: any) =>
-  res
-    .status(e instanceof IdeaError ? e.status : 500)
-    .json({ error: e instanceof IdeaError ? e.message : "App ideas are unavailable." });
+  res.status(e instanceof IdeaError ? e.status : 500).json({
+    error: e instanceof IdeaError ? e.message : "App ideas are unavailable.",
+  });
 app.get("/api/ideas", (_req, res) => {
   res.setHeader("Cache-Control", "no-store");
   try {
@@ -1908,7 +1939,12 @@ app.use((req, res, next) => {
   next();
 });
 app.use(staticAssets.middleware); // /r/<sha12>/ assets + rewritten pages, before the legacy root paths below
-app.use(express.static(path.join(ROOT, "public"), { index: "index.html", extensions: ["html"] }));
+app.use(
+  express.static(path.join(ROOT, "public"), {
+    index: "index.html",
+    extensions: ["html"],
+  }),
+);
 
 boot.mark("routes");
 const wss = new WebSocketServer({
@@ -2048,6 +2084,9 @@ wss.on("connection", (ws) => {
           }
           return;
         }
+        case "tool_rules_clear":
+          if (typeof m.thread === "string") threads.clearToolRules(m.thread);
+          return;
         case "refresh_usage":
           void refreshUsage();
           return;
@@ -2075,7 +2114,12 @@ wss.on("connection", (ws) => {
         case "answer": {
           try {
             threads.answer(m.thread, m.id, m.answers, m.skip === true);
-            return reply({ t: "answer_done", thread: m.thread, id: m.id, request: m.request });
+            return reply({
+              t: "answer_done",
+              thread: m.thread,
+              id: m.id,
+              request: m.request,
+            });
           } catch (e: any) {
             return reply({
               t: "answer_error",
@@ -2112,7 +2156,12 @@ wss.on("connection", (ws) => {
               });
             if (m.t === "queue_save") threads.saveQueued(m.thread, m.id, m.revision, m.text);
             else threads.cancelQueuedEdit(m.thread, m.id, m.revision);
-            return reply({ t: "queue_edit_done", request: m.request, thread: m.thread, id: m.id });
+            return reply({
+              t: "queue_edit_done",
+              request: m.request,
+              thread: m.thread,
+              id: m.id,
+            });
           } catch (e: any) {
             return reply({
               t: "queue_edit_error",
