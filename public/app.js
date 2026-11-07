@@ -5625,7 +5625,7 @@ createMenu({
       value: "graph",
       label: "Thread graph",
       desc: "How threads relate",
-      icon: "search",
+      icon: "network",
     },
     {
       value: "maps",

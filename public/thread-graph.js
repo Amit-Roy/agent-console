@@ -352,8 +352,40 @@ function savePositions() {
   });
   store.set(POS_KEY, JSON.stringify(positions));
 }
+const MAX_FIT_ZOOM = 1.1; // a few nodes fit at high zoom, which would blow labels up to 30+ px
+// Part of the canvas the open sheet covers: a side sheet on desktop, a bottom sheet on a phone.
+function coveredBySheet() {
+  const sheet = $("sheet");
+  if (sheet.hidden || !net) return { right: 0, bottom: 0 };
+  const canvas = $("cy").getBoundingClientRect();
+  const over = sheet.getBoundingClientRect();
+  const side = over.left > canvas.left + canvas.width / 4 && over.top <= canvas.top;
+  if (side) return { right: Math.min(canvas.right - over.left, canvas.width * 0.6), bottom: 0 };
+  return { right: 0, bottom: Math.min(Math.max(canvas.bottom - over.top, 0), canvas.height * 0.6) };
+}
 function fitGraph() {
-  net?.fit(undefined, 30);
+  if (!net) return;
+  const pad = 30;
+  const covered = coveredBySheet();
+  net.fit(undefined, {
+    top: pad,
+    left: pad,
+    right: pad + covered.right,
+    bottom: pad + covered.bottom,
+  });
+  if (net.zoom() <= MAX_FIT_ZOOM) return;
+  net.zoom(MAX_FIT_ZOOM);
+  net.center();
+  net.panBy({ x: -covered.right / 2, y: -covered.bottom / 2 });
+}
+function nodeUnderSheet() {
+  if (!net || $("sheet").hidden) return false;
+  const covered = coveredBySheet();
+  const canvas = $("cy").getBoundingClientRect();
+  return net.nodes().some((node) => {
+    const box = node.renderedBoundingBox();
+    return box.x2 > canvas.width - covered.right || box.y2 > canvas.height - covered.bottom;
+  });
 }
 async function makeGraph() {
   const cytoscape = await ensureCytoscape();
@@ -366,7 +398,10 @@ async function makeGraph() {
     maxZoom: 3,
   });
   $("cy").__cy = net; // handle for the browser test, which taps nodes at their rendered positions
-  net.on("tap", "node", (event) => openNode(event.target.id()));
+  net.on("tap", "node", (event) => {
+    hideTip();
+    openNode(event.target.id());
+  });
   net.on("tap", (event) => event.target === net && closeSheet());
   net.on("dragfree", "node", savePositions);
   net.on("mouseover", "node", (event) => showTip(event.target));
@@ -420,10 +455,13 @@ function tipText(node) {
 function showTip(node) {
   const tip = $("tip");
   tip.textContent = tipText(node);
-  const spot = node.renderedPosition();
-  tip.style.left = `${Math.max(4, spot.x + 14)}px`;
-  tip.style.top = `${Math.max(4, spot.y - 8)}px`;
   tip.hidden = false;
+  // above the node, so the node's own label stays readable
+  const spot = node.renderedPosition();
+  const reach = node.renderedOuterHeight() / 2 + 8;
+  const room = $("cy").clientWidth - tip.offsetWidth - 4;
+  tip.style.left = `${Math.min(Math.max(4, spot.x - tip.offsetWidth / 2), room)}px`;
+  tip.style.top = `${Math.max(4, spot.y - reach - tip.offsetHeight)}px`;
 }
 function hideTip() {
   $("tip").hidden = true;
@@ -450,6 +488,7 @@ function showSheet(title) {
   $("sheetTitle").textContent = title;
   $("sheet").hidden = false;
   $("scrim").hidden = false;
+  if (nodeUnderSheet()) fitGraph();
 }
 function openNode(id) {
   const node = state.nodes.get(id);

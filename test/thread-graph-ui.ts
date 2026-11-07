@@ -195,6 +195,26 @@ try {
     "sheet lists shared keys",
     (await desktop.page.textContent("#sheetBody"))!.includes("file:"),
   );
+  const clear = await desktop.page.evaluate(() => {
+    const cy = (document.getElementById("cy") as any).__cy;
+    const sheetLeft = document.getElementById("sheet")!.getBoundingClientRect().left;
+    const box = document.getElementById("cy")!.getBoundingClientRect();
+    const right = Math.max(
+      ...cy.nodes().map((node: any) => box.left + node.renderedBoundingBox().x2),
+    );
+    return { right, sheetLeft, font: cy.zoom() * 12 };
+  });
+  check("no node under the open sheet", clear.right <= clear.sheetLeft, JSON.stringify(clear));
+  check("labels stay at 14px or smaller at fit zoom", clear.font <= 14, String(clear.font));
+  const moved = await desktop.page.evaluate(() => {
+    const spot = (document.getElementById("cy") as any).__cy
+      .getElementById("bbbb")
+      .renderedPosition();
+    const box = document.getElementById("cy")!.getBoundingClientRect();
+    return { x: box.left + spot.x, y: box.top + spot.y };
+  });
+  await desktop.page.mouse.move(moved.x, moved.y);
+  await desktop.page.waitForSelector("#tip:not([hidden])");
   await desktop.page.screenshot({ path: path.join(OUT, "graph-desktop.png") });
   await desktop.page.click("#fProvider");
   await desktop.page.selectOption("#fProvider", "pi");
