@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { healCamofox, isWedgeFailure } from "../health/camofox.ts";
 import { CamofoxUnavailableError, camofoxCall } from "./camofox.ts";
 import { assertPublicHost, safeFetch } from "./safe-fetch.ts";
 import type { ShareLink } from "./types.ts";
@@ -8,7 +9,8 @@ import { MAX_ITEMS, MAX_TOTAL_BYTES, scanStage } from "./ytdlp.ts";
 // Logged-out fallback for Instagram posts: render the public page in camofox, read the media URLs from its embedded
 // JSON, then download them from the Instagram CDN ourselves. No cookies. Page content and URLs are untrusted data.
 
-const USER = "agent-console-share";
+export const CAMOFOX_USER = "agent-console-share";
+const USER = CAMOFOX_USER;
 const TAB_TIMEOUT_MS = 60_000;
 const EVALUATE_TIMEOUT_MS = 20_000;
 const WAIT_TIMEOUT_MS = 20_000;
@@ -43,12 +45,23 @@ export interface CamofoxDeps {
     url: string,
     opts: { maxBytes: number; timeoutMs: number; signal?: AbortSignal },
   ) => Promise<MediaResponse>;
+  heal?: () => Promise<unknown>;
 }
 
 export const defaultCamofoxDeps: CamofoxDeps = {
   call: camofoxCall,
   fetchMedia: (url, opts) => safeFetch(url, opts),
+  heal: () => healCamofox(),
 };
+
+// A wedged session context fails tab creation; restart camofox in the background, never blocking or throwing.
+function healOnWedgedTab(deps: CamofoxDeps, error: unknown): void {
+  const detail = String((error as Error)?.message ?? error);
+  if (!isWedgeFailure(detail) || !deps.heal) return;
+  try {
+    void deps.heal().catch(() => {});
+  } catch {}
+}
 
 // pickMedia and its helpers run inside the page via camofox evaluate: they are stringified (see PAGE_FUNCTIONS), so they
 // must stay plain JS after type stripping, call only each other, and touch nothing else in module scope.
@@ -206,15 +219,21 @@ async function openAndPick(
   link: ShareLink & { code?: string },
   signal?: AbortSignal,
 ): Promise<PickedMedia | null> {
-  const created = await deps.call(
-    "/tabs",
-    {
-      method: "POST",
-      body: JSON.stringify({ userId: USER, sessionKey: "instagram", url: link.url }),
-    },
-    signal,
-    TAB_TIMEOUT_MS,
-  );
+  let created: any;
+  try {
+    created = await deps.call(
+      "/tabs",
+      {
+        method: "POST",
+        body: JSON.stringify({ userId: USER, sessionKey: "instagram", url: link.url }),
+      },
+      signal,
+      TAB_TIMEOUT_MS,
+    );
+  } catch (error) {
+    if (!signal?.aborted) healOnWedgedTab(deps, error);
+    throw error;
+  }
   const tabId = encodeURIComponent(String(created?.tabId ?? ""));
   try {
     return await evaluatePage(deps, tabId, link.code ?? link.id, signal);
