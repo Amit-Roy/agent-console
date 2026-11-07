@@ -374,5 +374,36 @@ assert.match(pageExpression(CODE), /^\(\(\)=>\{function /);
   fs.rmSync(repo, { recursive: true, force: true });
 }
 
+// ---- wedged tab creation fires heal once, without blocking or throwing
+{
+  let heals = 0;
+  const wedged = {
+    ...defaultCamofoxDeps,
+    call: async () => {
+      throw new CamofoxUnavailableError("/tabs 500");
+    },
+    heal: async () => {
+      heals++;
+      throw new Error("heal failure must not propagate");
+    },
+  };
+  await runCamofoxFallback(
+    link,
+    fs.mkdtempSync(path.join(os.tmpdir(), "ig-heal-")),
+    {},
+    [],
+    wedged,
+  );
+  assert.equal(heals, 1, "heal fired once on tab timeout");
+  const quiet = {
+    ...wedged,
+    call: async () => {
+      throw new CamofoxUnavailableError("disabled");
+    },
+  };
+  await runCamofoxFallback(link, fs.mkdtempSync(path.join(os.tmpdir(), "ig-heal-")), {}, [], quiet);
+  assert.equal(heals, 1, "unrelated failure does not heal");
+}
+
 server.close();
 console.log("share-instagram-camofox: ok");

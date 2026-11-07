@@ -5,7 +5,7 @@
   "main": "index.js",
   "scripts": {
     "test:formal": "cd formal/queue && lake build",
-    "test:share": "node test/share.ts && for f in test/share-*.ts; do node $f || exit 1; done",
+    "test:share": "node test/share.ts && for f in test/share-*.ts; do node $f || exit 1; done && node test/health-camofox.ts",
     "test:review-takeover": "node test/review-takeover.ts",
     "test:benchmarks": "node --test test/benchmarks.ts test/benchmark-subscriptions.ts",
     "test:security": "node test/security.ts && node test/security-ui.ts && node test/sec-automations.ts && node test/sec-crashes.ts && node test/sec-automations-ui.ts",

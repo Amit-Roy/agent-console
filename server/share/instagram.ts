@@ -111,6 +111,13 @@ export interface Downloaded {
 let chain: Promise<unknown> = Promise.resolve();
 const recent = new Map<string, number>();
 
+/** Runs a job after every queued Instagram job and before later ones, so it never overlaps a share. */
+export function runInInstagramChain<T>(job: () => Promise<T>): Promise<T> {
+  const run = chain.then(job);
+  chain = run.catch(() => {});
+  return run;
+}
+
 /** Downloads one reel at a time. The caller owns the returned files and must call cleanup(). */
 export function downloadInstagram(
   link: InstagramLink,
