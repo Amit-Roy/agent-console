@@ -301,7 +301,9 @@ try {
   );
   await toggle.click();
   assert.equal(await doneChips.count(), 5, "expanded: open, three done, toggle");
-  await done.page.locator("#pr-strip").screenshot({ path: path.join(shots, "done-strip-open.png") });
+  await done.page
+    .locator("#pr-strip")
+    .screenshot({ path: path.join(shots, "done-strip-open.png") });
   const labels = await doneChips.evaluateAll((nodes) =>
     nodes.map((node) => node.getAttribute("aria-label")),
   );
