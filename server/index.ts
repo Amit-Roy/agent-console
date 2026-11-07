@@ -76,6 +76,7 @@ import { fileMedia, fileTree, fileViewer, sensitive as sensitiveFile } from "./f
 import { refHandler } from "./gh-refs.ts";
 import { headroom, metricsIngest } from "./headroom.ts";
 import { HeadroomProfileStore } from "./headroom-profile.ts";
+import { createHealthRunner, healthScheduleEnabled } from "./health/runner.ts";
 import { hostKill, hostMetrics, hostPorts, hostProcessDetail, hostProcesses } from "./host.ts";
 import { hostDu, hostDuRescan, hostHistory, latestHost, startHostSampler } from "./host-history.ts";
 import { IdeaError, Ideas } from "./ideas.ts";
@@ -103,7 +104,6 @@ import { claudeAccounts, claudeUsageKey } from "./providers/claude-accounts.ts";
 import { childEnv } from "./providers/env.ts";
 import { providerInfo, refreshPiModels } from "./providers/index.ts";
 import { effortModelPath } from "./providers/triage-effort.ts";
-import { createHealthRunner, healthScheduleEnabled } from "./health/runner.ts";
 import { describe, Schedules } from "./schedules.ts";
 import { mountSecurity } from "./security.ts";
 import { SessionSearch } from "./session-search.ts";

@@ -70,7 +70,22 @@ const checks = [
     healed: { action: "git worktree prune", result: "3 pruned" },
   },
 ];
-const worsts = ["ok", "ok", "warning", "ok", "error", "ok", "warning", "ok", "ok", "ok", "info", "ok", "error", "warning"];
+const worsts = [
+  "ok",
+  "ok",
+  "warning",
+  "ok",
+  "error",
+  "ok",
+  "warning",
+  "ok",
+  "ok",
+  "ok",
+  "info",
+  "ok",
+  "error",
+  "warning",
+];
 const fullRun = { at: iso(2 * HOUR), trigger: "hourly", durationMs: 1840, checks };
 const fullState = {
   latest: fullRun,
@@ -131,16 +146,24 @@ for (const [name, viewport, scheme] of shots) {
   const rows = await page.locator("#health-rows .health-row").allInnerTexts();
   const badges = await page.locator("#health-rows .health-badge").allInnerTexts();
   check(`${name}: five rows`, rows.length === 5, String(rows.length));
-  check(`${name}: badges`, badges.join("|").toUpperCase() === "OK|WARNING|ERROR|INFO|OK", badges.join("|"));
+  check(
+    `${name}: badges`,
+    badges.join("|").toUpperCase() === "OK|WARNING|ERROR|INFO|OK",
+    badges.join("|"),
+  );
   check(`${name}: healed note`, rows[4].includes("healed: git worktree prune — 3 pruned"));
-  check(`${name}: overall error`, (await page.locator("#health-worst").innerText()).toUpperCase() === "ERROR");
+  check(
+    `${name}: overall error`,
+    (await page.locator("#health-worst").innerText()).toUpperCase() === "ERROR",
+  );
   const last = await page.locator("#health-last").innerText();
   check(`${name}: last run text`, /^Last run 2h ago \(hourly\)$/.test(last), last);
   check(`${name}: 14 dots`, (await page.locator("#health-strip .health-dot").count()) === 14);
   const dot = page.locator("#health-strip .health-dot").last();
   check(
     `${name}: dot label`,
-    /Error|Warning|OK|Info/.test((await dot.getAttribute("aria-label")) || "") && !!(await dot.getAttribute("title")),
+    /Error|Warning|OK|Info/.test((await dot.getAttribute("aria-label")) || "") &&
+      !!(await dot.getAttribute("title")),
   );
   check(`${name}: no horizontal overflow`, !(await overflow(page)));
   const panel = page.locator("#health");
@@ -160,7 +183,9 @@ for (const [name, viewport, scheme] of shots) {
       (await page.locator("#health-run").isDisabled()) &&
         (await page.locator("#health-run").innerText()) === "Running…",
     );
-    await page.waitForFunction(() => /\(manual\)/.test(document.getElementById("health-last")?.textContent || ""));
+    await page.waitForFunction(() =>
+      /\(manual\)/.test(document.getElementById("health-last")?.textContent || ""),
+    );
     check(`${name}: run posted + refreshed`, mock.posts === 1 && mock.gets > getsBefore);
     check(`${name}: run enabled again`, !(await page.locator("#health-run").isDisabled()));
   }
@@ -174,7 +199,10 @@ for (const [name, viewport, scheme] of shots) {
   await mockHealth(page, { state: emptyState, posts: 0, gets: 0 });
   await page.goto(`${BASE}/host`);
   await page.waitForSelector("#health-empty:not([hidden])");
-  check("empty: message", (await page.locator("#health-empty").innerText()) === "No health runs yet");
+  check(
+    "empty: message",
+    (await page.locator("#health-empty").innerText()) === "No health runs yet",
+  );
   check("empty: no rows", (await page.locator("#health-rows .health-row").count()) === 0);
   check("empty: no overflow", !(await overflow(page)));
   check("empty: no console errors", errors.length === 0, errors.join(";"));
@@ -192,7 +220,9 @@ for (const [name, viewport] of [
   ["desktop", { width: 1280, height: 800 }],
 ] as const) {
   const { ctx, page } = await newPage(browser, viewport, "light");
-  await page.route("**/host", (route: any) => route.fulfill({ contentType: "text/html", body: before }));
+  await page.route("**/host", (route: any) =>
+    route.fulfill({ contentType: "text/html", body: before }),
+  );
   await page.goto(`${BASE}/host`);
   await page.waitForSelector("#proc-rows .hrow.proc");
   await page.screenshot({ path: `${OUT}/host-before-${name}.png` });

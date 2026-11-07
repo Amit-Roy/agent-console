@@ -38,7 +38,8 @@ const defaultDeps: HealthRunnerDeps = {
 
 export function worstStatus(checks: HealthCheck[]): HealthStatus {
   return checks.reduce<HealthStatus>(
-    (worst, item) => (SEVERITY.indexOf(item.status) > SEVERITY.indexOf(worst) ? item.status : worst),
+    (worst, item) =>
+      SEVERITY.indexOf(item.status) > SEVERITY.indexOf(worst) ? item.status : worst,
     "info",
   );
 }

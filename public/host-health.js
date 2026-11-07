@@ -27,7 +27,10 @@ function relTime(at) {
 }
 
 function worstOf(checks) {
-  return checks.reduce((acc, check) => (RANK[check.status] > RANK[acc] ? check.status : acc), "info");
+  return checks.reduce(
+    (acc, check) => (RANK[check.status] > RANK[acc] ? check.status : acc),
+    "info",
+  );
 }
 
 function badge(status) {
@@ -40,7 +43,9 @@ function checkRow(check) {
   item.append(makeNode("span", "health-label", check.label), badge(check.status));
   item.append(makeNode("span", "health-detail", check.detail || ""));
   if (check.healed) {
-    item.append(makeNode("span", "health-healed", `healed: ${check.healed.action} — ${check.healed.result}`));
+    item.append(
+      makeNode("span", "health-healed", `healed: ${check.healed.action} — ${check.healed.result}`),
+    );
   }
   return item;
 }
@@ -103,7 +108,8 @@ async function runNow() {
   try {
     await call("/api/host/health/run", "POST");
   } catch (err) {
-    if (!/409|already/i.test(err.message)) $("health-last").textContent = `Run failed: ${err.message}`;
+    if (!/409|already/i.test(err.message))
+      $("health-last").textContent = `Run failed: ${err.message}`;
   }
   await load();
 }
