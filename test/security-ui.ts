@@ -75,6 +75,45 @@ async function open(
   });
   return { ctx, page, errors, external, hits };
 }
+
+// "Fix it" links: one per trivy target, falco rule, infected file; never in a button row; nothing wider than the viewport
+async function checkFixButtons(page: any, name: string, width: number) {
+  const rows = page.locator("#trivy-rows .hrow.tgt");
+  for (let i = 0; i < (await rows.count()); i++)
+    if ((await rows.nth(i).getAttribute("aria-expanded")) !== "true") await rows.nth(i).click();
+  await page.locator("#falco-rows .hrow.tgt", { hasText: "Write below etc" }).click();
+  const q = (id: string, kind: string, key: string) =>
+    `/?fix_scan=${encodeURIComponent(id)}&fix_kind=${kind}&fix_key=${encodeURIComponent(key)}`;
+  const hrefs: string[] = await page
+    .locator("a.fixit")
+    .evaluateAll((a: any[]) => a.map((x) => x.getAttribute("href")));
+  const want = [
+    q(LATEST.id, "clamav", "/srv/uploads/invoice.pdf.exe"),
+    q(LATEST.id, "falco", "Write below etc"),
+    q(LATEST.id, "falco", "Terminal shell in container"),
+    ...["postgres:17", "/ (rootfs)", "caddy:2", "third-party repos"].map((n) =>
+      q(LATEST.id, "trivy", n),
+    ),
+  ];
+  check(
+    `${name}: fix buttons per kind with hrefs`,
+    hrefs.length === want.length && want.every((h) => hrefs.includes(h)),
+    hrefs.join(" ; "),
+  );
+  check(
+    `${name}: no fix button inside .hrow or on ports`,
+    (await page.locator(".hrow a.fixit, .hrow .fixit, .sport a.fixit").count()) === 0,
+  );
+  const wide = await page.evaluate((w: number) => {
+    const bad: string[] = [];
+    for (const n of document.querySelectorAll("#hm *")) {
+      const r = (n as HTMLElement).getBoundingClientRect();
+      if (r.width && r.right > w + 0.5) bad.push(`${n.tagName}.${(n as HTMLElement).className}`);
+    }
+    return bad.slice(0, 3).join(",");
+  }, width);
+  check(`${name}: nothing wider than viewport`, wide === "", wide);
+}
 const runModes: string[] = [];
 const findings = {
   latest: () => ({ result: LATEST }),
@@ -98,7 +137,10 @@ const findings = {
     ...LATEST,
     tools: {
       ...LATEST.tools,
-      falco: { ...LATEST.tools.falco, alerts: [...alerts, LATEST.tools.falco.alerts[0]] },
+      falco: {
+        ...LATEST.tools.falco,
+        alerts: [...alerts, LATEST.tools.falco.alerts[0]],
+      },
     },
   };
   const { ctx, page } = await open({ width: 390, height: 844 }, "dark", {
@@ -106,10 +148,14 @@ const findings = {
     latest: () => ({ result }),
   });
   await page.goto(`${BASE}/security`);
-  const button = page.locator("#falco-rows .hrow.tgt", { hasText: "Terminal shell" });
+  const button = page.locator("#falco-rows .hrow.tgt", {
+    hasText: "Terminal shell",
+  });
   await button.waitFor();
   const panel = page.locator(`#${await button.getAttribute("aria-controls")}`);
-  const other = page.locator("#falco-rows .hrow.tgt", { hasText: "Write below etc" });
+  const other = page.locator("#falco-rows .hrow.tgt", {
+    hasText: "Write below etc",
+  });
   check("falco: closed group renders lazily", (await panel.locator(".vuln").count()) === 0);
   for (const expanded of [true, false, true]) {
     await button.tap();
@@ -207,6 +253,7 @@ for (const [name, viewport, scheme] of [
     (await t.getAttribute("aria-expanded")) === "true" &&
       (await page.locator("#trivy .vuln").count()) === 3,
   );
+  await checkFixButtons(page, name, viewport.width);
   await page.check("#fixed-only");
   check(`${name}: fix-available filter`, (await page.locator("#trivy .vuln").count()) === 2);
   await page.uncheck("#fixed-only");
@@ -228,9 +275,31 @@ for (const [name, viewport, scheme] of [
   await ctx.close();
 }
 
+// fix-it evidence shots: expanded groups so the buttons show beside the rows
+for (const [name, viewport] of [
+  ["phone", { width: 390, height: 844 }],
+  ["desktop", { width: 1280, height: 800 }],
+] as const) {
+  const { ctx, page } = await open(viewport, "light", findings);
+  await page.goto(`${BASE}/security`);
+  await page.waitForSelector(".tool");
+  await checkFixButtons(page, `fix shot ${name}`, viewport.width);
+  await page.evaluate(() => {
+    document.getElementById("trivy")!.scrollIntoView();
+  });
+  await page.screenshot({ path: `${OUT}/security-fix-${name}.png` });
+  await ctx.close();
+}
+
 // run flow: button -> running banner with current tool -> status polling -> finished -> refresh
 {
-  const phases = [{ running: true, startedAt: new Date().toISOString(), currentTool: "clamav" }];
+  const phases = [
+    {
+      running: true,
+      startedAt: new Date().toISOString(),
+      currentTool: "clamav",
+    },
+  ];
   const { ctx, page, errors, hits } = await open({ width: 390, height: 844 }, "light", {
     ...findings,
     status: (n) => (n >= 3 ? { running: false, startedAt: null, currentTool: null } : phases[0]),
@@ -271,7 +340,9 @@ for (const [name, viewport, scheme] of [
   const { ctx, page } = await open({ width: 390, height: 844 }, "light", {
     ...findings,
     latest: () => ({ result: QUICK }),
-    history: () => ({ scans: [{ ...HISTORY[1], id: QUICK.id, mode: "quick" }, HISTORY[0]] }),
+    history: () => ({
+      scans: [{ ...HISTORY[1], id: QUICK.id, mode: "quick" }, HISTORY[0]],
+    }),
   });
   await page.goto(`${BASE}/security`);
   await page.waitForSelector(".tool");
@@ -428,7 +499,9 @@ for (const [name, viewport, scheme] of [
     (await page.locator("#log-body .ll").count()) === LOG_LINES.length &&
       (await page.locator("#log-state").innerText()) === "Finished",
   );
-  await page.screenshot({ path: `${OUT}/security-log-finished-phone-dark.png` });
+  await page.screenshot({
+    path: `${OUT}/security-log-finished-phone-dark.png`,
+  });
   await ctx.close();
 }
 for (const [label, body] of [
@@ -477,7 +550,10 @@ for (const [label, body] of [
   await ctx.close();
 }
 {
-  const down = (): any => ({ error: "Could not reach the scan host over SSH.", __status: 502 });
+  const down = (): any => ({
+    error: "Could not reach the scan host over SSH.",
+    __status: 502,
+  });
   const { ctx, page } = await open({ width: 390, height: 844 }, "dark", {
     latest: down,
     history: down,

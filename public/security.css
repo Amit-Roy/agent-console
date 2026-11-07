@@ -629,3 +629,17 @@
   justify-content: space-between;
   gap: var(--sp-3);
 }
+
+/* ---------- "Fix it" link: beside a finding, never inside a .hrow button ---------- */
+.fixbar {
+  display: flex;
+  justify-content: flex-start;
+  min-width: 0;
+  padding: 0 0 var(--sp-2);
+}
+.fixbar .btn.fixit {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+  white-space: nowrap;
+}
