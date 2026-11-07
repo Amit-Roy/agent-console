@@ -18,6 +18,15 @@
 <main id="hm" aria-busy="true">
   <p class="hmeta" id="meta"></p>
   <section class="dials" id="dials" aria-label="Current usage"></section>
+  <section class="panel" id="health" aria-label="Workspace health">
+    <div class="head"><h2>Workspace health</h2>
+      <div class="health-tools"><span class="health-badge" id="health-worst" hidden></span><button type="button" class="btn sm ghost" id="health-run">Run now</button></div>
+    </div>
+    <p class="note health-last" id="health-last" role="status"></p>
+    <p class="note" id="health-empty" hidden>No health runs yet</p>
+    <ul class="health-rows" id="health-rows"></ul>
+    <ol class="health-strip" id="health-strip" aria-label="Recent health runs" hidden></ol>
+  </section>
   <section class="panel" id="history" aria-label="Usage over time">
     <div class="head"><h2>History</h2>
       <!-- biome-ignore lint/a11y/useSemanticElements: role=group on a div styled by .range; fieldset would change the layout -->
@@ -82,4 +91,5 @@
   </div>
 </div>
 <script type="module" src="/host.js"></script>
+<script type="module" src="/host-health.js"></script>
 </body></html>
