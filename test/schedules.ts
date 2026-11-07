@@ -11,10 +11,12 @@ process.env.AGENT_CONSOLE_BRAIN = path.join(dir, "no-brain");
 process.env.AGENT_CONSOLE_LABELS = "0";
 const { Threads } = await import("../server/threads.ts");
 const { PROVIDERS } = await import("../server/providers/index.ts");
-const { Schedules, cronPattern, describe, finalText } = await import("../server/schedules.ts");
+const { Schedules, cronPattern, describe, finalText, resolveTier } = await import(
+  "../server/schedules.ts"
+);
 const ctxs = new Map<string, any>();
 const sent: { thread: string; text: string }[] = [];
-const tick = () => new Promise((r) => setTimeout(r, 50));
+const tick = () => new Promise((r) => setTimeout(r, 200));
 PROVIDERS.set("fixture", {
   id: "fixture",
   label: "Fixture",
@@ -40,25 +42,111 @@ const file = path.join(dir, "schedules.json");
 const events: any[] = [];
 const reply = (thread: string, text: string, extra = {}) => {
   const c = ctxs.get(thread);
-  c.event({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text }] } });
-  c.event({ type: "result", subtype: "success", is_error: false, duration_ms: 5, ...extra });
+  c.event({
+    type: "assistant",
+    message: { role: "assistant", content: [{ type: "text", text }] },
+  });
+  c.event({
+    type: "result",
+    subtype: "success",
+    is_error: false,
+    duration_ms: 5,
+    ...extra,
+  });
 };
 let threads = new Threads(() => {});
-let schedules = new Schedules(threads, (m) => events.push(m), { file, outputs, catchUp: false });
+let schedules = new Schedules(threads, (m) => events.push(m), {
+  file,
+  outputs,
+  catchUp: false,
+});
 try {
   // patterns and labels
   assert.equal(cronPattern({ repeat: "weekdays", time: "18:30", day: 1 }), "30 18 * * 1-5");
   assert.equal(cronPattern({ repeat: "manual", time: "09:00", day: 1 }), null);
   assert.equal(describe({ repeat: "weekly", time: "09:00", day: 1 }), "Mondays 09:00");
   assert.equal(describe({ repeat: "hourly", time: "00:15", day: 1 }), "Hourly at :15");
+  // tiers
+  const realPi = PROVIDERS.get("pi");
+  const realClaude = PROVIDERS.get("claude");
+  const fakeProv = (id: string, ok: boolean, models: string[]) =>
+    ({
+      ...(realClaude as any),
+      id,
+      label: id,
+      models: () => models,
+      defaultModel: () => models[0],
+      status: () => ({ ok }),
+      modelDetails: () => ({}),
+    }) as any;
+  try {
+    PROVIDERS.set("pi", fakeProv("pi", true, ["nemo-free", "other"]));
+    PROVIDERS.set("claude", fakeProv("claude", true, ["sonnet", "opus"]));
+    assert.deepEqual(resolveTier("free"), {
+      provider: "pi",
+      model: "nemo-free",
+      effort: undefined,
+    });
+    assert.deepEqual(resolveTier("paid"), {
+      provider: "claude",
+      model: "sonnet",
+      effort: "low",
+    });
+    const base = {
+      title: "t",
+      prompt: "p",
+      cwd: dir,
+      repeat: "manual" as const,
+    };
+    const free = schedules.create({ ...base, tier: "free" });
+    assert.equal(free.provider, "pi");
+    assert.equal(free.model, "nemo-free");
+    const paid = schedules.create({ ...base, tier: "paid" });
+    assert.equal(paid.provider, "claude");
+    assert.equal(paid.model, "sonnet");
+    assert.equal((paid as any).tier, undefined, "tier is not persisted");
+    assert.throws(
+      () => schedules.create({ ...base, tier: "free", model: "nope" }),
+      /Unknown model/,
+    );
+    assert.throws(
+      () => schedules.create({ ...base, provider: "claude", model: "nope" }),
+      /Unknown model/,
+    );
+    assert.equal(schedules.update(free.id, { tier: "paid" }).provider, "claude");
+    const plain = schedules.create({ ...base });
+    assert.equal(plain.provider, "pi", "no tier: default provider unchanged");
+    PROVIDERS.set("pi", fakeProv("pi", false, ["nemo-free"]));
+    assert.throws(() => schedules.create({ ...base, tier: "free" }), /Pi/);
+    assert.throws(() => resolveTier("free"), /not available/);
+    const fallback = schedules.create({ ...base });
+    assert.equal(fallback.provider, "claude", "no tier, pi down: existing fallback unchanged");
+    for (const t of [free, paid, plain, fallback]) schedules.remove(t.id);
+  } finally {
+    PROVIDERS.set("pi", realPi as any);
+    PROVIDERS.set("claude", realClaude as any);
+  }
   // validation speaks plainly
   assert.throws(() => schedules.create({ prompt: "x", provider: "fixture", cwd: dir }), /name/);
   assert.throws(
-    () => schedules.create({ title: "x", prompt: "x", provider: "fixture", cwd: dir, time: "9am" }),
+    () =>
+      schedules.create({
+        title: "x",
+        prompt: "x",
+        provider: "fixture",
+        cwd: dir,
+        time: "9am",
+      }),
     /HH:MM/,
   );
   assert.throws(
-    () => schedules.create({ title: "x", prompt: "x", provider: "fixture", cwd: "/etc" }),
+    () =>
+      schedules.create({
+        title: "x",
+        prompt: "x",
+        provider: "fixture",
+        cwd: "/etc",
+      }),
     /home folder/,
   );
   const task = schedules.create({
@@ -104,7 +192,9 @@ try {
   assert.match(fs.readFileSync(done.output!.path, "utf8"), /three launches/);
   assert.match(done.output!.commit!, /^[0-9a-f]{7,}$/);
   assert.match(
-    execFileSync("git", ["-C", outputs, "log", "--format=%s"], { encoding: "utf8" }),
+    execFileSync("git", ["-C", outputs, "log", "--format=%s"], {
+      encoding: "utf8",
+    }),
     /^AI news digest: \d{4}-\d\d-\d\d \d\d:\d\d/,
   );
   const card = threads.history(rt.id).find((e: any) => e.type === "schedule_report") as any;
@@ -125,12 +215,21 @@ try {
     sent.at(-1)!.text.includes(`previous run's report is ${done.output!.path}`),
     "the next run is told where the last report is",
   );
-  ctxs.get(bad.thread!).event({ type: "result", subtype: "error", is_error: true, duration_ms: 1 });
+  ctxs.get(bad.thread!).event({
+    type: "result",
+    subtype: "error",
+    is_error: true,
+    duration_ms: 1,
+  });
   await tick();
   assert.equal(schedules.get(task.id)!.runs.find((r) => r.id === bad.id)!.status, "failed");
   assert.equal(schedules.get(task.id)!.runs.find((r) => r.id === bad.id)!.output, undefined);
   // tools for agents: flat inputs, day names, titles as ids, explicit save_output wins over the fallback
-  const caller = threads.create({ provider: "fixture", cwd: dir, title: "Chat" });
+  const caller = threads.create({
+    provider: "fixture",
+    cwd: dir,
+    title: "Chat",
+  });
   const made = schedules.tool("schedule_create", caller.id, {
     title: "Weekly triage",
     prompt: "Triage issues.",
@@ -143,8 +242,12 @@ try {
   assert.equal(made.created.folder, dir, "defaults to the calling thread folder");
   assert.equal((schedules.tool("schedule_list", caller.id, {}) as any).tasks.length, 2);
   assert.equal(
-    (schedules.tool("schedule_update", caller.id, { id: "weekly triage", enabled: false }) as any)
-      .updated.enabled,
+    (
+      schedules.tool("schedule_update", caller.id, {
+        id: "weekly triage",
+        enabled: false,
+      }) as any
+    ).updated.enabled,
     false,
   );
   assert.equal(
@@ -156,7 +259,9 @@ try {
     () => schedules.tool("schedule_run_now", caller.id, { id: "nope" }),
     /schedule_list/,
   );
-  const r2 = schedules.tool("schedule_run_now", caller.id, { id: made.created.id }) as any;
+  const r2 = schedules.tool("schedule_run_now", caller.id, {
+    id: made.created.id,
+  }) as any;
   assert.equal(r2.status, "running");
   const saved = schedules.tool("save_output", r2.thread, {
     markdown: "Full triage report.",
@@ -176,7 +281,11 @@ try {
   schedules.shutdown();
   threads.shutdown();
   threads = new Threads(() => {});
-  schedules = new Schedules(threads, (m) => events.push(m), { file, outputs, catchUp: false });
+  schedules = new Schedules(threads, (m) => events.push(m), {
+    file,
+    outputs,
+    catchUp: false,
+  });
   assert.equal(schedules.get(task.id)!.runs.find((r) => r.id === cut.id)!.status, "failed");
   assert.equal(schedules.get(task.id)!.tz, "Asia/Kolkata");
   // catch-up: one run for the latest occurrence missed in the last 7 days, none for older ones
@@ -199,7 +308,14 @@ try {
     createdAt: Date.now() - 30 * 86_400_000,
     updatedAt: Date.now() - 30 * 86_400_000,
     repeat: "weekly",
-    runs: [{ id: "x", at: Date.now() - 8 * 86_400_000, trigger: "schedule", status: "done" }],
+    runs: [
+      {
+        id: "x",
+        at: Date.now() - 8 * 86_400_000,
+        trigger: "schedule",
+        status: "done",
+      },
+    ],
     day: new Date(Date.now() - 8 * 86_400_000).getUTCDay(),
     tz: "UTC",
     time: "00:00",
@@ -258,7 +374,10 @@ try {
       Math.abs(builtin.createdAt - Date.now()) < 5000,
       "createdAt is now: no catch-up at deploy",
     );
-    schedules.update("builtin", { title: "Edited by the user", enabled: false });
+    schedules.update("builtin", {
+      title: "Edited by the user",
+      enabled: false,
+    });
     const again = schedules.ensureTask("builtin", {
       title: "Built in",
       prompt: "Other.",
@@ -428,9 +547,15 @@ try {
   assert.equal(
     finalText([
       { type: "user_input" },
-      { type: "assistant", message: { content: [{ type: "text", text: "a" }] } },
+      {
+        type: "assistant",
+        message: { content: [{ type: "text", text: "a" }] },
+      },
       { type: "assistant", message: { content: [{ type: "tool_use" }] } },
-      { type: "assistant", message: { content: [{ type: "text", text: "b" }] } },
+      {
+        type: "assistant",
+        message: { content: [{ type: "text", text: "b" }] },
+      },
     ]),
     "a\n\nb",
   );
@@ -443,7 +568,9 @@ try {
       evs.push({ type: "user_input", text: `q${i} café 🧪` });
       evs.push({
         type: "assistant",
-        message: { content: [{ type: "text", text: `a${i} ${"x".repeat(300)} 🧪` }] },
+        message: {
+          content: [{ type: "text", text: `a${i} ${"x".repeat(300)} 🧪` }],
+        },
       });
     }
     fs.mkdirSync(path.dirname(logs), { recursive: true });

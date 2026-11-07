@@ -1,6 +1,6 @@
 {
   "title": "Agent Console architecture",
-  "subtitle": "Issue worker recovery can be checked on live data with the read-only worker-retries report",
+  "subtitle": "Scheduled tasks resolve a free or paid tier to a concrete agent and model",
   "items": [
     {
       "group": "Share entry points",
@@ -98,75 +98,65 @@
           "label": "App client",
           "tech": "public/app.js",
           "desc": "Records one cold sample per page load when the first history paints; App start row in the speed panel; three-dots menu gets Map a repo (PAGE_LINKS maps-link); context panels and turn breakdown load by dynamic import; running dot pulse kept under reduced motion",
-          "icon": "app-window",
-          "status": "modified"
+          "icon": "app-window"
         },
         {
           "id": "maps-ui",
           "label": "Maps page",
           "tech": "maps.js, arch.js",
           "desc": "Dashboard of map cards, overview, module drill-down and flow tabs drawn with the shared arch renderer",
-          "icon": "map",
-          "status": "added"
+          "icon": "map"
         },
         {
           "id": "render",
           "label": "Render module",
           "tech": "public/render.js",
           "desc": "highlight.js core and 13 languages load by dynamic import (ensureLanguage, highlightIdle); file viewer draws plain rows then swaps in highlighted rows",
-          "icon": "file-code",
-          "status": "modified"
+          "icon": "file-code"
         },
         {
           "id": "file-viewer",
           "label": "File viewer",
           "tech": "public/file-viewer.js",
           "desc": "Modal for files linked in chat; toolbar gets a zoom group (minus, percent, plus) and routes ctrl/cmd +, -, 0 and ctrl+wheel to the zoom module",
-          "icon": "file-code",
-          "status": "modified"
+          "icon": "file-code"
         },
         {
           "id": "fv-zoom",
           "label": "File viewer zoom",
           "tech": "public/file-viewer-zoom.js",
           "desc": "Images: pinch, wheel, double-tap and pan. Text: --file-zoom font scale 0.7 to 2.0 saved in localStorage file-viewer-zoom",
-          "icon": "zoom-in",
-          "status": "added"
+          "icon": "zoom-in"
         },
         {
           "id": "panzoom",
           "label": "Panzoom",
           "tech": "@panzoom/panzoom (vendored)",
           "desc": "Vendored, lazy-loaded on first image open; does the transform, touch pinch and bounds",
-          "icon": "package",
-          "status": "added"
+          "icon": "package"
         },
         {
           "id": "lazy-chunks",
           "label": "Lazy chunks",
           "tech": "vendor/hljs/*, context-economics.js, context-allocation.js, context-forecast.js, turn-breakdown.js",
           "desc": "Fetched on first use instead of at cold load; dynamic imports from render.js and app.js",
-          "icon": "package",
-          "status": "added"
+          "icon": "package"
         },
         {
           "id": "fonts",
           "label": "Web fonts",
           "tech": "public/fonts/*.woff2",
           "desc": "Instanced to narrower variable axes; Newsreader 129 KB to 52 KB",
-          "icon": "type",
-          "status": "modified"
+          "icon": "type"
         },
         {
           "id": "build-fonts",
           "label": "Font build script",
           "tech": "scripts/build-fonts.py, fonts-src/",
           "desc": "Instances the master fonts to the woff2 files in public/fonts",
-          "icon": "hammer",
-          "status": "added"
+          "icon": "hammer"
         }
-      ],
-      "status": "modified"
+      ]
     },
     {
       "group": "Server",
@@ -191,16 +181,14 @@
           "label": "Versioned static assets",
           "tech": "server/static-assets.ts",
           "desc": "/r/<sha12>/ serves public/ with immutable one-year cache; older sha12 from sibling release dirs; dev tree uses /r/dev/ no-cache",
-          "icon": "package",
-          "status": "added"
+          "icon": "package"
         },
         {
           "id": "pages",
           "label": "HTML rewrite + modulepreload",
           "tech": "server/static-assets.ts",
           "desc": "At boot, app pages get /r/<sha12>/ asset URLs plus modulepreload for the static import graph; served from memory, no-cache + ETag",
-          "icon": "file-code",
-          "status": "added"
+          "icon": "file-code"
         },
         {
           "id": "latency",
@@ -221,16 +209,14 @@
           "label": "Projected line cache",
           "tech": "server/history.ts \u00b7 in-memory LRU",
           "desc": "Keeps the clipped wire event for history lines >= 16 KiB (32 MiB budget). New: restored from a validated sidecar after restart, written about 1 s after a page; dropped on rewrite, truncation, replacement, projection change and redaction.",
-          "icon": "layers",
-          "status": "modified"
+          "icon": "layers"
         },
         {
           "id": "history-cache",
           "label": "Derived offset cache",
           "tech": "DATA_DIR/history-index \u00b7 JSON",
           "desc": "Private, atomic offset snapshots plus new .views.json sidecars keyed by fingerprint and projection key. Page reads write them; cache failures fall back to logs.",
-          "icon": "database",
-          "status": "modified"
+          "icon": "database"
         },
         {
           "id": "history-proofs",
@@ -239,148 +225,130 @@
           "desc": "New development-time checks: append boundaries, conditional cache equivalence, and adjacent slices. Runtime conformance tested separately.",
           "icon": "shield-check"
         }
-      ],
-      "status": "modified"
+      ]
     },
     {
       "group": "Codemap",
       "icon": "map",
-      "status": "added",
       "items": [
         {
           "id": "cm-api",
           "label": "Maps API and queue",
           "tech": "codemap/http.ts, jobs.ts",
           "desc": "/api/maps routes behind the auth gate, same-origin writes; one build at a time",
-          "icon": "route",
-          "status": "added"
+          "icon": "route"
         },
         {
           "id": "cm-source",
           "label": "Source resolver",
           "tech": "codemap/source.ts",
           "desc": "Local path under ~/repos or hardened shallow GitHub clone: no hooks, no symlinks, size limits",
-          "icon": "git-branch",
-          "status": "added"
+          "icon": "git-branch"
         },
         {
           "id": "cm-scan",
           "label": "Floorplan scanner",
           "tech": "vendor/floorplan (MIT)",
           "desc": "Vendored scan.mjs runs as a child Node process; never writes into the repo",
-          "icon": "scan-search",
-          "status": "added"
+          "icon": "scan-search"
         },
         {
           "id": "cm-assemble",
           "label": "Map assembly",
           "tech": "assemble.ts, spec.ts",
           "desc": "Heuristic quick map, then overview, module and flow views as PR-style architecture JSON",
-          "icon": "layout-dashboard",
-          "status": "added"
+          "icon": "layout-dashboard"
         },
         {
           "id": "cm-describe",
           "label": "Naming pass",
           "tech": "describe.ts, Sonnet",
           "desc": "One call on a bounded untrusted digest; output validated, quick map kept on failure",
-          "icon": "sparkles",
-          "status": "added"
+          "icon": "sparkles"
         },
         {
           "id": "cm-store",
           "label": "Map store",
           "tech": "DATA_DIR/maps/<slug>",
           "desc": "meta, scan, architecture and map JSON; clone/ for GitHub sources; up to 30 maps",
-          "icon": "database",
-          "status": "added"
+          "icon": "database"
         }
       ]
     },
     {
       "group": "Agent access",
       "icon": "terminal",
-      "status": "modified",
       "items": [
         {
           "id": "cm-cli",
           "label": "codemap CLI",
           "tech": "bin/codemap",
           "desc": "add, list, status, show, spec, refresh, rm; show prints a compact text brief for agents",
-          "icon": "square-terminal",
-          "status": "added"
+          "icon": "square-terminal"
         },
         {
           "id": "console-cli",
           "label": "console-cli tools",
           "tech": "console-cli-tools.ts",
           "desc": "New map_* tools; read-only ones allowed for issue-run tokens",
-          "icon": "wrench",
-          "status": "modified"
+          "icon": "wrench"
         }
       ]
     },
     {
       "group": "Thread todos",
       "icon": "list-checks",
-      "status": "added",
       "items": [
         {
           "id": "todo-ui",
           "label": "Todos side sheet",
           "tech": "public/todos.js",
           "desc": "Header badge opens a per-thread checklist; add, check, remove over WebSocket",
-          "icon": "list-checks",
-          "status": "added"
+          "icon": "list-checks"
         },
         {
           "id": "todo-ws",
           "label": "Todo WS and tool route",
           "tech": "server/index.ts",
           "desc": "todos_get, todo_add, todo_set, todo_remove messages; todo_* tool calls route to Threads.todoTool",
-          "icon": "route",
-          "status": "added"
+          "icon": "route"
         },
         {
           "id": "todo-store",
           "label": "Todo store",
           "tech": "server/todos.ts",
           "desc": "Per-thread todo items persisted with the thread",
-          "icon": "database",
-          "status": "added"
+          "icon": "database"
         },
         {
           "id": "todo-tools",
           "label": "Agent todo tools",
           "tech": "console-mcp.mjs, console-tools.mjs",
           "desc": "todo_add, todo_complete, todo_remove, todo_list; issue-run threads may only todo_list",
-          "icon": "wrench",
-          "status": "added"
+          "icon": "wrench"
         }
       ]
     },
     {
       "group": "Time travel",
       "icon": "history",
-      "status": "added",
       "items": [
-        {"id": "tt-ui", "label": "History panel", "tech": "public/time-travel.js, time-travel.css", "desc": "Side panel or bottom sheet with scrubber, diff, rewind confirm, undo toast, fork", "icon": "history", "status": "added"},
-        {"id": "tt-http", "label": "Checkpoint routes", "tech": "server/index.ts", "desc": "GET checkpoints, diff, file; POST rewind, fork; WS rewound", "icon": "route", "status": "added"},
-        {"id": "tt-turns", "label": "Turn checkpoints", "tech": "server/threads.ts", "desc": "Snapshot at turn start, after file tools (500 ms debounce) and turn end; rewind, fork, prune", "icon": "flag", "status": "added"},
-        {"id": "tt-shadow", "label": "Shadow git store", "tech": "server/checkpoints.ts", "desc": "Per-folder repo, per-thread index; skips ignored, sensitive, over 10 MB files", "icon": "git-branch", "status": "added"}
+        {"id": "tt-ui", "label": "History panel", "tech": "public/time-travel.js, time-travel.css", "desc": "Side panel or bottom sheet with scrubber, diff, rewind confirm, undo toast, fork", "icon": "history"},
+        {"id": "tt-http", "label": "Checkpoint routes", "tech": "server/index.ts", "desc": "GET checkpoints, diff, file; POST rewind, fork; WS rewound", "icon": "route"},
+        {"id": "tt-turns", "label": "Turn checkpoints", "tech": "server/threads.ts", "desc": "Snapshot at turn start, after file tools (500 ms debounce) and turn end; rewind, fork, prune", "icon": "flag"},
+        {"id": "tt-shadow", "label": "Shadow git store", "tech": "server/checkpoints.ts", "desc": "Per-folder repo, per-thread index; skips ignored, sensitive, over 10 MB files", "icon": "git-branch"}
       ]
     },
     {
       "group": "Design system",
       "icon": "palette",
-      "status": "added",
       "items": [
-        {"id": "ds-tokens", "label": "App token layer", "tech": "public/style.css", "desc": ":root blocks: base, dark, coarse pointer, high contrast", "icon": "palette", "status": "added"},
-        {"id": "ds-build", "label": "Package build", "tech": "scripts/build-design-system.js", "desc": "Copies the token layer, parses tokens.json; test fails on drift", "icon": "hammer", "status": "added"},
-        {"id": "ds-package", "label": "Published package", "tech": "packages/design-system", "desc": "@agent-console/design-system: design-system.css, tokens.json, index.js, index.d.ts", "icon": "package", "status": "added"},
-        {"id": "ds-schedule", "label": "Weekly scheduled task", "tech": "Agent Console Schedules", "desc": "Design system suggestions, Monday 09:00, Claude Haiku", "icon": "calendar-clock", "status": "added"},
-        {"id": "ds-sources", "label": "Suggestion run", "tech": "scripts/check-design-system-sources.js", "desc": "Reads Hacker News and Lobsters only; triage rule; drafts.json or run record", "icon": "filter", "status": "added"},
-        {"id": "ds-issues", "label": "GitHub issues", "tech": "gh issue list/create", "desc": "Dedupe by link; files only approved suggestions, label design-system", "icon": "circle-dot", "status": "added"}
+        {"id": "ds-tokens", "label": "App token layer", "tech": "public/style.css", "desc": ":root blocks: base, dark, coarse pointer, high contrast", "icon": "palette"},
+        {"id": "ds-build", "label": "Package build", "tech": "scripts/build-design-system.js", "desc": "Copies the token layer, parses tokens.json; test fails on drift", "icon": "hammer"},
+        {"id": "ds-package", "label": "Published package", "tech": "packages/design-system", "desc": "@agent-console/design-system: design-system.css, tokens.json, index.js, index.d.ts", "icon": "package"},
+        {"id": "ds-schedule", "label": "Weekly scheduled task", "tech": "Agent Console Schedules", "desc": "Design system suggestions, Monday 09:00, Claude Haiku", "icon": "calendar-clock"},
+        {"id": "ds-sources", "label": "Suggestion run", "tech": "scripts/check-design-system-sources.js", "desc": "Reads Hacker News and Lobsters only; triage rule; drafts.json or run record", "icon": "filter"},
+        {"id": "ds-issues", "label": "GitHub issues", "tech": "gh issue list/create", "desc": "Dedupe by link; files only approved suggestions, label design-system", "icon": "circle-dot"}
       ]
     },
     {"group": "Issue automation", "icon": "bot", "items": [
@@ -434,7 +402,8 @@
         }
       ],
       "status": "added"
-    }
+    },
+    {"group":"Scheduled tasks","icon":"calendar-clock","status":"modified","items":[{"id":"sch-tools","label":"Schedule tools","tech":"console-tools.mjs","desc":"schedule_create and schedule_update take tier (free|paid) and model","icon":"wrench","status":"modified"},{"id":"sch-tier","label":"resolveTier","tech":"schedules.ts","desc":"free = Pi default model, errors when Pi is down; paid = Claude Sonnet, low effort","icon":"scale","status":"added"},{"id":"sch-agent","label":"resolveAgent","tech":"schedules.ts","desc":"Applies the tier; an unknown model is an error, not a silent fallback; tier is not persisted","icon":"list-checks","status":"modified"},{"id":"sch-pi","label":"Pi provider","tech":"pi.ts","desc":"Free tier: default model and status check","icon":"cpu"},{"id":"sch-claude","label":"Claude provider","tech":"claude.ts","desc":"Paid tier: sonnet at low effort","icon":"sparkles"}]}
   ],
   "edges": [
     {
@@ -495,80 +464,67 @@
     {
       "from": "sw",
       "to": "pages",
-      "label": "navigation gets prefixed HTML",
-      "status": "added"
+      "label": "navigation gets prefixed HTML"
     },
     {
       "from": "pages",
       "to": "assets",
-      "label": "modulepreload + prefixed URLs",
-      "status": "added"
+      "label": "modulepreload + prefixed URLs"
     },
     {
       "from": "assets",
       "to": "static",
-      "label": "files from public/",
-      "status": "added"
+      "label": "files from public/"
     },
     {
       "from": "app",
       "to": "maps-ui",
-      "label": "Map a repo menu entry",
-      "status": "added"
+      "label": "Map a repo menu entry"
     },
     {
       "from": "maps-ui",
       "to": "cm-api",
-      "label": "/api/maps",
-      "status": "added"
+      "label": "/api/maps"
     },
     {
       "from": "cm-api",
       "to": "cm-source",
-      "label": "resolve source",
-      "status": "added"
+      "label": "resolve source"
     },
     {
       "from": "cm-source",
       "to": "cm-scan",
-      "label": "repo files",
-      "status": "added"
+      "label": "repo files"
     },
     {
       "from": "cm-scan",
       "to": "cm-assemble",
-      "label": "scan.json",
-      "status": "added"
+      "label": "scan.json"
     },
     {
       "from": "cm-assemble",
       "to": "cm-describe",
-      "label": "digest",
-      "status": "added"
+      "label": "digest"
     },
     {
       "from": "cm-assemble",
       "to": "cm-store",
-      "label": "map.json",
-      "status": "added"
+      "label": "map.json"
     },
     {
       "from": "cm-cli",
       "to": "cm-api",
-      "label": "HTTP",
-      "status": "added"
+      "label": "HTTP"
     },
     {
       "from": "console-cli",
       "to": "cm-api",
-      "label": "map_* tools",
-      "status": "added"
+      "label": "map_* tools"
     },
     {
       "from": "app",
       "to": "lazy-chunks",
-      "label": "dynamic import on first use",
-      "status": "added"
+      "label": "dynamic import on first use"
     },
     {
       "from": "app",
@@ -578,62 +534,54 @@
     {
       "from": "render",
       "to": "lazy-chunks",
-      "label": "lazy import",
-      "status": "added"
+      "label": "lazy import"
     },
     {
       "from": "build-fonts",
       "to": "fonts",
-      "label": "instance masters to woff2",
-      "status": "added"
+      "label": "instance masters to woff2"
     },
     {
       "from": "file-viewer",
       "to": "fv-zoom",
-      "label": "zoom",
-      "status": "added"
+      "label": "zoom"
     },
     {
       "from": "fv-zoom",
       "to": "panzoom",
-      "label": "import() on image",
-      "status": "added"
+      "label": "import() on image"
     },
     {
       "from": "app",
       "to": "todo-ui",
-      "label": "header badge opens sheet",
-      "status": "added"
+      "label": "header badge opens sheet"
     },
     {
       "from": "todo-ui",
       "to": "todo-ws",
-      "label": "WebSocket todo_*",
-      "status": "added"
+      "label": "WebSocket todo_*"
     },
     {
       "from": "todo-ws",
       "to": "todo-store",
-      "label": "Threads.todo",
-      "status": "added"
+      "label": "Threads.todo"
     },
     {
       "from": "todo-tools",
       "to": "todo-ws",
-      "label": "todo_* tool call",
-      "status": "added"
+      "label": "todo_* tool call"
     },
-    {"from":"app","to":"tt-ui","label":"History header button","status":"added"},
-    {"from":"tt-ui","to":"tt-http","label":"HTTP checkpoints, diff, rewind, fork","status":"added"},
-    {"from":"tt-http","to":"tt-turns","label":"rewind / fork","status":"added"},
-    {"from":"tt-turns","to":"tt-shadow","label":"snapshot, restore","status":"added"},
+    {"from":"app","to":"tt-ui","label":"History header button"},
+    {"from":"tt-ui","to":"tt-http","label":"HTTP checkpoints, diff, rewind, fork"},
+    {"from":"tt-http","to":"tt-turns","label":"rewind / fork"},
+    {"from":"tt-turns","to":"tt-shadow","label":"snapshot, restore"},
     {"from":"app","to":"history-snapshot","label":"open or older page via Threads.page"},
-    {"from":"history-snapshot","to":"history-cache","label":"offsets and view sidecars","status":"modified"},
+    {"from":"history-snapshot","to":"history-cache","label":"offsets and view sidecars"},
     {"from":"history-proofs","to":"history-snapshot","label":"models invariants; not runtime"},
-    {"from":"ds-tokens","to":"ds-build","label":"read token layer","status":"added"},
-    {"from":"ds-build","to":"ds-package","label":"write css and tokens.json","status":"added"},
-    {"from":"ds-schedule","to":"ds-sources","label":"run weekly","status":"added"},
-    {"from":"ds-sources","to":"ds-issues","label":"list, create approved","status":"added"},
+    {"from":"ds-tokens","to":"ds-build","label":"read token layer"},
+    {"from":"ds-build","to":"ds-package","label":"write css and tokens.json"},
+    {"from":"ds-schedule","to":"ds-sources","label":"run weekly"},
+    {"from":"ds-sources","to":"ds-issues","label":"list, create approved"},
     {"from":"ia-prompt","to":"ia-worker","label":"task with evidence CLI"},
     {"from":"ia-worker","to":"ia-guard","label":"pr-evidence create"},
     {"from":"ia-worker","to":"ia-review","label":"turn end"},
@@ -666,6 +614,10 @@
       "to": "perm-rules",
       "label": "save tool",
       "status": "added"
-    }
+    },
+    {"from":"sch-tools","to":"sch-tier","label":"tier","status":"added"},
+    {"from":"sch-tier","to":"sch-agent","label":"provider, model, effort","status":"added"},
+    {"from":"sch-agent","to":"sch-pi","label":"free","status":"added"},
+    {"from":"sch-agent","to":"sch-claude","label":"paid","status":"added"}
   ]
 }

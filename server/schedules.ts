@@ -70,7 +70,25 @@ export type TaskInput = Partial<
     | "saveOutput"
     | "limitMin"
   >
-> & { day?: number | string };
+> & { day?: number | string; tier?: Tier };
+
+export type Tier = "free" | "paid";
+export const TIERS: Tier[] = ["free", "paid"];
+
+/** free = Pi's default model; paid = Claude Sonnet at low effort. */
+export function resolveTier(tier: Tier): {
+  provider: string;
+  model: string;
+  effort?: string;
+} {
+  if (tier === "paid") return { provider: "claude", model: "sonnet", effort: "low" };
+  if (tier !== "free") throw new Error('Tier must be "free" or "paid".');
+  const pi = PROVIDERS.get("pi");
+  if (!pi?.status().ok) throw new Error("Free tier needs Pi, which is not available right now.");
+  const model = pi.defaultModel();
+  if (!model) throw new Error("Free tier needs a Pi model, but Pi has none available.");
+  return { provider: "pi", model, effort: undefined };
+}
 
 const CATCH_UP_MS = 7 * 86_400_000;
 const MAX_SKIPPED = 20;
@@ -152,9 +170,11 @@ function localParts(ts: number, tz: string) {
   return {
     date: `${p.year}-${p.month}-${p.day}`,
     time: `${p.hour}:${p.minute}`,
-    short: new Intl.DateTimeFormat("en", { timeZone: tz, month: "short", day: "numeric" }).format(
-      ts,
-    ),
+    short: new Intl.DateTimeFormat("en", {
+      timeZone: tz,
+      month: "short",
+      day: "numeric",
+    }).format(ts),
   };
 }
 
@@ -179,17 +199,27 @@ export function finalText(events: any[]): string {
 
 type Emit = (msg: unknown) => void;
 
-function resolveAgent(input: TaskInput, base?: Task) {
+function resolveAgent(raw: TaskInput, base?: Task) {
+  const tiered = raw.tier ? resolveTier(raw.tier) : undefined;
+  const input: TaskInput = tiered
+    ? {
+        ...raw,
+        provider: tiered.provider,
+        model: raw.model ?? tiered.model,
+        effort: raw.model ? raw.effort : tiered.effort,
+      }
+    : raw;
   const providerId =
     input.provider ?? base?.provider ?? (PROVIDERS.get("pi")?.status().ok ? "pi" : "claude");
   const prov = PROVIDERS.get(providerId);
   if (!prov) throw new Error("Unknown agent.");
-  const model =
-    input.model && prov.models().includes(input.model)
-      ? input.model
-      : providerId === base?.provider && !input.model
-        ? base.model
-        : prov.defaultModel();
+  if (input.model && !prov.models().includes(input.model))
+    throw new Error(`Unknown model "${input.model}" for ${prov.label}.`);
+  const model = input.model
+    ? input.model
+    : providerId === base?.provider && !input.model
+      ? base.model
+      : prov.defaultModel();
   if (!model) throw new Error(`${prov.label} has no models available.`);
   const mode =
     input.mode && prov.modes.includes(input.mode)
@@ -255,7 +285,12 @@ export class Schedules {
   constructor(
     threads: Threads,
     emit: Emit,
-    opts: { file?: string; outputs?: string; catchUp?: boolean; runLimitMs?: number } = {},
+    opts: {
+      file?: string;
+      outputs?: string;
+      catchUp?: boolean;
+      runLimitMs?: number;
+    } = {},
   ) {
     this.threads = threads;
     this.limit = opts.runLimitMs ?? RUN_LIMIT_MS;
@@ -299,7 +334,11 @@ export class Schedules {
     fs.writeFileSync(
       this.file,
       JSON.stringify(
-        { tz: this.tz, tasks: this.list(), removedBuiltins: [...this.removedBuiltins] },
+        {
+          tz: this.tz,
+          tasks: this.list(),
+          removedBuiltins: [...this.removedBuiltins],
+        },
         null,
         1,
       ),
@@ -454,7 +493,12 @@ export class Schedules {
       this.changed();
       return run;
     }
-    const run: Run = { id: crypto.randomUUID(), at: now, trigger, status: "running" };
+    const run: Run = {
+      id: crypto.randomUUID(),
+      at: now,
+      trigger,
+      status: "running",
+    };
     t.runs.push(run);
     let before: void | Promise<void>;
     try {
@@ -703,6 +747,7 @@ export class Schedules {
       day: i.day,
       provider: i.agent,
       model: i.model,
+      tier: i.tier,
       cwd: i.folder,
       enabled: i.enabled,
       saveOutput: i.save_output,
@@ -719,10 +764,17 @@ export class Schedules {
         return { tasks: this.list().map(brief) };
       case "schedule_create":
         return {
-          created: brief(this.create({ ...taskInput(input), cwd: input?.folder ?? from?.cwd })),
+          created: brief(
+            this.create({
+              ...taskInput(input),
+              cwd: input?.folder ?? from?.cwd,
+            }),
+          ),
         };
       case "schedule_update":
-        return { updated: brief(this.update(pick(input).id, taskInput(input))) };
+        return {
+          updated: brief(this.update(pick(input).id, taskInput(input))),
+        };
       case "schedule_delete": {
         const t = pick(input);
         this.remove(t.id);
@@ -731,11 +783,18 @@ export class Schedules {
       case "schedule_run_now": {
         const t = pick(input);
         const r = this.run(t.id, "manual");
-        return { task: t.title, status: r.status, reason: r.reason, thread: r.thread };
+        return {
+          task: t.title,
+          status: r.status,
+          reason: r.reason,
+          thread: r.thread,
+        };
       }
       case "save_output": {
         if (!thread) throw new Error("save_output works only inside an Agent Console thread.");
-        return { saved: this.saveOutput(thread, input?.markdown, input?.title) };
+        return {
+          saved: this.saveOutput(thread, input?.markdown, input?.title),
+        };
       }
     }
     throw new Error(`Unknown tool ${name}.`);

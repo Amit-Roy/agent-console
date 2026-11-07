@@ -19,7 +19,12 @@ const when = {
     description: "Weekly only: which day.",
   },
 };
-const id = { id: { type: "string", description: "Task id or exact title, from schedule_list." } };
+const id = {
+  id: {
+    type: "string",
+    description: "Task id or exact title, from schedule_list.",
+  },
+};
 
 export const TOOLS = [
   {
@@ -39,7 +44,10 @@ export const TOOLS = [
       additionalProperties: false,
       required: ["thread", "message"],
       properties: {
-        thread: { type: "string", description: "Target thread id from thread_list." },
+        thread: {
+          type: "string",
+          description: "Target thread id from thread_list.",
+        },
         message: { type: "string", minLength: 1, maxLength: 20000 },
       },
     },
@@ -175,8 +183,15 @@ export const TOOLS = [
       type: "object",
       required: ["thread"],
       properties: {
-        thread: { type: "string", description: "Thread id from session_search." },
-        start: { type: "integer", minimum: 1, description: "First line; default 1." },
+        thread: {
+          type: "string",
+          description: "Thread id from session_search.",
+        },
+        start: {
+          type: "integer",
+          minimum: 1,
+          description: "First line; default 1.",
+        },
         limit: {
           type: "integer",
           minimum: 1,
@@ -222,13 +237,29 @@ export const TOOLS = [
       type: "object",
       required: ["title", "prompt", "repeat"],
       properties: {
-        title: { type: "string", description: 'Short name, e.g. "AI news digest".' },
-        prompt: { type: "string", description: "Full instructions for each run." },
+        title: {
+          type: "string",
+          description: 'Short name, e.g. "AI news digest".',
+        },
+        prompt: {
+          type: "string",
+          description: "Full instructions for each run.",
+        },
         ...when,
         agent: {
           type: "string",
           enum: ["pi", "claude", "codex"],
           description: "Agent that runs it. Default pi.",
+        },
+        tier: {
+          type: "string",
+          enum: ["free", "paid"],
+          description:
+            "free = Pi default model; paid = Claude Sonnet, low effort. Overrides agent.",
+        },
+        model: {
+          type: "string",
+          description: "Model id for the agent; unknown ids are rejected.",
         },
         folder: {
           type: "string",
@@ -250,6 +281,15 @@ export const TOOLS = [
         title: { type: "string" },
         prompt: { type: "string" },
         ...when,
+        tier: {
+          type: "string",
+          enum: ["free", "paid"],
+          description: "free = Pi default model; paid = Claude Sonnet, low effort.",
+        },
+        model: {
+          type: "string",
+          description: "Model id; unknown ids are rejected.",
+        },
         enabled: { type: "boolean" },
       },
     },
@@ -276,7 +316,10 @@ export const TOOLS = [
       type: "object",
       required: ["markdown"],
       properties: {
-        markdown: { type: "string", description: "The full report in markdown." },
+        markdown: {
+          type: "string",
+          description: "The full report in markdown.",
+        },
         title: { type: "string", description: "Optional heading." },
       },
     },
@@ -315,7 +358,9 @@ export default function consoleTools(pi) {
     pi.registerTool({
       ...tool,
       async execute(_toolCallId, params, signal) {
-        return { content: [{ type: "text", text: await callTool(tool.name, params, signal) }] };
+        return {
+          content: [{ type: "text", text: await callTool(tool.name, params, signal) }],
+        };
       },
     });
 }
