@@ -1,6 +1,6 @@
 {
   "title": "Agent Console architecture",
-  "subtitle": "Scheduled tasks resolve a free or paid tier to a concrete agent and model",
+  "subtitle": "The ai-digest script collects AI items from GitHub, arXiv and Google Trends",
   "items": [
     {
       "group": "Share entry points",
@@ -403,7 +403,8 @@
       ],
       "status": "added"
     },
-    {"group":"Scheduled tasks","icon":"calendar-clock","status":"modified","items":[{"id":"sch-tools","label":"Schedule tools","tech":"console-tools.mjs","desc":"schedule_create and schedule_update take tier (free|paid) and model","icon":"wrench","status":"modified"},{"id":"sch-tier","label":"resolveTier","tech":"schedules.ts","desc":"free = Pi default model, errors when Pi is down; paid = Claude Sonnet, low effort","icon":"scale","status":"added"},{"id":"sch-agent","label":"resolveAgent","tech":"schedules.ts","desc":"Applies the tier; an unknown model is an error, not a silent fallback; tier is not persisted","icon":"list-checks","status":"modified"},{"id":"sch-pi","label":"Pi provider","tech":"pi.ts","desc":"Free tier: default model and status check","icon":"cpu"},{"id":"sch-claude","label":"Claude provider","tech":"claude.ts","desc":"Paid tier: sonnet at low effort","icon":"sparkles"}]}
+    {"group":"Scheduled tasks","icon":"calendar-clock","status":"modified","items":[{"id":"sch-tools","label":"Schedule tools","tech":"console-tools.mjs","desc":"schedule_create and schedule_update take tier (free|paid) and model","icon":"wrench","status":"modified"},{"id":"sch-tier","label":"resolveTier","tech":"schedules.ts","desc":"free = Pi default model, errors when Pi is down; paid = Claude Sonnet, low effort","icon":"scale","status":"added"},{"id":"sch-agent","label":"resolveAgent","tech":"schedules.ts","desc":"Applies the tier; an unknown model is an error, not a silent fallback; tier is not persisted","icon":"list-checks","status":"modified"},{"id":"sch-pi","label":"Pi provider","tech":"pi.ts","desc":"Free tier: default model and status check","icon":"cpu"},{"id":"sch-claude","label":"Claude provider","tech":"claude.ts","desc":"Paid tier: sonnet at low effort","icon":"sparkles"}]},
+    {"group":"AI digest","icon":"newspaper","status":"added","items":[{"id":"dg-cli","label":"ai-digest script","tech":"scripts/ai-digest.ts","desc":"Filters AI items, drops URLs seen in the last report, caps output at 16 KB; a failed source prints one error line","icon":"terminal","status":"added"},{"id":"dg-gh","label":"GitHub trending","tech":"github.com/trending","desc":"Parsed with linkedom; search API fallback","icon":"git-branch","status":"added"},{"id":"dg-ax","label":"arXiv","tech":"rss.arxiv.org","desc":"cs.AI, cs.CL, cs.LG; Atom API on empty feed; ranked by Hugging Face upvotes","icon":"file-text","status":"added"},{"id":"dg-tr","label":"Google Trends","tech":"trends.google.com","desc":"US trending RSS filtered by AI keywords","icon":"trending-up","status":"added"},{"id":"dg-out","label":"Digest text","tech":"stdout","desc":"Sections GitHub, arXiv, Trends; text or --json","icon":"file-output","status":"added"}]}
   ],
   "edges": [
     {
@@ -618,6 +619,10 @@
     {"from":"sch-tools","to":"sch-tier","label":"tier","status":"added"},
     {"from":"sch-tier","to":"sch-agent","label":"provider, model, effort","status":"added"},
     {"from":"sch-agent","to":"sch-pi","label":"free","status":"added"},
-    {"from":"sch-agent","to":"sch-claude","label":"paid","status":"added"}
+    {"from":"sch-agent","to":"sch-claude","label":"paid","status":"added"},
+    {"from":"dg-gh","to":"dg-cli","label":"stars today","status":"added"},
+    {"from":"dg-ax","to":"dg-cli","label":"papers, upvotes","status":"added"},
+    {"from":"dg-tr","to":"dg-cli","label":"traffic","status":"added"},
+    {"from":"dg-cli","to":"dg-out","label":"max 16 KB","status":"added"}
   ]
 }
