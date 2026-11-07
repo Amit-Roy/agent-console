@@ -184,7 +184,7 @@ try {
       `Timed out waiting for the server: ${JSON.stringify(inbox.map((message) => message.t + (message.message ? ":" + message.message : "")))}`,
     );
   };
-  socket.send(JSON.stringify({ t: "create", cwd: root, title: "ask" }));
+  socket.send(JSON.stringify({ t: "create", provider: "mock", cwd: os.homedir(), title: "ask" }));
   const created = await until((message) => message.t === "created");
   const thread = created.thread?.id ?? created.id;
   socket.send(JSON.stringify({ t: "send", thread, text: "question please" }));
