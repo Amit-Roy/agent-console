@@ -19,8 +19,8 @@ const RE_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;
 
 export class KeyNotFound extends Error {}
 
-const clean = (re: RegExp, value: unknown) =>
-  typeof value === "string" && re.test(value) ? value : null;
+const clean = (pattern: RegExp, value: unknown) =>
+  typeof value === "string" && pattern.test(value) ? value : null;
 
 /** Untrusted text: no control chars, no fence marker, capped. */
 export function sanitize(value: unknown): string {
@@ -39,30 +39,31 @@ const fact = (label: string, value: string | null) => (value ? `${label}: ${valu
 const compact = (lines: (string | null)[]) => lines.filter((line): line is string => !!line);
 
 function trivySection(scan: any, key: string): Section {
-  const target = (scan?.tools?.trivy?.targets || []).find((t: any) => t?.name === key);
+  const target = (scan?.tools?.trivy?.targets || []).find((tgt: any) => tgt?.name === key);
   if (!target) throw new KeyNotFound("finding not in scan");
   const vulns: any[] = target.vulns || [];
-  const facts = vulns.slice(0, ALERT_CAP).map((v) => {
+  const facts = vulns.slice(0, ALERT_CAP).map((vuln) => {
     const parts = compact([
-      clean(RE_CVE, v?.id),
-      fact("severity", clean(RE_SEVERITY, v?.severity)),
-      fact("pkg", clean(RE_PKG, v?.pkg)),
-      fact("installed", clean(RE_VERSION, v?.installed)),
-      fact("fixed", clean(RE_VERSION, v?.fixed)),
+      clean(RE_CVE, vuln?.id),
+      fact("severity", clean(RE_SEVERITY, vuln?.severity)),
+      fact("pkg", clean(RE_PKG, vuln?.pkg)),
+      fact("installed", clean(RE_VERSION, vuln?.installed)),
+      fact("fixed", clean(RE_VERSION, vuln?.fixed)),
     ]);
     return `- ${parts.join(", ")}`;
   });
   const data = [`target: ${sanitize(target.name)}`];
-  for (const v of vulns.slice(0, ALERT_CAP)) data.push(`title: ${sanitize(v?.title)}`);
+  for (const vuln of vulns.slice(0, ALERT_CAP)) data.push(`title: ${sanitize(vuln?.title)}`);
   return { facts, data };
 }
 
 function falcoSection(scan: any, key: string): Section {
-  const items = (scan?.tools?.falco?.alerts || []).filter((a: any) => a?.rule === key);
+  const items = (scan?.tools?.falco?.alerts || []).filter((alert: any) => alert?.rule === key);
   if (!items.length) throw new KeyNotFound("finding not in scan");
   const rank = ["Notice", "Warning", "Error", "Critical", "Alert", "Emergency"];
   const top = items.reduce(
-    (best: string, a: any) => (rank.indexOf(a?.priority) > rank.indexOf(best) ? a.priority : best),
+    (best: string, alert: any) =>
+      rank.indexOf(alert?.priority) > rank.indexOf(best) ? alert.priority : best,
     "Notice",
   );
   const facts = compact([
@@ -70,16 +71,19 @@ function falcoSection(scan: any, key: string): Section {
     `alerts in group: ${items.length}`,
   ]);
   const data = [`rule: ${sanitize(key)}`];
-  for (const a of items.slice(0, ALERT_CAP)) {
-    data.push(`container: ${sanitize(a?.container || "host")}`, `output: ${sanitize(a?.output)}`);
-    const time = clean(RE_TIME, a?.time);
+  for (const alert of items.slice(0, ALERT_CAP)) {
+    data.push(
+      `container: ${sanitize(alert?.container || "host")}`,
+      `output: ${sanitize(alert?.output)}`,
+    );
+    const time = clean(RE_TIME, alert?.time);
     if (time) facts.push(`alert time: ${time}`);
   }
   return { facts, data };
 }
 
 function clamavSection(scan: any, key: string): Section {
-  const hit = (scan?.tools?.clamav?.infected || []).find((f: any) => f?.path === key);
+  const hit = (scan?.tools?.clamav?.infected || []).find((file: any) => file?.path === key);
   if (!hit) throw new KeyNotFound("finding not in scan");
   return { facts: ["severity: infected file"], data: [`path: ${sanitize(hit.path)}`] };
 }
