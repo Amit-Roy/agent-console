@@ -160,7 +160,7 @@ try {
     );
     const draft = await picked.page
       .locator("#input")
-      .evaluate((el) => (el as HTMLInputElement).value);
+      .evaluate((inputEl) => (inputEl as HTMLInputElement).value);
     assert.ok(draft.endsWith(reply.prompt), "prompt appended to draft");
     await picked.page.screenshot({ path: path.join(shot, `fix-draft-${name}.png`) });
     assert.deepEqual(picked.sends, [], "nothing sent");
